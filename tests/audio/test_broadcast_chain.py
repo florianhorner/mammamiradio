@@ -16,9 +16,41 @@ from unittest.mock import patch
 from mammamiradio.audio import normalizer
 from mammamiradio.audio.normalizer import (
     _broadcast_filter_chain,
+    _mp3_output_args,
     apply_broadcast_chain,
     configure_broadcast_chain,
 )
+
+
+def test_mp3_output_args_shape():
+    """The shared encoding-args builder is the single source for BOTH the loudness
+    reconcile and the broadcast-chain re-encodes, so a drift here would silently change
+    both passes. Pin the full arg list (order + every flag), not just the audio params."""
+    assert _mp3_output_args(sample_rate=48000, channels=2, bitrate=192) == [
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+    # Non-default encoding is honoured (never silently downgraded to house defaults).
+    assert _mp3_output_args(sample_rate=44100, channels=1, bitrate=256) == [
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        "-b:a",
+        "256k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
 
 
 def test_broadcast_disabled_is_noop():

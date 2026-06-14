@@ -124,6 +124,7 @@ Current config options:
 | `super_italian_mode` | `bool?` | `MAMMAMIRADIO_SUPER_ITALIAN` |
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
+| `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default on, set false for studio-clean) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
@@ -141,7 +142,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator sa
 immediately; their cost line shows `estimate (unpriced model)` until a price is added
 to `MODEL_PRICES` in `web/streamer.py`.
 
-The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
+The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
 2. Add a translation entry in `translations/en.yaml`

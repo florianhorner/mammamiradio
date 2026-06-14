@@ -97,18 +97,24 @@ always-on final stage is the **FM broadcast chain** (`apply_broadcast_chain()` i
 over-the-air FM signal — a subtle multipath movement, a gentle pre-emphasis HF shelf,
 the ~15 kHz channel band-limit, and a soft broadcast leveller. Voice and music exit
 through the same final stage, so there is no "FM music next to studio-clean voice"
-seam. Toggle it with `[audio] broadcast_chain` (default on); a separate pass with no
-`loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers + loudnorm on
-ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
+seam. Toggle it with `[audio] broadcast_chain` (default on) — or, on the HA add-on,
+the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
+can switch to studio-clean without rebuilding the baked-in `radio.toml`. A separate
+pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers +
+loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
 `normalize()` so the extra encode respects the Pi 2-FFmpeg ceiling.
 
 The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
-prior audio in place and never raises, and emergency / bridge / rescue / canned fills
-(any segment carrying a rescue marker such as `queue_drain_recovery`, `resume_bridge`,
-`idle_bridge`, or `canned`) skip the pipeline entirely so a dead-air rescue is never
-delayed by an extra encode (leadership principle #2, INSTANT AUDIO). The chaos and
-reactive-interference content stages slot in **before** the broadcast chain — effects
-colour the content, the transmitter colours the channel last.
+prior audio in place and never raises, and emergency / bridge / rescue fills skip the
+pipeline entirely so a dead-air rescue is never delayed by an extra encode (leadership
+principle #2, INSTANT AUDIO). The skip is driven by an explicit `rescue` flag stamped
+where each bridge/rescue is built (`_is_rescue_fill()`), **not** by sniffing overloaded
+metadata keys: a canned clip in normal rotation (shareware gold clips / Demo mode) is
+`canned=True` but is **not** a rescue, so it is still coloured — otherwise the first
+host break a new user hears would air studio-clean next to FM music, the exact seam
+this stage removes. The chaos and reactive-interference content stages slot in
+**before** the broadcast chain — effects colour the content, the transmitter colours
+the channel last.
 
 ### Dynamic LLM routing (which model voices each task)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import datetime
 import logging
@@ -141,6 +142,7 @@ def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: 
             "title": title,
             "artist": artist,
             bridge_flag: True,
+            "rescue": True,
             "audio_source": "norm_cache",
         },
         f"{norm_path.name} ({detail})",
@@ -231,6 +233,7 @@ async def _queue_drain_recovery_bridge(
                     "type": "banter",
                     "canned": True,
                     "queue_drain_recovery": True,
+                    "rescue": True,
                     "title": "Recovery banter",
                 },
             )
@@ -273,6 +276,7 @@ async def _queue_drain_recovery_bridge(
                 "title": "Station continuity",
                 "artist": "",
                 "queue_drain_recovery": True,
+                "rescue": True,
                 "audio_source": "emergency_tone",
             },
             ephemeral=True,
@@ -490,6 +494,9 @@ def _front_insert_queue_and_shadow(
     if state.session_stopped:
         if segment.ephemeral:
             segment.path.unlink(missing_ok=True)
+        # The forced render is abandoned — release the one-at-a-time guard so the
+        # operator can retry after resume instead of being locked out until restart.
+        state.operator_force_pending = None
         logger.info("Discarding forced %s because the session is stopped", segment.type.value)
         return False
     items: list[Segment] = []
@@ -529,34 +536,28 @@ def _front_insert_queue_and_shadow(
     return True
 
 
-# Segments carrying any of these markers with a TRUTHY value are emergency / bridge
-# / rescue / canned fills: they exist to kill dead air the instant the queue runs
-# dry (leadership principle #2, INSTANT AUDIO). They MUST skip the egress FX pass so
-# a rescue is never delayed by an extra ffmpeg encode — a clean transmitter sound is
-# never worth a beat of silence. The check is truthiness, NOT key presence, because
-# ``canned`` is overloaded: a normal LLM-generated banter segment stamps
-# ``canned=False`` (it is not a canned clip) and MUST still be coloured — otherwise
-# every live host break would bypass the transmitter and air studio-clean next to FM
-# music, the exact seam this stage removes.
-_EGRESS_SKIP_KEYS = frozenset(
-    {
-        "error",
-        "queue_drain_recovery",
-        "silence_fallback",
-        "error_recovery",
-        "resume_bridge",
-        "idle_bridge",
-        "warmup",
-        "canned",
-        "recycled",
-    }
-)
+# Metadata flag, stamped at construction by every emergency / bridge / rescue fill,
+# marking a segment that must SKIP the egress FX pass. These fills exist to kill dead
+# air the instant the queue runs dry (leadership principle #2, INSTANT AUDIO); a clean
+# transmitter sound is never worth a beat of silence, so a rescue is never delayed by
+# an extra ffmpeg encode.
+#
+# This is a single explicit flag set where each rescue is BUILT — deliberately NOT an
+# allowlist of other metadata keys. The old allowlist keyed off ``canned``, but that
+# key is overloaded: normal-rotation shareware / Demo-mode banter is also a canned
+# clip (``canned=True``) yet is NOT a rescue and MUST still be coloured — otherwise
+# the first host break a new user hears airs studio-clean next to FM-coloured music,
+# the exact seam this stage removes. Rescue-ness is a property of WHY a segment was
+# made, which only the construction site knows; inferring it from key presence rots (a
+# new bridge marker silently misses the skip) and mis-fires (rotation-canned banter).
+_RESCUE_FLAG = "rescue"
 
 
 def _is_rescue_fill(segment: Segment) -> bool:
-    """True when the segment is an emergency / bridge / rescue / canned fill that must
-    skip the egress pass. Truthiness, not presence — see ``_EGRESS_SKIP_KEYS``."""
-    return any(segment.metadata.get(k) for k in _EGRESS_SKIP_KEYS)
+    """True when the segment is an emergency / bridge / rescue fill that must skip the
+    egress pass. Driven by the explicit ``rescue`` marker the construction site
+    stamps — never by sniffing overloaded keys like ``canned``."""
+    return bool(segment.metadata.get(_RESCUE_FLAG))
 
 
 async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
@@ -566,8 +567,8 @@ async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
     unchanged, when no stage applied. The FM broadcast chain is the always-on final
     stage — "the transmitter"; the chaos (#482) and interference (#483) content
     stages will slot in BEFORE it so effects colour the content and the broadcast
-    chain colours the channel last. Emergency / bridge / rescue / canned fills skip
-    the pipeline entirely (see ``_EGRESS_SKIP_KEYS``). Best-effort: a stage failure
+    chain colours the channel last. Emergency / bridge / rescue fills skip the
+    pipeline entirely (see ``_is_rescue_fill``). Best-effort: a stage failure
     leaves the prior audio in place and never raises, so the listener never hits
     dead air.
     """
@@ -579,10 +580,19 @@ async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
         applied = await loop.run_in_executor(None, apply_broadcast_chain, segment.path, out)
     except Exception:
         logger.debug("Egress broadcast chain failed (non-fatal), airing clean", exc_info=True)
-        out.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            out.unlink(missing_ok=True)
         return segment
+    except BaseException:
+        # Cancellation/shutdown landed mid-encode: don't leak the half-written egress
+        # tmp, then let the cancellation propagate (the pre-egress render is untouched).
+        # Suppress an unlink error so it can never mask the CancelledError we re-raise.
+        with contextlib.suppress(OSError):
+            out.unlink(missing_ok=True)
+        raise
     if not applied:
-        out.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            out.unlink(missing_ok=True)
         return segment
     pre_segment = segment
     segment = replace(segment, path=out, ephemeral=True)
@@ -611,9 +621,13 @@ async def _enqueue_with_egress(
     entry point. FX run BEFORE the front-insert critical section so it stays a
     no-await drain→prepend→repush.
     """
+    # Validate the front-insert contract BEFORE any egress work so a programming error
+    # never leaves a coloured egress tmp render orphaned on disk.
+    if front_insert and shadow_entry is None:  # operator air-next must always supply a shadow entry
+        raise ValueError("front_insert enqueue requires a shadow_entry")
     segment = await _apply_egress(segment, config)
     if front_insert:
-        assert shadow_entry is not None  # operator air-next always supplies a shadow entry
+        assert shadow_entry is not None  # narrowed by the guard above (mypy)
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
     await queue.put(segment)
     return True
@@ -1227,6 +1241,7 @@ async def run_producer(
                                 "type": "banter",
                                 "canned": True,
                                 "resume_bridge": True,
+                                "rescue": True,
                                 "title": "Resume bridge",
                             },
                             ephemeral=False,
@@ -1280,6 +1295,7 @@ async def run_producer(
                                 "canned": True,
                                 "warmup": True,
                                 "idle_bridge": True,
+                                "rescue": True,
                                 "title": "Station warm-up",
                             },
                         )
@@ -1603,6 +1619,7 @@ async def run_producer(
                                                 "type": "banter",
                                                 "canned": True,
                                                 "silence_fallback": True,
+                                                "rescue": True,
                                                 "title": "Recovery banter",
                                             },
                                             ephemeral=False,
@@ -1629,6 +1646,7 @@ async def run_producer(
                                                 "type": "music",
                                                 "recycled": True,
                                                 "silence_fallback": True,
+                                                "rescue": True,
                                                 "title": last_good.name,
                                             },
                                             ephemeral=False,
@@ -2609,6 +2627,7 @@ async def run_producer(
                         "type": "banter",
                         "canned": True,
                         "error_recovery": True,
+                        "rescue": True,
                         "title": "Recovery banter",
                     },
                     ephemeral=False,
@@ -2626,7 +2645,7 @@ async def run_producer(
                 segment = Segment(
                     type=seg_type,
                     path=silence_path,
-                    metadata={"error": str(e), "title": "Brief silence"},
+                    metadata={"error": str(e), "rescue": True, "title": "Brief silence"},
                 )
             # Do NOT advance state counters — failed segment doesn't count
 

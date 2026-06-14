@@ -44,31 +44,46 @@ def _seg(tmp_path: Path, *, metadata: dict, ephemeral: bool = True, name: str = 
     return Segment(type=SegmentType.MUSIC, path=path, metadata=metadata, ephemeral=ephemeral)
 
 
-# ── Scenario 2 & 3: rescue / bridge / canned fills must skip the pass ──────────
+# ── Scenario 2 & 3: rescue / bridge fills must skip the pass ───────────────────
 
 
-@pytest.mark.parametrize(
-    "skip_key",
-    [
-        "error",
-        "queue_drain_recovery",
-        "silence_fallback",
-        "error_recovery",
-        "resume_bridge",
-        "idle_bridge",
-        "warmup",
-        "canned",
-        "recycled",
-    ],
-)
-async def test_apply_egress_skips_rescue_and_canned_fills(tmp_path, skip_key):
-    """Every emergency / bridge / rescue / canned marker bypasses the egress pass so a
-    dead-air rescue is never delayed by an ffmpeg encode (INSTANT AUDIO)."""
-    seg = _seg(tmp_path, metadata={skip_key: True})
+# The real metadata shapes the producer stamps on each rescue/bridge fill. Every one
+# carries the explicit ``rescue`` flag (the egress skip key); the semantic markers
+# (queue_drain_recovery, idle_bridge, …) ride alongside it for other subsystems.
+_RESCUE_METADATA_SHAPES = [
+    {"queue_drain_recovery": True, "rescue": True},  # drain canned / norm-cache / tone bridge
+    {"resume_bridge": True, "rescue": True},  # resume bridge
+    {"warmup": True, "idle_bridge": True, "rescue": True},  # idle warm-up bridge
+    {"silence_fallback": True, "rescue": True},  # quality-gate silence fallback
+    {"recycled": True, "silence_fallback": True, "rescue": True},  # last-known-good recycle
+    {"error_recovery": True, "rescue": True},  # error-recovery canned
+    {"error": "boom", "rescue": True},  # brief-silence error segment
+    {"canned": True, "queue_drain_recovery": True, "rescue": True},  # canned bridge
+]
+
+
+@pytest.mark.parametrize("metadata", _RESCUE_METADATA_SHAPES)
+async def test_apply_egress_skips_rescue_fills(tmp_path, metadata):
+    """Every emergency / bridge / rescue fill carries the explicit ``rescue`` flag and
+    bypasses the egress pass so a dead-air rescue is never delayed by an ffmpeg encode
+    (INSTANT AUDIO)."""
+    seg = _seg(tmp_path, metadata=metadata)
     with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain") as m_chain:
         out = await _apply_egress(seg, _Cfg(tmp_path))
     m_chain.assert_not_called()
     assert out is seg  # returned untouched, same object
+
+
+async def test_apply_egress_colours_rotation_canned_banter(tmp_path):
+    """A canned clip used in NORMAL rotation (shareware gold clips / Demo mode) carries
+    ``canned=True`` but NOT the ``rescue`` flag — it is content, not a dead-air rescue,
+    so it MUST still be coloured. Guards the seam where Demo-mode host breaks aired
+    studio-clean next to FM-coloured music (the regression this fix removes)."""
+    seg = _seg(tmp_path, metadata={"type": "banter", "canned": True, "title": "Pre-recorded banter"})
+    with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour) as m_chain:
+        out = await _apply_egress(seg, _Cfg(tmp_path))
+    m_chain.assert_called_once()  # rotation-canned banter went through the transmitter
+    assert out.path.name.startswith("egress_")
 
 
 # ── Scenario 1: a produced segment is coloured ────────────────────────────────
@@ -155,6 +170,29 @@ async def test_apply_egress_best_effort_on_exception(tmp_path):
     assert not list(tmp_path.glob("egress_*.mp3"))
 
 
+async def test_apply_egress_cleans_up_tmp_on_cancellation(tmp_path):
+    """A cancellation/shutdown landing mid-encode must NOT leak the half-written egress
+    tmp, and must propagate (not swallow) — ``except Exception`` would miss it because
+    CancelledError is a BaseException. Uses a BaseException to hit the same branch
+    deterministically without asyncio cancellation internals."""
+
+    class _Interrupt(BaseException):
+        pass
+
+    seg = _seg(tmp_path, metadata={"title": "Song"})
+
+    def _partial_then_interrupt(in_path: Path, out_path: Path) -> bool:
+        out_path.write_bytes(b"PARTIAL")  # ffmpeg left a half-written file behind
+        raise _Interrupt
+
+    with (
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_partial_then_interrupt),
+        pytest.raises(_Interrupt),
+    ):
+        await _apply_egress(seg, _Cfg(tmp_path))
+    assert not list(tmp_path.glob("egress_*.mp3"))  # the half-written tmp was removed
+
+
 # ── The funnel wires egress to both enqueue shapes ────────────────────────────
 
 
@@ -187,9 +225,23 @@ async def test_enqueue_with_egress_front_insert_colours_before_critical_section(
     assert inserted_segment.path.name.startswith("egress_")  # coloured before insert
 
 
+async def test_enqueue_with_egress_front_insert_requires_shadow_entry(tmp_path):
+    """front_insert without a shadow_entry is a programming error that corrupts the
+    up-next shadow list — raise a clear ValueError rather than relying on an ``assert``
+    that python -O would strip into a None inserted into the shadow."""
+    seg = _seg(tmp_path, metadata={"title": "Song"})
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState()
+    with (
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour),
+        pytest.raises(ValueError),
+    ):
+        await _enqueue_with_egress(queue, state, _Cfg(tmp_path), seg, front_insert=True, shadow_entry=None)
+
+
 async def test_enqueue_with_egress_rescue_skips_chain(tmp_path):
     """A rescue segment routed through the funnel is enqueued as-is, never coloured."""
-    seg = _seg(tmp_path, metadata={"canned": True, "queue_drain_recovery": True})
+    seg = _seg(tmp_path, metadata={"canned": True, "queue_drain_recovery": True, "rescue": True})
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     state = StationState()
     with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain") as m_chain:
@@ -198,33 +250,64 @@ async def test_enqueue_with_egress_rescue_skips_chain(tmp_path):
     assert queue.get_nowait() is seg  # the original bridge audio, undelayed
 
 
-def test_egress_skip_keys_cover_known_rescue_markers():
-    """Floor: the skip set must include every rescue/bridge/canned marker the producer
-    stamps. A bridge type whose marker is dropped from the set would get an FX delay on
-    the dead-air rescue path."""
-    assert producer._EGRESS_SKIP_KEYS.issuperset(
-        {
-            "error",
-            "queue_drain_recovery",
-            "silence_fallback",
-            "error_recovery",
-            "resume_bridge",
-            "idle_bridge",
-            "warmup",
-            "canned",
-            "recycled",
-        }
-    )
+def test_norm_cache_bridge_payload_stamps_rescue_flag():
+    """Non-tautological floor: the shared norm-cache bridge builder (used by the drain,
+    resume, and idle bridges) stamps the explicit ``rescue`` flag, so every norm-cache
+    rescue skips the egress pass. Exercises the real constructor, not a mirror list."""
+    from pathlib import Path as _Path
+
+    with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=None):
+        metadata, _label = producer._norm_cache_bridge_payload(
+            _Path("/cache/norm_song.mp3"), "queue_drain_recovery", "Mamma Mi Radio"
+        )
+    assert metadata.get("rescue") is True
+    assert metadata.get("queue_drain_recovery") is True
+    assert _is_rescue_fill(Segment(type=SegmentType.MUSIC, path=_Path("/x.mp3"), metadata=metadata))
 
 
-def test_is_rescue_fill_uses_truthiness_not_presence():
-    """The skip decision is truthiness, not key presence — the contract that keeps
-    ``canned=False`` banter out of the skip path while ``canned=True`` fills skip."""
-    banter = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"canned": False})
-    canned = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"canned": True})
-    error = Segment(type=SegmentType.MUSIC, path=Path("/x.mp3"), metadata={"error": "boom"})
+def test_every_rescue_marker_dict_in_producer_stamps_rescue_flag():
+    """Drift guard, stronger than the old allowlist: scan the producer SOURCE and assert
+    every metadata dict literal carrying an unambiguous bridge/rescue marker also carries
+    the explicit ``rescue`` flag. A new rescue site that forgets the flag would get an
+    FFmpeg delay on the dead-air path (INSTANT AUDIO) — this fails CI at the construction
+    site instead of trusting a hand-maintained mirror list to be kept in sync."""
+    import ast
+    from pathlib import Path as _Path
+
+    # Markers that ONLY ever appear on rescue/bridge fills (not overloaded like
+    # ``canned``/``error``, which also ride on normal content).
+    markers = {
+        "queue_drain_recovery",
+        "resume_bridge",
+        "idle_bridge",
+        "warmup",
+        "silence_fallback",
+        "recycled",
+        "error_recovery",
+    }
+    tree = ast.parse(_Path(producer.__file__).read_text())
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        if (keys & markers) and "rescue" not in keys:
+            offenders.append((node.lineno, sorted(keys & markers)))
+    assert not offenders, f"producer rescue dicts missing 'rescue': True at {offenders}"
+
+
+def test_is_rescue_fill_keys_off_explicit_rescue_flag():
+    """The skip decision is the explicit ``rescue`` flag, NOT an overloaded key like
+    ``canned``: rotation-canned banter (``canned=True``, no rescue flag) must be
+    coloured, while a flagged fill skips. This is the contract that closed the
+    Demo-mode studio-clean-voice seam."""
+    rotation_canned = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"canned": True})
+    canned_false = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"canned": False})
+    bare_error_key = Segment(type=SegmentType.MUSIC, path=Path("/x.mp3"), metadata={"error": "boom"})
+    flagged_fill = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"rescue": True})
     normal = Segment(type=SegmentType.MUSIC, path=Path("/x.mp3"), metadata={"title": "Song"})
-    assert _is_rescue_fill(banter) is False  # live banter is NOT a fill — must be coloured
-    assert _is_rescue_fill(canned) is True
-    assert _is_rescue_fill(error) is True
+    assert _is_rescue_fill(rotation_canned) is False  # canned rotation banter MUST be coloured
+    assert _is_rescue_fill(canned_false) is False
+    assert _is_rescue_fill(bare_error_key) is False  # a marker without the rescue flag is content
+    assert _is_rescue_fill(flagged_fill) is True
     assert _is_rescue_fill(normal) is False

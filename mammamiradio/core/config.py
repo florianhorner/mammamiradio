@@ -879,6 +879,10 @@ def _apply_addon_options() -> None:
     if isinstance(fm, bool) and not os.getenv("MAMMAMIRADIO_FESTIVAL_MODE"):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = "true" if fm else "false"
 
+    bc = options.get("broadcast_chain")
+    if isinstance(bc, bool) and not os.getenv("MAMMAMIRADIO_BROADCAST_CHAIN"):
+        os.environ["MAMMAMIRADIO_BROADCAST_CHAIN"] = "true" if bc else "false"
+
     qp = options.get("quality_profile")
     if isinstance(qp, str) and qp and not os.getenv("MAMMAMIRADIO_QUALITY"):
         os.environ["MAMMAMIRADIO_QUALITY"] = qp
@@ -1236,6 +1240,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         )
         for _k in _legacy_audio_model_keys:
             audio_raw.pop(_k, None)
+
+    # Env override for the FM broadcast chain (HA add-on `broadcast_chain` option →
+    # MAMMAMIRADIO_BROADCAST_CHAIN via run.sh) so addon operators can toggle on-air
+    # colouring without rebuilding the baked-in radio.toml. env > toml.
+    _bc_env = os.getenv("MAMMAMIRADIO_BROADCAST_CHAIN", "").strip().lower()
+    if _bc_env in _TRUTHY:
+        audio_raw["broadcast_chain"] = True
+    elif _bc_env in _FALSY:
+        audio_raw["broadcast_chain"] = False
 
     ha_raw = raw.get("homeassistant", {})
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED

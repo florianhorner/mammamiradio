@@ -104,6 +104,36 @@ def _make_noise_mp3(path, duration_sec: float = 3.0) -> None:
     )
 
 
+def _make_voiceband_noise_mp3(path, duration_sec: float = 5.0) -> None:
+    """Generate noise concentrated in the ~300-3400 Hz voice band — a host-break proxy.
+
+    The broadcast chain's pre-emphasis ``treble`` shelf turns over at ~2.1 kHz, right
+    inside this band, so a voice-spectrum signal drives the shelf (and therefore the
+    downstream compressor) harder than flat pink noise does. Used to guard that the
+    chain stays loudness-neutral for VOICE, not just for the broadband source the
+    makeup gain was tuned against (so a voice-only neutrality regression can't pass).
+    """
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anoisesrc=d={duration_sec}:c=white:a=0.8,highpass=f=300,lowpass=f=3400",
+            "-ac",
+            "2",
+            "-acodec",
+            "libmp3lame",
+            "-ab",
+            "128k",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 def _measure_rms(path, start_sec: float, window_sec: float) -> float:
     """Return the RMS volume (linear, 0-1) of an mp3 window via ffmpeg volumedetect."""
     result = subprocess.run(
@@ -405,6 +435,31 @@ def test_broadcast_chain_is_loudness_neutral_real_ffmpeg(tmp_path):
         f"broadcast chain shifted loudness {before:.1f} -> {after:.1f} LUFS "
         "(> 1.0 LU) — it must stay neutral so segments hold the reconciled target "
         "(real drift is ~0.1 LU; this catches a makeup-gain regression)"
+    )
+
+
+def test_broadcast_chain_is_loudness_neutral_on_voiceband_real_ffmpeg(tmp_path):
+    """Neutrality must hold for VOICE, not just for the broadband noise the makeup gain
+    was tuned against. The pre-emphasis ``treble`` shelf turns over at ~2.1 kHz, inside
+    the voice band, so a host break drives the shelf + compressor differently than flat
+    noise — a fixed makeup that is neutral for noise can still push voice off the
+    reconciled target (the FM-music/studio-voice seam reappearing as a loudness seam).
+    This is the guard that any future filter tweak keeps the chain neutral for the
+    segment type the egress stage most needs to match to music."""
+    configure_broadcast_chain(True)
+    src = tmp_path / "voice.mp3"
+    coloured = tmp_path / "voice_out.mp3"
+    _make_voiceband_noise_mp3(src, duration_sec=5.0)
+    before = _measure_lufs_real(src)
+    assert before is not None
+
+    assert apply_broadcast_chain(src, coloured) is True
+    after = _measure_lufs_real(coloured)
+    assert after is not None
+    assert abs(after - before) <= 1.0, (
+        f"broadcast chain shifted voice-band loudness {before:.1f} -> {after:.1f} LUFS "
+        "(> 1.0 LU) — voice would air off the reconciled target while music holds it; "
+        "re-tune the acompressor makeup so the chain stays neutral across content"
     )
 
 

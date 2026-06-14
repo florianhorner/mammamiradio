@@ -64,10 +64,13 @@ def test_front_insert_into_empty_queue():
 
 def test_front_insert_dropped_when_session_stopped(tmp_path):
     """Scenario 3 (post-restart/stopped): a stop mid-build drops the forced segment
-    — it never airs, the queue/shadow are untouched, and its temp is cleaned up."""
+    — it never airs, the queue/shadow are untouched, and its temp is cleaned up. The
+    one-at-a-time guard is also released so the operator can retry after resume instead
+    of being locked out until restart."""
     q: asyncio.Queue = asyncio.Queue(maxsize=5)
     state = StationState()
     state.session_stopped = True
+    state.operator_force_pending = SegmentType.BANTER  # a trigger was in flight when the stop landed
     f = tmp_path / "banter.mp3"
     f.write_bytes(b"x")
     banter = Segment(type=SegmentType.BANTER, path=f, metadata={}, ephemeral=True)
@@ -76,6 +79,7 @@ def test_front_insert_dropped_when_session_stopped(tmp_path):
     assert q.qsize() == 0
     assert state.queued_segments == []
     assert not f.exists()  # ephemeral temp unlinked, no leak
+    assert state.operator_force_pending is None  # guard released — operator can retry after resume
 
 
 def test_front_insert_drops_furthest_future_tail_on_full_queue():

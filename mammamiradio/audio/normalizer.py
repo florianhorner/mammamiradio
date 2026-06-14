@@ -225,6 +225,27 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
+def _mp3_output_args(*, sample_rate: int, channels: int, bitrate: int) -> list[str]:
+    """Build the station's MP3 output-encoding args (the shape ``normalize()`` honours).
+
+    One builder for both corrective re-encode passes — the loudness reconcile and the
+    FM broadcast chain — so a future encoding change (e.g. an id3 flag) lands in one
+    place and can never drift between the two passes.
+    """
+    return [
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "-b:a",
+        f"{bitrate}k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+
+
 def configure_loudness_reconcile(
     main_target: float | None,
     ad_target: float | None,
@@ -243,18 +264,7 @@ def configure_loudness_reconcile(
     """
     global _loudness_reconcile, _reconcile_output_args
     _loudness_reconcile = None if main_target is None or ad_target is None else (float(main_target), float(ad_target))
-    _reconcile_output_args = [
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-b:a",
-        f"{bitrate}k",
-        "-write_xing",
-        "0",
-        "-f",
-        "mp3",
-    ]
+    _reconcile_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
 
 
 def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
@@ -359,18 +369,7 @@ def configure_broadcast_chain(
     if not enabled:
         _broadcast_output_args = None
         return
-    _broadcast_output_args = [
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-b:a",
-        f"{bitrate}k",
-        "-write_xing",
-        "0",
-        "-f",
-        "mp3",
-    ]
+    _broadcast_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
 
 
 def _broadcast_filter_chain() -> str:
