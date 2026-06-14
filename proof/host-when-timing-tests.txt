@@ -1,0 +1,9 @@
+espresso-o'clock (feat/host-when-timing) — local verification
+date: 2026-06-14T00:30:39Z
+command: make check (ruff + mypy + pytest + coverage floors)
+---
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 94.09%
+2800 passed, 2 skipped, 13 deselected, 1 warning in 64.21s (0:01:04)
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
