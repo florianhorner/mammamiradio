@@ -1332,12 +1332,18 @@ async def run_producer(
             state.ha_context_char_count = len(ha_cache.summary or "")
             raw_states = getattr(ha_cache, "raw_states", {})
             if isinstance(raw_states, dict):
-                schedule_label_generation(
-                    raw_states,
-                    cache_dir=config.cache_dir,
-                    config=config,
-                    score_by_entity={entity.entity_id: entity.score for entity in ha_cache.scored},
-                )
+                # Fail-soft: scheduling does synchronous preflight work before
+                # creating the background task; an exception here must never
+                # stop segment production (INSTANT AUDIO).
+                try:
+                    schedule_label_generation(
+                        raw_states,
+                        cache_dir=config.cache_dir,
+                        config=config,
+                        score_by_entity={entity.entity_id: entity.score for entity in ha_cache.scored},
+                    )
+                except Exception:
+                    logger.warning("HA label generation scheduling failed (non-fatal)", exc_info=True)
             timestamp = getattr(ha_cache, "timestamp", 0.0)
             state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
             # Dashboard HA moments: pick the most notable recent non-person event.

@@ -539,6 +539,53 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path):
+    """If schedule_label_generation raises (it does synchronous preflight work),
+    the producer must still build and queue the segment — fail-soft audio path."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Che bella giornata!")]
+
+    raw_states = {
+        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}
+    }
+    mock_context = MagicMock()
+    mock_context.summary = "Il tempo e' bello"
+    mock_context.events_summary = ""
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.timestamp = 1234.5
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.raw_states = raw_states
+    mock_context.events = deque()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.schedule_label_generation", side_effect=RuntimeError("boom")) as mock_schedule,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    mock_schedule.assert_called_once()
+    assert not queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_ha_context_first_home_moment_armed_during_banter(tmp_path):
     state = _make_state()
     config = _make_config(tmp_path)

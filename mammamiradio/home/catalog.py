@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -146,10 +147,12 @@ class LabelCandidate:
 
 
 def _catalog_path(cache_dir: Path) -> Path:
+    """Return the on-disk catalog path for a cache directory."""
     return Path(cache_dir) / CATALOG_FILENAME
 
 
 def _empty_catalog() -> dict:
+    """Return a valid, empty catalog structure."""
     return {"schema_version": SCHEMA_VERSION, "generated_at": 0.0, "entries": {}}
 
 
@@ -163,6 +166,7 @@ def reset_catalog_cache() -> None:
 
 
 def _looks_sensitive_value(value: str) -> bool:
+    """Return True if the string looks like a UUID, token, IP, MAC, email, or geo pair."""
     candidate = value.strip()
     if not candidate:
         return False
@@ -178,6 +182,7 @@ def _looks_sensitive_value(value: str) -> bool:
 
 
 def _sanitize_label_source(value: object, *, max_len: int = MAX_LABEL_LENGTH) -> str:
+    """Strip control chars, angle brackets, and length; drop prompt-injection or sensitive values."""
     text = str(value or "").strip()
     text = _CONTROL_RE.sub("", text)
     text = text.replace("<", "").replace(">", "")
@@ -188,10 +193,22 @@ def _sanitize_label_source(value: object, *, max_len: int = MAX_LABEL_LENGTH) ->
 
 
 def _entity_domain(entity_id: str) -> str:
+    """Return the domain prefix of an entity_id (the part before the first dot)."""
     return entity_id.split(".", 1)[0] if "." in entity_id else ""
 
 
+def _attrs_dict(state_data: dict) -> dict:
+    """Return the entity's attributes as a dict, tolerating malformed payloads.
+
+    A non-dict ``attributes`` value (list, string, null) from a malformed Home
+    Assistant snapshot must not raise ``AttributeError`` into the label path.
+    """
+    attrs = state_data.get("attributes", {})
+    return attrs if isinstance(attrs, dict) else {}
+
+
 def _metadata_value(attrs: dict, *keys: str) -> str:
+    """Return the first non-empty sanitized attribute value among ``keys``."""
     for key in keys:
         value = attrs.get(key)
         if value is not None:
@@ -202,7 +219,8 @@ def _metadata_value(attrs: dict, *keys: str) -> str:
 
 
 def _candidate_metadata(entity_id: str, state_data: dict) -> dict[str, Any]:
-    attrs = state_data.get("attributes", {}) or {}
+    """Build the safe, non-empty metadata sent to the LLM and used for hashing."""
+    attrs = _attrs_dict(state_data)
     metadata = {
         "entity_id": entity_id,
         "domain": _entity_domain(entity_id),
@@ -224,7 +242,8 @@ def compute_hash(entity_id: str, state_data: dict) -> str:
 
 
 def _fallback_label(entity_id: str, state_data: dict) -> str | None:
-    attrs = state_data.get("attributes", {}) or {}
+    """Build a tier-3 label from registry/friendly names plus area, or None."""
+    attrs = _attrs_dict(state_data)
     label = _metadata_value(attrs, "registry_entity_name", "friendly_name", "registry_device_name")
     area = _metadata_value(attrs, "area", "area_name", "area_id")
     if not label:
@@ -235,6 +254,7 @@ def _fallback_label(entity_id: str, state_data: dict) -> str | None:
 
 
 def _catalog_entry_valid(entity_id: str, entry: object, expected_hash: str) -> tuple[str, str] | None:
+    """Return (label_it, label_en) if the cached entry matches the hash and validates, else None."""
     if not isinstance(entry, dict):
         return None
     if entry.get("hash") != expected_hash:
@@ -289,8 +309,9 @@ def load_catalog(cache_dir: Path | None) -> dict:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> bool:
+    """Write JSON to a unique temp file then atomically replace; owner-only perms. Returns success."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         os.chmod(tmp_path, 0o600)
@@ -351,6 +372,7 @@ def resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None = 
 
 
 def _fallback_score(entity_id: str) -> float:
+    """Return a default salience score by domain when no caller score is given."""
     domain = _entity_domain(entity_id)
     return {
         "media_player": 1.0,
@@ -367,6 +389,7 @@ def _fallback_score(entity_id: str) -> float:
 
 
 def _estimate_tokens(payload: dict) -> int:
+    """Rough token estimate for a metadata payload (~4 chars per token)."""
     return max(1, len(json.dumps(payload, ensure_ascii=False, sort_keys=True)) // 4)
 
 
@@ -421,6 +444,7 @@ def select_label_candidates(
 
 
 def generation_in_progress() -> bool:
+    """Return True if a label refresh is scheduled or currently running."""
     return _generation_scheduled or _CATALOG_LOCK.locked()
 
 
@@ -464,6 +488,7 @@ async def _run_scheduled_generation(
     score_by_entity: dict[str, float] | None,
     force: bool,
 ) -> None:
+    """Run one catalog refresh and always clear the scheduled flag when done."""
     global _generation_scheduled
     try:
         await generate_label_catalog(
@@ -529,7 +554,11 @@ async def generate_label_catalog(
         if accepted == 0:
             return catalog
         updated = {"schema_version": SCHEMA_VERSION, "generated_at": time.time(), "entries": entries}
-        save_catalog(cache_dir, updated)
+        if not save_catalog(cache_dir, updated):
+            # Fail-soft: a failed disk write must not be reported as a refresh.
+            # Keep the existing catalog so the next poll retries.
+            logger.warning("HA label catalog produced labels but persistence failed; keeping old catalog")
+            return catalog
         logger.info("HA label catalog refreshed: %d/%d labels accepted", accepted, len(candidates))
         return updated
 
@@ -552,7 +581,10 @@ async def _call_anthropic_labels(
         "label_it, and label_en. Do not include raw entity IDs in labels.\n\n"
         + json.dumps({"entities": prompt_payload}, ensure_ascii=False, sort_keys=True)
     )
-    response = await client.messages.create(
+    # Cap the request: this is a background labeling call that should finish in
+    # seconds. The SDK default is 10 minutes, which would hold _CATALOG_LOCK and
+    # block future refreshes if the API stalls.
+    response = await client.with_options(timeout=45.0).messages.create(
         model=model,
         max_tokens=1200,
         system="You label Home Assistant entities safely and concisely.",
@@ -565,6 +597,7 @@ async def _call_anthropic_labels(
 
 
 def _resolve_anthropic_fast_model(config: StationConfig) -> str:
+    """Resolve the Anthropic fast-role model id for label generation."""
     models = config.models
     for profile_name in (models.active_profile, models.default_profile):
         key = models.profiles.get(profile_name, {}).get("anthropic", {}).get("fast")
@@ -575,6 +608,7 @@ def _resolve_anthropic_fast_model(config: StationConfig) -> str:
 
 
 def _response_text(response: object) -> str:
+    """Concatenate the text blocks of an Anthropic message response into one string."""
     parts = getattr(response, "content", None) or []
     chunks: list[str] = []
     for part in parts:

@@ -2123,12 +2123,16 @@ async def test_homeassistant_labels_regenerate_returns_409_when_running():
     app = _make_test_app()
     app.state.config.anthropic_api_key = "sk-ant-test"
 
-    with patch("mammamiradio.web.streamer.generation_in_progress", return_value=True):
+    with (
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=True),
+        patch("mammamiradio.web.streamer.schedule_label_generation") as schedule,
+    ):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/homeassistant/labels/regenerate")
 
     assert resp.status_code == 409
+    schedule.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2136,13 +2140,17 @@ async def test_homeassistant_labels_regenerate_no_key_returns_unscheduled():
     app = _make_test_app()
     app.state.config.anthropic_api_key = ""
 
-    with patch("mammamiradio.web.streamer.generation_in_progress", return_value=False):
+    with (
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
+        patch("mammamiradio.web.streamer.schedule_label_generation") as schedule,
+    ):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/homeassistant/labels/regenerate")
 
     assert resp.status_code == 200
     assert resp.json() == {"scheduled": False, "reason": "anthropic_key_missing"}
+    schedule.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2153,6 +2161,7 @@ async def test_homeassistant_labels_regenerate_no_home_context_returns_unschedul
     with (
         patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
         patch("mammamiradio.web.streamer.get_cached_home_context", return_value=None),
+        patch("mammamiradio.web.streamer.schedule_label_generation") as schedule,
     ):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -2160,6 +2169,31 @@ async def test_homeassistant_labels_regenerate_no_home_context_returns_unschedul
 
     assert resp.status_code == 200
     assert resp.json() == {"scheduled": False, "reason": "home_context_unavailable"}
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_labels_regenerate_no_candidates_is_not_a_conflict():
+    # schedule_label_generation returns False with nothing to label; the route
+    # must report a successful no-op, not a bogus 409 "already in progress".
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-test"
+    cached_context = SimpleNamespace(
+        raw_states={"light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
+        scored=[SimpleNamespace(entity_id="light.counter", score=0.6)],
+    )
+
+    with (
+        patch("mammamiradio.web.streamer.get_cached_home_context", return_value=cached_context),
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
+        patch("mammamiradio.web.streamer.schedule_label_generation", return_value=False),
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/homeassistant/labels/regenerate")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"scheduled": False, "reason": "no_candidates"}
 
 
 # ---------------------------------------------------------------------------

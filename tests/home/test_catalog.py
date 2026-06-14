@@ -201,6 +201,38 @@ async def test_generate_label_catalog_failure_preserves_old_catalog(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_generate_label_catalog_persist_failure_preserves_old_catalog(tmp_path):
+    """Labels were accepted but the disk write failed: the refresh must not be
+    reported as success — keep the old catalog so the next poll retries."""
+    config = _config()
+    entity_id = "light.counter"
+    state = _state("Counter light")
+    save_catalog(
+        tmp_path,
+        {
+            "entries": {
+                entity_id: {"hash": compute_hash(entity_id, state), "label_it": "Vecchia luce", "label_en": "Old light"}
+            }
+        },
+    )
+
+    fresh_labels = AsyncMock(return_value=[{"entity_id": entity_id, "label_it": "Luce nuova", "label_en": "New light"}])
+    with (
+        patch("mammamiradio.home.catalog._call_anthropic_labels", new=fresh_labels),
+        patch("mammamiradio.home.catalog.save_catalog", return_value=False) as save,
+    ):
+        result = await generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True)
+
+    save.assert_called_once()
+    # Returned catalog and on-disk file both keep the old label, not the new one.
+    assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
+    assert (
+        json.loads((tmp_path / CATALOG_FILENAME).read_text(encoding="utf-8"))["entries"][entity_id]["label_it"]
+        == "Vecchia luce"
+    )
+
+
+@pytest.mark.asyncio
 async def test_schedule_label_generation_flag_prevents_task_buildup(tmp_path):
     config = _config()
     states = {"light.counter": _state("Counter light")}

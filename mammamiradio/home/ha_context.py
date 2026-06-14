@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -514,11 +515,21 @@ def _resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None =
     return resolve_label(entity_id, state_data, cache_dir=cache_dir)
 
 
-def _format_state(entity_id: str, state_data: dict, *, cache_dir: Path | None = None) -> str | None:
-    """Format a single entity state as a natural language line."""
+def _format_state(
+    entity_id: str,
+    state_data: dict,
+    *,
+    cache_dir: Path | None = None,
+    resolved: LabelResolution | None = None,
+) -> str | None:
+    """Format a single entity state as a natural language line.
+
+    ``resolved`` lets the caller pass an already-computed label so the resolver
+    (and its catalog disk read) runs once per entity per poll instead of twice.
+    """
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+    resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir)
     if resolved is None:
         # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
         # catalog, registry, or friendly label is available, drop the entity.
@@ -630,7 +641,7 @@ def _build_scored_entities(
         resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
         if resolved is None:
             continue
-        line = _format_state(entity_id, state_data, cache_dir=cache_dir)
+        line = _format_state(entity_id, state_data, cache_dir=cache_dir, resolved=resolved)
         if not line:
             continue
         scored.append(
@@ -1207,7 +1218,7 @@ def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> Hom
 def _write_registry_snapshot(cache_dir: Path, snapshot: HomeRegistrySnapshot) -> None:
     path = _ha_registry_cache_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     payload = {
         "schema_version": 1,
         "fetched_at": snapshot.fetched_at,

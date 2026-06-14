@@ -1825,7 +1825,12 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         force=True,
     )
     if not scheduled:
-        raise HTTPException(status_code=409, detail="HA label generation already in progress")
+        # schedule_label_generation returns False both when a refresh is already
+        # running AND when there is simply nothing new to label. Only the former
+        # is a conflict; the latter is a successful no-op.
+        if generation_in_progress():
+            raise HTTPException(status_code=409, detail="HA label generation already in progress")
+        return {"scheduled": False, "reason": "no_candidates"}
     return {"scheduled": True}
 
 
