@@ -1406,6 +1406,11 @@ async def run_producer(
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
+        # Per-iteration reset of the cross-domain-callback "landed" flag. The
+        # flash/ad branches also reset it before generating, but resetting here
+        # too keeps it provably scoped to one segment — a stale True from a
+        # flash that failed mid-generation can never reach the next flash/ad.
+        state.pending_callback_landed = False
         # Render-latency deep-dive: total wall time to build this segment, logged
         # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
         # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).

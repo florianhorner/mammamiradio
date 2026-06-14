@@ -396,6 +396,51 @@ async def test_write_banter_adds_new_joke(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_stashes_pending_verbal_gag(config, state):
+    """new_joke {text, punch} is stashed on state.pending_verbal_gag for the producer
+    to commit to the cross-domain ledger at queue time (Callback Director seed path)."""
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Haha!"}],
+            "new_joke": {"text": "bathroom fans", "punch": 5},
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    assert state.pending_verbal_gag is None
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    assert state.pending_verbal_gag == {"text": "bathroom fans", "punch": 5.0}
+    assert "bathroom fans" in state.running_jokes  # running_jokes still seeded too
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_new_joke_leaves_pending_gag_none(config, state):
+    """No new_joke -> nothing stashed; a canned/no-joke banter must not plant a gag."""
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Haha!"}],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    assert state.pending_verbal_gag is None
+
+
+@pytest.mark.asyncio
 async def test_write_banter_falls_back_on_api_exception(config, state):
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
