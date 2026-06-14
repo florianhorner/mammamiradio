@@ -304,3 +304,24 @@ def test_norm_cache_bridge_scrubs_foreign_artist():
     assert metadata["title"] == "Be Without U"  # real title preserved
     assert metadata["queue_drain_recovery"] is True
     assert metadata["audio_source"] == "norm_cache"
+
+
+def test_norm_cache_bridge_scrubs_foreign_title_prefix():
+    """Sibling of the artist scrub: a sidecar title carrying a 'Radio X - Song'
+    rescue prefix must be prefix-stripped here too, so the bridge payload never
+    leaks a foreign station name on the title while the artist alone was cleaned.
+    A song genuinely titled 'Radio Ga Ga' (no separator) survives."""
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    poisoned = {"title": "Radio Sabrina Sensatione – Be Without U", "artist": "Be Without U"}
+    with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=poisoned):
+        metadata, _ = _norm_cache_bridge_payload(Path("norm_abc_128k.mp3"), "queue_drain_recovery", "Mamma Mi Radio")
+
+    assert "Radio Sabrina Sensatione" not in metadata["title"]
+    assert metadata["title"] == "Be Without U"
+
+    # A real "Radio X" song title (no separator) is preserved, not blanked.
+    real = {"title": "Radio Ga Ga", "artist": "Queen"}
+    with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=real):
+        metadata, _ = _norm_cache_bridge_payload(Path("norm_xyz_128k.mp3"), "idle_bridge", "Mamma Mi Radio")
+    assert metadata["title"] == "Radio Ga Ga"
