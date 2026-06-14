@@ -130,3 +130,35 @@ def test_openai_script_model_override(monkeypatch):
     config = load_config(TOML_PATH)
     assert resolve_model(config.models, "banter", "openai") == "gpt-5"
     assert resolve_model(config.models, "transition", "openai") == "gpt-5"
+
+
+def test_broadcast_chain_env_disable(monkeypatch):
+    """MAMMAMIRADIO_BROADCAST_CHAIN=false (HA add-on `broadcast_chain` option) turns the
+    FM colouring off without editing the baked-in radio.toml — the addon's escape hatch
+    to studio-clean output."""
+    monkeypatch.setenv("MAMMAMIRADIO_BROADCAST_CHAIN", "false")
+    config = load_config(TOML_PATH)
+    assert config.audio.broadcast_chain is False
+
+
+def test_broadcast_chain_env_enable_overrides_toml(monkeypatch, tmp_path):
+    """env > toml proven against an explicit toml=false (not just the default): an
+    operator who set broadcast_chain = false in radio.toml is overridden ON by the env
+    var. Uses a tmp toml so the assertion can't pass merely because the repo default
+    happens to be true."""
+    toml_src = Path(TOML_PATH).read_text().replace("broadcast_chain = true", "broadcast_chain = false")
+    toml_file = tmp_path / "radio.toml"
+    toml_file.write_text(toml_src)
+    # Sanity: with no env, the tmp toml's explicit false stands.
+    monkeypatch.delenv("MAMMAMIRADIO_BROADCAST_CHAIN", raising=False)
+    assert load_config(str(toml_file)).audio.broadcast_chain is False
+    # env=true overrides the explicit toml false.
+    monkeypatch.setenv("MAMMAMIRADIO_BROADCAST_CHAIN", "true")
+    assert load_config(str(toml_file)).audio.broadcast_chain is True
+
+
+def test_broadcast_chain_defaults_on_without_env(monkeypatch):
+    """No env set → the radio.toml/default value stands (on by default)."""
+    monkeypatch.delenv("MAMMAMIRADIO_BROADCAST_CHAIN", raising=False)
+    config = load_config(TOML_PATH)
+    assert config.audio.broadcast_chain is True

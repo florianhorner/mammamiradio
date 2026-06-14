@@ -98,11 +98,20 @@ async def startup():
     # One integrated-LUFS target across every segment type: configure the
     # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
     # bedded banter and ads then all land at the same perceived level.
-    from mammamiradio.audio.normalizer import configure_loudness_reconcile
+    from mammamiradio.audio.normalizer import configure_broadcast_chain, configure_loudness_reconcile
 
     configure_loudness_reconcile(
         config.audio.lufs_target,
         config.audio.ad_lufs_target,
+        sample_rate=config.audio.sample_rate,
+        channels=config.audio.channels,
+        bitrate=config.audio.bitrate,
+    )
+
+    # The egress FM broadcast chain — the final "transmitter" stage every aired
+    # non-rescue segment passes through so the station sounds like radio.
+    configure_broadcast_chain(
+        config.audio.broadcast_chain,
         sample_rate=config.audio.sample_rate,
         channels=config.audio.channels,
         bitrate=config.audio.bitrate,

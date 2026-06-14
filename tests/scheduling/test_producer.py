@@ -94,6 +94,39 @@ async def test_queued_segment_includes_playlist_index_for_music(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_produced_segment_routes_through_egress_funnel(tmp_path):
+    """Integration: with the broadcast chain active, a real segment produced by
+    run_producer actually flows through the egress funnel — proving the enqueue
+    refactor wires the FX pass in, not just the isolated unit tests."""
+    track = Track(title="Canzone", artist="Artista", duration_ms=200_000, spotify_id="d1", source="classic")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_path = tmp_path / "music.mp3"
+    music_path.write_bytes(b"fake audio")
+
+    async def fake_render(t: Track, *_args, **_kwargs) -> RenderedMusicTrack:
+        return RenderedMusicTrack(track=t, path=music_path, cache_path=music_path, cache_hit=True)
+
+    def spy_colour(in_path, out_path):
+        out_path.write_bytes(b"FM")
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
+        patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=spy_colour) as m_chain,
+    ):
+        await _run_until_status_queued(queue, state, config)
+
+    m_chain.assert_called()  # the produced segment passed through the transmitter
+    assert m_chain.call_args[0][0] == music_path  # colouring the real produced audio
+
+
+@pytest.mark.asyncio
 async def test_queued_segment_uses_selected_track_identity_for_duplicate_cache_keys(tmp_path):
     """Duplicate cache keys must still report the exact selected pool index."""
     tracks = [

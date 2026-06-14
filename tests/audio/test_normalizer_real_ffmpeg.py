@@ -17,7 +17,12 @@ import subprocess
 
 import pytest
 
-from mammamiradio.audio.normalizer import normalize
+from mammamiradio.audio.normalizer import (
+    apply_broadcast_chain,
+    concat_files,
+    configure_broadcast_chain,
+    normalize,
+)
 
 # Use the project-wide `requires_ffmpeg` marker (registered in pyproject.toml)
 # instead of skipif. The default `addopts = "-m 'not requires_ffmpeg'"` means
@@ -86,6 +91,36 @@ def _make_noise_mp3(path, duration_sec: float = 3.0) -> None:
             "lavfi",
             "-i",
             f"anoisesrc=d={duration_sec}:c=pink:a=0.5",
+            "-ac",
+            "2",
+            "-acodec",
+            "libmp3lame",
+            "-ab",
+            "128k",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _make_voiceband_noise_mp3(path, duration_sec: float = 5.0) -> None:
+    """Generate noise concentrated in the ~300-3400 Hz voice band — a host-break proxy.
+
+    The broadcast chain's pre-emphasis ``treble`` shelf turns over at ~2.1 kHz, right
+    inside this band, so a voice-spectrum signal drives the shelf (and therefore the
+    downstream compressor) harder than flat pink noise does. Used to guard that the
+    chain stays loudness-neutral for VOICE, not just for the broadband source the
+    makeup gain was tuned against (so a voice-only neutrality regression can't pass).
+    """
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anoisesrc=d={duration_sec}:c=white:a=0.8,highpass=f=300,lowpass=f=3400",
             "-ac",
             "2",
             "-acodec",
@@ -327,3 +362,124 @@ def test_loudness_reconcile_runs_after_fast_path_skip_real_ffmpeg(tmp_path, capl
     lufs = _measure_lufs_real(out)
     assert lufs is not None
     assert abs(lufs - target) <= 2.0, f"skipped-path output at {lufs}, expected {target} +/-2 (reconcile bypassed?)"
+
+
+# ── FM broadcast chain (egress colouring pass) ────────────────────────────────
+# The release-invariant EQ-count guard only scans normalizer.py's music_eq_chain,
+# so the broadcast chain is invisible to it. These real-ffmpeg tests are the guard
+# that the egress filtergraph does not SIGABRT on ffmpeg 8.x / Pi aarch64, exercised
+# on the REAL risky segment shapes the egress pass actually sees (not the function
+# in isolation): a normalized track, a concat output (dialogue / sting-merge), and
+# the full normalize→colour egress sequence.
+
+
+def test_broadcast_chain_does_not_crash_on_noise_real_ffmpeg(tmp_path):
+    """The broadcast filtergraph (aphaser+treble+lowpass+acompressor, no loudnorm)
+    must complete on a realistic broadband signal — exit 0, non-empty output."""
+    configure_broadcast_chain(True)
+    src = tmp_path / "in.mp3"
+    out = tmp_path / "out.mp3"
+    _make_noise_mp3(src)
+
+    assert apply_broadcast_chain(src, out) is True
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_broadcast_chain_on_concat_output_real_ffmpeg(tmp_path):
+    """The egress pass runs on a CONCAT output — the shape a dialogue assembly or a
+    transition-sting merge produces — not just a single clean track."""
+    configure_broadcast_chain(True)
+    a = tmp_path / "a.mp3"
+    b = tmp_path / "b.mp3"
+    merged = tmp_path / "merged.mp3"
+    out = tmp_path / "out.mp3"
+    _make_tone_mp3(a, duration_sec=1.5, freq=330)
+    _make_noise_mp3(b, duration_sec=1.5)
+    concat_files([a, b], merged, 0, False)
+
+    assert apply_broadcast_chain(merged, out) is True
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_broadcast_chain_after_normalize_full_egress_shape(tmp_path):
+    """The real egress sequence: normalize() (loudness) THEN the broadcast colour.
+    Two chained passes must not crash and must leave audible, non-empty output."""
+    configure_broadcast_chain(True)
+    src = tmp_path / "in.mp3"
+    normed = tmp_path / "normed.mp3"
+    out = tmp_path / "out.mp3"
+    _make_noise_mp3(src)
+    normalize(src, normed, loudnorm=True, music_eq=True)
+
+    assert apply_broadcast_chain(normed, out) is True
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_broadcast_chain_is_loudness_neutral_real_ffmpeg(tmp_path):
+    """The broadcast chain runs AFTER the loudness reconcile (it is the last egress
+    stage), so it must not move the integrated level — else every aired segment drifts
+    off the reconciled target and the consistent-loudness contract (the #544 work)
+    silently regresses. The acompressor makeup is tuned to offset its own gain
+    reduction; this is the guard that a future filter tweak keeps the chain neutral."""
+    configure_broadcast_chain(True)
+    src = tmp_path / "in.mp3"
+    coloured = tmp_path / "out.mp3"
+    _make_noise_mp3(src, duration_sec=5.0)
+    before = _measure_lufs_real(src)
+    assert before is not None
+
+    assert apply_broadcast_chain(src, coloured) is True
+    after = _measure_lufs_real(coloured)
+    assert after is not None
+    assert abs(after - before) <= 1.0, (
+        f"broadcast chain shifted loudness {before:.1f} -> {after:.1f} LUFS "
+        "(> 1.0 LU) — it must stay neutral so segments hold the reconciled target "
+        "(real drift is ~0.1 LU; this catches a makeup-gain regression)"
+    )
+
+
+def test_broadcast_chain_is_loudness_neutral_on_voiceband_real_ffmpeg(tmp_path):
+    """Neutrality must hold for VOICE, not just for the broadband noise the makeup gain
+    was tuned against. The pre-emphasis ``treble`` shelf turns over at ~2.1 kHz, inside
+    the voice band, so a host break drives the shelf + compressor differently than flat
+    noise — a fixed makeup that is neutral for noise can still push voice off the
+    reconciled target (the FM-music/studio-voice seam reappearing as a loudness seam).
+    This is the guard that any future filter tweak keeps the chain neutral for the
+    segment type the egress stage most needs to match to music."""
+    configure_broadcast_chain(True)
+    src = tmp_path / "voice.mp3"
+    coloured = tmp_path / "voice_out.mp3"
+    _make_voiceband_noise_mp3(src, duration_sec=5.0)
+    before = _measure_lufs_real(src)
+    assert before is not None
+
+    assert apply_broadcast_chain(src, coloured) is True
+    after = _measure_lufs_real(coloured)
+    assert after is not None
+    assert abs(after - before) <= 1.0, (
+        f"broadcast chain shifted voice-band loudness {before:.1f} -> {after:.1f} LUFS "
+        "(> 1.0 LU) — voice would air off the reconciled target while music holds it; "
+        "re-tune the acompressor makeup so the chain stays neutral across content"
+    )
+
+
+def test_broadcast_chain_cpu_budget_logged(tmp_path, capsys):
+    """Measure and surface the added-pass wall-clock for the Pi CPU-budget decision
+    (D4: pure-egress adds one pass per aired segment; all three FX layers stack on
+    the _NORM_SEM 2-ffmpeg ceiling). Printed to the pi-smoke log, not hard-gated —
+    the number informs the pure-egress vs cache-bake call, it doesn't fail CI."""
+    import time
+
+    configure_broadcast_chain(True)
+    src = tmp_path / "in.mp3"
+    out = tmp_path / "out.mp3"
+    _make_noise_mp3(src, duration_sec=3.0)
+
+    t0 = time.perf_counter()
+    assert apply_broadcast_chain(src, out) is True
+    elapsed = time.perf_counter() - t0
+
+    with capsys.disabled():
+        print(f"\n[broadcast-chain CPU] 3s segment colour pass: {elapsed:.2f}s")
+    assert out.exists() and out.stat().st_size > 0
+    assert elapsed < 60.0  # loose sanity bound; a pathological hang fails, real timing is the log
