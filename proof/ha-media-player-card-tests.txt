@@ -1,0 +1,17 @@
+Proof: HA media card logo fallback (PR1)
+Commit: 4110dd21
+Generated: 2026-06-14T00:33:34Z
+Command: make check (lint + mypy + pytest + coverage floors)
+----------------------------------------
+tests/scheduling/test_producer_coverage.py:1326: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+.venv/bin/python scripts/coverage-ratchet.py check
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.11.15-final-0 _______________
+Required test coverage of 92.0% reached. Total coverage: 94.08%
+2810 passed, 2 skipped, 13 deselected, 1 warning in 63.18s (0:01:03)
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
+----------------------------------------
+Targeted artwork/logo tests:
+.................                                                        [100%]
+17 passed, 177 deselected in 0.11s
