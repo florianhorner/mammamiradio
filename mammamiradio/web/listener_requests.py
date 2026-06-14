@@ -48,12 +48,13 @@ from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     SegmentType,
 )
-from mammamiradio.web.auth import require_admin_access
+from mammamiradio.web.auth import _HASSIO_NETWORK, require_admin_access
 from mammamiradio.web.streamer import _register_background_task
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 
-_HASSIO_NETWORK = ipaddress.ip_network("172.30.32.0/23")
+# _HASSIO_NETWORK is imported from web.auth, the SSOT for trusted-network
+# classification, so the Supervisor CIDR cannot drift between the two modules.
 _TRUSTED_PROXY_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("::1/128"),

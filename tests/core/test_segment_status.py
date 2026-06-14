@@ -19,6 +19,10 @@ from mammamiradio.core import segment_status as ss
         {"queue_drain_recovery": True},
         {"resume_bridge": True},
         {"silence_fallback": True},
+        # idle warm-up canned clips set idle_bridge but no audio_source, so the
+        # flag must classify them as rescue (else a warm-up clip reads as the
+        # primary station). Regression guard for #547.
+        {"idle_bridge": True},
         {"audio_source": "fallback_demo_asset"},
         {"audio_source": "norm_cache"},
         {"audio_source": "emergency_tone"},

@@ -31,6 +31,7 @@ from mammamiradio.home.ha_enrichment import (
     diff_states,
     prune_events,
 )
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
 
@@ -1482,7 +1483,19 @@ async def push_state_to_ha(
                 or getattr(current_track, "title", None)
                 or now_streaming.get("label", "")
             )
-            media_artist = metadata.get("artist") or getattr(current_track, "artist", None) or station_name
+            # Illusion guard: never let a foreign "Radio X" station name reach the
+            # HA card as a song's artist/title (e.g. a rescue segment built from a
+            # poisoned norm-cache sidecar). Strip it and fall back; our own name is
+            # the right last resort for the artist, but not a competitor's.
+            media_artist = (
+                strip_foreign_station_name(metadata.get("artist"), station_name)
+                or strip_foreign_station_name(getattr(current_track, "artist", None), station_name)
+                or station_name
+            )
+            # Title uses prefix-only mode: strip a rescue display prefix
+            # ("Radio X - Song" -> "Song") but never blank a real song that is
+            # genuinely titled "Radio Ga Ga" / "Radio Free Europe".
+            media_title = strip_foreign_station_name(media_title, station_name, prefix_only=True)
         else:
             media_title = metadata.get("title") or (now_streaming.get("label", "") if now_streaming else "")
             media_artist = station_name

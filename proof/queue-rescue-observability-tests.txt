@@ -1,0 +1,19 @@
+# Proof — PR #579: feat(observability): surface producer rescue-bridge health (closes #547)
+# Generated locally on branch florianhorner/chore/verify-issues-565-547
+
+## ruff check (mammamiradio/ tests/)
+All checks passed!
+
+## mypy mammamiradio/ tests/ (last line)
+Success: no issues found in 173 source files
+
+## pytest — affected files
+........................................................................ [ 94%]
+...................                                                      [100%]
+379 passed in 26.07s
+
+## make check — full suite + coverage gate
+Required test coverage of 92.0% reached. Total coverage: 94.06%
+2774 passed, 2 skipped, 13 deselected, 1 warning
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed

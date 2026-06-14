@@ -38,21 +38,35 @@ def _inject_csrf_token(html: str, token: str) -> str:
 
 
 def _same_origin(request: Request, candidate: str) -> bool:
-    parsed = urlparse(candidate)
+    # urlparse raises ValueError at call time on some malformed inputs (e.g. an
+    # unmatched bracket, "Invalid IPv6 URL"), and lazily on .port access for a
+    # bad port (out-of-range, non-numeric, embedded whitespace). Guard both: a
+    # request we cannot parse is never same-origin — fail closed (403) rather
+    # than let the ValueError surface as a 500.
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return False
     if not parsed.scheme or not parsed.netloc:
         return False
     request_url = request.url
 
     # Normalize ports: None means the default for the scheme (80/443)
-    def _effective_port(port, scheme: str) -> int:
+    def _effective_port(port: int | None, scheme: str) -> int:
         if port is not None:
             return port
         return 443 if scheme == "https" else 80
 
+    try:
+        candidate_port = _effective_port(parsed.port, parsed.scheme)
+        request_port = _effective_port(request_url.port, request_url.scheme)
+    except ValueError:
+        return False
+
     return (
         parsed.scheme == request_url.scheme
         and parsed.hostname == request_url.hostname
-        and _effective_port(parsed.port, parsed.scheme) == _effective_port(request_url.port, request_url.scheme)
+        and candidate_port == request_port
     )
 
 

@@ -119,6 +119,21 @@ def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
     assert "const state=rs.health_state||'ready'" not in block
 
 
+def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
+    """#547: the Runtime Status card adds a Queue rescue row driven by
+    rs.bridge_health, flipping to the colorblind-safe 'degraded' state when the
+    station is running on rescue."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const bh=rs.bridge_health" in block
+    assert "statusRow('Queue rescue'" in block
+    # Warning state must be the canonical (yellow) 'degraded', never green.
+    assert "const rescueState=bh.unhealthy?'degraded':'ready'" in block
+    assert "Running on rescue" in block
+    # Row is wired into the rendered card array.
+    assert "rescueRow," in block
+
+
 def test_runtime_provider_row_handles_recovery_mode() -> None:
     block = _function_block(_read_admin_html(), "runtimeProviderRow")
 

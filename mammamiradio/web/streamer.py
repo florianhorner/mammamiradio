@@ -40,6 +40,7 @@ from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.ha_context import push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
+from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
     load_explicit_source,
@@ -153,6 +154,14 @@ def _safe_external_album_art(value: Any) -> str:
 
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
+# Producer rescue-bridge health (#547). A drain/resume/idle bridge firing now and
+# then is normal (one startup or resume bridge is expected). Firing repeatedly
+# means the lookahead queue is starving and the station is "running on rescue" —
+# audio plays, but it is cached rotation, not the real station. BRIDGE_HEALTH_*
+# defines that line: this many bridges inside the rolling window flips runtime
+# status to unhealthy so the operator sees it instead of a falsely-green station.
+BRIDGE_HEALTH_WINDOW_SECONDS = 900.0  # 15-minute rolling window
+BRIDGE_HEALTH_THRESHOLD = 3  # bridges within the window before "running on rescue"
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
@@ -647,6 +656,32 @@ def _runtime_status_snapshot(
         "recent_events": recent_events,
         "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
+        "bridge_health": _bridge_health_snapshot(state),
+    }
+
+
+def _bridge_health_snapshot(state: StationState) -> dict:
+    """Producer rescue-bridge health for the admin Runtime Status card (#547).
+
+    Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
+    fires; ``unhealthy`` trips once the count reaches ``BRIDGE_HEALTH_THRESHOLD``
+    inside ``BRIDGE_HEALTH_WINDOW_SECONDS``. Session counts and the queue-empty
+    elapsed (reused from the existing health probe) ride along so the operator
+    sees one honest "running on rescue" readout instead of a falsely-green card.
+    """
+    now = time.time()
+    window = BRIDGE_HEALTH_WINDOW_SECONDS
+    recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
+    last_fire = state.bridge_events[-1] if state.bridge_events else None
+    return {
+        "window_seconds": window,
+        "threshold": BRIDGE_HEALTH_THRESHOLD,
+        "session_count": state.bridge_fires_total,
+        "by_type": dict(state.bridge_fires_by_type),
+        "window_count": len(recent),
+        "last_fire": dict(last_fire) if last_fire else None,
+        "queue_empty_elapsed_s": round(_queue_empty_elapsed(state), 1),
+        "unhealthy": len(recent) >= BRIDGE_HEALTH_THRESHOLD,
     }
 
 
@@ -668,6 +703,10 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "scored_entities": state.ha_scored_entities[:12],
         "denylist_hits": dict(state.ha_denylist_hits),
         "catalog_hit_rate": state.ha_catalog_hit_rate,
+        "context_char_count": state.ha_context_char_count,
+        "context_entity_count": state.ha_context_entity_count,
+        "context_last_updated": state.ha_context_last_updated or None,
+        "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
 
 
@@ -1047,8 +1086,19 @@ async def run_playback_loop(app) -> None:
                             rescued_from_norm = True
                             sidecar = load_track_metadata(rescue)
                             if sidecar:
-                                rescue_title = f"{sidecar['artist']} – {sidecar['title']}"
-                                rescue_artist: str | None = sidecar["artist"]
+                                # Illusion guard: a poisoned sidecar artist (a foreign
+                                # "Radio X" station name) must never surface as the
+                                # now-playing artist/label. Strip it and drop to
+                                # title-only rather than airing a competitor's name.
+                                clean_artist = strip_foreign_station_name(
+                                    sidecar["artist"], config.display_station_name
+                                )
+                                if clean_artist:
+                                    rescue_title = f"{clean_artist} – {sidecar['title']}"
+                                    rescue_artist: str | None = clean_artist
+                                else:
+                                    rescue_title = sidecar["title"]
+                                    rescue_artist = None
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
@@ -1079,7 +1129,10 @@ async def run_playback_loop(app) -> None:
                             stem = rescue.stem
                             if " - " in stem:
                                 rescue_artist, rescue_title = stem.split(" - ", 1)
-                                rescue_artist = rescue_artist.strip() or "Unknown"
+                                rescue_artist = (
+                                    strip_foreign_station_name(rescue_artist.strip(), config.display_station_name)
+                                    or "Unknown"
+                                )
                                 rescue_title = rescue_title.strip() or stem
                             else:
                                 rescue_artist = "Unknown"
@@ -2060,6 +2113,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
+    import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
     import mammamiradio.hosts.transitions as _transitions_mod
 
     # Debounce: reject if called within 5s of last reload (monotonic to avoid NTP skew)
@@ -2090,11 +2144,12 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_prompt_world_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
+        importlib.reload(_station_name_guard_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2103,6 +2158,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.prompt_world",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
+                "mammamiradio.hosts.station_name_guard",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,
