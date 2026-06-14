@@ -86,6 +86,30 @@ stamps a `reconciled_lufs` marker into the norm sidecar so later hits skip both 
 re-encode and the measure. This self-heals files cached before reconciliation
 existed (which otherwise aired at their old, quieter level) one play at a time.
 
+### Egress FX pipeline (the transmitter, applied last)
+
+Every segment reaches the playback queue through one funnel —
+`_enqueue_with_egress()` in `scheduling/producer.py` — so music, dialogue, ads, and
+bridges all leave through a single chokepoint after every mix, concat, and
+transition-sting merge is done. The funnel runs an ordered egress FX pipeline whose
+always-on final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
+`audio/normalizer.py`): one extra FFmpeg pass that colours the finished audio like an
+over-the-air FM signal — a subtle multipath movement, a gentle pre-emphasis HF shelf,
+the ~15 kHz channel band-limit, and a soft broadcast leveller. Voice and music exit
+through the same final stage, so there is no "FM music next to studio-clean voice"
+seam. Toggle it with `[audio] broadcast_chain` (default on); a separate pass with no
+`loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers + loudnorm on
+ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
+`normalize()` so the extra encode respects the Pi 2-FFmpeg ceiling.
+
+The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
+prior audio in place and never raises, and emergency / bridge / rescue / canned fills
+(any segment carrying a rescue marker such as `queue_drain_recovery`, `resume_bridge`,
+`idle_bridge`, or `canned`) skip the pipeline entirely so a dead-air rescue is never
+delayed by an extra encode (leadership principle #2, INSTANT AUDIO). The chaos and
+reactive-interference content stages slot in **before** the broadcast chain — effects
+colour the content, the transmitter colours the channel last.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by

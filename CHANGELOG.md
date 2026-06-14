@@ -18,6 +18,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **The station now sounds like it's coming through a real radio.** Every song, host break, and ad passes through a gentle on-air colouring — the warm, slightly band-limited character of an FM broadcast — so the station feels like a station you've tuned into, not a clean studio file. It's on by default; set `broadcast_chain = false` under `[audio]` in `radio.toml` for studio-clean output. The instant rescue clips that cover a gap skip the colouring so they still start the moment they're needed.
+
 - **The host learns warmer names for your connected home.** When Home Assistant is connected and an Anthropic key is set, the station quietly teaches itself how to talk about your devices — your vacuum by its real name, your lights by their room, your speakers — and remembers them so it doesn't have to work it out again. Hand-picked Italian names always win; the host never reads out a raw technical device ID, and anything it can't name warmly it simply leaves out. The admin home-status data tracks how many names came ready-made, how many the station generated, and how many are still waiting. Privacy note: to generate those names, your devices' display names and rooms are sent to Anthropic — no sensor readings, no presence, no location — and the results are kept locally on your own machine. A startup log line confirms when this is on.
 
 - **The morning coffee gets a knowing nod.** When the coffee machine clicks on, the host may tie it to the time of day the way a real DJ would — a warm "right on time" when it's early — never forced, and never a remark about how often or how long you do anything. The station already knew the hour; now it can use it.

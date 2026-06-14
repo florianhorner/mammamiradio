@@ -25,6 +25,7 @@ from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, 
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
+    apply_broadcast_chain,
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
@@ -528,6 +529,69 @@ def _front_insert_queue_and_shadow(
     return True
 
 
+# Segments carrying any of these markers with a TRUTHY value are emergency / bridge
+# / rescue / canned fills: they exist to kill dead air the instant the queue runs
+# dry (leadership principle #2, INSTANT AUDIO). They MUST skip the egress FX pass so
+# a rescue is never delayed by an extra ffmpeg encode — a clean transmitter sound is
+# never worth a beat of silence. The check is truthiness, NOT key presence, because
+# ``canned`` is overloaded: a normal LLM-generated banter segment stamps
+# ``canned=False`` (it is not a canned clip) and MUST still be coloured — otherwise
+# every live host break would bypass the transmitter and air studio-clean next to FM
+# music, the exact seam this stage removes.
+_EGRESS_SKIP_KEYS = frozenset(
+    {
+        "error",
+        "queue_drain_recovery",
+        "silence_fallback",
+        "error_recovery",
+        "resume_bridge",
+        "idle_bridge",
+        "warmup",
+        "canned",
+        "recycled",
+    }
+)
+
+
+def _is_rescue_fill(segment: Segment) -> bool:
+    """True when the segment is an emergency / bridge / rescue / canned fill that must
+    skip the egress pass. Truthiness, not presence — see ``_EGRESS_SKIP_KEYS``."""
+    return any(segment.metadata.get(k) for k in _EGRESS_SKIP_KEYS)
+
+
+async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
+    """Run the outgoing egress FX pipeline on a finished segment.
+
+    Returns the processed segment (a fresh ephemeral tmp render) or the original,
+    unchanged, when no stage applied. The FM broadcast chain is the always-on final
+    stage — "the transmitter"; the chaos (#482) and interference (#483) content
+    stages will slot in BEFORE it so effects colour the content and the broadcast
+    chain colours the channel last. Emergency / bridge / rescue / canned fills skip
+    the pipeline entirely (see ``_EGRESS_SKIP_KEYS``). Best-effort: a stage failure
+    leaves the prior audio in place and never raises, so the listener never hits
+    dead air.
+    """
+    if _is_rescue_fill(segment):
+        return segment
+    out = config.tmp_dir / f"egress_{uuid4().hex[:8]}.mp3"
+    loop = asyncio.get_running_loop()
+    try:
+        applied = await loop.run_in_executor(None, apply_broadcast_chain, segment.path, out)
+    except Exception:
+        logger.debug("Egress broadcast chain failed (non-fatal), airing clean", exc_info=True)
+        out.unlink(missing_ok=True)
+        return segment
+    if not applied:
+        out.unlink(missing_ok=True)
+        return segment
+    pre_segment = segment
+    segment = replace(segment, path=out, ephemeral=True)
+    # Drop the pre-egress tmp render; a cache file (norm-cache music, ephemeral=False)
+    # is left in place so the cache is never corrupted by the colouring pass.
+    _unlink_if_tmp_render(pre_segment, config.tmp_dir)
+    return segment
+
+
 async def _enqueue_with_egress(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -540,13 +604,14 @@ async def _enqueue_with_egress(
     """The single funnel every segment passes through on its way to the playback queue.
 
     The outgoing egress FX pipeline (the always-on FM broadcast chain; the chaos
-    and interference stages slot in later) hooks in here, so music, dialogue, ads
-    and bridges all leave through one chokepoint — the audio equivalent of the
+    and interference stages slot in later) runs here, so music, dialogue, ads and
+    bridges all leave through one chokepoint — the audio equivalent of the
     transmitter every signal passes through last. Operator air-next still routes
     through the synchronous front-insert critical section, just behind this one
-    entry point. For now this is a behaviour-preserving pass-through; ``config`` is
-    the seam the FX stages read.
+    entry point. FX run BEFORE the front-insert critical section so it stays a
+    no-await drain→prepend→repush.
     """
+    segment = await _apply_egress(segment, config)
     if front_insert:
         assert shadow_entry is not None  # operator air-next always supplies a shadow entry
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)

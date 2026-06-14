@@ -124,6 +124,11 @@ bitrate = 192
 # longer jump in volume. Ads sit 1 LU hotter so they still pop.
 lufs_target = -16.0
 ad_lufs_target = -15.0
+# FM broadcast chain: colour every aired segment like an over-the-air FM signal
+# (a subtle multipath movement, gentle pre-emphasis, a ~15 kHz band-limit, and a
+# soft transmitter leveller) so the station sounds like radio, not a clean studio
+# file. Set false for studio-clean.
+broadcast_chain = true
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────
 # Script generation never names a model in code. A task asks for a ROLE; the

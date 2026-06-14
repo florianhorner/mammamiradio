@@ -57,3 +57,15 @@ def _reset_loudness_reconcile():
     configure_loudness_reconcile(None, None)
     yield
     configure_loudness_reconcile(None, None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_broadcast_chain():
+    """Keep the normalizer's module-level FM broadcast-chain state out of cross-test
+    state: default it OFF before and after every test so a test (or a full-app
+    lifespan) that enables it can't colour another test's audio output."""
+    from mammamiradio.audio.normalizer import configure_broadcast_chain
+
+    configure_broadcast_chain(False)
+    yield
+    configure_broadcast_chain(False)
