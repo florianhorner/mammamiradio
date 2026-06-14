@@ -326,8 +326,10 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
     (
         "switch.bar_kaffeemaschine_steckdose",
         "on",
-        "La macchina del caffè si è appena accesa! I conduttori sentono il profumo di espresso"
-        " e lo notano brevemente — naturale, non esagerato.",
+        "La macchina del caffè si è appena accesa! Profumo di espresso, notatelo brevemente —"
+        " naturale, non esagerato. Se l'ora mostrata sopra calza, legate l'evento al momento"
+        " ('puntuale'), solo se naturale. Mai dire con che frequenza o da quanto"
+        " succede.",
         1800,
     ),
     (

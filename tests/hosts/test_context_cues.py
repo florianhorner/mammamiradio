@@ -117,6 +117,21 @@ class TestContextRules:
             block = compute_context_block()
         assert "SHOW SEGMENT:" in block
 
+    def test_emits_clock_time_for_espresso_oclock(self):
+        """REGRESSION GUARD: the exact HH:MM clock must stay in the context block.
+
+        The "espresso o'clock" WHEN feature (the coffee REACTIVE_TRIGGERS directive
+        in ha_context.py) tells the host it may tie a home event to "l'orario mostrato
+        sopra" — the time shown here. That time only reaches the prompt via this line.
+        If it is ever removed or reworded away, time-aware banter dies silently with no
+        error. Keep the literal clock in the block.
+        """
+        with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = _freeze_time(7)  # 07:30
+            block = compute_context_block()
+        assert "It is " in block
+        assert "07:30" in block
+
     def test_seasonal_cue_appears_for_valid_month(self):
         with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = _freeze_time(10, month=12)
