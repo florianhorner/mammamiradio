@@ -1529,10 +1529,7 @@ async def push_state_to_ha(
         cover = (
             album_art
             if (
-                is_playing
-                and parsed_art is not None
-                and parsed_art.scheme in ("http", "https")
-                and parsed_art.hostname
+                is_playing and parsed_art is not None and parsed_art.scheme in ("http", "https") and parsed_art.hostname
             )
             else ""
         )
