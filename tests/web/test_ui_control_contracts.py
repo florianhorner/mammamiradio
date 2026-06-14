@@ -1219,9 +1219,7 @@ class TestFaderDownEmptyRoomUI:
             "not infer empty-room state from playback metadata alone."
         )
         assert "st?.listeners_active" in helper, "legacy listener-count fallback should remain harmless."
-        assert "updateFaderDownState(_st)" in refresh, (
-            "refreshFast() must derive Fader Down from each /status poll."
-        )
+        assert "updateFaderDownState(_st)" in refresh, "refreshFast() must derive Fader Down from each /status poll."
 
     def test_fader_down_copy_is_distinct_from_stopped_and_building(self):
         html = ADMIN_HTML.read_text()
@@ -1240,8 +1238,7 @@ class TestFaderDownEmptyRoomUI:
         assert "clearInterval(_tick)" in freeze
         assert "_tick=null" in freeze
         assert "if(_faderDownActive){freezeFaderDownProgress();return;}" in update_now, (
-            "updateNow() must not restart the elapsed interval while the empty-room "
-            "state is active."
+            "updateNow() must not restart the elapsed interval while the empty-room state is active."
         )
 
     def test_fader_down_snapshot_is_read_back_so_the_value_holds_steady(self):
@@ -1262,6 +1259,14 @@ class TestFaderDownEmptyRoomUI:
         assert "_faderDownSnapshot=null" in update_now, (
             "a newly cued record must invalidate the snapshot so it re-snapshots "
             "near 0:00 instead of freezing on the prior record's value."
+        )
+        # Record-change detection must key on more than the bare label: two
+        # different cued records can share a label, and the stale snapshot has
+        # to drop anyway. Guard against regressing to label-only comparison.
+        assert "_prevNowKey" in update_now, "updateNow() must compare a composite record key, not the bare label."
+        assert "ns.started" in update_now and "typeKey" in update_now, (
+            "the record key must fold in type and start time so a same-label "
+            "different record still invalidates the frozen snapshot."
         )
 
     def test_fader_down_does_not_take_over_stop_resume_authority(self):

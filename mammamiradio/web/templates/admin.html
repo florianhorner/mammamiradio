@@ -2161,7 +2161,7 @@ const _base = (() => {
   return p === '' ? '' : p;
 })();
 let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
-let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
+let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
 let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
 let _programmeFilter='all', _lastProgrammeHash='';
 // Delayed-commit undo state (eng review T2/E3): destructive queue actions remove
@@ -2573,7 +2573,7 @@ function updateNow(ns){
     const topBarArtist=document.getElementById('topBarArtist');
     if(topBarTitleText)topBarTitleText.textContent='Waiting for signal… ';
     if(topBarArtist)topBarArtist.textContent='';
-    if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
+    if(_tick){clearInterval(_tick);_tick=null;_prevNowKey='';}
     return;
   }
   const typeKey=segmentTypeKey(ns.type);
@@ -2604,8 +2604,11 @@ function updateNow(ns){
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   const dur=durationSec(ns);
   const label=ns.label||'';
-  if(label!==_prevLabel||(_resumeFromFaderLabel&&label===_resumeFromFaderLabel)){
-    _prevLabel=label;
+  // Key record-change on type+label+start, not label alone: two different cued
+  // records can share a label, and the stale snapshot must still be dropped.
+  const nowKey=`${typeKey}|${label}|${Number(ns.started||0)}`;
+  if(nowKey!==_prevNowKey||(_resumeFromFaderLabel&&label===_resumeFromFaderLabel)){
+    _prevNowKey=nowKey;
     _nowStart=(_resumeFromFaderLabel&&label===_resumeFromFaderLabel)?Date.now():(ns.started?ns.started*1000:Date.now());
     _resumeFromFaderLabel='';
     _nowDur=dur||0;
