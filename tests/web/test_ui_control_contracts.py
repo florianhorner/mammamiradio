@@ -51,6 +51,15 @@ AUTH = {"X-Radio-Admin-Token": TOKEN}
 # ---------------------------------------------------------------------------
 
 
+def _admin_function_block(name: str) -> str:
+    html = ADMIN_HTML.read_text()
+    start = html.find(f"function {name}")
+    assert start != -1, f"could not locate {name}() in admin.html"
+    next_function = re.search(r"\n(?:async\s+)?function\s+", html[start + 1 :])
+    end = start + 1 + next_function.start() if next_function is not None else len(html)
+    return html[start:end]
+
+
 def _make_seg(title: str = "Track") -> Segment:
     return Segment(
         type=SegmentType.MUSIC,
@@ -1195,6 +1204,95 @@ class TestStoppedStateQuietsTheUI:
         assert "updateStopState" in block, (
             "refreshFast() must call updateStopState() so the poll keeps the stopped UI in sync with the server."
         )
+
+
+class TestFaderDownEmptyRoomUI:
+    """When the transport pauses because no one is listening, the admin should
+    show a cued, waiting state without treating the station as stopped."""
+
+    def test_admin_derives_fader_down_from_status_listener_count(self):
+        helper = _admin_function_block("activeListenerCount")
+        refresh = _admin_function_block("refreshFast")
+
+        assert "st?.listeners?.active" in helper, (
+            "Fader Down must read the canonical /status listeners.active value, "
+            "not infer empty-room state from playback metadata alone."
+        )
+        assert "st?.listeners_active" in helper, "legacy listener-count fallback should remain harmless."
+        assert "updateFaderDownState(_st)" in refresh, "refreshFast() must derive Fader Down from each /status poll."
+
+    def test_fader_down_copy_is_distinct_from_stopped_and_building(self):
+        html = ADMIN_HTML.read_text()
+        programme = _admin_function_block("renderProgramme")
+
+        assert 'data-fader-down="true"' in html
+        assert "The record is cued. Waiting for someone to tune in." in html
+        assert "Fader Down — the record is cued for the next listener." in programme
+        assert "Station paused — press Start to resume." in programme
+        assert "Preparing the next segment..." in programme
+
+    def test_fader_down_freezes_elapsed_timer_without_waiting_for_stop(self):
+        freeze = _admin_function_block("freezeFaderDownProgress")
+        update_now = _admin_function_block("updateNow")
+
+        assert "clearInterval(_tick)" in freeze
+        assert "_tick=null" in freeze
+        assert "if(_faderDownActive){freezeFaderDownProgress();return;}" in update_now, (
+            "updateNow() must not restart the elapsed interval while the empty-room state is active."
+        )
+
+    def test_fader_down_snapshot_is_read_back_so_the_value_holds_steady(self):
+        # Regression guard: a captured-but-never-read snapshot let the "frozen"
+        # counter climb on every /status poll (it recomputed elapsed from
+        # Date.now()-_nowStart each call). The freeze must REUSE the snapshot,
+        # not just write it, so the displayed elapsed/width hold steady.
+        freeze = _admin_function_block("freezeFaderDownProgress")
+        update_now = _admin_function_block("updateNow")
+
+        assert "if(_faderDownSnapshot)" in freeze, (
+            "freezeFaderDownProgress() must read _faderDownSnapshot back to hold "
+            "the value steady, not recompute elapsed from wall-clock every poll."
+        )
+        assert "({elapsed,width}=_faderDownSnapshot)" in freeze, (
+            "the held snapshot must be consumed as the displayed elapsed/width."
+        )
+        assert "_faderDownSnapshot=null" in update_now, (
+            "a newly cued record must invalidate the snapshot so it re-snapshots "
+            "near 0:00 instead of freezing on the prior record's value."
+        )
+        # Record-change detection must key on more than the bare label: two
+        # different cued records can share a label, and the stale snapshot has
+        # to drop anyway. Guard against regressing to label-only comparison.
+        assert "_prevNowKey" in update_now, "updateNow() must compare a composite record key, not the bare label."
+        assert "ns.started" in update_now and "typeKey" in update_now, (
+            "the record key must fold in type and start time so a same-label "
+            "different record still invalidates the frozen snapshot."
+        )
+
+    def test_fader_down_does_not_take_over_stop_resume_authority(self):
+        refresh = _admin_function_block("refreshFast")
+        fader = _admin_function_block("updateFaderDownState")
+
+        assert "updateStopState(_st.session_stopped)" in refresh, (
+            "session_stopped must remain the only authority for the stopped UI."
+        )
+        assert "/api/stop" not in fader
+        assert "/api/resume" not in fader
+        assert "updateStopState(" not in fader
+        assert "session_stopped=" not in fader
+
+    @pytest.mark.asyncio
+    async def test_status_exposes_listener_counts_for_admin_fader_down(self):
+        app = _make_app(now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}})
+        app.state.station_state.listeners_active = 0
+        app.state.station_state.listeners_peak = 2
+        app.state.station_state.listeners_total = 5
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/status", headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json()["listeners"] == {"active": 0, "peak": 2, "total": 5}
 
 
 class TestHostBlockSelectorScoping:

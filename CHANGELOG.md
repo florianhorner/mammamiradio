@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.
+
 - **The Home Assistant media card no longer keeps the last song's cover during talk.** When the hosts talk, an ad plays, or the station is idle, the HA media card now shows the station logo instead of leaving the previous track's album art frozen on screen. The real cover returns the moment music does. You can point the card at your own logo with `artwork_url` under `[brand]` in `radio.toml`.
 
 - **The Home Assistant media card never shows the wrong station name.** A radio-station name that the hosts may have improvised in conversation could occasionally slip into the now-playing artist line on your Home Assistant media player — showing a station that isn't yours. The now-playing details (and the listener page's now-playing line) are now scrubbed so only your real station name ever appears; a song's actual artist and title still come through (a "Radio X - Song" label is trimmed to just the song, and a foreign name written in any case or with stray punctuation is caught too). Improvised station names are also kept out of the spoken ad and news breaks, matching the existing guard on host chatter.
