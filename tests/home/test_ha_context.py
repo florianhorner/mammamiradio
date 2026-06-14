@@ -2284,6 +2284,31 @@ async def test_push_state_to_ha_uses_configured_artwork_url(reset_ha_push_deboun
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_real_cover_wins_over_configured_artwork_url(reset_ha_push_debounce):
+    """Precedence: a playing music track's real cover beats the configured station
+    logo (`cover or artwork_url or default`). Guards against a regression that
+    surfaces the station logo over a genuine album cover during music."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time() - 5,
+                "metadata": {"title": "Song", "album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            artwork_url="https://my.station/logo.png",
+        )
+    assert _mp_attrs(mock_client)["entity_picture"] == "https://x/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_media_position_floored_at_zero(reset_ha_push_debounce):
     """media_position must never be negative even if started is slightly in the future."""
     mock_client = AsyncMock()
