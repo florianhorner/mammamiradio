@@ -51,6 +51,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mammamiradio.home.gag_select import weighted_offer
 from mammamiradio.home.ha_context import BRONZE_ENTITIES, GOLD_ENTITIES, SILVER_ENTITIES
 from mammamiradio.home.ha_enrichment import HomeEvent
 
@@ -271,22 +272,24 @@ class EveningLedger:
         producer calls `mark_spoken()` only after generated banter successfully
         queues, so failed/canned fallback paths do not burn a callback.
         """
-        roll = rng or random
         eligible = [
             (key, bucket)
             for key, bucket in self.buckets.items()
             if bucket.count >= MIN_COUNT_FOR_GAG and (now - bucket.last_spoken_ts) >= GAG_COOLDOWN_SECONDS
         ]
-        if not eligible:
+        # Weighted-random pick (not strict top, so a hot gag can't starve the rest)
+        # + silence chance ("discovered, not announced"). Shared with the verbal
+        # running-gag ledger via gag_select.weighted_offer.
+        chosen = weighted_offer(
+            eligible,
+            now=now,
+            inject_probability=GAG_INJECT_PROBABILITY,
+            weight=lambda bucket, n: bucket.salience(now=n),
+            rng=rng,
+        )
+        if chosen is None:
             return None
-        weights = [bucket.salience(now=now) for _, bucket in eligible]
-        if sum(weights) <= 0:
-            return None
-        # Weighted-random pick (not strict top) so a hot gag can't starve the rest.
-        chosen_key, chosen_bucket = roll.choices(eligible, weights=weights, k=1)[0]
-        # Silence chance: a callback is "discovered, not announced".
-        if roll.random() >= GAG_INJECT_PROBABILITY:
-            return None  # stayed silent; no cooldown spent
+        chosen_key, chosen_bucket = chosen
         return chosen_key, _render_gag(chosen_bucket)
 
     def mark_spoken(self, bucket_key: str, *, now: float) -> None:

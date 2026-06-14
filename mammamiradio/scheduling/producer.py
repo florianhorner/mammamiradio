@@ -1476,6 +1476,11 @@ async def run_producer(
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         success_callback: Callable[[], None] | None = None
+        # Per-iteration reset of the cross-domain-callback "landed" flag. The
+        # flash/ad branches also reset it before generating, but resetting here
+        # too keeps it provably scoped to one segment — a stale True from a
+        # flash that failed mid-generation can never reach the next flash/ad.
+        state.pending_callback_landed = False
         # Render-latency deep-dive: total wall time to build this segment, logged
         # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
         # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
@@ -1812,6 +1817,11 @@ async def run_producer(
 
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
+
+                # Reset the pending verbal gag — write_banter sets it ONLY on the
+                # LLM success path, so a canned/failed banter never leaves a stale
+                # gag for the success callback to commit (B-i).
+                state.pending_verbal_gag = None
 
                 # Track listening sessions for compounding persona
                 await _maybe_start_session(state)
@@ -2177,6 +2187,8 @@ async def run_producer(
                     _gag_key=state.ha_running_gag_key,
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
+                    _pending_gag=state.pending_verbal_gag,
+                    _vledger=state.verbal_gag_ledger,
                 ) -> None:
                     state.after_banter()
                     if _is_new_listener:
@@ -2196,6 +2208,17 @@ async def run_producer(
                         _ledger.mark_spoken(_gag_key, now=time.time())
                         _ledger.save_if_dirty(_cache_dir)
                     state.ha_running_gag_key = ""
+                    # Commit the banter-seeded verbal gag to the cross-domain
+                    # ledger ONLY now that the banter actually queued (B-i). A
+                    # discarded banter never reaches this callback, so it never
+                    # plants a travelable gag whose setup the listener never heard.
+                    if _pending_gag and _vledger is not None:
+                        _vledger.add_gag(
+                            _pending_gag.get("text", ""),
+                            punch=_pending_gag.get("punch"),
+                            now=time.time(),
+                        )
+                    state.pending_verbal_gag = None
 
                 success_callback = _banter_callback
 
@@ -2204,9 +2227,21 @@ async def run_producer(
 
                 try:
                     state.set_gen("writing", "news_flash", "Writing a news flash")
+                    # Callback Director: offer at most one cross-domain verbal gag
+                    # (best-effort, never raises into audio). contrasting_to is the
+                    # segment domain — a host-seeded gag is eligible here.
+                    state.pending_callback_landed = False
+                    _cb_gag = None
+                    if state.verbal_gag_ledger is not None:
+                        try:
+                            _cb_gag = state.verbal_gag_ledger.offer(now=time.time(), contrasting_to="news_flash")
+                        except Exception:
+                            _cb_gag = None
                     _gen_ok = False
                     try:
-                        host, text, category = await _sw.write_news_flash(state, config)
+                        host, text, category = await _sw.write_news_flash(
+                            state, config, callback_gag=(_cb_gag[1].text if _cb_gag else None)
+                        )
                         _gen_ok = True
                     finally:
                         state.end_gen(ok=_gen_ok)
@@ -2257,8 +2292,13 @@ async def run_producer(
 
                 _bound_cat = category
 
-                def _news_callback(_c=_bound_cat) -> None:
+                def _news_callback(_c=_bound_cat, _gag=_cb_gag, _vledger=state.verbal_gag_ledger) -> None:
                     state.after_news_flash(_c)
+                    # Retire the verbal gag ONLY if the model reported it landed
+                    # (queue-time != used) — a discarded segment never reaches here,
+                    # and an ignored callback must not burn the gag.
+                    if _gag is not None and _vledger is not None and state.pending_callback_landed:
+                        _vledger.mark_spoken(_gag[0], now=time.time())
 
                 success_callback = _news_callback
 
@@ -2530,6 +2570,17 @@ async def run_producer(
                 _ad_prov_tok = set_collector(_ad_collector)
                 _ad_brand = spot_params[0][0] if spot_params else ""
                 state.set_gen("writing", "ad", f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break")
+                # Callback Director: offer one cross-domain verbal gag for the
+                # break, handed to the FIRST spot only (at most one callback per
+                # break). Best-effort; never raises into audio.
+                state.pending_callback_landed = False
+                _cb_gag = None
+                if state.verbal_gag_ledger is not None:
+                    try:
+                        _cb_gag = state.verbal_gag_ledger.offer(now=time.time(), contrasting_to="ad")
+                    except Exception:
+                        _cb_gag = None
+                _cb_gag_text = _cb_gag[1].text if _cb_gag else None
                 _gen_ok = False
                 try:
                     (
@@ -2540,7 +2591,16 @@ async def run_producer(
                         _build_intro(),
                         asyncio.gather(
                             *(
-                                _sw.write_ad(brand, vm, state, config, ad_format=af, sonic=sn, spot_index=i)
+                                _sw.write_ad(
+                                    brand,
+                                    vm,
+                                    state,
+                                    config,
+                                    ad_format=af,
+                                    sonic=sn,
+                                    spot_index=i,
+                                    callback_gag=(_cb_gag_text if i == 0 else None),
+                                )
                                 for i, (brand, af, sn, vm) in enumerate(spot_params)
                             )
                         ),
@@ -2671,8 +2731,12 @@ async def run_producer(
                 )
                 _bound_brands = break_brands
 
-                def _ad_callback(_b=_bound_brands) -> None:
+                def _ad_callback(_b=_bound_brands, _gag=_cb_gag, _vledger=state.verbal_gag_ledger) -> None:
                     state.after_ad(brands=_b)
+                    # Retire the verbal gag ONLY if the model reported it landed
+                    # (queue-time != used) — a discarded break never reaches here.
+                    if _gag is not None and _vledger is not None and state.pending_callback_landed:
+                        _vledger.mark_spoken(_gag[0], now=time.time())
 
                 success_callback = _ad_callback
 
