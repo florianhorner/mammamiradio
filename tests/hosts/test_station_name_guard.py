@@ -50,6 +50,27 @@ def test_strip_relabels_real_two_word_radio_bands_aggressively():
         assert strip_foreign_station_name(band, STATION) == ""
 
 
+def test_strip_drops_lowercased_foreign_station_name():
+    # Metadata has no surrounding sentence, so a lowercased foreign name is just
+    # as much an illusion break and must still be stripped.
+    assert strip_foreign_station_name("radio italia", STATION) == ""
+    assert strip_foreign_station_name("radio kiss kiss", STATION) == ""
+
+
+def test_strip_drops_foreign_name_with_trailing_punctuation():
+    # A trailing tail ("!", ".", quotes) must not let the foreign name slip past
+    # the whole-value match.
+    assert strip_foreign_station_name("Radio Kiss Kiss!", STATION) == ""
+    assert strip_foreign_station_name("Radio Deejay.", STATION) == ""
+
+
+def test_strip_handles_siamo_su_prefix_form():
+    # The "siamo su X - Song" rescue prefix is stripped on both modes, matching
+    # the spoken vocabulary so the two surfaces never drift apart.
+    assert strip_foreign_station_name("siamo su Radio Deejay – Song", STATION, prefix_only=True) == "Song"
+    assert strip_foreign_station_name("siamo su Radio Deejay – Song", STATION) == "Song"
+
+
 def test_strip_keeps_our_own_station_name():
     ours = "Radio PenthouseFlo FM"
     assert strip_foreign_station_name(ours, ours) == ours

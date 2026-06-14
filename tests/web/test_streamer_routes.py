@@ -655,6 +655,61 @@ async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title(tmp_path, caplog):
+    """Sibling of the artist-strip test on the TITLE field: a sidecar title that
+    carries a foreign "Radio X - Song" rescue prefix must be trimmed to the song,
+    so the listener-facing now-playing title never airs a competitor's name. This
+    streamer rescue path is a separate function from the producer bridge, so it
+    needs its own guard."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    rescue_path = tmp_path / "norm_rescue_title.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+    import json
+
+    # artist is clean; the foreign name is baked into the title prefix.
+    (tmp_path / "norm_rescue_title.mp3.json").write_text(
+        json.dumps({"title": "Radio Sabrina Sensatione – Be Without U", "artist": "Mario Biondi"})
+    )
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming.get("metadata", {})
+    # The foreign station prefix must not appear in the now-playing title.
+    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
+    # Title keeps the clean artist + the real song, prefix trimmed.
+    assert "Be Without U" in (now_meta.get("title") or "")
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, caplog):
     """Malformed sidecar JSON must not crash; rescue falls back to humanize (Item 20)."""
     app = _make_test_app()
