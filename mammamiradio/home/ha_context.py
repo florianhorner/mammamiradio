@@ -1193,10 +1193,19 @@ def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> Hom
         return None
     ref_now = time.time() if now is None else now
     source = "disk_fresh" if ref_now - float(fetched_at) < _HA_REGISTRY_TTL else "disk_stale"
+
+    def _str_map(value: object) -> dict[str, str]:
+        # A truncated/older/manual cache may store a non-dict here (e.g. []);
+        # treat anything that isn't a dict as an empty mapping so a malformed
+        # cache degrades to a fresh fetch instead of raising on .items().
+        if not isinstance(value, dict):
+            return {}
+        return {str(k): str(v) for k, v in value.items()}
+
     return HomeRegistrySnapshot(
-        entity_areas={str(k): str(v) for k, v in (data.get("entity_areas") or {}).items()},
-        entity_names={str(k): str(v) for k, v in (data.get("entity_names") or {}).items()},
-        entity_device_names={str(k): str(v) for k, v in (data.get("entity_device_names") or {}).items()},
+        entity_areas=_str_map(data.get("entity_areas")),
+        entity_names=_str_map(data.get("entity_names")),
+        entity_device_names=_str_map(data.get("entity_device_names")),
         fetched_at=float(fetched_at),
         source=source,
     )

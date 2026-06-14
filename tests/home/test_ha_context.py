@@ -414,6 +414,13 @@ def test_load_registry_snapshot_rejects_malformed_data(tmp_path):
     # Dict without a numeric fetched_at -> None.
     path.write_text('{"fetched_at": "soon", "entity_areas": {}}', encoding="utf-8")
     assert _load_registry_snapshot(tmp_path) is None
+    # Valid timestamp but a non-dict mapping field (truncated/older cache):
+    # must not raise; the bad field degrades to an empty mapping.
+    path.write_text('{"fetched_at": 1.0, "entity_areas": [1, 2], "entity_names": "x"}', encoding="utf-8")
+    snapshot = _load_registry_snapshot(tmp_path)
+    assert snapshot is not None
+    assert snapshot.entity_areas == {}
+    assert snapshot.entity_names == {}
 
 
 @pytest.mark.asyncio
