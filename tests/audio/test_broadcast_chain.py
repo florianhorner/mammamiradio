@@ -76,9 +76,7 @@ def test_broadcast_failure_is_best_effort(tmp_path):
     configure_broadcast_chain(True)
     out = tmp_path / "out.mp3"
     out.write_bytes(b"PARTIAL")  # simulate a half-written output ffmpeg left behind
-    with patch.object(
-        normalizer, "_run_ffmpeg", side_effect=subprocess.CalledProcessError(1, "ffmpeg")
-    ):
+    with patch.object(normalizer, "_run_ffmpeg", side_effect=subprocess.CalledProcessError(1, "ffmpeg")):
         assert apply_broadcast_chain(tmp_path / "in.mp3", out) is False
     assert not out.exists()  # the failed output was removed, never aired
 

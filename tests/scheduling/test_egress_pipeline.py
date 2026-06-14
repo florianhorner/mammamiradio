@@ -180,9 +180,7 @@ async def test_enqueue_with_egress_front_insert_colours_before_critical_section(
         patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour) as m_chain,
         patch(f"{PRODUCER_MODULE}._front_insert_queue_and_shadow", m_front),
     ):
-        ok = await _enqueue_with_egress(
-            queue, state, _Cfg(tmp_path), seg, front_insert=True, shadow_entry={"id": "x"}
-        )
+        ok = await _enqueue_with_egress(queue, state, _Cfg(tmp_path), seg, front_insert=True, shadow_entry={"id": "x"})
     assert ok is True
     m_chain.assert_called_once()
     inserted_segment = m_front.call_args[0][2]  # (queue, state, segment, shadow_entry)
