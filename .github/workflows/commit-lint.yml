@@ -1,6 +1,8 @@
 # Per-repo includer for the engineering-standards reusable commit-lint workflow.
 # Canonical workflow: https://github.com/florianhorner/engineering-standards/blob/main/.github/workflows/commit-lint-reusable.yml
-# Pin to a SHA in production; 1fe9a730a3779349ddcea67974f10050a7548a47 is the bootstrap placeholder until bootstrap-repo.sh resolves the actual SHA.
+# Pin to a SHA in production. 502b48e0521350509f06cd3c6ad65a7c848f23af carries the
+# injection-safe fix: PR title / SHAs are passed via env, so an apostrophe in the
+# PR title no longer crashes the validate step ("unexpected EOF").
 name: commit-lint
 
 on:
@@ -13,4 +15,4 @@ permissions:
 
 jobs:
   commit-lint:
-    uses: florianhorner/engineering-standards/.github/workflows/commit-lint-reusable.yml@1fe9a730a3779349ddcea67974f10050a7548a47
+    uses: florianhorner/engineering-standards/.github/workflows/commit-lint-reusable.yml@502b48e0521350509f06cd3c6ad65a7c848f23af

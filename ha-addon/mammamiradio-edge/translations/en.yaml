@@ -38,3 +38,6 @@ configuration:
   festival_mode:
     name: Festival Mode
     description: "Turns your station into a theatrical music competition. Hosts announce songs as fictional Italian regional delegations, assign dramatic points, and call drinking game triggers. Toggleable live from the admin panel without a restart."
+  broadcast_chain:
+    name: On-Air Sound
+    description: "On (default): every song, host break, and ad gets a gentle on-air colouring — the warm, slightly band-limited character of an FM broadcast — so the station sounds like a station you tuned into, not a clean studio file. Off: studio-clean output."
