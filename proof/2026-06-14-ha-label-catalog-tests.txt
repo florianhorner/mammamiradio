@@ -36,3 +36,8 @@ nested junk value ("entity_areas": {"light.x": ["Kitchen"]}) -> None (no stringi
 absent mapping field -> empty {} (legit partial cache still usable as stale fallback)
 _call_anthropic_labels test now asserts .with_options(timeout=45.0)
 full pytest suite: 2838 passed, 2 skipped
+
+=== /code-review follow-ups (markdown-fence tolerance + single-resolver delegation) ===
+_parse_label_payload strips ```json / ``` fences before json.loads; unparseable -> [] with a warning (no silent starvation)
+_resolve_anthropic_fast_model now delegates to resolve_model(models, "transition", "anthropic") (env overrides + floor logic honored)
+ratchet: catalog.py 89%, all floors held; full suite 2839 passed

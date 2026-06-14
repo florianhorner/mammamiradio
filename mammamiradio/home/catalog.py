@@ -590,21 +590,39 @@ async def _call_anthropic_labels(
         system="You label Home Assistant entities safely and concisely.",
         messages=[{"role": "user", "content": prompt}],
     )
-    text = _response_text(response)
-    data = json.loads(text)
+    return _parse_label_payload(_response_text(response))
+
+
+def _parse_label_payload(text: str) -> list[dict]:
+    """Parse the LLM label response, tolerating a markdown code fence.
+
+    Despite the "return only JSON" instruction, models sometimes wrap output in
+    ```json ... ```. Strip a leading/trailing fence before parsing. On any parse
+    failure return [] (the caller keeps the existing catalog) with a warning,
+    rather than raising a generic exception that would silently starve labels.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[A-Za-z0-9_-]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+    try:
+        data = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("HA label generation returned unparseable JSON; skipping this batch")
+        return []
     labels = data.get("labels") if isinstance(data, dict) else data
     return labels if isinstance(labels, list) else []
 
 
 def _resolve_anthropic_fast_model(config: StationConfig) -> str:
-    """Resolve the Anthropic fast-role model id for label generation."""
-    models = config.models
-    for profile_name in (models.active_profile, models.default_profile):
-        key = models.profiles.get(profile_name, {}).get("anthropic", {}).get("fast")
-        model = models.catalog.get("anthropic", {}).get(key or "")
-        if model:
-            return model
-    return resolve_model(models, "transition", "anthropic")
+    """Resolve the Anthropic fast-role model id for label generation.
+
+    Delegates to the single resolver (the `transition` task routes to the fast
+    role), so env overrides (`CLAUDE_MODEL`), profile selection, and the floor
+    logic stay consistent with the rest of the station instead of being
+    re-derived here.
+    """
+    return resolve_model(config.models, "transition", "anthropic")
 
 
 def _response_text(response: object) -> str:

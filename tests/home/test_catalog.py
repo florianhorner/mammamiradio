@@ -276,18 +276,42 @@ def test_response_text_joins_text_blocks_and_tolerates_shapes():
     assert _response_text(object()) == ""
 
 
-def test_resolve_anthropic_fast_model_walks_profile_then_catalog():
+def _models_section():
+    from mammamiradio.core.config import ModelsSection
+
+    return ModelsSection(
+        catalog={"anthropic": {"haiku": "claude-haiku-test"}},
+        routing={"transition": "fast"},
+        profiles={"balanced": {"anthropic": {"fast": "haiku"}}},
+        default_profile="balanced",
+        active_profile="balanced",
+    )
+
+
+def test_resolve_anthropic_fast_model_delegates_to_single_resolver():
     from mammamiradio.home.catalog import _resolve_anthropic_fast_model
 
-    models = SimpleNamespace(
-        active_profile="economy",
-        default_profile="balanced",
-        profiles={"balanced": {"anthropic": {"fast": "haiku"}}},
-        catalog={"anthropic": {"haiku": "claude-haiku-test"}},
-    )
-    config = SimpleNamespace(models=models)
-    # active profile has no fast key; falls through to the default profile.
+    config = SimpleNamespace(models=_models_section())
+    # transition routes to the fast role -> the fast catalog model id.
     assert _resolve_anthropic_fast_model(config) == "claude-haiku-test"
+
+
+def test_parse_label_payload_tolerates_fences_and_garbage():
+    from mammamiradio.home.catalog import _parse_label_payload
+
+    item = '{"labels": [{"entity_id": "light.x", "label_it": "Luce", "label_en": "Light"}]}'
+    expected = [{"entity_id": "light.x", "label_it": "Luce", "label_en": "Light"}]
+    # Plain JSON object.
+    assert _parse_label_payload(item) == expected
+    # Wrapped in a ```json fence (a common model habit).
+    assert _parse_label_payload(f"```json\n{item}\n```") == expected
+    # Wrapped in a bare ``` fence.
+    assert _parse_label_payload(f"```\n{item}\n```") == expected
+    # A bare top-level list is accepted too.
+    assert _parse_label_payload('[{"entity_id": "light.x", "label_it": "Luce", "label_en": "Light"}]') == expected
+    # Unparseable junk degrades to [] instead of raising.
+    assert _parse_label_payload("sorry, I cannot do that") == []
+    assert _parse_label_payload("") == []
 
 
 @pytest.mark.asyncio
@@ -300,13 +324,7 @@ async def test_call_anthropic_labels_builds_client_and_parses_labels():
         entity_hash="h",
         metadata={"entity_id": "light.counter", "friendly_name": "Counter"},
     )
-    models = SimpleNamespace(
-        active_profile="balanced",
-        default_profile="balanced",
-        profiles={"balanced": {"anthropic": {"fast": "haiku"}}},
-        catalog={"anthropic": {"haiku": "claude-haiku-test"}},
-    )
-    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=models)
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
 
     fake_response = SimpleNamespace(
         content=[
