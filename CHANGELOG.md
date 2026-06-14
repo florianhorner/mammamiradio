@@ -165,7 +165,7 @@ The current version source of truth is `pyproject.toml`.
   segment shows a 5-second Undo toast and only commits when the window closes, so
   a mis-tap on a running station is recoverable.
 
-## [2.13.0] - 2026-05-26
+## [2.13.0]
 
 ### Added
 
