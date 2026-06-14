@@ -19,6 +19,7 @@ from mammamiradio.core.models import StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
@@ -156,6 +157,11 @@ async def startup():
     # corrupt files start fresh and never block boot.
     evening_ledger = EveningLedger.load(config.cache_dir)
 
+    # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
+    # correctly forgets verbal gags), so unlike the evening ledger it is not
+    # loaded from disk.
+    verbal_gag_ledger = VerbalGagLedger()
+
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
@@ -181,6 +187,7 @@ async def startup():
         startup_source_error=startup_source_error,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
+        verbal_gag_ledger=verbal_gag_ledger,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
     )

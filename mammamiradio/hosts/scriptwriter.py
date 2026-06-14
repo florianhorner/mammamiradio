@@ -1154,6 +1154,24 @@ Rules:
 - Output ONLY valid JSON, no markdown fences or extra text."""
 
 
+def _normalize_new_joke(value: object) -> tuple[str, float | None]:
+    """Banter ``new_joke`` may be a bare string (legacy) or ``{text, punch}``.
+
+    Returns ``(text, punch)`` with ``punch`` None when absent/unparseable (the
+    verbal-gag ledger then applies its default). Tolerant by design — a malformed
+    field must never raise into the audio path.
+    """
+    if isinstance(value, dict):
+        text = str(value.get("text", "")).strip()
+        raw_punch = value.get("punch")
+        try:
+            punch = float(raw_punch) if raw_punch is not None else None
+        except (TypeError, ValueError):
+            punch = None
+        return text, punch
+    return str(value).strip(), None
+
+
 async def write_banter(
     state: StationState,
     config: StationConfig,
@@ -1419,7 +1437,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 </context_awareness>
 {track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": "brief description of any new running joke or null"{persona_update_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){persona_update_schema}}}"""
 
     try:
         data = await _generate_json_response(
@@ -1449,8 +1467,17 @@ Return JSON:
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
 
-        if data.get("new_joke"):
-            state.add_joke(data["new_joke"])
+        # Seed running jokes (banter self-reference + persona store, unchanged)
+        # AND stash a pending verbal gag for the producer to commit to the
+        # cross-domain ledger at QUEUE time (B-i). pending is set ONLY on this
+        # success path; the producer resets it to None before each banter so a
+        # canned/failed banter never leaves a stale gag to commit.
+        new_joke = data.get("new_joke")
+        if new_joke:
+            gag_text, gag_punch = _normalize_new_joke(new_joke)
+            if gag_text:
+                state.add_joke(gag_text)
+                state.pending_verbal_gag = {"text": gag_text, "punch": gag_punch}
 
         # Persist persona updates from the LLM response (fire-and-forget)
         if persona_store and data.get("persona_updates"):
@@ -1592,14 +1619,35 @@ def _pick_news_flash_host(config: StationConfig, category: str) -> HostPersonali
     return random.choice(anchor_pool)
 
 
+def _callback_block(callback_gag: str | None) -> str:
+    """A cross-domain 'land this gag here' instruction, or empty when no gag.
+
+    Empty string means the prompt OMITS the callback entirely (no 'none'
+    placeholder) — flash/ad prompts no longer carry the full running-jokes list;
+    the Callback Director hands at most ONE gag, rarely.
+    """
+    if not callback_gag:
+        return ""
+    return (
+        f"\nCALLBACK (optional, must feel natural): earlier a host joked — "
+        f'"{_sanitize_prompt_data(callback_gag)}". If you can slip an unexpected nod to it into '
+        f"this segment, that surprise is the whole point. Only if it lands cleanly; otherwise ignore it. "
+        f'Set "callback_used" true ONLY if you actually worked it in, else false.'
+    )
+
+
 async def write_news_flash(
     state: StationState,
     config: StationConfig,
     category: str | None = None,
+    callback_gag: str | None = None,
 ) -> tuple[HostPersonality, str, str]:
     """Generate an absurd Italian news/traffic/sports flash bulletin.
 
     Returns (host, text, category) — the host delivers the flash solo.
+
+    ``callback_gag`` is an optional single verbal gag (chosen by the producer via
+    the verbal-gag ledger) to land cross-domain; None means no callback.
     """
     if not has_script_llm(config):
         host = random.choice(config.hosts)
@@ -1610,7 +1658,6 @@ async def write_news_flash(
     cat_desc = NEWS_FLASH_CATEGORIES.get(category, NEWS_FLASH_CATEGORIES["breaking"])
 
     recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
-    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
     host = _pick_news_flash_host(config, category)
 
@@ -1619,8 +1666,7 @@ async def write_news_flash(
 CATEGORY: {category}
 {cat_desc}
 
-Recent music: {recent_tracks if recent_tracks else "show just started"}
-Running jokes to optionally callback: {jokes if jokes else "none"}
+Recent music: {recent_tracks if recent_tracks else "show just started"}{_callback_block(callback_gag)}
 
 RULES:
 - Single host delivers this: {host.name} ({host.style})
@@ -1631,7 +1677,7 @@ RULES:
 - ALL text in {config.station.language}.
 
 Return JSON:
-{{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash"}}"""
+{{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash", "callback_used": false}}"""
 
     try:
         data = await _generate_json_response(
@@ -1644,6 +1690,10 @@ Return JSON:
         )
 
         text = sanitize_spoken_station_name(data.get("text", "Notizia dell'ultima ora!"), config.station.name)
+        if callback_gag:
+            # Model-reported: did it actually land the cross-domain gag? The
+            # producer retires the gag only when this is true (queue-time != used).
+            state.pending_callback_landed = bool(data.get("callback_used"))
         logger.info("Generated %s flash: %d chars", category, len(text))
         return (host, text, category)
 
@@ -1775,8 +1825,13 @@ async def write_ad(
     ad_format: str = "classic_pitch",
     sonic: SonicWorld | None = None,
     spot_index: int | None = None,
+    callback_gag: str | None = None,
 ) -> AdScript:
-    """Generate a structured fictional ad script for one brand with role-based voices."""
+    """Generate a structured fictional ad script for one brand with role-based voices.
+
+    ``callback_gag`` is an optional single verbal gag (chosen by the producer via
+    the verbal-gag ledger) to land cross-domain; None means no callback.
+    """
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
@@ -1793,7 +1848,6 @@ async def write_ad(
         else ["(nessuna pubblicità ancora)"]
     )
 
-    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
     recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
 
     # Find same-brand history for campaign arcs
@@ -1867,8 +1921,7 @@ IMPORTANT: These are NOT radio hosts. These are separate commercial voices.
 Recent ads from OTHER brands that aired (you may cleverly reference or mock these):
 {chr(10).join(recent_ads)}
 
-Running jokes from the hosts: {jokes if jokes else "none"}
-Recently played music: {recent_tracks if recent_tracks else "show just started"}
+Recently played music: {recent_tracks if recent_tracks else "show just started"}{_callback_block(callback_gag)}
 {ad_ha_block}
 
 RULES:
@@ -1894,7 +1947,8 @@ Return JSON:
     {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}
   ],
   "mood": "{sonic.music_bed}",
-  "summary": "One sentence summary IN ENGLISH for internal tracking"
+  "summary": "One sentence summary IN ENGLISH for internal tracking",
+  "callback_used": false
 }}"""
 
     try:
@@ -1908,6 +1962,11 @@ Return JSON:
             role="ad_spot",
             spot_index=spot_index,
         )
+
+        if callback_gag:
+            # Model-reported: did the ad land the cross-domain gag? Producer
+            # retires only when true (queue-time != used).
+            state.pending_callback_landed = bool(data.get("callback_used"))
 
         parts = []
         for p in data.get("parts", []):

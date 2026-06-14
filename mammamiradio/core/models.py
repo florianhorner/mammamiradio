@@ -19,6 +19,7 @@ from mammamiradio.core.segment_status import is_fallback_active
 if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
+    from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 
 
 PartyMode = Literal["festival"]
@@ -532,6 +533,19 @@ class StationState:
     persona_store: PersonaStore | None = None
     # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup
     evening_ledger: EveningLedger | None = None
+    # Verbal running-gag ledger — cross-domain banter callbacks; set by main.py.
+    # In-memory only (session-ephemeral), so a restart correctly forgets gags.
+    verbal_gag_ledger: VerbalGagLedger | None = None
+    # Pending banter-seeded verbal gag {text, punch}, committed to the ledger by
+    # the producer's banter success callback at QUEUE time (so a discarded banter
+    # never plants a travelable gag whose setup never aired). Mirrors
+    # ha_running_gag_key's stash->commit lifecycle.
+    pending_verbal_gag: dict | None = None
+    # Model-reported: did the just-generated flash/ad actually land the offered
+    # cross-domain callback gag? The producer resets this False before each
+    # flash/ad and retires the gag only when the generator set it True (queue-time
+    # is not air-time, and the model may ignore the callback instruction).
+    pending_callback_landed: bool = False
     # Consumption metrics
     api_calls: int = 0
     api_input_tokens: int = 0
