@@ -1,0 +1,22 @@
+fm-broadcast-chain (feat/fm-broadcast-chain) — local verification
+date: 2026-06-14T11:45:37Z
+head: c24e29be06e534c3b47c9a70ccc7fa9b3ba48c63
+
+command: make check (ruff + mypy + vulture + pytest + coverage floors)
+---
+2890 passed, 2 skipped, 17 deselected in ~70s
+Required test coverage of 92.0% reached. Total coverage: 94%
+All coverage floors held (normalizer 99% / floor 96; producer 86% / floor 83)
+All checks passed
+
+command: pytest -m requires_ffmpeg tests/audio/test_normalizer_real_ffmpeg.py
+  (real ffmpeg 8.1.1 — same major as the Pi — SIGABRT on risky shapes,
+   loudness-neutrality guard, CPU-budget measurement)
+---
+[broadcast-chain CPU] 3s segment colour pass: 0.03s
+13 passed in 2.29s
+
+command: bash scripts/check-release-invariants.sh
+---
+Passed: 6  Failed: 0
+All invariants passed.
