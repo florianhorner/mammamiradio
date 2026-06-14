@@ -1194,18 +1194,34 @@ def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> Hom
     ref_now = time.time() if now is None else now
     source = "disk_fresh" if ref_now - float(fetched_at) < _HA_REGISTRY_TTL else "disk_stale"
 
-    def _str_map(value: object) -> dict[str, str]:
-        # A truncated/older/manual cache may store a non-dict here (e.g. []);
-        # treat anything that isn't a dict as an empty mapping so a malformed
-        # cache degrades to a fresh fetch instead of raising on .items().
-        if not isinstance(value, dict):
+    def _str_map(value: object) -> dict[str, str] | None:
+        # A mapping field that is ABSENT (older/partial cache) degrades to empty.
+        # But a field that is PRESENT and malformed — a non-dict (e.g. []) or one
+        # with nested junk like {"light.x": ["Kitchen"]} — marks the cache corrupt:
+        # return None so the loader treats the whole file as a miss. The caller then
+        # refetches via websocket (and rewrites the cache) instead of serving an
+        # empty or garbage registry for the full TTL.
+        if value is None:
             return {}
-        return {str(k): str(v) for k, v in value.items()}
+        if not isinstance(value, dict):
+            return None
+        cleaned: dict[str, str] = {}
+        for key, val in value.items():
+            if not isinstance(key, str) or not isinstance(val, str):
+                return None
+            cleaned[key] = val
+        return cleaned
+
+    entity_areas = _str_map(data.get("entity_areas"))
+    entity_names = _str_map(data.get("entity_names"))
+    entity_device_names = _str_map(data.get("entity_device_names"))
+    if entity_areas is None or entity_names is None or entity_device_names is None:
+        return None
 
     return HomeRegistrySnapshot(
-        entity_areas=_str_map(data.get("entity_areas")),
-        entity_names=_str_map(data.get("entity_names")),
-        entity_device_names=_str_map(data.get("entity_device_names")),
+        entity_areas=entity_areas,
+        entity_names=entity_names,
+        entity_device_names=entity_device_names,
         fetched_at=float(fetched_at),
         source=source,
     )

@@ -317,10 +317,18 @@ async def test_call_anthropic_labels_builds_client_and_parses_labels():
     )
     create = AsyncMock(return_value=fake_response)
     scoped_client = SimpleNamespace(messages=SimpleNamespace(create=create))
-    client = SimpleNamespace(with_options=lambda **_: scoped_client)
+    seen_options: dict[str, object] = {}
+
+    def with_options(**kwargs):
+        seen_options.update(kwargs)
+        return scoped_client
+
+    client = SimpleNamespace(with_options=with_options)
 
     with patch("anthropic.AsyncAnthropic", return_value=client):
         labels = await _call_anthropic_labels([candidate], config, role="fast")
 
     assert labels == [{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}]
     assert create.await_args.kwargs["model"] == "claude-haiku-test"
+    # The 45s timeout must be applied (it guards _CATALOG_LOCK from a 10-min stall).
+    assert seen_options == {"timeout": 45.0}

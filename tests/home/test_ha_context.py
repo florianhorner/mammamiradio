@@ -414,13 +414,66 @@ def test_load_registry_snapshot_rejects_malformed_data(tmp_path):
     # Dict without a numeric fetched_at -> None.
     path.write_text('{"fetched_at": "soon", "entity_areas": {}}', encoding="utf-8")
     assert _load_registry_snapshot(tmp_path) is None
-    # Valid timestamp but a non-dict mapping field (truncated/older cache):
-    # must not raise; the bad field degrades to an empty mapping.
-    path.write_text('{"fetched_at": 1.0, "entity_areas": [1, 2], "entity_names": "x"}', encoding="utf-8")
-    snapshot = _load_registry_snapshot(tmp_path)
+    # A present-but-non-dict mapping field marks the whole cache corrupt -> None,
+    # so the caller refetches instead of serving a degraded registry for the TTL.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": [1, 2], "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    assert _load_registry_snapshot(tmp_path) is None
+    # Nested junk (a list value) must not surface as a stringified label -> None.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": {"light.x": ["Kitchen"]},'
+        ' "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    assert _load_registry_snapshot(tmp_path) is None
+
+
+def test_load_registry_snapshot_accepts_clean_string_maps(tmp_path):
+    from mammamiradio.home.ha_context import _ha_registry_cache_path, _load_registry_snapshot
+
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": {"light.x": "Kitchen"},'
+        ' "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+    snapshot = _load_registry_snapshot(tmp_path, now=99999999999)
     assert snapshot is not None
-    assert snapshot.entity_areas == {}
-    assert snapshot.entity_names == {}
+    assert snapshot.entity_areas == {"light.x": "Kitchen"}
+    assert snapshot.source == "disk_fresh"
+
+
+@pytest.mark.asyncio
+async def test_fetch_registry_snapshot_malformed_fresh_disk_triggers_websocket(tmp_path):
+    # A malformed but recent cache must not be accepted as disk_fresh; the fetch
+    # falls through to a websocket refresh instead of skipping it for the TTL.
+    from mammamiradio.home import ha_context as ha_mod
+    from mammamiradio.home.ha_context import _fetch_ha_registry_snapshot, _ha_registry_cache_path
+
+    ha_mod._ha_registry_snapshot_cache = None
+    ha_mod._ha_registry_fetched_at = 0.0
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Recent timestamp but a malformed mapping field.
+    path.write_text(
+        '{"fetched_at": 99999999999, "entity_areas": [], "entity_names": {}, "entity_device_names": {}}',
+        encoding="utf-8",
+    )
+
+    fresh = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    with patch(
+        "mammamiradio.home.ha_context._fetch_ha_registry_snapshot_websocket",
+        new=AsyncMock(return_value=fresh),
+    ) as ws:
+        result = await _fetch_ha_registry_snapshot("http://ha:8123", "token", cache_dir=tmp_path)
+
+    ws.assert_awaited_once()
+    assert result.entity_areas == {"light.x": "Kitchen"}
+    ha_mod._ha_registry_snapshot_cache = None
+    ha_mod._ha_registry_fetched_at = 0.0
 
 
 @pytest.mark.asyncio

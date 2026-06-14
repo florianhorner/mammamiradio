@@ -24,8 +24,15 @@ All invariants passed.
 === full pytest suite ===
 2828 passed, 2 skipped, 13 deselected, 1 warning in 54.86s
 
-=== coverage ratchet (CI gate) after dead-code removal + tests ===
-mammamiradio/home/catalog.py                 303     27    100     19    89%   172, 265, 278, 294, 303, 305, 321-327, 340, 412, 415, 418, 421, 438, 442, 448, 525, 537, 541, 545, 555, 607
-mammamiradio/home/ha_context.py              850     18    336     17    97%   440->430, 773-774, 826->828, 898->900, 980, 1083, 1084->1081, 1108, 1150->1152, 1225-1226, 1240, 1291, 1310, 1312, 1326, 1327->1329, 1330->1323, 1339, 1518, 1573, 1693-1695
+=== coverage ratchet (CI gate) — final, after all review rounds ===
+mammamiradio/home/catalog.py                 303     28    100     20    88%
+mammamiradio/home/ha_context.py              866     18    346     17    97%
 All coverage floors held. Total: 94% (floor: 92%)
-(ha_context restored to 97% floor; catalog.py new-module coverage 88%)
+(ha_context holds its 97% floor; catalog.py new-module coverage 88%)
+
+=== registry cache hardening (Codex + CodeRabbit round) ===
+malformed-but-fresh registry cache ("entity_areas": []) -> _load_registry_snapshot None -> websocket refetch (not served for TTL)
+nested junk value ("entity_areas": {"light.x": ["Kitchen"]}) -> None (no stringified garbage label)
+absent mapping field -> empty {} (legit partial cache still usable as stale fallback)
+_call_anthropic_labels test now asserts .with_options(timeout=45.0)
+full pytest suite: 2838 passed, 2 skipped
