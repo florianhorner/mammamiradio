@@ -573,6 +573,35 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
         evict_cache_lru(cache_dir, 0.0001)
 
 
+def test_evict_cache_lru_keeps_processed_audio_over_regular(cache_dir):
+    """Transient/regular cache files evict before processed audio — an fm_ broadcast-chain
+    bake (which may be queued/airing) is kept over a newer regular file, matching the
+    norm_ safety baseline so eviction can't pull a baked render out from under playback."""
+    import time
+
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    fm = cache_dir / "fm_norm_song_v1.mp3"
+    reg = cache_dir / "download_tmp.mp3"
+    fm.write_bytes(b"x" * 1024 * 1024)  # older
+    time.sleep(0.02)
+    reg.write_bytes(b"x" * 1024 * 1024)  # newer, but a regular file
+    evict_cache_lru(cache_dir, 1)  # 2 MB -> 1 MB: evict one
+    assert not reg.exists()  # regular evicted first despite being newer
+    assert fm.exists()  # fm_ bake (processed bucket) survives
+
+
+def test_evict_cache_lru_protects_queued_fm_bake(cache_dir):
+    """A baked render currently queued/airing (passed in protected_paths) is never evicted,
+    even under a zero budget — the queued-path protection covers fm_ bakes too."""
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    fm = cache_dir / "fm_norm_song_v1.mp3"
+    fm.write_bytes(b"x" * 1024 * 1024)
+    evict_cache_lru(cache_dir, 0.0001, protected_paths={fm})
+    assert fm.exists()
+
+
 def test_evict_cache_lru_evicts_regular_before_norm(cache_dir):
     """Regular files are evicted before norm cache; norm evicted if still over budget."""
     from mammamiradio.playlist.downloader import evict_cache_lru

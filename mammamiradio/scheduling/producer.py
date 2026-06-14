@@ -27,6 +27,7 @@ from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
+    broadcast_chain_version,
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
@@ -118,6 +119,14 @@ def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
 def _unlink_if_tmp_render(segment: Segment, tmp_dir: Path) -> None:
     if _is_tmp_render(segment, tmp_dir):
         segment.path.unlink(missing_ok=True)
+
+
+def _is_under(path: Path, directory: Path) -> bool:
+    """True when ``path`` resolves to a location inside ``directory`` (best-effort)."""
+    try:
+        return path.resolve().is_relative_to(directory.resolve())
+    except OSError:
+        return False
 
 
 def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
@@ -560,24 +569,85 @@ def _is_rescue_fill(segment: Segment) -> bool:
     return bool(segment.metadata.get(_RESCUE_FLAG))
 
 
+async def _bake_cached_egress(segment: Segment, source: Path, config: StationConfig) -> Segment:
+    """Colour a cache-file source once and reuse the baked render on later plays.
+
+    A norm-cache music hit is a stable file that can air many times; the FM pass is a
+    full re-encode, expensive on the Pi, and re-running it every replay is wasted work.
+    Bake the coloured render into the cache keyed by source identity + chain version, so a
+    replay reuses it with no encode, a chain change re-bakes (new key), and stale bakes
+    fall out by normal LRU eviction. The baked file is published atomically (encode to a
+    staging name, then ``os.replace``) so a reader never sees a half-written file.
+    Best-effort: any failure airs the source un-coloured this play and retries next time.
+
+    The key includes the source's mtime+size, not just its name: a norm file can be
+    rewritten in place at the same path — ``reconcile_cached_music()`` re-levels it after a
+    LUFS-target change, or eviction drops it and it is regenerated — and keying on the name
+    alone would serve the stale bake (old/quieter colour) instead of re-baking the updated
+    source. A content change moves the key, so the stale bake is orphaned and LRU-evicted.
+    """
+    chain_ver = broadcast_chain_version()
+    if chain_ver is None:  # chain disabled — nothing to colour
+        return segment
+    try:
+        st = source.stat()
+    except OSError:
+        return segment  # source vanished (e.g. evicted mid-flight) — leave it to the caller
+    src_tag = f"{st.st_mtime_ns}_{st.st_size}"  # busts the bake when the source is rewritten
+    baked = config.cache_dir / f"fm_{source.stem}_{chain_ver}_{src_tag}.mp3"
+    if baked.exists() and baked.stat().st_size > 0:  # cache hit — no re-encode
+        return replace(segment, path=baked, ephemeral=False)
+    staging = config.cache_dir / f"fm_{source.stem}_{chain_ver}_{src_tag}.staging_{uuid4().hex[:8]}.mp3"
+    loop = asyncio.get_running_loop()
+    try:
+        applied = await loop.run_in_executor(None, apply_broadcast_chain, source, staging)
+    except Exception:
+        logger.debug("Egress bake failed (non-fatal), airing source clean", exc_info=True)
+        with contextlib.suppress(OSError):
+            staging.unlink(missing_ok=True)
+        return segment
+    except BaseException:
+        with contextlib.suppress(OSError):
+            staging.unlink(missing_ok=True)
+        raise
+    if not applied:
+        with contextlib.suppress(OSError):
+            staging.unlink(missing_ok=True)
+        return segment
+    try:
+        os.replace(staging, baked)  # atomic publish within cache_dir
+    except OSError:
+        logger.debug("Egress bake publish failed (non-fatal), airing source clean", exc_info=True)
+        with contextlib.suppress(OSError):
+            staging.unlink(missing_ok=True)
+        return segment
+    return replace(segment, path=baked, ephemeral=False)
+
+
 async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
     """Run the outgoing egress FX pipeline on a finished segment.
 
-    Returns the processed segment (a fresh ephemeral tmp render) or the original,
-    unchanged, when no stage applied. The FM broadcast chain is the always-on final
-    stage — "the transmitter"; the chaos (#482) and interference (#483) content
-    stages will slot in BEFORE it so effects colour the content and the broadcast
-    chain colours the channel last. Emergency / bridge / rescue fills skip the
-    pipeline entirely (see ``_is_rescue_fill``). Best-effort: a stage failure
-    leaves the prior audio in place and never raises, so the listener never hits
-    dead air.
+    Returns the processed segment (a baked cache render or a fresh ephemeral tmp render)
+    or the original, unchanged, when no stage applied. The FM broadcast chain is the
+    always-on final stage — "the transmitter"; the chaos (#482) and interference (#483)
+    content stages will slot in BEFORE it so effects colour the content and the broadcast
+    chain colours the channel last. Emergency / bridge / rescue fills skip the pipeline
+    entirely (see ``_is_rescue_fill``). Best-effort: a stage failure leaves the prior
+    audio in place and never raises, so the listener never hits dead air.
+
+    A cache-file source (a norm-cache music hit) is colour-baked once and reused (see
+    ``_bake_cached_egress``); an ephemeral one-shot render (fresh voice/music) is
+    coloured to a per-play tmp.
     """
     if _is_rescue_fill(segment):
         return segment
+    source = segment.path
+    if not segment.ephemeral and _is_under(source, config.cache_dir):
+        return await _bake_cached_egress(segment, source, config)
     out = config.tmp_dir / f"egress_{uuid4().hex[:8]}.mp3"
     loop = asyncio.get_running_loop()
     try:
-        applied = await loop.run_in_executor(None, apply_broadcast_chain, segment.path, out)
+        applied = await loop.run_in_executor(None, apply_broadcast_chain, source, out)
     except Exception:
         logger.debug("Egress broadcast chain failed (non-fatal), airing clean", exc_info=True)
         with contextlib.suppress(OSError):
