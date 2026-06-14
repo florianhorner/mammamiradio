@@ -256,7 +256,7 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`
 - scored entities and privacy filter counts are admin-only and never appear in `/public-status`
-- while a song is playing, `push_state_to_ha` sets `entity_picture` on `media_player.mammamiradio` to the track's absolute http(s) cover URL (`Track.album_art`); it is left unset for non-http art or when idle/stopped so HA shows its default icon rather than a stale or broken tile. `media_image_url`/`media_image_remotely_accessible` are intentionally omitted (inert for a state pushed via the REST API rather than a media_player integration component)
+- `push_state_to_ha` always sets `entity_picture` on `media_player.mammamiradio` to an absolute http(s) image: the track's cover (`Track.album_art`) while a song plays, and the station logo for host talk, ads, music with no cover, and idle/stopped. The logo fallback is required because HA's media-control card does not clear a removed `entity_picture` — it keeps the last cover — so omitting it would leave the previous track's art on screen during a news flash. The logo URL is `[brand] artwork_url` (absolute http(s) only; relative paths are rejected because HA resolves `entity_picture` against its own origin), defaulting to the bundled station logo. `media_image_url`/`media_image_remotely_accessible` are intentionally omitted (inert for a state pushed via the REST API rather than a media_player integration component)
 
 ## Album cover artwork
 

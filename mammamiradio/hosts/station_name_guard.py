@@ -25,18 +25,28 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# Match station-name-like phrases. Inline (?i:…) makes "Radio" / "siamo su"
-# case-insensitive while requiring Title Case on the proper-noun words that
-# follow, which stops the match before Italian function words like "e", "la".
+# SPOKEN text. Inline (?i:…) makes "Radio" / "siamo su" case-insensitive while
+# requiring Title Case on the proper-noun words that follow, which stops the
+# match before Italian function words like "e", "la" mid-sentence.
 _WRONG_STATION_PATTERN = re.compile(
     r"\b(?i:Radio)(?:\s+[A-Z]\w*){1,3}|\b(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
 )
 
-# Anchored variant for METADATA fields. It fires when the *entire* value is a
-# station-name-like phrase, or when the value *begins* with one followed by a
-# separator (the rescue display form "Radio X - Song"). "Radiohead" (a single
-# token, no following Title-Case word) and "The Radio Dept." (does not start
-# with "Radio") are safe.
+# METADATA fields share one body so the spoken and now-playing surfaces never
+# drift apart on what counts as a station name. Unlike spoken text there is no
+# surrounding sentence, so the Title-Case constraint is dropped: a metadata
+# value is matched case-insensitively (a lowercased "radio italia" is just as
+# much an illusion break as "Radio Italia") and any following word counts.
+# Still requires >=1 word after the keyword so a single token like "Radiohead"
+# never matches.
+_META_STATION_BODY = r"(?i:radio)(?:\s+\w+){1,3}|(?i:siamo\s+su)(?:\s+\w+){1,5}"
+
+# Whole-value match for METADATA fields. Fires when the *entire* value is a
+# station-name-like phrase (a trailing-punctuation tail like "Radio Kiss Kiss!"
+# is tolerated), or — via _LEADING_STATION_PREFIX — when the value *begins* with
+# one followed by a separator (the rescue display form "Radio X - Song").
+# "Radiohead" (a single token, no following word) and "The Radio Dept." (does
+# not start with "Radio") are safe.
 #
 # This is deliberately aggressive, NOT perfectly conservative: a real band
 # literally named "Radio <Word>" (e.g. "Radio Birdman", "Radio Futura") also
@@ -44,12 +54,8 @@ _WRONG_STATION_PATTERN = re.compile(
 # is intentional — a foreign improvised station name reaching the now-playing
 # line is a hard illusion break (leadership #1); a rare real "Radio X" band shown
 # as the station is benign beside it. Pinned by tests in test_station_name_guard.
-_FULL_STATION_PATTERN = re.compile(
-    r"(?i:Radio)(?:\s+[A-Z]\w*){1,3}|(?i:siamo\s+su)(?:\s+[A-Z]\w*){1,5}",
-)
-_LEADING_STATION_PREFIX = re.compile(
-    r"^(?i:Radio)(?:\s+[A-Z]\w*){1,3}\s*[–—-]\s*",
-)
+_FULL_STATION_PATTERN = re.compile(rf"(?:{_META_STATION_BODY})[\s\W]*")
+_LEADING_STATION_PREFIX = re.compile(rf"^(?:{_META_STATION_BODY})\s*[–—-]\s*")
 
 
 def sanitize_spoken_station_name(text: str, station_name: str) -> str:
@@ -87,20 +93,24 @@ def strip_foreign_station_name(value: str | None, station_name: str, *, prefix_o
     station, so we drop the foreign name and let the caller fall back rather than
     substituting our own name as the artist.
 
-    Returns ``""`` when the whole value is a foreign station name, strips a
-    leading "Radio X - " prefix off the rescue display form, and otherwise
-    returns the value unchanged. "Radiohead" and "The Radio Dept." are left
-    intact. NOTE: matching is deliberately aggressive — a real band named
+    Returns ``""`` when the whole value is a foreign station name (matched
+    case-insensitively and tolerant of a trailing-punctuation tail, so a
+    lowercased "radio italia" or a "Radio Kiss Kiss!" is caught too), strips a
+    leading "Radio X - " / "siamo su X - " prefix off the rescue display form,
+    and otherwise returns the value unchanged. "Radiohead" and "The Radio Dept."
+    are left intact. NOTE: matching is deliberately aggressive — a real band named
     "Radio <Word>" (e.g. "Radio Birdman") is also stripped, and the artist then
     falls back to the station name; this is an accepted trade so a foreign
     improvised station name can never surface (see the module-level note).
 
     ``prefix_only=True`` keeps the leading-prefix strip but skips the
-    whole-value match, so the value is never emptied. Use it for the **title**
-    field, where a real song can legitimately be named "Radio Ga Ga" / "Radio
-    Free Europe" — blanking those would itself break the now-playing line. The
-    artist field uses the default (full) mode because its fallback chain ends in
-    our own station name, never a blank.
+    whole-value match, so a real song named "Radio Ga Ga" / "Radio Free Europe"
+    is preserved rather than blanked (the only way it returns "" is the
+    degenerate "Radio X - " with no song after the separator; callers fall back
+    to the raw value). Use it for the **title** field, where blanking a real
+    title would itself break the now-playing line. The artist field uses the
+    default (full) mode because its fallback chain ends in our own station name,
+    never a blank.
     """
     if not value:
         return ""

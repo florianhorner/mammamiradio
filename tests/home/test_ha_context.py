@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from mammamiradio.home.ha_context import (
+    _DEFAULT_STATION_ARTWORK_URL,
     ENTITY_LABELS,
     MAX_PRESENCE_IN_SLICE,
     HomeContext,
@@ -969,6 +970,49 @@ def test_reactive_trigger_fires_on_match():
     directive = check_reactive_triggers(events)
     assert directive is not None
     assert isinstance(directive, str) and "caffè" in directive.lower()
+
+
+def test_coffee_directive_invites_timing_and_guards_frequency():
+    """Espresso o'clock (WHEN): the coffee directive must invite tying the event
+    to the time of day — the host already sees the clock in the same banter prompt
+    (compute_context_block, asserted by test_context_cues) — AND must forbid
+    frequency/duration commentary, the research's documented "creepy-flip". This
+    is a wording guard: the timing effect and its safety rail both live in the
+    directive string, so they cannot silently regress on an edit.
+    """
+    import mammamiradio.home.ha_context as ha_mod
+
+    ha_mod._reactive_cooldowns.clear()
+    now = time.time()
+    events: deque[HomeEvent] = deque(maxlen=20)
+    events.append(
+        HomeEvent(
+            entity_id="switch.bar_kaffeemaschine_steckdose",
+            label="La macchina del caffè",
+            old_state="spento/a",
+            new_state="acceso/a",
+            timestamp=now - 30,
+        )
+    )
+    directive = check_reactive_triggers(events)
+    assert isinstance(directive, str)
+    # The directive flows through scriptwriter.write_banter, which runs it through
+    # _sanitize_prompt_data(max_len=300). An over-long directive gets truncated and
+    # would silently drop the guardrail at the end — the exact creepy-flip the
+    # wording exists to prevent. So assert the SANITIZED prompt-path form, not just
+    # the raw string, and pin the length budget explicitly.
+    assert len(directive) <= 300, "coffee directive must fit the 300-char prompt sanitizer budget"
+    from mammamiradio.hosts.scriptwriter import _sanitize_prompt_data
+
+    sanitized = _sanitize_prompt_data(directive, max_len=300)
+    # Timing invite (references the clock shown above it in the prompt) survives.
+    assert "mostrata" in sanitized.lower()
+    # Both halves of the guardrail survive: no-frequency AND no-duration.
+    assert "frequenza" in sanitized.lower()
+    assert "da quanto" in sanitized.lower()
+    # The example phrasing must not itself imply a habit ("come sempre"/"as always"),
+    # which would contradict the very guardrail above it.
+    assert "sempre" not in directive.lower()
 
 
 def test_reactive_trigger_respects_age_cutoff():
@@ -2400,8 +2444,12 @@ async def test_push_state_to_ha_sets_entity_picture_for_http_album_art(reset_ha_
 
 
 @pytest.mark.asyncio
-async def test_push_state_to_ha_no_entity_picture_when_album_art_missing(reset_ha_push_debounce):
-    """EMPTY: no album_art → entity_picture unset (HA shows its default icon, no broken tile)."""
+async def test_push_state_to_ha_falls_back_to_logo_when_album_art_missing(reset_ha_push_debounce):
+    """EMPTY: no album_art → entity_picture is the station logo, not unset.
+
+    HA's media-control card keeps the last cover when entity_picture is removed,
+    so we must push the logo rather than omit it.
+    """
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
@@ -2413,12 +2461,17 @@ async def test_push_state_to_ha_no_entity_picture_when_album_art_missing(reset_h
             listeners_active=0,
             session_stopped=False,
         )
-    assert "entity_picture" not in _mp_attrs(mock_client)
+    assert _mp_attrs(mock_client)["entity_picture"] == _DEFAULT_STATION_ARTWORK_URL
 
 
 @pytest.mark.asyncio
-async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce):
-    """A relative/local album_art is never used (HA would resolve it against its own origin)."""
+@pytest.mark.parametrize(
+    "bad_art",
+    ["/artwork/station.svg", "station.svg", "http://", "https://", "https://:443/cover.jpg", "http://[::1/cover.jpg"],
+)
+async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce, bad_art):
+    """A relative/local/scheme-only/hostless album_art is never used (HA resolves
+    it against its own origin); it falls back to the absolute station logo."""
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
@@ -2429,18 +2482,19 @@ async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounc
                 "type": "music",
                 "label": "Song",
                 "started": time.time(),
-                "metadata": {"album_art": "/artwork/station.svg"},
+                "metadata": {"album_art": bad_art},
             },
             current_track=None,
             listeners_active=0,
             session_stopped=False,
         )
-    assert "entity_picture" not in _mp_attrs(mock_client)
+    assert _mp_attrs(mock_client)["entity_picture"] == _DEFAULT_STATION_ARTWORK_URL
 
 
 @pytest.mark.asyncio
-async def test_push_state_to_ha_stopped_has_no_entity_picture(reset_ha_push_debounce):
-    """POST-RESTART: a stopped session never carries artwork and stays idle/off."""
+async def test_push_state_to_ha_stopped_shows_logo(reset_ha_push_debounce):
+    """POST-RESTART: a stopped session shows the station logo (not the last track's
+    cover frozen on the card) and stays idle/off."""
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
@@ -2458,11 +2512,95 @@ async def test_push_state_to_ha_stopped_has_no_entity_picture(reset_ha_push_debo
             session_stopped=True,
         )
     attrs = _mp_attrs(mock_client)
-    assert "entity_picture" not in attrs
+    # Stopped drops the real cover and shows the logo instead of a frozen tile.
+    assert attrs["entity_picture"] == _DEFAULT_STATION_ARTWORK_URL
     # Existing contract preserved: stopped session is not "playing" and has no position.
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     assert mp_call.kwargs["json"]["state"] == "idle"
     assert "media_position" not in attrs
+
+
+def test_default_station_artwork_url_points_at_a_bundled_asset():
+    """Guard the hardcoded default logo URL: it must reference an absolute http(s)
+    path AND the file it names must still exist in the repo. Catches a future move
+    of logo.png that would silently 404 every default station's HA media card (the
+    URL is a plain string literal, so symbol-grep refactor checks miss it)."""
+    from pathlib import Path
+
+    assert _DEFAULT_STATION_ARTWORK_URL.startswith("https://")
+    marker = "/main/"
+    assert marker in _DEFAULT_STATION_ARTWORK_URL
+    repo_rel = _DEFAULT_STATION_ARTWORK_URL.split(marker, 1)[1]
+    repo_root = Path(__file__).resolve().parents[2]
+    assert (repo_root / repo_rel).is_file(), f"default artwork asset missing: {repo_rel}"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_news_flash_falls_back_to_logo(reset_ha_push_debounce):
+    """REGRESSION: a news flash (no album_art) must show the station logo, not the
+    previous track's cover. HA keeps a removed entity_picture, so the voice segment
+    has to actively push the logo."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "news_flash",
+                "label": "News flash: meteo",
+                "started": time.time(),
+                "metadata": {"type": "news_flash", "title": "News flash: meteo"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+    assert _mp_attrs(mock_client)["entity_picture"] == _DEFAULT_STATION_ARTWORK_URL
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_uses_configured_artwork_url(reset_ha_push_debounce):
+    """A station that sets [brand] artwork_url gets its own logo on voice/idle
+    segments, not the engine default."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={"type": "banter", "label": "Live", "started": time.time(), "metadata": {}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            artwork_url="https://my.station/logo.png",
+        )
+    assert _mp_attrs(mock_client)["entity_picture"] == "https://my.station/logo.png"
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_real_cover_wins_over_configured_artwork_url(reset_ha_push_debounce):
+    """Precedence: a playing music track's real cover beats the configured station
+    logo (`cover or artwork_url or default`). Guards against a regression that
+    surfaces the station logo over a genuine album cover during music."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="t",
+            now_streaming={
+                "type": "music",
+                "label": "Song",
+                "started": time.time() - 5,
+                "metadata": {"title": "Song", "album_art": "https://x/600x600bb.jpg"},
+            },
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+            artwork_url="https://my.station/logo.png",
+        )
+    assert _mp_attrs(mock_client)["entity_picture"] == "https://x/600x600bb.jpg"
 
 
 @pytest.mark.asyncio

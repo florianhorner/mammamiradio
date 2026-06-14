@@ -126,6 +126,42 @@ def test_parse_brand_full_valid_block():
     assert warnings == []
 
 
+def test_parse_brand_accepts_absolute_artwork_url():
+    raw = {"brand": {"artwork_url": "https://cdn.example/logo.png"}}
+    brand, warnings = _parse_brand(raw, _make_hosts())
+    assert brand.artwork_url == "https://cdn.example/logo.png"
+    assert warnings == []
+
+
+def test_parse_brand_blank_artwork_url_is_empty():
+    raw = {"brand": {"artwork_url": "  "}}
+    brand, warnings = _parse_brand(raw, _make_hosts())
+    assert brand.artwork_url == ""
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "/static/logo.png",
+        "logo.png",
+        "http://",
+        "https://",
+        "https://:443/logo.png",
+        "ftp://host/logo.png",
+        "data:image/png;base64,AAAA",
+        "http://[::1",  # malformed IPv6 — urlsplit raises; must degrade, not crash boot
+    ],
+)
+def test_parse_brand_rejects_non_absolute_artwork_url(bad_url):
+    """A relative, scheme-only, or non-http(s) artwork_url is dropped with a warning
+    (HA resolves entity_picture against its own origin, so it must be absolute)."""
+    raw = {"brand": {"artwork_url": bad_url}}
+    brand, warnings = _parse_brand(raw, _make_hosts())
+    assert brand.artwork_url == ""
+    assert any("artwork_url" in w for w in warnings)
+
+
 # ─── theme guardrails (design D1) ───────────────────────────────
 
 

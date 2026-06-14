@@ -24,7 +24,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig
+from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
 from mammamiradio.home.ha_enrichment import (
@@ -246,8 +246,10 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
     (
         "switch.bar_kaffeemaschine_steckdose",
         "on",
-        "La macchina del caffè si è appena accesa! I conduttori sentono il profumo di espresso"
-        " e lo notano brevemente — naturale, non esagerato.",
+        "La macchina del caffè si è appena accesa! Profumo di espresso, notatelo brevemente —"
+        " naturale, non esagerato. Se l'ora mostrata sopra calza, legate l'evento al momento"
+        " ('puntuale'), solo se naturale. Mai dire con che frequenza o da quanto"
+        " succede.",
         1800,
     ),
     (
@@ -1547,6 +1549,15 @@ _last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
 _last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
 
+# Absolute fallback logo for the HA media_player entity_picture. HA's
+# media-control card does NOT clear a removed entity_picture — it keeps the last
+# cover — so a voice/ad/idle segment must actively push an image or the previous
+# track's art lingers. Must be absolute (HA resolves it against its own origin).
+# Overridable per station via [brand] artwork_url in radio.toml.
+_DEFAULT_STATION_ARTWORK_URL = (
+    "https://raw.githubusercontent.com/florianhorner/mammamiradio/main/ha-addon/mammamiradio/logo.png"
+)
+
 
 def _get_ha_push_lock() -> asyncio.Lock:
     """Return a process-local lock so concurrent HA pushes cannot overwrite newer state."""
@@ -1565,12 +1576,17 @@ async def push_state_to_ha(
     session_stopped: bool,
     queue_depth: int = 0,
     station_name: str = DEFAULT_STATION_NAME,
+    artwork_url: str = "",
 ) -> None:
     """Push radio state to HA as media_player + sensor entities. Fire-and-forget.
 
     ``station_name`` is the listener-facing name used for media_player/sensor
     friendly names and the station ``media_artist``. Entity IDs and the
     ``mammamiradio_*`` custom attributes stay unchanged for compatibility.
+
+    ``artwork_url`` is the absolute station-logo URL used for ``entity_picture``
+    whenever the current segment has no real cover (voice/ad/idle); blank falls
+    back to ``_DEFAULT_STATION_ARTWORK_URL``.
     """
     global _last_ha_push, _last_ha_stop_push
 
@@ -1641,13 +1657,15 @@ async def push_state_to_ha(
             media_attrs["media_position_updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
         # Secondary artwork surface: the HA frontend reads entity_picture directly.
-        # Only set it while actually playing, and only for an absolute http(s) cover
-        # URL — never a relative/local path (HA resolves relative entity_picture
-        # against its own origin, which 404s for an add-on). When absent, leave it
-        # unset so HA shows its clean default icon instead of a stale or broken tile.
+        # ALWAYS set an absolute http(s) image — the real cover for a music track,
+        # the station logo for everything else (voice/ad/idle, or music with no
+        # cover). HA's media-control card does NOT clear a removed entity_picture;
+        # it keeps the last cover, so omitting it leaves the previous track's art
+        # on screen during a news flash. A relative/local path is never used (HA
+        # resolves it against its own origin, which 404s for an add-on).
         album_art = str(metadata.get("album_art") or "").strip()
-        if is_playing and album_art.startswith(("http://", "https://")):
-            media_attrs["entity_picture"] = album_art
+        cover = album_art if (is_playing and is_absolute_http_url(album_art)) else ""
+        media_attrs["entity_picture"] = cover or artwork_url or _DEFAULT_STATION_ARTWORK_URL
 
         entities: list[tuple[str, dict]] = [
             (
