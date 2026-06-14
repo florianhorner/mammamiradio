@@ -34,6 +34,7 @@ from mammamiradio.home.ha_context import (
     _ha_websocket_url,
     _sanitize_state_value,
     _score_entity,
+    _write_registry_snapshot,
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
@@ -354,6 +355,65 @@ def test_scored_entities_include_registry_labeled_entity_and_drop_unlabeled():
     assert [entity.entity_id for entity in scored] == ["light.counter"]
     assert scored[0].label_en == "Counter (Kitchen)"
     assert scored[0].label_tier == "fallback"
+
+
+def test_scored_entities_drops_labeled_entity_with_unavailable_state():
+    # resolve_label succeeds (a friendly name exists) but _format_state returns
+    # None for an unavailable state — the entity must be dropped, not scored.
+    states = {
+        "light.counter": {"state": "unavailable", "attributes": {"friendly_name": "Counter light"}},
+        "weather.forecast_home": {"state": "sunny", "attributes": {"temperature": 22, "temperature_unit": "°C"}},
+    }
+
+    scored = _build_scored_entities(states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0)
+
+    assert [entity.entity_id for entity in scored] == ["weather.forecast_home"]
+
+
+def test_write_registry_snapshot_swallows_write_error(tmp_path):
+    # A failed disk write must not raise into the polling path; the temp file is
+    # cleaned up and the cache is simply left unwritten.
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+
+    with patch("mammamiradio.home.ha_context.os.replace", side_effect=OSError("disk full")):
+        _write_registry_snapshot(tmp_path, snapshot)
+
+    # No catalog/registry file was left behind, and no leftover temp files.
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_format_state_light_brightness_non_numeric_falls_back_to_accese():
+    # A non-numeric brightness must not raise; it degrades to the plain "on" line.
+    result = _format_state(
+        "light.magic_areas_light_groups_wohnzimmer_all_lights",
+        {"state": "on", "attributes": {"brightness": "bright"}},
+    )
+    assert result is not None
+    assert "accese" in result
+    assert "%" not in result
+
+
+def test_format_state_power_sensor_non_numeric_watts_shows_placeholder():
+    # A power sensor with a non-numeric reading degrades to a neutral placeholder.
+    result = _format_state(
+        "sensor.bar_bali_boot_steckdose_power",
+        {"state": "lots", "attributes": {"device_class": "power", "unit_of_measurement": "W"}},
+    )
+    assert result is not None
+    assert "—" in result
+
+
+def test_load_registry_snapshot_rejects_malformed_data(tmp_path):
+    from mammamiradio.home.ha_context import _ha_registry_cache_path, _load_registry_snapshot
+
+    path = _ha_registry_cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Valid JSON but not a dict -> None.
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    assert _load_registry_snapshot(tmp_path) is None
+    # Dict without a numeric fetched_at -> None.
+    path.write_text('{"fetched_at": "soon", "entity_areas": {}}', encoding="utf-8")
+    assert _load_registry_snapshot(tmp_path) is None
 
 
 @pytest.mark.asyncio

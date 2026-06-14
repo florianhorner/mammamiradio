@@ -425,19 +425,6 @@ def _area_from_attrs(attrs: dict) -> str | None:
     return area or None
 
 
-def _generic_label(entity_id: str, state_data: dict) -> str:
-    attrs = state_data.get("attributes", {})
-    friendly = attrs.get("friendly_name")
-    if friendly:
-        label = _sanitize_state_value(str(friendly), max_len=80)
-    else:
-        label = entity_id.split(".", 1)[-1].replace("_", " ").strip() or entity_id
-    area = _area_from_attrs(attrs)
-    if area and area.lower() not in label.lower():
-        return f"{label} ({area})"
-    return label
-
-
 def _sanitize_attributes(attrs: dict) -> dict:
     sanitized: dict = {}
     for key, value in attrs.items():

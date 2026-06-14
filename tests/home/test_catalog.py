@@ -265,3 +265,62 @@ async def test_schedule_label_generation_resets_flag_after_failure(tmp_path):
         assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+
+
+def test_response_text_joins_text_blocks_and_tolerates_shapes():
+    from mammamiradio.home.catalog import _response_text
+
+    resp = SimpleNamespace(content=[SimpleNamespace(text="ciao"), {"text": "mondo"}, SimpleNamespace(text=None)])
+    assert _response_text(resp) == "ciao\nmondo"
+    assert _response_text(SimpleNamespace(content=None)) == ""
+    assert _response_text(object()) == ""
+
+
+def test_resolve_anthropic_fast_model_walks_profile_then_catalog():
+    from mammamiradio.home.catalog import _resolve_anthropic_fast_model
+
+    models = SimpleNamespace(
+        active_profile="economy",
+        default_profile="balanced",
+        profiles={"balanced": {"anthropic": {"fast": "haiku"}}},
+        catalog={"anthropic": {"haiku": "claude-haiku-test"}},
+    )
+    config = SimpleNamespace(models=models)
+    # active profile has no fast key; falls through to the default profile.
+    assert _resolve_anthropic_fast_model(config) == "claude-haiku-test"
+
+
+@pytest.mark.asyncio
+async def test_call_anthropic_labels_builds_client_and_parses_labels():
+    from mammamiradio.home.catalog import LabelCandidate, _call_anthropic_labels
+
+    candidate = LabelCandidate(
+        entity_id="light.counter",
+        score=0.6,
+        entity_hash="h",
+        metadata={"entity_id": "light.counter", "friendly_name": "Counter"},
+    )
+    models = SimpleNamespace(
+        active_profile="balanced",
+        default_profile="balanced",
+        profiles={"balanced": {"anthropic": {"fast": "haiku"}}},
+        catalog={"anthropic": {"haiku": "claude-haiku-test"}},
+    )
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=models)
+
+    fake_response = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                text='{"labels": [{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}]}'
+            )
+        ]
+    )
+    create = AsyncMock(return_value=fake_response)
+    scoped_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    client = SimpleNamespace(with_options=lambda **_: scoped_client)
+
+    with patch("anthropic.AsyncAnthropic", return_value=client):
+        labels = await _call_anthropic_labels([candidate], config, role="fast")
+
+    assert labels == [{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}]
+    assert create.await_args.kwargs["model"] == "claude-haiku-test"
