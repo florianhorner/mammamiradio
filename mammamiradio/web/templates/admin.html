@@ -1184,6 +1184,34 @@ body::before {
 body[data-stopped="true"] .a-trigger { opacity: 0.35; pointer-events: none; filter: saturate(0.5); }
 body[data-stopped="true"] .a-topbar .live-pill .dot { animation-play-state: paused; }
 body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused; }
+/* Fader Down is not stopped: the transport is cued with no active listeners.
+   Keep controls available, but quiet the motion so it does not read as airing. */
+body[data-fader-down="true"] .on-air-zone {
+  border-color: rgba(236,204,48,0.42);
+}
+body[data-fader-down="true"] .on-air-status-line .dot.on,
+body[data-fader-down="true"] .a-topbar .live-pill .dot,
+body[data-fader-down="true"] .a-station-card .dot.on {
+  animation-play-state: paused;
+  opacity: 0.45;
+  box-shadow: none;
+  background: transparent;
+  border: 1px solid var(--sun2);
+}
+body[data-fader-down="true"] .a-topbar .live-pill {
+  border-color: rgba(236,204,48,0.42);
+  background: rgba(236,204,48,0.10);
+  color: var(--sun);
+}
+body[data-fader-down="true"] .a-eq span {
+  animation-play-state: paused;
+  opacity: 0.35;
+}
+body[data-fader-down="true"] .on-air-progress-track .progress-fill {
+  transition: none;
+  background: var(--sun2);
+  opacity: 0.65;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .a-station-card .dot.on,
@@ -2133,7 +2161,8 @@ const _base = (() => {
   return p === '' ? '' : p;
 })();
 let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
-let _nowStart=0, _nowDur=0, _tick=null, _prevLabel='';
+let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
+let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
 let _programmeFilter='all', _lastProgrammeHash='';
 // Delayed-commit undo state (eng review T2/E3): destructive queue actions remove
 // the row optimistically and defer the backend call by 5s. Undo cancels the
@@ -2220,6 +2249,25 @@ function segmentInline(type){
   const typeKey=segmentTypeKey(type);
   const sKey=segmentClass(typeKey);const sText=segmentText(typeKey);
   return `<span class="segment-inline segment-${sKey}" aria-label="segment: ${esc(sText)}">${esc(segmentBadge(typeKey))}</span>`;
+}
+const FADER_DOWN_COPY='The record is cued. Waiting for someone to tune in.';
+function activeListenerCount(st){
+  const active=st?.listeners?.active;
+  if(Number.isFinite(active))return active;
+  const legacy=st?.listeners_active;
+  return Number.isFinite(legacy)?legacy:0;
+}
+function streamSignalText(st){
+  const freq=st?.stream?.frequency||st?.brand?.frequency||'';
+  const bitrate=Number(st?.stream?.bitrate_kbps||0);
+  return [freq,bitrate?`${bitrate} kbps`:'' ].filter(Boolean).join(' · ')||'Live signal';
+}
+function hasCuedSegment(st){
+  const type=st?.now_streaming?.type;
+  return !!type&&type!=='stopped';
+}
+function shouldFaderDown(st){
+  return st?.session_stopped!==true&&activeListenerCount(st)===0&&hasCuedSegment(st);
 }
 function nowTypeStatus(type){
   const typeKey=segmentTypeKey(type);
@@ -2410,6 +2458,11 @@ async function doResume(el){flash(el);await api('POST','/api/resume');toast('Ses
 function updateStopState(stopped){
   // Global toggle so CSS can dim animations, producer buttons, etc.
   document.body.setAttribute('data-stopped',stopped?'true':'false');
+  if(stopped){
+    document.body.setAttribute('data-fader-down','false');
+    _faderDownActive=false;
+    _faderDownSnapshot=null;
+  }
   document.getElementById('stoppedBanner').classList.toggle('show',stopped);
   document.getElementById('stopBtn').style.display=stopped?'none':'';
   document.getElementById('resumeBtn').style.display=stopped?'':'none';
@@ -2431,6 +2484,59 @@ function updateStopState(stopped){
   if(topBarStatus)topBarStatus.textContent=stopped?'Fermo':'In onda';
   const topBarEq=document.getElementById('topBarEq');
   if(topBarEq)topBarEq.classList.toggle('paused',stopped);
+}
+function fmtClock(sec){
+  const safe=Math.max(0,Math.floor(Number(sec)||0));
+  const m=Math.floor(safe/60);const s=String(safe%60).padStart(2,'0');
+  return m+':'+s;
+}
+function freezeFaderDownProgress(){
+  if(_tick){clearInterval(_tick);_tick=null;}
+  let elapsed,width;
+  if(_faderDownSnapshot){
+    ({elapsed,width}=_faderDownSnapshot);          // read-back: hold steady across polls
+  }else{
+    elapsed=_nowStart>0?Math.max(0,(Date.now()-_nowStart)/1000):0;
+    if((_nowDur>0&&elapsed>=_nowDur)||(!_nowDur&&elapsed>60))elapsed=0;
+    width=_nowDur>0?Math.min(100,(elapsed/_nowDur)*100):0;
+    _faderDownSnapshot={elapsed,width};            // capture once per cued record
+  }
+  const label=elapsed>0?'paused at ':'cued at ';
+  const elapsedEl=document.getElementById('nowElapsed');
+  const fill=document.getElementById('progFill');
+  if(elapsedEl)elapsedEl.textContent=label+fmtClock(elapsed);
+  if(fill)fill.style.width=width+'%';
+}
+function updateFaderDownState(st){
+  const active=shouldFaderDown(st);
+  document.body.setAttribute('data-fader-down',active?'true':'false');
+  const stopped=document.body.getAttribute('data-stopped')==='true';
+  const badge=document.getElementById('onAirBadge');
+  const dot=document.getElementById('onAirDot');
+  const topBarStatus=document.getElementById('topBarStatus');
+  const topBarEq=document.getElementById('topBarEq');
+  const stationSignal=document.getElementById('stationSignal');
+  if(active){
+    _faderDownActive=true;
+    if(badge)badge.textContent='In attesa';
+    if(dot){dot.classList.add('on');dot.classList.remove('off');}
+    if(topBarStatus)topBarStatus.textContent='In attesa';
+    if(topBarEq)topBarEq.classList.add('paused');
+    if(stationSignal)stationSignal.textContent=FADER_DOWN_COPY;
+    freezeFaderDownProgress();
+    return;
+  }
+  if(_faderDownActive){
+    _resumeFromFaderLabel=st?.now_streaming?.label||'';
+    _faderDownSnapshot=null;
+  }
+  _faderDownActive=false;
+  if(stopped)return;
+  if(badge)badge.textContent='In onda';
+  if(dot){dot.classList.add('on');dot.classList.remove('off');}
+  if(topBarStatus)topBarStatus.textContent='In onda';
+  if(topBarEq)topBarEq.classList.remove('paused');
+  if(stationSignal)stationSignal.textContent=streamSignalText(st);
 }
 
 // ── Flag Track — operator-only action, prompt() dialog is acceptable here ──
@@ -2467,7 +2573,7 @@ function updateNow(ns){
     const topBarArtist=document.getElementById('topBarArtist');
     if(topBarTitleText)topBarTitleText.textContent='Waiting for signal… ';
     if(topBarArtist)topBarArtist.textContent='';
-    if(_tick){clearInterval(_tick);_tick=null;_prevLabel='';}
+    if(_tick){clearInterval(_tick);_tick=null;_prevNowKey='';}
     return;
   }
   const typeKey=segmentTypeKey(ns.type);
@@ -2498,7 +2604,17 @@ function updateNow(ns){
   document.getElementById('progFill').setAttribute('data-t',typeKey);
   const dur=durationSec(ns);
   const label=ns.label||'';
-  if(label!==_prevLabel){_prevLabel=label;_nowStart=ns.started?ns.started*1000:Date.now();_nowDur=dur||0}
+  // Key record-change on type+label+start, not label alone: two different cued
+  // records can share a label, and the stale snapshot must still be dropped.
+  const nowKey=`${typeKey}|${label}|${Number(ns.started||0)}`;
+  if(nowKey!==_prevNowKey||(_resumeFromFaderLabel&&label===_resumeFromFaderLabel)){
+    _prevNowKey=nowKey;
+    _nowStart=(_resumeFromFaderLabel&&label===_resumeFromFaderLabel)?Date.now():(ns.started?ns.started*1000:Date.now());
+    _resumeFromFaderLabel='';
+    _nowDur=dur||0;
+    _faderDownSnapshot=null;   // new record cued -> re-snapshot on next freeze
+  }
+  if(_faderDownActive){freezeFaderDownProgress();return;}
   if(!_tick){_tick=setInterval(()=>{
     const el=Math.max(0,(Date.now()-_nowStart)/1000);
     const rem=_nowDur>0?Math.max(0,Math.floor(_nowDur-el)):0;
@@ -2593,7 +2709,8 @@ function renderProgramme(st){
   // session_stopped is part of the key: the empty-state branches below render
   // different copy when stopped vs building, so a stop/resume with an unchanged
   // upcoming list must still re-render.
-  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter,!!st?.session_stopped,[..._pendingRemovals],_pendingPurge]);
+  const faderDown=shouldFaderDown(st);
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -2654,6 +2771,8 @@ function renderProgramme(st){
     el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Quando</th><th>Tipo</th><th>Titolo</th><th>Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else if(document.body.getAttribute('data-stopped')==='true'){
     el.innerHTML='<div class="prog-empty">Station paused — press Start to resume.</div>';
+  }else if(faderDown){
+    el.innerHTML='<div class="prog-empty">Fader Down — the record is cued for the next listener.</div>';
   }else{
     el.innerHTML='<div class="prog-empty">Preparing the next segment...</div>';
   }
@@ -3694,9 +3813,7 @@ function updateEngineRoom(st,caps){
   if(sidebarUptime)sidebarUptime.textContent=uptime;
   const stationSignal=document.getElementById('stationSignal');
   if(stationSignal){
-    const freq=st?.stream?.frequency||st?.brand?.frequency||'';
-    const bitrate=Number(st?.stream?.bitrate_kbps||0);
-    stationSignal.textContent=[freq,bitrate?`${bitrate} kbps`:'' ].filter(Boolean).join(' · ')||'Segnale live';
+    stationSignal.textContent=shouldFaderDown(st)?FADER_DOWN_COPY:streamSignalText(st);
   }
   // sidebarLiveLine removed in Volare Refined redesign
 
@@ -3795,6 +3912,7 @@ async function refreshFast(){
     notifyExternalAddNotices(_st.external_add_notices);
     const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
+    updateFaderDownState(_st);
     updateNow(_st.now_streaming);
     renderProduction(_st);
     renderProgramme(_st);
