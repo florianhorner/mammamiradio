@@ -250,7 +250,8 @@ async def test_apply_egress_reuses_baked_render_from_prior_run(tmp_path):
     """Scenario 3 (post-restart): a baked render persisted on disk from a prior run is
     reused on the next play with no re-encode — instant, no FFmpeg, even after a restart."""
     cfg, seg = _cache_setup(tmp_path)
-    baked = cfg.cache_dir / f"fm_{seg.path.stem}_v1.mp3"
+    st = seg.path.stat()
+    baked = cfg.cache_dir / f"fm_{seg.path.stem}_v1_{st.st_mtime_ns}_{st.st_size}.mp3"
     baked.write_bytes(b"COLOURED-FROM-PRIOR-RUN")  # as if a prior run produced it
     with (
         patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
@@ -259,6 +260,25 @@ async def test_apply_egress_reuses_baked_render_from_prior_run(tmp_path):
         out = await _apply_egress(seg, cfg)
     m_chain.assert_not_called()  # no encode — reused the persisted bake
     assert out.path == baked and out.ephemeral is False
+
+
+async def test_apply_egress_rebakes_when_source_rewritten(tmp_path):
+    """A norm source rewritten in place (e.g. ``reconcile_cached_music`` re-levels it after
+    a LUFS-target change, or it is evicted and regenerated) must NOT reuse the stale bake.
+    The source mtime+size is in the bake key, so a content change re-bakes the new source
+    instead of airing the old/quieter colour."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour) as m_chain,
+    ):
+        first = await _apply_egress(seg, cfg)
+        # Source rewritten in place with different content (new size — and mtime) so the
+        # bake key must change even though the path and chain version are identical.
+        seg.path.write_bytes(b"RECONCILED-LOUDER-AND-LONGER-THAN-BEFORE")
+        second = await _apply_egress(seg, cfg)
+    assert m_chain.call_count == 2  # re-baked from the updated source, not reused
+    assert first.path != second.path  # the source tag in the key changed
 
 
 # ── Best-effort: a colouring failure never produces dead air ──────────────────

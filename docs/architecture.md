@@ -119,9 +119,11 @@ the channel last.
 **Colour-baking (repeat plays cost nothing on the Pi).** A norm-cache music hit is a
 stable file that can air many times, and the FM pass is a full re-encode — expensive on
 the Pi. So `_apply_egress()` bakes the coloured render once into the cache
-(`_bake_cached_egress()`), keyed by source + `broadcast_chain_version()` (a filter or
-encoding change yields a new key, so a config change re-bakes instead of airing a stale
-colour). A replay — including the first play after a restart, since the bake persists on disk —
+(`_bake_cached_egress()`), keyed by source identity (path + mtime/size) +
+`broadcast_chain_version()`. A filter/encoding change OR an in-place source rewrite —
+`reconcile_cached_music()` re-levelling the norm file after a LUFS-target change, or an
+evict-then-regenerate at the same path — yields a new key, so it re-bakes instead of
+airing a stale colour. A replay — including the first play after a restart, since the bake persists on disk —
 reuses the baked file with no encode; the bake is published atomically (encode to a
 staging name, then `os.replace`) so a reader never sees a half-written file. Bakes are
 evicted alongside `norm_` originals (the evict-last "processed audio" group in

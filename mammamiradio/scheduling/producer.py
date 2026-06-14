@@ -574,19 +574,30 @@ async def _bake_cached_egress(segment: Segment, source: Path, config: StationCon
 
     A norm-cache music hit is a stable file that can air many times; the FM pass is a
     full re-encode, expensive on the Pi, and re-running it every replay is wasted work.
-    Bake the coloured render into the cache keyed by source + chain version, so a replay
-    reuses it with no encode, a chain change re-bakes (new key), and stale bakes fall
-    out by normal LRU eviction. The baked file is published atomically (encode to a
+    Bake the coloured render into the cache keyed by source identity + chain version, so a
+    replay reuses it with no encode, a chain change re-bakes (new key), and stale bakes
+    fall out by normal LRU eviction. The baked file is published atomically (encode to a
     staging name, then ``os.replace``) so a reader never sees a half-written file.
     Best-effort: any failure airs the source un-coloured this play and retries next time.
+
+    The key includes the source's mtime+size, not just its name: a norm file can be
+    rewritten in place at the same path — ``reconcile_cached_music()`` re-levels it after a
+    LUFS-target change, or eviction drops it and it is regenerated — and keying on the name
+    alone would serve the stale bake (old/quieter colour) instead of re-baking the updated
+    source. A content change moves the key, so the stale bake is orphaned and LRU-evicted.
     """
     chain_ver = broadcast_chain_version()
     if chain_ver is None:  # chain disabled — nothing to colour
         return segment
-    baked = config.cache_dir / f"fm_{source.stem}_{chain_ver}.mp3"
+    try:
+        st = source.stat()
+    except OSError:
+        return segment  # source vanished (e.g. evicted mid-flight) — leave it to the caller
+    src_tag = f"{st.st_mtime_ns}_{st.st_size}"  # busts the bake when the source is rewritten
+    baked = config.cache_dir / f"fm_{source.stem}_{chain_ver}_{src_tag}.mp3"
     if baked.exists() and baked.stat().st_size > 0:  # cache hit — no re-encode
         return replace(segment, path=baked, ephemeral=False)
-    staging = config.cache_dir / f"fm_{source.stem}_{chain_ver}.staging_{uuid4().hex[:8]}.mp3"
+    staging = config.cache_dir / f"fm_{source.stem}_{chain_ver}_{src_tag}.staging_{uuid4().hex[:8]}.mp3"
     loop = asyncio.get_running_loop()
     try:
         applied = await loop.run_in_executor(None, apply_broadcast_chain, source, staging)
