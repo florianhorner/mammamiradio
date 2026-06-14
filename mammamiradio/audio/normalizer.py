@@ -142,6 +142,16 @@ _loudness_reconcile: tuple[float, float] | None = None  # (main_target_lufs, ad_
 # what normalize() honours), never silently rewritten to the house defaults.
 _reconcile_output_args: list[str] = list(_MP3_OUTPUT_ARGS)
 
+# FM broadcast "transmitter" chain: when configured (configure_broadcast_chain,
+# called once at startup from radio.toml [audio]), each finished segment gets one
+# extra ffmpeg pass that colours it like an over-the-air FM signal. It is the LAST
+# stage of the egress pipeline — applied after all mixing/concat so music and voice
+# leave through the same transmitter. None = disabled (the default, so tests and
+# any unconfigured import stay studio-clean). When enabled this holds the output-
+# encoding args (the station's sample rate / channels / bitrate), like the reconcile
+# pass, so the colouring re-encode never rewrites a non-default encoding.
+_broadcast_output_args: list[str] | None = None
+
 # Canonical list of supported SFX types (synthetic fallbacks).
 # Pre-recorded files in sfx_dir can extend this, but this list is what the
 # LLM prompt advertises as available.
@@ -215,6 +225,27 @@ def _gate_after(onset_sec: float) -> str:
     return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
 
 
+def _mp3_output_args(*, sample_rate: int, channels: int, bitrate: int) -> list[str]:
+    """Build the station's MP3 output-encoding args (the shape ``normalize()`` honours).
+
+    One builder for both corrective re-encode passes — the loudness reconcile and the
+    FM broadcast chain — so a future encoding change (e.g. an id3 flag) lands in one
+    place and can never drift between the two passes.
+    """
+    return [
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "-b:a",
+        f"{bitrate}k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+
+
 def configure_loudness_reconcile(
     main_target: float | None,
     ad_target: float | None,
@@ -233,18 +264,7 @@ def configure_loudness_reconcile(
     """
     global _loudness_reconcile, _reconcile_output_args
     _loudness_reconcile = None if main_target is None or ad_target is None else (float(main_target), float(ad_target))
-    _reconcile_output_args = [
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-b:a",
-        f"{bitrate}k",
-        "-write_xing",
-        "0",
-        "-f",
-        "mp3",
-    ]
+    _reconcile_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
 
 
 def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
@@ -329,6 +349,89 @@ def reconcile_cached_music(path: Path) -> None:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not mark norm sidecar reconciled %s: %s", sidecar.name, exc)
+
+
+def configure_broadcast_chain(
+    enabled: bool,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    bitrate: int = 192,
+) -> None:
+    """Enable the FM broadcast 'transmitter' chain (call once at startup).
+
+    Pass enabled=False (or never call this) to leave segments studio-clean. The
+    colouring re-encode honours the station's configured encoding so a non-default
+    sample rate / channels / bitrate is preserved — matching what normalize() and
+    the loudness reconcile pass already emit.
+    """
+    global _broadcast_output_args
+    if not enabled:
+        _broadcast_output_args = None
+        return
+    _broadcast_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
+
+
+def _broadcast_filter_chain() -> str:
+    """The FM 'transmitter' colour applied LAST in the egress pipeline.
+
+    Deliberately conservative — a subtle multipath movement, a gentle pre-emphasis
+    HF shelf at the real ~75 µs turnover (~2.1 kHz, not 3180 Hz), the ~15 kHz FM
+    channel band-limit, and a soft broadcast leveller. NO equalizer + loudnorm
+    stack (that is the psymodel.c:576 SIGABRT surface on ffmpeg 8.x / Pi aarch64),
+    and no loudnorm at all — the segment is already at target from the upstream
+    reconcile pass. Filter VALUES are a starting point pending the A/B listening
+    sign-off; the chain SHAPE (no stacked EQ, no loudnorm) is the safety contract.
+    """
+    return ",".join(
+        [
+            # Subtle multipath / transmitter movement (clamped aphaser helper).
+            _aphaser(in_gain=0.9, out_gain=0.85, delay=2.0, decay=0.25, speed=0.5),
+            # FM pre-emphasis: gentle HF shelf at the ~75 µs turnover (~2.1 kHz).
+            "treble=g=2:f=2100",
+            # FM channel band-limit: roll off the top above ~15 kHz.
+            "lowpass=f=15000",
+            # Soft broadcast leveller — glue. makeup is a LINEAR gain (not dB); 1.3
+            # (~+2.3 dB) offsets the compression + band-limit so the coloured segment
+            # lands back on the reconciled target (measured neutral at -16.3 LUFS),
+            # preserving the consistent-loudness contract instead of airing quieter.
+            "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=1.3",
+        ]
+    )
+
+
+def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
+    """Colour a finished segment with the FM broadcast chain (one ffmpeg pass).
+
+    No-op (returns False, leaving output_path unwritten) when the chain is not
+    configured. Best-effort: any ffmpeg failure returns False and leaves the input
+    untouched — never raises into the audio path, never produces dead air. Holds
+    _NORM_SEM so the extra pass respects the Pi 2-ffmpeg ceiling. Returns True only
+    when output_path was successfully written.
+    """
+    args = _broadcast_output_args
+    if args is None:
+        return False
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-filter:a",
+        _broadcast_filter_chain(),
+        *args,
+        str(output_path),
+    ]
+    with _NORM_SEM:
+        try:
+            _run_ffmpeg(cmd, f"broadcast chain {input_path.name}")
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            output_path.unlink(missing_ok=True)
+            return False
+    return True
 
 
 def normalize(
