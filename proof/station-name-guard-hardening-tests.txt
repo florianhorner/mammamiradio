@@ -1,7 +1,14 @@
-station-name-guard metadata-matching hardening — test proof
-commit: 5fa0cc03a47d6f7ce0f398b16d5e392dbdb82aca
-date (UTC): 2026-06-14T00:20:40Z
----
-........................................................................ [ 95%]
-.......                                                                  [100%]
-151 passed in 3.64s
+station-name-guard metadata-matching hardening — proof
+commit: 69d2f1430306a74df7dbf63de0102b8ea25770dd
+date (UTC): 2026-06-14T00:22:02Z
+
+## tests (pytest, affected modules)
+151 passed in 4.64s
+
+## build/lint
+ruff check: All checks passed!
+ruff format --check: 6 files already formatted
+mypy: Success: no issues found in 2 source files
+
+## full suite
+2803 passed, 2 skipped, 13 deselected
