@@ -1093,11 +1093,19 @@ async def run_playback_loop(app) -> None:
                                 clean_artist = strip_foreign_station_name(
                                     sidecar["artist"], config.display_station_name
                                 )
+                                # prefix_only on the song title: drop a "Radio X - Song"
+                                # rescue prefix but keep a song really titled "Radio Ga Ga".
+                                song_title = (
+                                    strip_foreign_station_name(
+                                        sidecar["title"], config.display_station_name, prefix_only=True
+                                    )
+                                    or sidecar["title"]
+                                )
                                 if clean_artist:
-                                    rescue_title = f"{clean_artist} – {sidecar['title']}"
+                                    rescue_title = f"{clean_artist} – {song_title}"
                                     rescue_artist: str | None = clean_artist
                                 else:
-                                    rescue_title = sidecar["title"]
+                                    rescue_title = song_title
                                     rescue_artist = None
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
