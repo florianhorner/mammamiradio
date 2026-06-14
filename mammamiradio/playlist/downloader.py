@@ -178,21 +178,25 @@ def evict_cache_lru(
 
     protected_names = {p.name for p in (protected_paths or set())}
 
-    # Evict regular cache files first, then norm_ files if still over budget.
+    # Evict transient/regular cache files first; processed audio that may be queued or
+    # currently airing — norm_ originals and fm_ broadcast-chain bakes — is evicted last.
+    # Within each group, oldest-by-atime first, so a cold or stale-chain-version bake goes
+    # before a hot one and a file that is about to play is the least likely to be removed
+    # mid-stream (matching the long-standing norm_ safety baseline).
     regular = []
-    norm = []
+    processed = []
     for f in cache_dir.glob("*.mp3"):
         if f.name in _CACHE_PROTECTED:
             continue
         if f.name in protected_names:
             continue
-        if f.name.startswith("norm_"):
-            norm.append(f)
+        if f.name.startswith(("norm_", "fm_")):
+            processed.append(f)
         else:
             regular.append(f)
     regular.sort(key=lambda f: f.stat().st_atime)
-    norm.sort(key=lambda f: f.stat().st_atime)
-    mp3_files = regular + norm
+    processed.sort(key=lambda f: f.stat().st_atime)
+    mp3_files = regular + processed
 
     total_bytes = sum(f.stat().st_size for f in mp3_files)
     max_bytes = max_size_mb * 1024 * 1024

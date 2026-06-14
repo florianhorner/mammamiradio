@@ -1,0 +1,35 @@
+egress-cache-bake (feat/egress-cache-bake) — local verification
+date: 2026-06-14
+
+command: make check (ruff + mypy + vulture + pytest + coverage floors)
+---
+2918 passed, 2 skipped, 19 deselected
+Required test coverage of 92.0% reached. Total coverage: 94%
+All coverage floors held
+All checks passed
+
+command: pytest -m requires_ffmpeg -k broadcast tests/audio/test_normalizer_real_ffmpeg.py
+  (real ffmpeg 8.1.1 — SIGABRT-safety + loudness-neutrality on broadband and
+   voice-band signals + CPU budget; apply_broadcast_chain unchanged by this PR)
+---
+[broadcast-chain CPU] 3s segment colour pass: 0.04s
+6 passed in 1.15s
+
+command: pytest tests/scheduling/test_egress_pipeline.py tests/playlist/test_downloader.py
+  (cache-bake: reuse-skips-encode, rebake-on-version-change, disabled no-op,
+   bake-failure/exception/publish-failure best-effort, post-restart persisted bake,
+   fm_ eviction bucketed with norm_, queued fm_ protected)
+---
+all passed
+
+command: bash scripts/check-release-invariants.sh
+---
+All invariants passed.
+
+command: bash scripts/validate-addon.sh
+---
+All checks passed. Safe to push.
+
+command: bash scripts/check-changelog-lint.sh
+---
+Changelog lint clean.

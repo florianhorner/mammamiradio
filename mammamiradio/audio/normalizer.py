@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -398,6 +399,21 @@ def _broadcast_filter_chain() -> str:
             "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=1.3",
         ]
     )
+
+
+def broadcast_chain_version() -> str | None:
+    """A short stable fingerprint of the active broadcast chain, or None when disabled.
+
+    Combines the filter graph with the output-encoding args so any change to either —
+    a filter tweak or a different sample rate / channels / bitrate — yields a new
+    fingerprint. Callers that cache a coloured ("baked") render key the cache file by
+    this value, so a chain change re-bakes instead of airing a stale colour, and the
+    superseded bakes fall out of the cache by normal LRU eviction.
+    """
+    if _broadcast_output_args is None:
+        return None
+    payload = _broadcast_filter_chain() + "|" + " ".join(_broadcast_output_args)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:

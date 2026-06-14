@@ -26,10 +26,13 @@ PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 
 
 class _Cfg:
-    """Minimal stand-in carrying just the tmp_dir the egress pass needs."""
+    """Minimal stand-in carrying the tmp_dir + cache_dir the egress pass needs."""
 
-    def __init__(self, tmp_dir: Path):
+    def __init__(self, tmp_dir: Path, cache_dir: Path | None = None):
         self.tmp_dir = tmp_dir
+        # Defaults to tmp_dir for the ephemeral-source tests, which never read it
+        # (the bakeable branch short-circuits on ephemeral=True). Bake tests pass it.
+        self.cache_dir = cache_dir if cache_dir is not None else tmp_dir
 
 
 def _colour(in_path: Path, out_path: Path) -> bool:
@@ -130,21 +133,132 @@ async def test_apply_egress_unlinks_pre_egress_tmp(tmp_path):
     assert not pre_path.exists()  # the pre-egress tmp was removed
 
 
-async def test_apply_egress_preserves_cache_file(tmp_path):
-    """A norm-cache hit (non-ephemeral, outside tmp_dir) is colour-copied but the
-    CACHE file itself is left intact — the colouring pass never corrupts the cache."""
+# ── Cache-bake: a norm-cache music hit is coloured once and reused ────────────
+
+
+def _cache_setup(tmp_path: Path) -> tuple[_Cfg, Segment]:
+    """A cache-file music segment (non-ephemeral, source under cache_dir) + its _Cfg.
+
+    Tests derive the cache dir from ``cfg.cache_dir`` and the source from ``seg.path``.
+    """
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     tmp_dir = tmp_path / "tmp"
     tmp_dir.mkdir()
-    cache_file = cache_dir / "norm_song.mp3"
-    cache_file.write_bytes(b"CACHED")
-    seg = Segment(type=SegmentType.MUSIC, path=cache_file, metadata={"title": "S"}, ephemeral=False)
-    with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour):
-        out = await _apply_egress(seg, _Cfg(tmp_dir))
-    assert cache_file.exists()  # cache preserved
-    assert cache_file.read_bytes() == b"CACHED"
-    assert out.path != cache_file and out.ephemeral is True
+    src = cache_dir / "norm_song.mp3"
+    src.write_bytes(b"CACHED")
+    seg = Segment(type=SegmentType.MUSIC, path=src, metadata={"title": "S"}, ephemeral=False)
+    return _Cfg(tmp_dir, cache_dir), seg
+
+
+async def test_apply_egress_bakes_cache_hit_and_preserves_source(tmp_path):
+    """A norm-cache music hit is colour-baked into a persistent cache file (fm_*), the
+    source is left intact, and the baked render is non-ephemeral (kept for reuse)."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour),
+    ):
+        out = await _apply_egress(seg, cfg)
+    assert out.path.name.startswith("fm_") and out.path.parent == cfg.cache_dir
+    assert out.ephemeral is False  # a cache file — not unlinked after play
+    assert out.path.read_bytes() == b"COLOURED"
+    assert seg.path.exists() and seg.path.read_bytes() == b"CACHED"  # source untouched
+    assert not list(cfg.cache_dir.glob("*.staging_*"))  # staging atomically consumed
+
+
+async def test_apply_egress_reuses_baked_render_without_reencode(tmp_path):
+    """The win: the second play of a cached song reuses the baked render and does NOT
+    re-run the FM encode (the per-replay re-encode that cost Pi CPU is eliminated)."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour) as m_chain,
+    ):
+        first = await _apply_egress(seg, cfg)
+        second = await _apply_egress(seg, cfg)
+    assert m_chain.call_count == 1  # baked once, reused on replay — no second encode
+    assert first.path == second.path and second.ephemeral is False
+
+
+async def test_apply_egress_rebakes_on_chain_version_change(tmp_path):
+    """A filter/encoding change yields a new chain version, so the segment re-bakes under
+    a new key instead of airing a stale colour (the old bake is left to LRU eviction)."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", side_effect=["v1", "v2"]),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour) as m_chain,
+    ):
+        r1 = await _apply_egress(seg, cfg)
+        r2 = await _apply_egress(seg, cfg)
+    assert m_chain.call_count == 2  # re-encoded for the new version
+    assert r1.path != r2.path
+    assert "v1" in r1.path.name and "v2" in r2.path.name
+
+
+async def test_apply_egress_cache_source_noop_when_chain_disabled(tmp_path):
+    """With the chain disabled (broadcast_chain_version is None — the autouse default),
+    a cache-file source is returned untouched and never re-encoded."""
+    cfg, seg = _cache_setup(tmp_path)
+    with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain") as m_chain:
+        out = await _apply_egress(seg, cfg)
+    m_chain.assert_not_called()
+    assert out is seg
+
+
+async def test_apply_egress_bake_failure_airs_source_clean(tmp_path):
+    """apply_broadcast_chain returning False leaves the source aired un-coloured this
+    play (never dead air) and publishes no baked/partial file."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", return_value=False),
+    ):
+        out = await _apply_egress(seg, cfg)
+    assert out is seg
+    assert not list(cfg.cache_dir.glob("fm_*"))  # nothing published, staging cleaned
+
+
+async def test_apply_egress_bake_exception_cleans_staging(tmp_path):
+    """A raised exception during the bake never escapes, airs the source un-coloured,
+    and leaves no staging file behind in the cache."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=RuntimeError("boom")),
+    ):
+        out = await _apply_egress(seg, cfg)
+    assert out is seg
+    assert not list(cfg.cache_dir.glob("fm_*"))
+
+
+async def test_apply_egress_bake_publish_failure_airs_source_clean(tmp_path):
+    """If the atomic publish (os.replace) fails after a successful encode, the source is
+    aired un-coloured this play and no baked/staging file is left in the cache."""
+    cfg, seg = _cache_setup(tmp_path)
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_colour),
+        patch(f"{PRODUCER_MODULE}.os.replace", side_effect=OSError("ENOSPC")),
+    ):
+        out = await _apply_egress(seg, cfg)
+    assert out is seg
+    assert not list(cfg.cache_dir.glob("fm_*"))  # staging cleaned, nothing published
+
+
+async def test_apply_egress_reuses_baked_render_from_prior_run(tmp_path):
+    """Scenario 3 (post-restart): a baked render persisted on disk from a prior run is
+    reused on the next play with no re-encode — instant, no FFmpeg, even after a restart."""
+    cfg, seg = _cache_setup(tmp_path)
+    baked = cfg.cache_dir / f"fm_{seg.path.stem}_v1.mp3"
+    baked.write_bytes(b"COLOURED-FROM-PRIOR-RUN")  # as if a prior run produced it
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="v1"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain") as m_chain,
+    ):
+        out = await _apply_egress(seg, cfg)
+    m_chain.assert_not_called()  # no encode — reused the persisted bake
+    assert out.path == baked and out.ephemeral is False
 
 
 # ── Best-effort: a colouring failure never produces dead air ──────────────────

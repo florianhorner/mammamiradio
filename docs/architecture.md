@@ -116,6 +116,22 @@ this stage removes. The chaos and reactive-interference content stages slot in
 **before** the broadcast chain — effects colour the content, the transmitter colours
 the channel last.
 
+**Colour-baking (repeat plays cost nothing on the Pi).** A norm-cache music hit is a
+stable file that can air many times, and the FM pass is a full re-encode — expensive on
+the Pi. So `_apply_egress()` bakes the coloured render once into the cache
+(`_bake_cached_egress()`), keyed by source + `broadcast_chain_version()` (a filter or
+encoding change yields a new key, so a config change re-bakes instead of airing a stale
+colour). A replay — including the first play after a restart, since the bake persists on disk —
+reuses the baked file with no encode; the bake is published atomically (encode to a
+staging name, then `os.replace`) so a reader never sees a half-written file. Bakes are
+evicted alongside `norm_` originals (the evict-last "processed audio" group in
+`evict_cache_lru`, oldest-by-atime first, so a cold or stale-version bake goes before a
+hot one); a bake currently queued for playback is passed in `protected_paths` so
+eviction cannot pull it mid-stream. The trade-off is roughly double the per-track cache
+footprint (a `norm_` original plus its `fm_` bake). One-shot ephemeral renders (fresh
+voice/banter) have no stable identity to key on, so they are still coloured to a
+per-play tmp.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by
