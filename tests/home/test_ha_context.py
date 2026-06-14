@@ -2176,7 +2176,7 @@ async def test_push_state_to_ha_falls_back_to_logo_when_album_art_missing(reset_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad_art",
-    ["/artwork/station.svg", "station.svg", "http://", "https://", "https://:443/cover.jpg"],
+    ["/artwork/station.svg", "station.svg", "http://", "https://", "https://:443/cover.jpg", "http://[::1/cover.jpg"],
 )
 async def test_push_state_to_ha_ignores_non_http_album_art(reset_ha_push_debounce, bad_art):
     """A relative/local/scheme-only/hostless album_art is never used (HA resolves

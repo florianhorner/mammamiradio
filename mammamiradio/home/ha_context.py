@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig
+from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
@@ -1525,14 +1525,7 @@ async def push_state_to_ha(
         # on screen during a news flash. A relative/local path is never used (HA
         # resolves it against its own origin, which 404s for an add-on).
         album_art = str(metadata.get("album_art") or "").strip()
-        parsed_art = urlsplit(album_art) if album_art else None
-        cover = (
-            album_art
-            if (
-                is_playing and parsed_art is not None and parsed_art.scheme in ("http", "https") and parsed_art.hostname
-            )
-            else ""
-        )
+        cover = album_art if (is_playing and is_absolute_http_url(album_art)) else ""
         media_attrs["entity_picture"] = cover or artwork_url or _DEFAULT_STATION_ARTWORK_URL
 
         entities: list[tuple[str, dict]] = [

@@ -150,6 +150,7 @@ def test_parse_brand_blank_artwork_url_is_empty():
         "https://:443/logo.png",
         "ftp://host/logo.png",
         "data:image/png;base64,AAAA",
+        "http://[::1",  # malformed IPv6 — urlsplit raises; must degrade, not crash boot
     ],
 )
 def test_parse_brand_rejects_non_absolute_artwork_url(bad_url):

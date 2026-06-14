@@ -881,6 +881,23 @@ def _apply_addon_options() -> None:
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
 
+def is_absolute_http_url(value: str) -> bool:
+    """True only for an absolute http(s) URL that has a host.
+
+    Raise-safe by contract: a malformed value (e.g. an unterminated IPv6 literal
+    like ``http://[::1`` makes ``urlsplit`` raise ``ValueError``, and a bad port
+    makes ``.hostname`` raise) returns ``False`` rather than propagating. Both
+    callers depend on this: the config loader must never fail boot, and the HA
+    push must never raise into the audio path. Used for the ``[brand]
+    artwork_url`` guardrail and the ``album_art`` cover check (``ha_context``).
+    """
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+    except ValueError:
+        return False
+
+
 def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
     """Parse [brand] from radio.toml; apply guardrails per design D1.
 
@@ -996,18 +1013,16 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
 
     # Artwork URL guardrail: HA resolves entity_picture against its own origin,
     # so only an absolute http(s) URL with a host is usable. A relative, non-http,
-    # scheme-only ("http://"), or hostless-authority ("https://:443/logo.png")
-    # value would 404 on the HA media card; warn and fall back to the engine
-    # default (blank). Check hostname (not netloc) so ":443" alone is rejected.
+    # scheme-only ("http://"), hostless-authority ("https://:443/logo.png"), or
+    # malformed value would 404 (or be rejected) on the HA media card; warn and
+    # fall back to the engine default (blank). is_absolute_http_url is raise-safe.
     artwork_url = str(brand_raw.get("artwork_url", "") or "").strip()
-    if artwork_url:
-        parsed = urlsplit(artwork_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            warnings.append(
-                f"brand.artwork_url={artwork_url!r} is not an absolute http(s) URL with a host; "
-                "ignoring it and using the default station logo"
-            )
-            artwork_url = ""
+    if artwork_url and not is_absolute_http_url(artwork_url):
+        warnings.append(
+            f"brand.artwork_url={artwork_url!r} is not an absolute http(s) URL with a host; "
+            "ignoring it and using the default station logo"
+        )
+        artwork_url = ""
 
     brand = BrandSection(
         station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),

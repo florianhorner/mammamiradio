@@ -1,14 +1,14 @@
 Proof: HA media card logo fallback (PR1)
-Commit: (pending — this commit)
-Generated: 2026-06-14T08:31:10Z
-Command: make check (lint + mypy + pytest + coverage floors)
+Generated: 2026-06-14T08:59:24Z
+Command: make check + ruff format --check . (CI parity)
 ----------------------------------------
 All checks passed!
 Required test coverage of 92.0% reached. Total coverage: 94.10%
-2815 passed, 2 skipped, 13 deselected, 1 warning in 65.08s (0:01:05)
+2822 passed, 2 skipped, 13 deselected, 1 warning in 63.54s (0:01:03)
 All coverage floors held. Total: 94% (floor: 92%)
 All checks passed
+182 files already formatted
 ----------------------------------------
-Targeted artwork/logo/validation tests:
-......................                                                   [100%]
-22 passed, 177 deselected in 0.13s
+Targeted artwork/logo/validation tests (incl. malformed-IPv6 raise-safety):
+........................                                                 [100%]
+24 passed, 177 deselected in 0.14s
