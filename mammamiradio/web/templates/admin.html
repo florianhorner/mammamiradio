@@ -81,7 +81,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
 .now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
-.now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
+.now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .now-type[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
 
 .sidebar-now .now-title {
@@ -108,7 +108,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   background: var(--ok);
 }
 .sidebar-progress-fill[data-t="banter"] { background: var(--sun); }
-.sidebar-progress-fill[data-t="ad"] { background: var(--warning); }
+.sidebar-progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .sidebar-progress-fill[data-t="news_flash"] { background: var(--news); }
 .sidebar-time {
   font-family: var(--font-mono); font-size: 10px; color: var(--muted);
@@ -275,7 +275,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .prog-row[data-type="music"] .prog-border { background: var(--ok); }
 .prog-row[data-type="banter"] .prog-border { background: var(--sun2); }
-.prog-row[data-type="ad"] .prog-border { background: var(--warning); }
+.prog-row[data-type="ad"] .prog-border { background: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-border { background: var(--news); }
 
 .prog-badge {
@@ -284,7 +284,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--ok); }
 .prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--sun); }
-.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--warning); }
+.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-badge { background: rgba(224,112,56,0.15); color: var(--news); }
 
 .now-badge {
@@ -482,7 +482,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
 .le-type[data-t="music"] { color: var(--ok); }
 .le-type[data-t="banter"] { color: var(--sun); }
-.le-type[data-t="ad"] { color: var(--warning); }
+.le-type[data-t="ad"] { color: var(--seg-ad); }
 .le-type[data-t="news_flash"] { color: var(--news); }
 .le-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(245,237,216,0.7); }
 
@@ -770,7 +770,7 @@ body::before {
 .a-now-compact .progress-track { flex: 1; height: 2px; background: var(--surface-strong); border-radius: 1px; overflow: hidden; }
 .a-now-compact .progress-fill { height: 100%; border-radius: 1px; transition: width 1s linear; width: 0; background: var(--ok); }
 .a-now-compact .progress-fill[data-t="banter"] { background: var(--sun); }
-.a-now-compact .progress-fill[data-t="ad"] { background: var(--warning); }
+.a-now-compact .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 
@@ -957,7 +957,7 @@ body::before {
 .segment-inline { color: var(--muted); }
 .segment-inline.segment-music { color: var(--ok); }
 .segment-inline.segment-banter { color: var(--sun2); }
-.segment-inline.segment-ad { color: var(--accent-warm); } /* secondary accent — distinct from --warning (degraded) */
+.segment-inline.segment-ad { color: var(--seg-ad); } /* dedicated ad token — distinct from --warning (degraded) */
 .segment-inline.segment-news_flash { color: var(--news); }
 .segment-inline.segment-station_id,
 .segment-inline.segment-sweeper,
@@ -1419,7 +1419,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   background: var(--ok);
 }
 .on-air-progress-track .progress-fill[data-t="banter"] { background: var(--sun); }
-.on-air-progress-track .progress-fill[data-t="ad"] { background: var(--warning); }
+.on-air-progress-track .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
 .on-air-actions {
   display: flex;

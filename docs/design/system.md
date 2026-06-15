@@ -75,6 +75,7 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --error:         #c44a4a;
   --warning:       #D97706;
   --news:          #e07038;   /* news_flash segment type — warm orange, distinct from warning amber */
+  --seg-ad:        var(--accent-warm);  /* ad segment type — warm amber, deliberately NOT --warning (degraded) */
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
