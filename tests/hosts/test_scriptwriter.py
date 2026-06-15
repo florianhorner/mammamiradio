@@ -557,8 +557,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
-    """Lock the production default: when no override is set, OpenAI is called with gpt-4o-mini."""
+async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.5."""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -576,15 +576,15 @@ async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["model"] == "gpt-5.5"
 
 
 @pytest.mark.asyncio
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "small"
-    config.models.catalog["openai"]["small"] = "gpt-5-mini"
+    # banter → creative role → balanced openai creative = "large"
+    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -601,7 +601,44 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5-mini"
+    assert call_kwargs["model"] == "gpt-5.5-test"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_model"),
+    [
+        ("news_flash", "gpt-5.5"),
+        ("ad", "gpt-5.5"),
+        ("transition", "gpt-5.4-mini"),
+    ],
+)
+async def test_openai_fallback_routes_by_caller_role(config, state, caller, expected_model):
+    """Creative fallbacks use GPT-5.5; latency-sensitive transitions use GPT-5.4-mini."""
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": True}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await scriptwriter_module._generate_json_response(
+            prompt="Return JSON.",
+            config=config,
+            state=state,
+            model=resolve_model(config.models, caller, "anthropic"),
+            max_tokens=100,
+            caller=caller,
+        )
+
+    call_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == expected_model
 
 
 @pytest.mark.asyncio
@@ -629,7 +666,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-4o-mini"
+    assert record.model == "gpt-5.5"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True

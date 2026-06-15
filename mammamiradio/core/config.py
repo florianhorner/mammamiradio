@@ -142,8 +142,8 @@ _DEFAULT_CATALOG: dict[str, dict[str, str]] = {
         "haiku": "claude-haiku-4-5-20251001",
     },
     "openai": {
-        "large": "gpt-4o",
-        "small": "gpt-4o-mini",
+        "large": "gpt-5.5",
+        "small": "gpt-5.4-mini",
     },
 }
 _DEFAULT_ROUTING: dict[str, str] = {
@@ -159,7 +159,7 @@ _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     },
     "balanced": {
         "anthropic": {"creative": "opus", "fast": "haiku"},
-        "openai": {"creative": "small", "fast": "small"},
+        "openai": {"creative": "large", "fast": "small"},
     },
     "economy": {
         "anthropic": {"creative": "haiku", "fast": "haiku"},

@@ -131,8 +131,8 @@ Additional Jamendo tuning can be set in `radio.toml` or container env without ex
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
 snapshot, and `run.sh` maps it to `MAMMAMIRADIO_QUALITY` (a missing/blank value
-defaults to `balanced`, which reproduces the prior model mapping — so an upgrade
-from the old dropdown is a zero-behavior-change event). If an existing
+defaults to `balanced`, which keeps Anthropic on the prior Opus/Haiku routing while
+using the frontier OpenAI catalog for creative fallback). If an existing
 `/data/options.json` still contains the removed `claude_model` key, `run.sh` also
 exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator saves
 `quality_profile`. The actual model IDs live in `[models]` in `radio.toml` (see

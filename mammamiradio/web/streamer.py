@@ -2453,8 +2453,8 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
     "claude-opus-4-6": (0.000015, 0.000075),
     "claude-sonnet-4-6": (0.000003, 0.000015),
     "claude-haiku-4-5-20251001": (0.0000008, 0.000004),
-    "gpt-4o": (0.0000025, 0.00001),
-    "gpt-4o-mini": (0.00000015, 0.0000006),
+    "gpt-5.5": (0.000005, 0.00003),
+    "gpt-5.4-mini": (0.00000075, 0.0000045),
 }
 _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 
