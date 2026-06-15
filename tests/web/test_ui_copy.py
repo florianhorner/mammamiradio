@@ -109,8 +109,7 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
     hits = [frag for frag in forbidden if frag in text]
     assert not hits, (
         "admin.html reintroduced raw-error / dead-end toast copy — route failures "
-        "through wayOut()/offlineMsg() (warm + a concrete way-out, principle #5):\n  "
-        + "\n  ".join(hits)
+        "through wayOut()/offlineMsg() (warm + a concrete way-out, principle #5):\n  " + "\n  ".join(hits)
     )
 
 

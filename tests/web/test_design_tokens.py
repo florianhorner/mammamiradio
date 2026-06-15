@@ -198,25 +198,16 @@ def test_ad_segment_color_is_distinct_from_warning() -> None:
     --warning, and no ad-segment rule in admin.html colors with --warning.
     """
     assert "--seg-ad" in _primitives_in(TOKENS_CSS), (
-        "tokens.css must define --seg-ad (the ad-segment color, distinct from "
-        "--warning / degraded status)."
+        "tokens.css must define --seg-ad (the ad-segment color, distinct from --warning / degraded status)."
     )
     tokens_text = _strip_comments(TOKENS_CSS.read_text(encoding="utf-8"))
     assert not re.search(r"--seg-ad\s*:\s*var\(\s*--warning\s*\)", tokens_text), (
-        "--seg-ad must not alias --warning — that re-creates the ad/degraded "
-        "color collision."
+        "--seg-ad must not alias --warning — that re-creates the ad/degraded color collision."
     )
 
     text = _strip_comments(_ADMIN_HTML_TEXT)
-    ad_rule_re = re.compile(
-        r'[^\n{}]*(?:\[data-t="ad"\]|\[data-type="ad"\]|\.segment-ad)[^\n{}]*\{[^}]*\}'
-    )
-    offenders = [
-        m.group(0).strip()
-        for m in ad_rule_re.finditer(text)
-        if "var(--warning)" in m.group(0)
-    ]
+    ad_rule_re = re.compile(r'[^\n{}]*(?:\[data-t="ad"\]|\[data-type="ad"\]|\.segment-ad)[^\n{}]*\{[^}]*\}')
+    offenders = [m.group(0).strip() for m in ad_rule_re.finditer(text) if "var(--warning)" in m.group(0)]
     assert not offenders, (
-        "ad-segment rules must use var(--seg-ad), not var(--warning) "
-        "(degraded-status color):\n" + "\n".join(offenders)
+        "ad-segment rules must use var(--seg-ad), not var(--warning) (degraded-status color):\n" + "\n".join(offenders)
     )
