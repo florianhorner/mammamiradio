@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
+
 ### Fixed
 
 - **The connected-home hello now retries if the host script falls back.** If AI banter generation fails and the station uses its stock banter instead, the first connected-home moment stays queued for a later real host break instead of being marked done. Homes with safe labels but no room metadata can still qualify for the hello. A running joke that didn't make it to air for the same reason keeps its turn too, instead of quietly going on cooldown.

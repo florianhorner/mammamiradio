@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
+
 ### Fixed
 
 - **News flashes now invent a fresh premise every time instead of repeating the same scenarios.** The traffic, weather, breaking news, sports, and culture bulletin prompts no longer hand the host a set of concrete joke setups to fall back on — each prompt now describes the *shape* and *tone* of what to invent, leaving the host to arrive at something new each time. Traffic incidents, weather reports, and cultural controversies all felt similar after enough listens; now each flash starts from a blank slate.

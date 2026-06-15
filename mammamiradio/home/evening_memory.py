@@ -122,16 +122,26 @@ def _domain(entity_id: str) -> str:
     return entity_id.split(".", 1)[0] if "." in entity_id else ""
 
 
+# Domains whose non-numeric state changes happen on their own — weather conditions
+# flipping (cloudy -> sunny), the sun crossing the horizon. They are NOT a human
+# doing something in the home, so they must not advance the evening's activity
+# clock; otherwise a genuinely empty home with passive weather/sun changes would
+# never hit the advertised inactivity reset and would carry stale gags forward.
+_PASSIVE_ACTIVITY_DOMAINS: frozenset[str] = frozenset({"weather", "sun"})
+
+
 def _is_home_activity(event: HomeEvent) -> bool:
     """A real, discrete home action — what should keep an evening session alive.
 
     Broader than gag candidacy: any non-numeric, non-person state change means a
     human did something in the home. Numeric drift (power meters tick every poll),
-    person trackers, and device-availability flaps (HA restart artefacts) are
-    excluded so radio-cadence polling can't fake activity and prevent the
-    inactivity rollover from ever firing.
+    person trackers, device-availability flaps (HA restart artefacts), and passive
+    environmental domains (weather/sun, which change on their own) are excluded so
+    nothing but real activity can fake an evening into staying alive.
     """
     if event.entity_id.startswith("person."):
+        return False
+    if _domain(event.entity_id) in _PASSIVE_ACTIVITY_DOMAINS:
         return False
     if _is_sentinel_transition(event):
         return False
