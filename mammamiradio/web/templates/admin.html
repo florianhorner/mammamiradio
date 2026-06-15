@@ -1254,6 +1254,10 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .pl-row, .sr-row { flex-wrap: wrap; }
   .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
+  /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
+   * on phones — give them a real touch height here without bloating the dense
+   * desktop list. */
+  .pl-btn, .sr-add { min-height: 44px; }
   .force-badge { margin-left: 28px; }
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
