@@ -163,8 +163,14 @@ async def startup():
 
     # Restore the evening running-gag ledger so a mid-evening addon restart
     # resumes the same session and gags instead of resetting them. Missing or
-    # corrupt files start fresh and never block boot.
-    evening_ledger = EveningLedger.load(config.cache_dir)
+    # corrupt files start fresh and never block boot. Candidacy policy comes from
+    # config ([home.running_gags]); empty lists keep the built-in domain default.
+    evening_ledger = EveningLedger.load(
+        config.cache_dir,
+        domain_allowlist=config.running_gags.domain_allowlist or None,
+        entity_allowlist=config.running_gags.entity_allowlist or None,
+        entity_denylist=config.running_gags.entity_denylist or None,
+    )
 
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not

@@ -82,6 +82,53 @@ def test_load_config_parses_audio_lufs_targets(tmp_path):
     assert legacy.audio.ad_lufs_target == -15.0
 
 
+def test_load_config_running_gags_defaults_empty(tmp_path):
+    """No [home.running_gags] → empty override lists (built-in domain default applies)."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    config = load_config(str(source))
+    assert config.running_gags.domain_allowlist == []
+    assert config.running_gags.entity_allowlist == []
+    assert config.running_gags.entity_denylist == []
+
+
+def test_load_config_parses_running_gags_overrides(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text() + (
+        "\n[home.running_gags]\n"
+        'domain_allowlist = ["light", "switch"]\n'
+        'entity_denylist = ["binary_sensor.flappy", 42, ""]\n'  # non-strings/empties dropped
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+    config = load_config(str(custom_path))
+    assert config.running_gags.domain_allowlist == ["light", "switch"]
+    assert config.running_gags.entity_denylist == ["binary_sensor.flappy"]
+    assert config.running_gags.entity_allowlist == []
+
+
+def test_load_config_running_gags_malformed_degrades(tmp_path):
+    """A malformed [home.running_gags] must not raise — it degrades to empty."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text() + (
+        '\n[home.running_gags]\ndomain_allowlist = "switch"\n'  # string, not a list
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+    config = load_config(str(custom_path))
+    assert config.running_gags.domain_allowlist == []
+
+
+def test_load_config_home_non_table_degrades(tmp_path):
+    """A `[home]` declared as a non-table value must not raise during load."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text() + '\nhome = "not-a-table"\n'
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+    config = load_config(str(custom_path))
+    assert config.running_gags.domain_allowlist == []
+    assert config.running_gags.entity_denylist == []
+
+
 def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace(
@@ -453,7 +500,7 @@ def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
         "[audio]\n"
         'claude_model = "claude-haiku-4-5-20251001"\n'
         'claude_creative_model = "claude-opus-4-6"\n'
-        'openai_script_model = "gpt-4o-mini"\n'
+        'openai_script_model = "gpt-5.4-mini"\n'
     )
     assert "[audio]\n" in text
     patched = text.replace("[audio]\n", legacy, 1)

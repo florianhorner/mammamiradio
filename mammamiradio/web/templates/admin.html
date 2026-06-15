@@ -2067,6 +2067,18 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           </div>
         </div>
 
+        <!-- On-Air Sound toggle (FM broadcast chain — live A/B against studio-clean) -->
+        <div class="card-label">On-Air Sound</div>
+        <div style="margin-bottom:14px">
+          <label class="super-italian-toggle">
+            <input type="checkbox" id="broadcastChainToggle" class="super-italian-checkbox" onchange="toggleBroadcastChain(this)">
+            <span><strong>On-Air Sound</strong></span>
+          </label>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            The warm, slightly band-limited FM character on every song, break, and ad. Toggle live to A/B it against studio-clean — the change lands on the next track.
+          </div>
+        </div>
+
         <!-- Group 1: Status -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-status-h">
           <div class="ttl-eyebrow" id="eg-status-h">Status</div>
@@ -3732,6 +3744,32 @@ async function toggleSuperItalian(el){
   }
 }
 
+// ── On-Air Sound toggle (FM broadcast chain) ──
+async function loadBroadcastChainToggle(){
+  try{
+    const r=await api('GET','/api/broadcast-chain');
+    const cb=document.getElementById('broadcastChainToggle');
+    if(cb&&r&&typeof r.broadcast_chain==='boolean')cb.checked=r.broadcast_chain;
+  }catch(e){/* ignore — toggle re-syncs from the server on next load */}
+}
+async function toggleBroadcastChain(el){
+  const value=!!el.checked;
+  el.disabled=true;
+  try{
+    const r=await api('POST','/api/broadcast-chain',{broadcast_chain:value});
+    if(r&&r.ok)toast(value?'On-Air Sound: ON — from the next track':'On-Air Sound: OFF — from the next track');
+    else{
+      el.checked=!value;
+      toast('Error: '+((r&&r.error)||'unknown'));
+    }
+  }catch(_){
+    el.checked=!value;
+    toast('Network error');
+  }finally{
+    el.disabled=false;
+  }
+}
+
 // ── AI Quality dial (model profile) ──
 const QUALITY_LABELS={
   premium:'Premium — best hosts, highest cost',
@@ -3953,6 +3991,7 @@ async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
 loadSuperItalianToggle();
+loadBroadcastChainToggle();
 loadQuality();
 loadChaosToggle();
 loadFestivalToggle();

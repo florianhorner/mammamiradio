@@ -149,8 +149,8 @@ sonnet = "claude-sonnet-4-6"
 haiku  = "claude-haiku-4-5-20251001"
 
 [models.catalog.openai]      # the ONLY place OpenAI model IDs live
-large = "gpt-4o"
-small = "gpt-4o-mini"
+large = "gpt-5.5"
+small = "gpt-5.4-mini"
 
 [models.routing]             # task (caller) → role
 banter     = "creative"
@@ -164,7 +164,7 @@ openai    = { creative = "large", fast = "small" }
 
 [models.profiles.balanced]   # reproduces prior behavior (creative=opus, fast=haiku)
 anthropic = { creative = "opus", fast = "haiku" }
-openai    = { creative = "small", fast = "small" }
+openai    = { creative = "large", fast = "small" }
 
 [models.profiles.economy]
 anthropic = { creative = "haiku", fast = "haiku" }
@@ -194,6 +194,17 @@ timer_poll_interval = 5      # seconds between lightweight timer-entity checks
 # entity_id = "timer.lavatrice"
 # directive = "La lavatrice ha finito. Muovetevi prima che si sgualcisca tutto."
 # urgency = "urgent"
+
+# Evening running gags ("the coffee machine, on again tonight"). The station
+# notices repeated home toggles over an evening and weaves a deferred, approximate
+# callback into banter. Candidacy is by device DOMAIN, so it works on any home with
+# no config: switch / fan / lock / vacuum / binary_sensor (doorbell, presence)
+# toggles are gag-worthy; sensors, climate, media, lights, and person trackers are
+# not. Override only if you want to tune it.
+# [home.running_gags]
+# domain_allowlist = ["switch", "fan", "lock", "vacuum", "binary_sensor"]  # replaces the default domain set
+# entity_allowlist = []   # if non-empty, restricts gags to these exact entity_ids
+# entity_denylist  = []   # silence chatty entities, e.g. a flapping presence sensor
 
 [persona]
 arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend

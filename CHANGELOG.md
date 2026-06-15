@@ -6,7 +6,15 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
+
 ### Fixed
+
+- **News flashes now invent a fresh premise every time instead of repeating the same scenarios.** The traffic, weather, breaking news, sports, and culture bulletin prompts no longer hand the host a set of concrete joke setups to fall back on — each prompt now describes the *shape* and *tone* of what to invent, leaving the host to arrive at something new each time. Traffic incidents, weather reports, and cultural controversies all felt similar after enough listens; now each flash starts from a blank slate.
+
+- **The hosts keep their real chatter even when the station runs on its backup writer.** If the main host-script engine is unavailable and the station leans on its backup, the backup would occasionally hand back the banter in a slightly different shape — and the station quietly dropped to a generic stock line instead of airing it. The station now understands that shape too, so the DJs keep their in-the-moment chatter while on the backup writer; only a genuinely empty response falls back to stock copy.
 
 - **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.
 
@@ -20,6 +28,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Switch the on-air radio sound on or off live, from the panel.** The FM "On-Air Sound" colouring now has a toggle in the producer's Engine Room, so you can flip it mid-broadcast and hear the difference on the next track — no restart, nothing interrupted. Handy for deciding whether you prefer the warm over-the-air character or a cleaner studio sound while the station is playing. Your choice sticks across restarts.
+
 - **The hosts can bring a running joke back when you least expect it.** A bit the DJs started during a music break can resurface once, somewhere it has no business being — folded into a sports score or a fake ad — the "wait, did the radio just remember that?" moment a real station pulls off and a playlist never could. It stays rare on purpose, so it lands instead of wearing out, and it only ever happens after the original joke actually aired.
 
 - **The station now sounds like it's coming through a real radio.** Every song, host break, and ad — including the pre-recorded clips a fresh, key-less station plays — passes through a gentle on-air colouring — the warm, slightly band-limited character of an FM broadcast — so the station feels like a station you've tuned into, not a clean studio file. It's on by default; turn it off for studio-clean output with the **On-Air Sound** toggle on the Home Assistant add-on, or by setting `broadcast_chain = false` under `[audio]` in `radio.toml`. The instant rescue clips that cover a gap skip the colouring so they still start the moment they're needed. When a song already saved in the local cache comes round again, its on-air sound is computed once and reused rather than re-made on every play (and the saved version survives a restart), so repeats stay light on low-power hardware like a Raspberry Pi.
@@ -27,6 +37,8 @@ The current version source of truth is `pyproject.toml`.
 - **The host learns warmer names for your connected home.** When Home Assistant is connected and an Anthropic key is set, the station quietly teaches itself how to talk about your devices — your vacuum by its real name, your lights by their room, your speakers — and remembers them so it doesn't have to work it out again. Hand-picked Italian names always win; the host never reads out a raw technical device ID, and anything it can't name warmly it simply leaves out. The admin home-status data tracks how many names came ready-made, how many the station generated, and how many are still waiting. Privacy note: to generate those names, your devices' display names and rooms are sent to Anthropic — no sensor readings, no presence, no location — and the results are kept locally on your own machine. A startup log line confirms when this is on.
 
 - **The morning coffee gets a knowing nod.** When the coffee machine clicks on, the host may tie it to the time of day the way a real DJ would — a warm "right on time" when it's early — never forced, and never a remark about how often or how long you do anything. The station already knew the hour; now it can use it.
+
+- **The "on again tonight" home callbacks now work in any home.** When the same thing keeps happening around the house over an evening — the coffee machine, a fan, the front door — the host can bring it back later as a warm, knowing aside. The station now recognises the right devices in your home automatically (any switch, fan, lock, vacuum, doorbell, or presence sensor), so it's no longer tuned to one particular setup. You can shape what counts, or hush a chatty sensor, with `[home.running_gags]` in `radio.toml`. A quiet evening with nothing happening for a few hours gently resets, so last night's tallies don't bleed into today.
 
 - **The Engine Room tells you when the station is running on rescue.** A new Queue rescue row shows how often the station has to bridge a gap with cached, canned, or stand-in audio when fresh content isn't ready in time. Now and then is normal; if it starts happening repeatedly (three times in fifteen minutes) the row flips to a warning, so you can tell a station that's genuinely live from one that only sounds live because something keeps filling the gaps. It also shows the last bridge and how long the queue has been empty right now.
 

@@ -34,10 +34,12 @@ Why aggregation: storing every raw event is unbounded (numeric sensors emit
 bounded by the number of discrete states an allowlisted entity has. Numeric /
 continuous states are excluded outright.
 
-PROVISIONAL config: the allowlist, salience weights, cooldown, inject
-probability, and render phrasing below are v0 placeholders. They are tuned in
-Phase 1 from the design's "Assignment" (hand-collected real evening events) and
-the renderer output is golden-snapshotted then. Do not treat them as final.
+Candidacy is operator-portable: gag-worthiness is decided by device DOMAIN
+(`switch`/`fan`/`lock`/`vacuum`/`binary_sensor` by default), so the feature works
+on any home, and operators tune it via `[home.running_gags]` in radio.toml
+(domain_allowlist / entity_allowlist / entity_denylist). The salience weights,
+cooldown, inject probability, and render phrasing remain provisional and may be
+tuned further from real listening.
 """
 
 from __future__ import annotations
@@ -60,28 +62,20 @@ logger = logging.getLogger(__name__)
 LEDGER_FILENAME = "evening_ledger.json"
 _SCHEMA_VERSION = 1
 
-# --- PROVISIONAL tuning (Phase 1 finalizes from the Assignment data) ---------
-# Discrete-toggle entities whose state changes read as "Nth time tonight" gags.
-# Deliberately NOT "GOLD+SILVER": tiers are curation priority, not gag-worthiness
-# (codex review). Weather, climate temps, media titles, power, brightness do not
-# make running-gag callbacks. Phase 1 tunes this set from real collected events.
-_GAG_ENTITY_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "switch.bar_kaffeemaschine_steckdose",  # coffee machine on/off
-        "vacuum.goldstaubsucher",  # robot vacuum docked/cleaning
-        "vacuum.matrix10_ultra",
-        "lock.lock_ultra_8d3c",  # door lock locked/unlocked
-        # NOTE: input_button.* and other timestamp-state entities are deliberately
-        # excluded — their state is the last-press time, so every press is a unique
-        # transition that never forms a repeat (no gag) while bloating the ledger.
-        "switch.bad_gross_waschmaschine_steckdose",  # washing machine on/off
-        "fan.bad_gross_lufter_shelly",  # bathroom / kitchen fans on/off
-        "fan.bad_klein_lufter",
-        "fan.kuche_lufter",
-        "binary_sensor.buro_9_ring_intercom_klingelt",  # doorbell
-        "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar",  # living-room presence
-    }
-)
+# --- gag candidacy (operator-portable) ---------------------------------------
+# Gag-candidacy is decided by DEVICE DOMAIN, not hardcoded entity_ids, so the
+# feature fires on any operator's home out of the box (a coffee machine is a
+# `switch.*` everywhere, even though the entity_id differs per home). The default
+# set is the discrete, recurring domains whose on/off / locked / docked toggles
+# read as "Nth time tonight" gags. Deliberately excludes `sensor` (numeric drift),
+# `climate`, `media_player`, `weather`, `light` (flaps constantly → gag noise),
+# and `person` (privacy + tracker noise). Operators override via
+# `[home.running_gags]` in radio.toml (domain_allowlist / entity_allowlist /
+# entity_denylist) — see core/config.EveningGagsSection.
+_DEFAULT_GAG_DOMAINS: frozenset[str] = frozenset({"switch", "fan", "lock", "vacuum", "binary_sensor"})
+# NOTE: input_button.* and other timestamp-state entities never form a repeat
+# (their state is the last-press time, a unique transition each time) — they are
+# kept out of the default domain set and bloat-guarded by the numeric exclusion.
 
 _TIER_WEIGHTS = {3.0: GOLD_ENTITIES, 2.0: SILVER_ENTITIES, 1.0: BRONZE_ENTITIES}
 _RECENCY_HALFLIFE_SECONDS = 7200.0  # salience halves ~every 2 hours
@@ -111,13 +105,46 @@ def _is_numeric(value: str) -> bool:
         return False
 
 
-def _is_gag_candidate(event: HomeEvent) -> bool:
-    """Only allowlisted, discrete (non-numeric), non-person events become gags."""
+# HA emits these when a device drops off or reconnects (e.g. on an addon/HA
+# restart). A `unavailable -> on` transition is infrastructure noise, not a human
+# action: it must neither form a running gag ("the doorbell, di nuovo stasera"
+# every time HA reboots) nor count as evening activity that keeps a quiet session
+# from rolling over.
+_HA_SENTINEL_STATES: frozenset[str] = frozenset({"unavailable", "unknown", "none"})
+
+
+def _is_sentinel_transition(event: HomeEvent) -> bool:
+    return event.raw_old_state.lower() in _HA_SENTINEL_STATES or event.raw_new_state.lower() in _HA_SENTINEL_STATES
+
+
+def _domain(entity_id: str) -> str:
+    """The HA domain of an entity_id — the part before the first dot."""
+    return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+
+# Domains whose non-numeric state changes happen on their own — weather conditions
+# flipping (cloudy -> sunny), the sun crossing the horizon. They are NOT a human
+# doing something in the home, so they must not advance the evening's activity
+# clock; otherwise a genuinely empty home with passive weather/sun changes would
+# never hit the advertised inactivity reset and would carry stale gags forward.
+_PASSIVE_ACTIVITY_DOMAINS: frozenset[str] = frozenset({"weather", "sun"})
+
+
+def _is_home_activity(event: HomeEvent) -> bool:
+    """A real, discrete home action — what should keep an evening session alive.
+
+    Broader than gag candidacy: any non-numeric, non-person state change means a
+    human did something in the home. Numeric drift (power meters tick every poll),
+    person trackers, device-availability flaps (HA restart artefacts), and passive
+    environmental domains (weather/sun, which change on their own) are excluded so
+    nothing but real activity can fake an evening into staying alive.
+    """
     if event.entity_id.startswith("person."):
         return False
-    if event.entity_id not in _GAG_ENTITY_ALLOWLIST:
+    if _domain(event.entity_id) in _PASSIVE_ACTIVITY_DOMAINS:
         return False
-    # Defense in depth: even an allowlisted entity must not emit numeric drift.
+    if _is_sentinel_transition(event):
+        return False
     return not (_is_numeric(event.raw_new_state) or _is_numeric(event.raw_old_state))
 
 
@@ -203,7 +230,31 @@ class EveningLedger:
     last_active: float = 0.0
     watermark: float = 0.0
     buckets: dict[str, GagBucket] = field(default_factory=dict)
+    # --- candidacy policy (from config, NOT persisted to disk) ---------------
+    # domain_allowlist gates which device domains form gags; entity_allowlist (if
+    # non-empty) restricts to specific entity_ids; entity_denylist always wins.
+    domain_allowlist: frozenset[str] = field(default_factory=lambda: _DEFAULT_GAG_DOMAINS)
+    entity_allowlist: frozenset[str] = field(default_factory=frozenset)
+    entity_denylist: frozenset[str] = field(default_factory=frozenset)
     _dirty: bool = field(default=False, repr=False)
+
+    # --- candidacy -----------------------------------------------------------
+
+    def _is_gag_candidate(self, event: HomeEvent) -> bool:
+        """Discrete (non-numeric), non-person, policy-allowed events become gags."""
+        if event.entity_id.startswith("person."):
+            return False
+        if event.entity_id in self.entity_denylist:
+            return False
+        # Defense in depth: a candidate must never emit numeric drift...
+        if _is_numeric(event.raw_new_state) or _is_numeric(event.raw_old_state):
+            return False
+        # ...nor a device-availability flap (HA/addon restart artefact).
+        if _is_sentinel_transition(event):
+            return False
+        if self.entity_allowlist:
+            return event.entity_id in self.entity_allowlist
+        return _domain(event.entity_id) in self.domain_allowlist
 
     # --- session lifecycle ---------------------------------------------------
 
@@ -220,6 +271,10 @@ class EveningLedger:
         if gap_too_long or day_rolled:
             self.session_id += 1
             self.started_at = now
+            # Reset the activity clock to the roll point. last_active now advances
+            # only on real home activity (not every poll), so without this a rolled
+            # session whose home stays quiet would re-roll on every subsequent poll.
+            self.last_active = now
             self.buckets.clear()
             self._dirty = True
 
@@ -230,14 +285,20 @@ class EveningLedger:
 
         Returns True if the ledger changed (and should be persisted).
         """
+        prev_session = self.session_id
         self._maybe_roll_session(now)
+        # A session start (0→1) or roll mutates persisted state, so it counts as
+        # a change even on an otherwise-quiet poll (honest return for the caller).
+        changed = self.session_id != prev_session
         max_ts = self.watermark
-        changed = False
+        activity = False
         for event in events:
             if event.timestamp <= self.watermark:
                 continue  # already consumed on a prior poll (dedupe)
             max_ts = max(max_ts, event.timestamp)
-            if not _is_gag_candidate(event):
+            if _is_home_activity(event):
+                activity = True
+            if not self._is_gag_candidate(event):
                 continue
             key = _bucket_key(event)
             bucket = self.buckets.get(key)
@@ -256,11 +317,14 @@ class EveningLedger:
         if max_ts > self.watermark:
             self.watermark = max_ts
             changed = True
-        self.last_active = now
-        # Persist on every observe: last_active always advances, and it must
-        # survive a restart so the inactivity-gap math is correct (otherwise a
-        # quiet-but-active stretch would look like an evening-ending gap).
-        self._dirty = True
+        # last_active advances ONLY on real home activity (not every poll), so a
+        # quiet evening genuinely rolls over after EVENING_GAP_SECONDS instead of
+        # radio-cadence polling keeping the session alive forever.
+        if activity:
+            self.last_active = now
+            changed = True
+        if changed:
+            self._dirty = True
         return changed
 
     # --- read / render -------------------------------------------------------
@@ -336,13 +400,7 @@ class EveningLedger:
         )
 
     @classmethod
-    def load(cls, cache_dir: Path) -> EveningLedger:
-        """Reload the ledger from disk; start fresh on missing/corrupt files.
-
-        A corrupt ledger must never crash boot (that would cause dead air —
-        leadership principle #1). Missing → silent fresh ledger; corrupt → warn
-        and fresh ledger.
-        """
+    def _load_raw(cls, cache_dir: Path) -> EveningLedger:
         path = cache_dir / LEDGER_FILENAME
         try:
             payload = json.loads(path.read_text())
@@ -359,6 +417,35 @@ class EveningLedger:
         except (AttributeError, TypeError, ValueError):
             logger.warning("Evening ledger has invalid fields, starting fresh: %s", path)
             return cls()
+
+    @classmethod
+    def load(
+        cls,
+        cache_dir: Path,
+        *,
+        domain_allowlist: Iterable[str] | None = None,
+        entity_allowlist: Iterable[str] | None = None,
+        entity_denylist: Iterable[str] | None = None,
+    ) -> EveningLedger:
+        """Reload the ledger from disk; start fresh on missing/corrupt files.
+
+        A corrupt ledger must never crash boot (that would cause dead air —
+        leadership principle #1). Missing → silent fresh ledger; corrupt → warn
+        and fresh ledger.
+
+        Candidacy policy comes from config, NOT from disk: pass the operator's
+        `[home.running_gags]` overrides here. A `None` argument keeps the built-in
+        default (domain-based candidacy). The persisted tally is independent of the
+        policy, so changing the allowlist between runs takes effect immediately.
+        """
+        led = cls._load_raw(cache_dir)
+        if domain_allowlist is not None:
+            led.domain_allowlist = frozenset(domain_allowlist)
+        if entity_allowlist is not None:
+            led.entity_allowlist = frozenset(entity_allowlist)
+        if entity_denylist is not None:
+            led.entity_denylist = frozenset(entity_denylist)
+        return led
 
     def save_if_dirty(self, cache_dir: Path) -> None:
         """Persist atomically (temp + rename) only when state changed."""
