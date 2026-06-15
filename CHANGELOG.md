@@ -8,6 +8,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **News flashes now invent a fresh premise every time instead of repeating the same scenarios.** The traffic, weather, breaking news, sports, and culture bulletin prompts no longer hand the host a set of concrete joke setups to fall back on — each prompt now describes the *shape* and *tone* of what to invent, leaving the host to arrive at something new each time. Traffic incidents, weather reports, and cultural controversies all felt similar after enough listens; now each flash starts from a blank slate.
+
 - **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.
 
 - **The Home Assistant media card no longer keeps the last song's cover during talk.** When the hosts talk, an ad plays, or the station is idle, the HA media card now shows the station logo instead of leaving the previous track's album art frozen on screen. The real cover returns the moment music does. You can point the card at your own logo with `artwork_url` under `[brand]` in `radio.toml`.
