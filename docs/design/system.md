@@ -83,7 +83,7 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
-  --line-strong:   rgba(245,237,216,0.32);  /* listener cards, hero stage, ghost button — visible at rest */
+  --line-strong:   rgba(245,237,216,0.16);  /* admin emphasized borders — espresso Pi-baseline (PROTECTED). Listener cards inline a brighter rgba(...,0.32) for visibility, in listener.css — never here. */
   --shadow:        rgba(0,0,0,0.35);
 }
 ```
