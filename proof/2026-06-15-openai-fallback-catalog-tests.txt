@@ -1,0 +1,35 @@
+openai-fallback-catalog (florianhorner/chore/gpt-anthropic-usage) — local verification
+date: 2026-06-15T21:10:00Z
+head: 1335f324
+base: merged origin/main (d7b7bb61, incl #593 On-Air Sound toggle)
+
+command: make coverage-check (full pytest + per-module coverage floors)
+---
+2967 passed, 2 skipped, 19 deselected
+Required test coverage of 92.0% reached. Total coverage: 94.01%
+All coverage floors held. Total: 94% (floor: 92%)
+
+command: pytest tests/web/test_quality_dial.py -q
+---
+15 passed in 0.44s
+
+command: ruff check .
+---
+All checks passed!
+
+command: ruff format --check .
+---
+193 files already formatted
+
+command: mypy mammamiradio/ tests/
+---
+Success: no issues found in 186 source files
+
+command: bash scripts/check-release-invariants.sh
+---
+Passed: 6  Failed: 0
+All invariants passed.
+
+command: bash scripts/check-changelog-lint.sh
+---
+Changelog lint clean.

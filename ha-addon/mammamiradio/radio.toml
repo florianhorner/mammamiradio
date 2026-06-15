@@ -149,8 +149,8 @@ sonnet = "claude-sonnet-4-6"
 haiku  = "claude-haiku-4-5-20251001"
 
 [models.catalog.openai]      # the ONLY place OpenAI model IDs live
-large = "gpt-4o"
-small = "gpt-4o-mini"
+large = "gpt-5.5"
+small = "gpt-5.4-mini"
 
 [models.routing]             # task (caller) → role
 banter     = "creative"
@@ -164,7 +164,7 @@ openai    = { creative = "large", fast = "small" }
 
 [models.profiles.balanced]   # reproduces prior behavior (creative=opus, fast=haiku)
 anthropic = { creative = "opus", fast = "haiku" }
-openai    = { creative = "small", fast = "small" }
+openai    = { creative = "large", fast = "small" }
 
 [models.profiles.economy]
 anthropic = { creative = "haiku", fast = "haiku" }
