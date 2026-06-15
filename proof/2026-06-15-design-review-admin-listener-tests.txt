@@ -1,0 +1,33 @@
+Proof: tests + lint — design-review batch (admin + listener)
+Branch: florianhorner/chore/design-review-admin-listener
+Date: 2026-06-15
+
+== changed-path guard tests ==
+$ pytest tests/web/test_ui_copy.py tests/web/test_design_tokens.py -q
+....................                                                     [100%]
+20 passed in 0.15s
+
+== player + admin contract / invariant tests ==
+$ pytest tests/web/test_pages.py tests/web/test_route_smoke.py tests/web/test_listener_mobile_invariants.py tests/web/test_admin_mobile_invariants.py tests/web/test_admin_status_invariants.py tests/web/test_radio_immersion.py -q
+........                                                                 [100%]
+80 passed in 0.61s
+
+== full suite ==
+$ pytest tests/ -q   (run 2026-06-15)
+3001 passed, 2 skipped, 19 deselected — except 1 LOCAL-ONLY failure:
+  tests/web/test_chaos_api.py::test_boot_read_back_does_not_arm_first_strike
+  Pre-existing on origin/main; this branch touches NO config/chaos/main.py code
+  (git diff origin/main...HEAD = web UI/CSS/docs only). It fails only on this
+  stale local .venv (predates the merge's pydantic-core 2.47 bump). origin/main
+  CI is GREEN on this test (gh run quality.yml success on 4716c9c1), so it is
+  green on the integrated PR state too.
+
+== lint ==
+$ ruff check mammamiradio/ tests/
+All checks passed!
+$ ruff format --check (changed files)
+2 files already formatted
+
+== typecheck ==
+$ mypy mammamiradio/ tests/
+Success: no issues found in 186 source files
