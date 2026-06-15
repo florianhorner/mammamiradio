@@ -180,11 +180,12 @@ def test_cost_counter_prices_each_model():
     state = StationState(playlist=[])
     state.api_tokens_by_model = {
         "claude-opus-4-8": {"input": 1_000_000, "output": 1_000_000},  # 15 + 75 = 90
-        "gpt-4o-mini": {"input": 1_000_000, "output": 1_000_000},  # 0.15 + 0.60 = 0.75
+        "gpt-5.5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 30 = 35 (default-profile creative fallback)
+        "gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000},  # 0.75 + 4.50 = 5.25
     }
     cost, unpriced = _estimate_api_cost(state)
     assert unpriced is False
-    assert cost == pytest.approx(90.75, abs=0.01)
+    assert cost == pytest.approx(130.25, abs=0.01)
 
 
 def test_cost_counter_unpriced_model_flags_and_uses_conservative_default():
@@ -208,10 +209,10 @@ def test_cost_counter_never_zero_without_per_model_data():
 def test_cost_counter_includes_tts_characters():
     """Paid TTS characters add a blended estimate on top of the LLM token cost."""
     state = StationState(playlist=[])
-    state.api_tokens_by_model = {"gpt-4o-mini": {"input": 1_000_000, "output": 1_000_000}}  # 0.75
+    state.api_tokens_by_model = {"gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000}}  # 5.25
     state.tts_characters = 1_000_000  # * 0.00002 blended = 20.00
     cost, _ = _estimate_api_cost(state)
-    assert cost == pytest.approx(0.75 + 20.0, abs=0.01)
+    assert cost == pytest.approx(5.25 + 20.0, abs=0.01)
 
 
 def test_cost_counter_tts_folds_into_legacy_aggregate_branch():

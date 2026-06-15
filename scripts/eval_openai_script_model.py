@@ -8,7 +8,7 @@ per call. Writes a JSONL log to tmp/evals/ and prints a summary table.
 
 Usage:
     OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py
-    OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --models gpt-4o-mini gpt-5-mini
+    OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --models gpt-5.4-mini gpt-5.5
     OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --fixtures path/to/prompts.json
 
 Decision criteria stay with the operator — this script ships the means to
@@ -35,14 +35,14 @@ from mammamiradio.core.config import load_config  # noqa: E402
 from mammamiradio.core.models import StationState, Track  # noqa: E402
 from mammamiradio.hosts.scriptwriter import _generate_json_response  # noqa: E402
 
-# Public per-1M-token rates (USD) as of 2026-05. Used for rough cost estimation
+# Public per-1M-token rates (USD) as of 2026-06. Used for rough cost estimation
 # only — verify against your billing dashboard before drawing conclusions.
 COST_PER_1M_TOKENS = {
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gpt-5-mini": {"input": 0.25, "output": 2.00},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.5": {"input": 5.00, "output": 30.00},
 }
 
-DEFAULT_MODELS = ["gpt-4o-mini", "gpt-5-mini"]
+DEFAULT_MODELS = ["gpt-5.4-mini", "gpt-5.5"]
 DEFAULT_FIXTURES = REPO_ROOT / "scripts" / "eval_fixtures" / "openai_script_prompts.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "tmp" / "evals"
 

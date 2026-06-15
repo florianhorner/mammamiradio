@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
+
 ### Fixed
 
 - **The hosts keep their real chatter even when the station runs on its backup writer.** If the main host-script engine is unavailable and the station leans on its backup, the backup would occasionally hand back the banter in a slightly different shape — and the station quietly dropped to a generic stock line instead of airing it. The station now understands that shape too, so the DJs keep their in-the-moment chatter while on the backup writer; only a genuinely empty response falls back to stock copy.

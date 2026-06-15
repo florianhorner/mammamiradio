@@ -500,7 +500,7 @@ def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
         "[audio]\n"
         'claude_model = "claude-haiku-4-5-20251001"\n'
         'claude_creative_model = "claude-opus-4-6"\n'
-        'openai_script_model = "gpt-4o-mini"\n'
+        'openai_script_model = "gpt-5.4-mini"\n'
     )
     assert "[audio]\n" in text
     patched = text.replace("[audio]\n", legacy, 1)

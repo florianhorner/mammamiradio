@@ -80,7 +80,7 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
     assert result["providers"]["openai_tts"]["ok"] is True
     assert "anthropic-secret" not in str(result)
     assert "openai-secret" not in str(result)
-    assert seen_auth_headers == ["Bearer openai-secret", "Bearer openai-secret"]
+    assert seen_auth_headers == ["Bearer openai-secret", "Bearer openai-secret", "Bearer openai-secret"]
 
 
 @pytest.mark.asyncio
@@ -93,7 +93,7 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
     config.azure_speech_key = ""
     config.azure_speech_region = ""
     config.elevenlabs_api_key = ""
-    config.models.active_profile = "premium"  # creative=gpt-4o, fast=gpt-4o-mini
+    config.models.active_profile = "premium"  # creative=gpt-5.5, fast=gpt-5.4-mini
 
     async_client = httpx.AsyncClient
     seen_chat_models: list[str] = []
@@ -102,7 +102,7 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
         if str(request.url).endswith("/v1/chat/completions"):
             model = json.loads(request.content.decode("utf-8"))["model"]
             seen_chat_models.append(model)
-            if model == "gpt-4o-mini":
+            if model == "gpt-5.4-mini":
                 return httpx.Response(
                     404,
                     json={"error": {"type": "invalid_request_error", "code": "model_not_found", "message": "nope"}},
@@ -122,7 +122,7 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
 
     result = await check_provider_keys(config)
 
-    assert seen_chat_models == ["gpt-4o", "gpt-4o-mini"]
+    assert seen_chat_models == ["gpt-5.5", "gpt-5.4-mini"]
     assert result["providers"]["openai_chat"]["ok"] is False
     assert result["providers"]["openai_chat"]["error_type"] == "model_not_found"
     assert "openai-secret" not in str(result)
