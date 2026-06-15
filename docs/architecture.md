@@ -99,7 +99,11 @@ the ~15 kHz channel band-limit, and a soft broadcast leveller. Voice and music e
 through the same final stage, so there is no "FM music next to studio-clean voice"
 seam. Toggle it with `[audio] broadcast_chain` (default on) — or, on the HA add-on,
 the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
-can switch to studio-clean without rebuilding the baked-in `radio.toml`. A separate
+can switch to studio-clean without rebuilding the baked-in `radio.toml`. It is also
+operator-toggleable **live** from the admin Engine Room On-Air Sound dial
+(`POST /api/broadcast-chain`), which re-calls `configure_broadcast_chain()` to (dis)arm
+the chain on the next produced segment — no restart, no queue purge — so an operator
+can A/B the FM colouring against studio-clean on the live stream. A separate
 pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers +
 loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
 `normalize()` so the extra encode respects the Pi 2-FFmpeg ceiling.
