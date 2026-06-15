@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
@@ -110,6 +111,20 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
     assert not hits, (
         "admin.html reintroduced raw-error / dead-end toast copy — route failures "
         "through wayOut()/offlineMsg() (warm + a concrete way-out, principle #5):\n  " + "\n  ".join(hits)
+    )
+
+    # Pattern-based backstop so unanticipated variants (double quotes, new
+    # wrappers, raw fields) cannot slip past the exact-string list above.
+    patterns = (
+        # A toast literal that opens with a machine phrase.
+        r"toast\(\s*['\"](?:Error:|Failed |Network error)",
+        # A toast that interpolates a raw backend error field.
+        r"toast\([^;\n]*\b(?:r\.error|r\.exception|error_code|r\.detail|resp\.error)\b",
+    )
+    pattern_hits = [m.group(0) for p in patterns for m in re.finditer(p, text)]
+    assert not pattern_hits, (
+        "admin.html has a toast() that shows a machine phrase or a raw error "
+        "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)
     )
 
 

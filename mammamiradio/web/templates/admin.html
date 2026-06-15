@@ -3349,7 +3349,7 @@ async function addExternal(i){
       toast(wayOut('add that to the queue'));
     }
   }catch(_){
-    toast('Failed to add to queue');
+    toast(offlineMsg());
   }finally{
     if(btn){btn.classList.remove('loading');btn.textContent='↓ Queue';}
   }
@@ -3760,11 +3760,11 @@ async function toggleBroadcastChain(el){
     if(r&&r.ok)toast(value?'On-Air Sound: ON — from the next track':'On-Air Sound: OFF — from the next track');
     else{
       el.checked=!value;
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut('change the On-Air Sound'));
     }
   }catch(_){
     el.checked=!value;
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
