@@ -1,0 +1,17 @@
+Proof artifact — fix: exclude passive HA domains (weather/sun) from evening activity
+Generated: 2026-06-15T21:14:02Z  HEAD-base: origin/main b3581cde
+
+===== ruff check . =====
+All checks passed!
+
+===== mypy mammamiradio/ tests/ =====
+Success: no issues found in 186 source files
+
+===== pytest (full suite) =====
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2986 passed, 2 skipped, 19 deselected, 1 warning in 53.31s
+
+===== release invariants =====
+=======================================
+
+All invariants passed.
