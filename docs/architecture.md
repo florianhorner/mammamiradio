@@ -99,7 +99,11 @@ the ~15 kHz channel band-limit, and a soft broadcast leveller. Voice and music e
 through the same final stage, so there is no "FM music next to studio-clean voice"
 seam. Toggle it with `[audio] broadcast_chain` (default on) — or, on the HA add-on,
 the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
-can switch to studio-clean without rebuilding the baked-in `radio.toml`. A separate
+can switch to studio-clean without rebuilding the baked-in `radio.toml`. It is also
+operator-toggleable **live** from the admin Engine Room On-Air Sound dial
+(`POST /api/broadcast-chain`), which re-calls `configure_broadcast_chain()` to (dis)arm
+the chain on the next produced segment — no restart, no queue purge — so an operator
+can A/B the FM colouring against studio-clean on the live stream. A separate
 pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers +
 loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
 `normalize()` so the extra encode respects the Pi 2-FFmpeg ceiling.
@@ -167,6 +171,8 @@ Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings a
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
 **Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
+
+**Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on non-numeric, non-person events, so radio-cadence polling can't keep a quiet evening alive forever — or at the 4am day rollover.
 
 Chaos Mode adds three state fields around the existing queue model: `chaos_mode_active`, a typed `chaos_pending` first-strike slot, and `chaos_cutover_epoch`. Enabling the mode purges pre-produced lookahead segments, bumps the epoch so any in-flight pre-chaos segment is discarded at commit, and queues a chaos-flavored `BANTER` next. Disabling clears `chaos_pending` and bumps the epoch without purging already queued audio. `played_track_log` is a separate play-time history used by impossible-recall chaos prompts; it is populated in `on_stream_segment()` for music, not when music is merely queued.
 

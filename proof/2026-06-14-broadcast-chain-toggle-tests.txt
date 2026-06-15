@@ -1,0 +1,22 @@
+broadcast-chain-toggle (feat/broadcast-chain-toggle) — local verification
+date: 2026-06-14T21:06:49Z
+head: 3fc066c38b02a7ca8f6418d551c701cf04540978
+base: rebased onto origin/main (incl #589 FM chain, #591 cache-bake, #592 callback director)
+
+command: make check (ruff + mypy + vulture + pytest + coverage floors)
+---
+All coverage floors held. Total: 94%
+producer 87% / floor 83
+All checks passed
+
+command: pytest tests/web/test_broadcast_chain_toggle.py -q
+---
+10 passed in 0.37s
+
+command: ruff format --check mammamiradio/ tests/
+---
+186 files already formatted
+
+command: bash scripts/check-changelog-lint.sh
+---
+Changelog lint clean.

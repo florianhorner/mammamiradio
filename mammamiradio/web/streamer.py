@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
-from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.normalizer import configure_broadcast_chain, humanize_norm_filename, load_track_metadata
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
@@ -2389,6 +2389,72 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
         else:
             await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     return {"ok": True, "super_italian_mode": value}
+
+
+_broadcast_chain_lock = asyncio.Lock()
+
+
+@router.get("/api/broadcast-chain")
+async def get_broadcast_chain(request: Request, _: None = Depends(require_admin_access)):
+    """Return the current On-Air Sound (FM broadcast chain) flag."""
+    config = request.app.state.config
+    return {"broadcast_chain": bool(config.audio.broadcast_chain)}
+
+
+@router.post("/api/broadcast-chain")
+async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle the On-Air Sound (FM broadcast chain) live and persist it.
+
+    Hot-swaps with NO restart and NO queue purge: re-arming the egress chain via
+    ``configure_broadcast_chain()`` changes only the segment produced NEXT; the
+    current (and already-buffered) segments finish airing as they are — the same
+    next-segment semantics as the AI Quality dial, contrast ``/api/playlist/load``
+    which purges. This lets an operator A/B the FM colouring against studio-clean on
+    the live stream without breaking the current track.
+
+    Persistence: writes ``MAMMAMIRADIO_BROADCAST_CHAIN`` to ``.env`` on standalone
+    deploys, and the ``broadcast_chain`` option to ``/data/options.json`` on HA
+    addons (the same key ``run.sh`` reads back), so the choice survives a restart.
+    """
+    config = request.app.state.config
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False, "error": "invalid JSON body"}
+    if not isinstance(body, dict) or "broadcast_chain" not in body:
+        return {"ok": False, "error": "expected JSON object with broadcast_chain"}
+    raw_value = body["broadcast_chain"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "broadcast_chain must be a JSON boolean (true/false)"}
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _broadcast_chain_lock:
+        # Persist FIRST: if the write fails, leave runtime state untouched so the
+        # live setting never drifts from what survives a restart.
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "broadcast_chain", value)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_BROADCAST_CHAIN": env_value})
+        except Exception:
+            logger.error("Failed to persist On-Air Sound toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist on-air sound"},
+            )
+        config.audio.broadcast_chain = value
+        os.environ["MAMMAMIRADIO_BROADCAST_CHAIN"] = env_value
+        # Hot-apply: (dis)arm the egress chain so the NEXT produced segment reflects
+        # the change. No restart, no queue purge.
+        configure_broadcast_chain(
+            value,
+            sample_rate=config.audio.sample_rate,
+            channels=config.audio.channels,
+            bitrate=config.audio.bitrate,
+        )
+    logger.info("On-Air Sound (broadcast chain) %s by admin", "enabled" if value else "disabled")
+    return {"ok": True, "broadcast_chain": value}
 
 
 _quality_lock = asyncio.Lock()
