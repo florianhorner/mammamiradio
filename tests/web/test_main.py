@@ -162,6 +162,47 @@ async def test_startup_wires_loudness_targets_from_config():
 
 
 @pytest.mark.asyncio
+async def test_startup_wires_running_gag_policy_from_config():
+    """startup() must thread [home.running_gags] into EveningLedger.load(), and an
+    empty override list must become None so the built-in domain default applies
+    (the config -> startup -> ledger seam, incl. the []→None translation)."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+    # Real lists (not Mock attrs) so the `... or None` translation is exercised.
+    mock_config.running_gags.domain_allowlist = ["light"]
+    mock_config.running_gags.entity_allowlist = []  # empty → None
+    mock_config.running_gags.entity_denylist = ["binary_sensor.flappy"]
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.EveningLedger") as m_ledger,
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    m_ledger.load.assert_called_once_with(
+        TEST_CACHE,
+        domain_allowlist=["light"],
+        entity_allowlist=None,
+        entity_denylist=["binary_sensor.flappy"],
+    )
+
+
+@pytest.mark.asyncio
 async def test_startup_skips_provider_verdict_when_no_keys():
     """With no AI key configured, startup() must NOT schedule a validation probe."""
     from mammamiradio.core.models import Track

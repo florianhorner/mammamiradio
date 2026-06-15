@@ -380,6 +380,23 @@ class HomeAssistantSection:
 
 
 @dataclass
+class EveningGagsSection:
+    """Operator overrides for evening running-gag candidacy (Impossible Moments).
+
+    Maps to `[home.running_gags]` in radio.toml. All three lists are empty by
+    default, which keeps the built-in domain-based candidacy (a `switch`/`fan`/
+    `lock`/`vacuum`/`binary_sensor` toggle is gag-worthy on any home). Set
+    `domain_allowlist` to replace the default domain set; `entity_allowlist` to
+    restrict to specific entity_ids; `entity_denylist` to silence chatty entities.
+    Resolved against the ledger in home/evening_memory.py.
+    """
+
+    domain_allowlist: list[str] = field(default_factory=list)
+    entity_allowlist: list[str] = field(default_factory=list)
+    entity_denylist: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SonicBrandSection:
     """Station sonic identity: jingles, sweepers, and motif configuration."""
 
@@ -556,6 +573,7 @@ class StationConfig:
     audio: AudioSection = field(default_factory=AudioSection)
     models: ModelsSection = field(default_factory=_build_default_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
+    running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
     brand: BrandSection = field(default_factory=BrandSection)
     brand_warnings: list[str] = field(default_factory=list)
@@ -1274,6 +1292,24 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     ]
     ha_section = HomeAssistantSection(**ha_raw)
     ha_section.timer_interrupts = timer_interrupts
+
+    # Evening running-gag candidacy overrides ([home.running_gags]). Degrade to
+    # built-in domain-based defaults on any malformed value — never raise (a bad
+    # operator config must not stop the station booting).
+    def _str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+
+    home_raw = raw.get("home", {})
+    gags_raw = home_raw.get("running_gags", {}) if isinstance(home_raw, dict) else {}
+    if not isinstance(gags_raw, dict):
+        gags_raw = {}
+    running_gags = EveningGagsSection(
+        domain_allowlist=_str_list(gags_raw.get("domain_allowlist")),
+        entity_allowlist=_str_list(gags_raw.get("entity_allowlist")),
+        entity_denylist=_str_list(gags_raw.get("entity_denylist")),
+    )
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
     if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
@@ -1346,6 +1382,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio=AudioSection(**audio_raw),
         models=models_section,
         homeassistant=ha_section,
+        running_gags=running_gags,
         persona=PersonaSection(**raw.get("persona", {})),
         brand=brand,
         brand_warnings=brand_warnings,
