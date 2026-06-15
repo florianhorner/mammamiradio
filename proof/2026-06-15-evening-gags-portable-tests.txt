@@ -1,0 +1,22 @@
+Proof artifact — evening-gags-portable (Phase 1: operator-portable running gags)
+Generated: 2026-06-15T21:01:28Z  HEAD: 2ac1190c
+
+===== ruff check . =====
+All checks passed!
+
+===== ruff format --check (changed files) =====
+6 files already formatted
+
+===== mypy mammamiradio/ tests/ =====
+tests/web/test_main.py:385: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 185 source files
+
+===== pytest (full suite) =====
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2974 passed, 2 skipped, 19 deselected, 1 warning in 52.46s
+
+===== release invariants =====
+=======================================
+
+All invariants passed.

@@ -195,6 +195,17 @@ timer_poll_interval = 5      # seconds between lightweight timer-entity checks
 # directive = "La lavatrice ha finito. Muovetevi prima che si sgualcisca tutto."
 # urgency = "urgent"
 
+# Evening running gags ("the coffee machine, on again tonight"). The station
+# notices repeated home toggles over an evening and weaves a deferred, approximate
+# callback into banter. Candidacy is by device DOMAIN, so it works on any home with
+# no config: switch / fan / lock / vacuum / binary_sensor (doorbell, presence)
+# toggles are gag-worthy; sensors, climate, media, lights, and person trackers are
+# not. Override only if you want to tune it.
+# [home.running_gags]
+# domain_allowlist = ["switch", "fan", "lock", "vacuum", "binary_sensor"]  # replaces the default domain set
+# entity_allowlist = []   # if non-empty, restricts gags to these exact entity_ids
+# entity_denylist  = []   # silence chatty entities, e.g. a flapping presence sensor
+
 [persona]
 arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend
 anthem_threshold = 3            # plays without skip to declare anthem

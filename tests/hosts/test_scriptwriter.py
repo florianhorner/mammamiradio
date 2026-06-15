@@ -521,6 +521,159 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_handles_string_shaped_lines(config, state):
+    # The OpenAI fallback (gpt-4o-mini) sometimes returns `lines` as a list of
+    # plain strings instead of {"host","text"} dicts. This must air as banter,
+    # not crash to stock copy (observed live: AttributeError at scriptwriter.py).
+    response_json = json.dumps(
+        {
+            "lines": ["Ciao a tutti!", "Che ridere!", "Restate con noi!"],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 3
+    assert [text for _, text in result] == ["Ciao a tutti!", "Che ridere!", "Restate con noi!"]
+    for host, _ in result:
+        assert host in config.hosts
+    # With two or more hosts, string lines alternate so it reads as a real exchange.
+    if len(config.hosts) >= 2:
+        assert result[0][0] is not result[1][0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_handles_mixed_and_empty_lines(config, state):
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": host_name, "text": "Eccoci!"},
+                "una battuta veloce",
+                {"host": host_name, "text": ""},  # empty dict line dropped
+                {"host": host_name},  # dict line missing "text" key dropped
+                {"host": host_name, "text": None},  # null text dropped (never aired as "None")
+                {"host": host_name, "text": ["x"]},  # container text dropped (never aired as "['x']")
+                "",  # empty string dropped
+                123,  # non-str/dict dropped
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["Eccoci!", "una battuta veloce"]
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_no_usable_lines(config, state):
+    # A response with only empty/unusable lines has nothing airable → stock copy.
+    response_json = json.dumps({"lines": ["", "   ", None], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    # Falls back to the stock multi-line exchange, never empty/silence.
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_lines_key_missing(config, state):
+    # Valid dict but no "lines" key at all → nothing airable → stock copy.
+    response_json = json.dumps({"new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_data_not_dict(config, state):
+    # A confused model returns a top-level JSON array instead of an object.
+    # The parser must degrade to stock copy, never raise into the audio path.
+    response_json = json.dumps(["Ciao a tutti!", "Che ridere!"])
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_string_lines_single_host(config, state):
+    # A single-host operator config: string lines all assign the only host
+    # (alternation degenerates cleanly, no crash).
+    config.hosts = config.hosts[:1]
+    response_json = json.dumps({"lines": ["Ciao!", "Ancora noi!"], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 2
+    assert all(host is config.hosts[0] for host, _ in result)
+
+
+@pytest.mark.asyncio
+async def test_write_banter_string_lines_alternate_around_blanks(config, state):
+    # Interleaved blank strings must not collapse two aired lines onto one host:
+    # alternation counts only emitted string lines, not raw positions.
+    if len(config.hosts) < 2:
+        pytest.skip("needs at least two hosts to assert alternation")
+    response_json = json.dumps({"lines": ["uno", "", "due"], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["uno", "due"]
+    assert result[0][0] is not result[1][0]
+
+
+@pytest.mark.asyncio
 async def test_write_banter_no_llm_returns_language_fallback(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""

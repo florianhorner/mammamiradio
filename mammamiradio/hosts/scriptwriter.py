@@ -1450,10 +1450,38 @@ Return JSON:
         )
 
         result = []
-        for line in data["lines"]:
-            raw_name = str(line.get("host", ""))
-            host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
-            result.append((host, line["text"]))
+        raw_lines = data.get("lines")
+        if not isinstance(raw_lines, list):
+            raw_lines = []
+        str_line_idx = 0
+        for line in raw_lines:
+            if isinstance(line, dict):
+                raw_name = str(line.get("host", ""))
+                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
+                raw_text = line.get("text", "")
+                # Only real strings are airable. A null/list/dict text would otherwise
+                # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
+                # so a malformed line falls through to stock copy instead of airing junk.
+                text = raw_text if isinstance(raw_text, str) else ""
+            elif isinstance(line, str):
+                # The OpenAI fallback (gpt-4o-mini) sometimes returns lines as plain
+                # strings with no host. Alternate hosts across the string lines we
+                # actually air (counting only emitted lines, so interleaved blanks
+                # don't collapse two lines onto one host) so it still reads as
+                # two-host banter instead of crashing to stock copy.
+                host = config.hosts[str_line_idx % len(config.hosts)]
+                text = line
+            else:
+                continue
+            if not text.strip():
+                continue
+            if isinstance(line, str):
+                str_line_idx += 1
+            result.append((host, text))
+
+        # Genuinely unusable shape (no airable lines) → fall to stock copy via except.
+        if not result:
+            raise ValueError("banter response contained no usable lines")
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
         deduped: list[tuple[HostPersonality, str]] = []
