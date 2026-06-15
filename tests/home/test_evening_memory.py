@@ -424,6 +424,25 @@ def test_sentinel_transition_is_not_home_activity():
     assert led.last_active == BASE + 1
 
 
+def test_passive_domains_do_not_advance_last_active():
+    """weather/sun change on their own — they must not keep a quiet evening alive."""
+    led = EveningLedger()
+    led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
+    led.observe([ev("weather.forecast_home", "cloudy", "sunny", BASE + 100)], now=BASE + 100)
+    led.observe([ev("sun.sun", "above_horizon", "below_horizon", BASE + 200)], now=BASE + 200)
+    assert led.last_active == BASE + 1
+
+
+def test_quiet_home_with_only_passive_changes_rolls_over():
+    led = EveningLedger()
+    led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
+    # Only weather changes for the whole gap window — nobody's home.
+    led.observe([ev("weather.forecast_home", "sunny", "rainy", BASE + 7200)], now=BASE + 7200)
+    later = BASE + 1 + EVENING_GAP_SECONDS + 60
+    led.observe([ev("switch.coffee", "off", "on", later)], now=later)
+    assert led.session_id == 2
+
+
 def test_observe_reports_change_on_quiet_session_roll():
     """observe() returns True when a session rolls, even on an empty poll, so a
     return-value-driven caller still persists the new session."""
