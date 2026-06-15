@@ -203,6 +203,44 @@ def test_transitions_fallbacks_extraction_structural_and_reexport():
     assert scriptwriter_module._transition_stem is transitions._transition_stem
 
 
+def test_news_flash_category_prompts_do_not_seed_recycled_premises():
+    """News flash category prompts must not hand the model tired concrete jokes.
+
+    The categories should describe shape and tone, leaving the LLM to invent a
+    fresh premise for each bulletin instead of copying hardcoded examples.
+    """
+    joined = " ".join(scriptwriter_module.NEWS_FLASH_CATEGORIES.values()).lower()
+
+    for stale_fragment in (
+        "buffalo",
+        "autostrada",
+        "pavarotti",
+        "all restaurants",
+        "vatican has released",
+        "leaning tower",
+        "raining espresso",
+        "panna on carbonara",
+    ):
+        assert stale_fragment not in joined
+
+    for copied_submission_fragment in (
+        "almost a crime",
+        "where to have lunch",
+        "with this heat, better",
+        "record highs",
+        "still undefeated",
+        "second medical opinion",
+        "cannot be translated into words",
+        "nobody wanted more lasagna",
+        "not that way. listen to me",
+        "broke spaghetti in half",
+    ):
+        assert copied_submission_fragment not in joined
+
+    for category, prompt in scriptwriter_module.NEWS_FLASH_CATEGORIES.items():
+        assert "invent" in prompt.lower(), f"{category} prompt should require fresh premises"
+
+
 # --- _host_expression_block tests ---
 
 

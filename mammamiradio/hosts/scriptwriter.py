@@ -1593,30 +1593,35 @@ Return JSON:
 
 NEWS_FLASH_CATEGORIES = {
     "traffic": (
-        "Absurd Italian traffic bulletin. Burning Lamborghinis, escaped buffalo blocking the A1, "
-        "a Fiat Panda going the wrong way on the tangenziale, nonna driving 20 km/h in the fast lane. "
+        "Absurd Italian traffic bulletin. Invent a fresh, specific road incident every time: "
+        "unexpected vehicles, impossible detours, bureaucratic road signs, dramatic commuters, "
+        "family-lunch indecision, scolding navigation systems, or municipal mishaps. "
         "Deliver it like a real traffic update — professional tone, insane content."
     ),
     "breaking": (
-        "Absurd Italian breaking news. Pizza dough exported to Russia as building material, "
-        "the Leaning Tower of Pisa has straightened 2 degrees and Pisani are furious, "
-        "a senator caught putting panna on carbonara. Delivered with fake-serious urgency."
+        "Absurd Italian breaking news. Invent a new civic, culinary, political, or architectural scandal "
+        "with one concrete consequence and one offended group. Useful directions include food etiquette, "
+        "domestic diplomacy, public hand gestures, or negotiations interrupted by table manners. "
+        "Delivered with fake-serious urgency."
     ),
     "sports": (
         "Fake Italian sports desk update delivered by a measured, informed radio host. "
-        "Fictional teams and players are fine, but keep the scoreline followable and the analysis clear: "
-        "who scored, what changed, and why the match matters. Light dry wit is welcome; "
+        "Invent fictional teams and players, but keep the scoreline followable and the analysis clear: "
+        "who scored, what changed, and why the match matters. Everyday Italian athletic feats are fair game: "
+        "staircases, grocery bags, family endurance, espresso-powered comebacks. Light dry wit is welcome; "
         "avoid meltdown commentary, all-caps hype, extended goal screams, and breathless incoherence."
     ),
     "weather": (
-        "Absurd Italian weather report. It's raining espresso in Napoli, "
-        "a heat wave in Milan is melting the Duomo, fog so thick in Emilia-Romagna "
-        "that 47 people accidentally walked into the wrong house. Professional meteorologist tone."
+        "Absurd Italian weather report. Invent a new impossible forecast with a clear location, "
+        "a visible effect on daily life, and one practical-sounding warning. Lean into heat, gelato logic, "
+        "coffee dependency, seaside optimism, or umbrella superstition. Professional meteorologist tone."
     ),
     "culture": (
-        "Absurd Italian culture bulletin. A new law requires all restaurants to play Pavarotti, "
-        "the Vatican has released a hip-hop album, a museum in Florence caught an AI pretending "
-        "to be a Botticelli. Delivered as a serious cultural segment."
+        "Absurd Italian culture bulletin. Invent a fresh arts, museum, cinema, church, fashion, or food-world "
+        "controversy with a specific institution and a ridiculous official response. Good directions include "
+        "mothers treating appetite as medical evidence, family lunches that outlast the calendar, "
+        "untranslatable gestures, or sacred arguments about pasta. "
+        "Delivered as a serious cultural segment."
     ),
 }
 

@@ -12,6 +12,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **News flashes now invent a fresh premise every time instead of repeating the same scenarios.** The traffic, weather, breaking news, sports, and culture bulletin prompts no longer hand the host a set of concrete joke setups to fall back on — each prompt now describes the *shape* and *tone* of what to invent, leaving the host to arrive at something new each time. Traffic incidents, weather reports, and cultural controversies all felt similar after enough listens; now each flash starts from a blank slate.
+
 - **The hosts keep their real chatter even when the station runs on its backup writer.** If the main host-script engine is unavailable and the station leans on its backup, the backup would occasionally hand back the banter in a slightly different shape — and the station quietly dropped to a generic stock line instead of airing it. The station now understands that shape too, so the DJs keep their in-the-moment chatter while on the backup writer; only a genuinely empty response falls back to stock copy.
 
 - **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.
