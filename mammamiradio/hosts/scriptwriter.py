@@ -1458,7 +1458,11 @@ Return JSON:
             if isinstance(line, dict):
                 raw_name = str(line.get("host", ""))
                 host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
-                text = str(line.get("text", ""))
+                raw_text = line.get("text", "")
+                # Only real strings are airable. A null/list/dict text would otherwise
+                # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
+                # so a malformed line falls through to stock copy instead of airing junk.
+                text = raw_text if isinstance(raw_text, str) else ""
             elif isinstance(line, str):
                 # The OpenAI fallback (gpt-4o-mini) sometimes returns lines as plain
                 # strings with no host. Alternate hosts across the string lines we

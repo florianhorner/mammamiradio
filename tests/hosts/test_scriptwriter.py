@@ -558,6 +558,8 @@ async def test_write_banter_handles_mixed_and_empty_lines(config, state):
                 "una battuta veloce",
                 {"host": host_name, "text": ""},  # empty dict line dropped
                 {"host": host_name},  # dict line missing "text" key dropped
+                {"host": host_name, "text": None},  # null text dropped (never aired as "None")
+                {"host": host_name, "text": ["x"]},  # container text dropped (never aired as "['x']")
                 "",  # empty string dropped
                 123,  # non-str/dict dropped
             ],
