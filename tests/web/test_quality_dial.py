@@ -180,11 +180,12 @@ def test_cost_counter_prices_each_model():
     state = StationState(playlist=[])
     state.api_tokens_by_model = {
         "claude-opus-4-8": {"input": 1_000_000, "output": 1_000_000},  # 15 + 75 = 90
+        "gpt-5.5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 30 = 35 (default-profile creative fallback)
         "gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000},  # 0.75 + 4.50 = 5.25
     }
     cost, unpriced = _estimate_api_cost(state)
     assert unpriced is False
-    assert cost == pytest.approx(95.25, abs=0.01)
+    assert cost == pytest.approx(130.25, abs=0.01)
 
 
 def test_cost_counter_unpriced_model_flags_and_uses_conservative_default():
