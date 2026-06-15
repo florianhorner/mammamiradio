@@ -2197,6 +2197,10 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
+// Human, always-a-way-out copy for a failed action. Raw error codes/exceptions
+// never reach the screen (leadership principle #5) — they stay in the logs.
+function wayOut(action){return (action?"Couldn't "+action:"That didn't go through")+" — give it a few seconds and try again.";}
+function offlineMsg(){return "Can't reach the studio right now — check the connection and try again.";}
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
 // toast any whose ts we haven't shown yet. The first poll only primes the
@@ -2336,7 +2340,7 @@ initOnAirSticky();
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
-async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast('Error: '+(r.error||'unknown'))}
+async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut())}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
@@ -2346,7 +2350,7 @@ async function doQuickAction(action,el){
     if(ok)toast('Fewer banter: every '+v+' tracks');
   }else if(action==='more_chaos'){
     const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Chaos incoming — banter queued':'Error: '+(r.error||'unknown'));
+    toast(r.ok?'Chaos incoming — banter queued':wayOut());
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
@@ -2355,8 +2359,8 @@ async function doQuickAction(action,el){
   }else if(action==='hot_reload'){
     const r=await api('POST','/api/hot-reload',{});
     if(r.ok)toast('Scripts reloaded in '+r.duration_ms+'ms');
-    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
-    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
+    else if(r.error_code==='debounced')toast('Reload skipped — give it '+r.retry_after_s+'s and try again.');
+    else toast(wayOut('reload that'));
   }
 }
 let _modeChaos=false,_modeFestival=false;
@@ -2388,12 +2392,12 @@ async function toggleChaosMode(el){
     }else{
       el.checked=!value;
       updateChaosState({enabled:!value});
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
     updateChaosState({enabled:!value});
-    toast('Error: connection failed');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -2426,12 +2430,12 @@ async function toggleFestivalMode(el){
     }else{
       el.checked=!value;
       updateFestivalState({active:!value});
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
     updateFestivalState({active:!value});
-    toast('Error: connection failed');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -2551,7 +2555,7 @@ async function flagCurrentTrack(el) {
   if (!rule) return;
   flash(el);
   const r = await api('POST', '/api/track-rules', { youtube_id: ytId, rule });
-  toast(r.ok ? 'Rule saved' : 'Error: ' + (r.error || 'unknown'));
+  toast(r.ok ? 'Rule saved' : wayOut('save the rule'));
 }
 
 // ── Now Playing (sidebar) ──
@@ -2790,7 +2794,7 @@ async function removeQueueItem(id,el){
   if(typeof window.undoableToast!=='function'){
     const r=await api('POST','/api/queue/remove',{id});
     if(r.ok){toast('Removed: '+(r.removed||'segment'));_lastProgrammeHash='';await refreshFast();}
-    else toast('Remove failed: '+(r.error||r.detail||'unknown'));
+    else toast(wayOut('remove that'));
     return;
   }
   if(_pendingRemovals.has(id))return;
@@ -3017,7 +3021,7 @@ async function setupSaveKeys(el){
   if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
-  if(!resp.ok){toast(resp.error||'Saving keys failed');return}
+  if(!resp.ok){toast(wayOut('save your keys'));return}
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
   document.getElementById('setupAzureSpeechKey').value='';
@@ -3117,7 +3121,7 @@ function updateSourceControls(st,caps){
 async function shufflePlaylist(el){
   flash(el);
   const r=await api('POST','/api/shuffle',{});
-  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  if(!r.ok){toast(wayOut());return;}
   toast('Playlist shuffled');
   await refreshFast();
 }
@@ -3127,7 +3131,7 @@ async function enrichPlaylistSource(kind,el){
   const url=dispatch.url;
   const r=await api('POST','/api/playlist/enrich',{url,position:'end'});
   if(!r.ok){
-    toast('Error: '+(r.error||'unknown'));
+    toast(wayOut());
     return;
   }
   toast(dispatch.toast+` (${r.added} nuovi)`);
@@ -3230,7 +3234,7 @@ function focusPlaylistTrack(index, trackId){
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
   const r=await api('POST','/api/playlist/move_to_next',{index:i});
-  if(r.ok)toast('Queued next: '+r.moved);else toast('Move failed');
+  if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
 }
 // Delayed-commit undo: hide the row, defer /api/playlist/remove by 5s, allow
 // Undo to restore it. The rotation list only re-renders on explicit reload, so
@@ -3330,7 +3334,7 @@ async function addExternal(i){
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
-      toast('Error: '+(r.error||'queue failed'));
+      toast(wayOut('add that to the queue'));
     }
   }catch(_){
     toast('Failed to add to queue');
@@ -3358,7 +3362,7 @@ function initDragDrop(){
       const dst=parseInt(row.dataset.i);
       if(_dragSrc===null||_dragSrc===dst)return;
       const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-      if(r.ok)toast('Moved: '+r.moved);else toast('Move failed');
+      if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
       _dragSrc=null;
     });
   });
@@ -3402,7 +3406,7 @@ async function savePacingField(field,value,{silent=false}={}){
   try{
     const r=await api('PATCH','/api/pacing',{[field]:+value});
     if(r&&r.detail){
-      toast('Pacing not saved: '+r.detail);
+      toast(wayOut('save pacing'));
       if(_st.pacing)applyPacingResponse(_st.pacing,field);
       await refreshFast();
       return false;
@@ -3411,7 +3415,7 @@ async function savePacingField(field,value,{silent=false}={}){
     if(!silent)toast('Pacing saved');
     return true;
   }catch(_){
-    toast('Pacing not saved: network error');
+    toast(offlineMsg());
     if(_st.pacing)applyPacingResponse(_st.pacing,field);
     return false;
   }
@@ -3718,11 +3722,11 @@ async function toggleSuperItalian(el){
     if(r&&r.ok)toast(value?'Italian mode: ON':'Italian mode: OFF');
     else{
       el.checked=!value;
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -3774,10 +3778,10 @@ async function setQuality(value){
       if(sel)sel.value=active;
       toast('AI quality: '+active);
     }
-    else{if(sel)sel.value=_activeQualityProfile;toast('Error: '+((r&&r.error)||'unknown'));}
+    else{if(sel)sel.value=_activeQualityProfile;toast(wayOut());}
   }catch(_){
     if(sel)sel.value=_activeQualityProfile;  // restore — server state unchanged
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     if(sel)sel.disabled=false;
   }
