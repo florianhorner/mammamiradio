@@ -81,7 +81,7 @@ html, body {
 @keyframes wave { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
 
 /* Play button */
-.mmr-play-btn { width: 48px; height: 48px; border: none; border-radius: 50%; background: var(--brand-primary, var(--sun2)); color: var(--ink); font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(236,204,48,0.45), 0 0 0 5px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2); transition: transform 120ms, background 180ms, box-shadow 180ms; padding-left: 3px; flex-shrink: 0; }
+.mmr-play-btn { width: 48px; height: 48px; border: none; border-radius: 50%; background: var(--brand-primary, var(--sun2)); color: var(--ink); font-family: var(--font-body); font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(236,204,48,0.45), 0 0 0 5px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2); transition: transform 120ms, background 180ms, box-shadow 180ms; padding-left: 3px; flex-shrink: 0; }
 .mmr-play-btn:active { transform: scale(0.94); }
 .mmr-play-btn.playing { background: var(--ok); color: var(--cream); padding-left: 0; box-shadow: 0 4px 20px rgba(37,99,235,0.45), 0 0 0 5px rgba(37,99,235,0.08), 0 0 28px rgba(37,99,235,0.2); }
 
@@ -310,6 +310,8 @@ html, body {
 .mmr-footer .foot-head { font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--lancia); margin-bottom: 4px; }
 .mmr-footer .foot-col a { font-size: 13px; color: rgba(26,20,16,0.78); text-decoration: none; transition: color 180ms; }
 .mmr-footer .foot-col a:hover { color: var(--ink); }
+.mmr-footer .foot-link-btn { font-family: var(--font-body); font-size: 13px; color: rgba(26,20,16,0.78); background: none; border: none; padding: 0; text-align: left; cursor: pointer; transition: color 180ms; }
+.mmr-footer .foot-link-btn:hover { color: var(--ink); }
 
 /* Responsive */
 @media (max-width: 900px) {
