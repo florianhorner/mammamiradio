@@ -301,7 +301,7 @@ html, body {
 
 /* Footer */
 .mmr-footer { margin: 0; padding: 32px 0 40px; background: var(--cream); color: var(--ink); }
-.mmr-foot-inner { max-width: 1280px; margin: 0 auto; padding: 0 32px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 36px; }
+.mmr-foot-inner { max-width: 1280px; margin: 0 auto; padding: 0 32px; display: grid; grid-template-columns: 2fr 1fr; gap: 36px; }
 .mmr-footer .foot-logo { width: 34px; height: 34px; display: block; margin-bottom: 10px; }
 .mmr-footer .wordmark { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 22px; color: var(--ink); letter-spacing: -0.01em; white-space: nowrap; }
 .mmr-footer .wordmark em { color: var(--lancia); }
