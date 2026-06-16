@@ -365,8 +365,14 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             ),
         )
         # "pinned" or "queued" both mean the track landed in the playlist for this
-        # request; only "dropped" means a source switch / consumption discarded it.
-        if status != "dropped":
+        # request. "banned" means the operator blocklisted the song — a terminal
+        # answer, so mark song_error rather than leaving the listener spinning on
+        # "searching…" forever. "dropped" means a source switch / consumption
+        # discarded it (a silent no-op, the request is gone anyway).
+        if status == "banned":
+            req["song_error"] = True
+            logger.info("Listener song request refused — song is banned: %s", track.display)
+        elif status != "dropped":
             req["song_found"] = True
             req["song_track"] = track.display
             req["song_track_obj"] = track

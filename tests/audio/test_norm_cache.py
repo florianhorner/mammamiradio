@@ -92,6 +92,30 @@ def test_select_norm_cache_rescue_allows_only_cache_file_when_recent(tmp_path):
         assert select_norm_cache_rescue(tmp_path, state) == only
 
 
+def test_select_norm_cache_rescue_skips_blocklisted_cache_file(tmp_path):
+    """A banned song must never re-air through the rescue path. The blocklisted
+    cache file is dropped even though it is not a recent identity."""
+    state = StationState(blocklist={("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}})
+
+    _write_norm(tmp_path, "norm_aaa_ordinary.mp3", title="Ordinary", artist="Alex Warren")
+    allowed = _write_norm(tmp_path, "norm_zzz_alternative.mp3", title="Musica Leggera", artist="Colapesce")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state)
+
+    assert rescue == allowed
+    choice.assert_called_once_with([allowed])
+
+
+def test_select_norm_cache_rescue_returns_none_when_only_file_is_banned(tmp_path):
+    """If every cache file is banned, the rescue degrades to None so the caller's
+    next layer (canned clip / forced banter) keeps audio flowing — never a banned song."""
+    state = StationState(blocklist={("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}})
+    _write_norm(tmp_path, "norm_aaa_ordinary.mp3", title="Ordinary", artist="Alex Warren")
+
+    assert select_norm_cache_rescue(tmp_path, state) is None
+
+
 def test_select_norm_cache_rescue_ignores_malformed_sidecar(tmp_path):
     state = StationState()
     state.now_streaming = {

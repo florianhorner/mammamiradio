@@ -102,3 +102,29 @@ def test_save_is_atomic_no_partial_file(tmp_path):
     # No leftover temp files from the tmp+os.replace publish.
     leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".blocklist-")]
     assert leftovers == []
+
+
+def test_corrupt_banned_at_does_not_raise(tmp_path):
+    """A valid-JSON file with a non-numeric banned_at must NOT crash load_blocklist
+    — it runs at startup, so a raise here would take the whole boot down (dead air).
+    The bad value degrades to 0.0 (sorts oldest) and the ban itself still loads."""
+    raw = {
+        "modugno\x1fvolare": {"display": "Modugno - Volare", "banned_by": "operator", "banned_at": "whenever"},
+        "al bano\x1ffelicità": {"display": "Al Bano - Felicità", "banned_at": ["not", "a", "number"]},
+    }
+    blocklist_path(tmp_path).write_text(json.dumps(raw), encoding="utf-8")
+    loaded = load_blocklist(tmp_path)
+    assert set(loaded) == {("modugno", "volare"), ("al bano", "felicità")}
+    assert loaded[("modugno", "volare")]["banned_at"] == 0.0
+    assert loaded[("al bano", "felicità")]["banned_at"] == 0.0
+
+
+def test_save_returns_false_on_unwritable_dir(tmp_path, monkeypatch):
+    """A write failure is best-effort: save returns False (so the caller can be
+    honest about durability) instead of raising into the request/audio path."""
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("mammamiradio.playlist.blocklist.tempfile.mkstemp", _boom)
+    assert save_blocklist(tmp_path, {("a", "b"): block_meta("A - B")}) is False

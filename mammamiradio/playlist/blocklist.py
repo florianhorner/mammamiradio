@@ -50,12 +50,25 @@ def _decode_key(raw: str) -> BlockKey | None:
     return (artist, title)
 
 
+def _coerce_banned_at(value: object) -> float:
+    """Best-effort timestamp coercion. A corrupt/hand-edited blocklist.json with a
+    non-numeric ``banned_at`` (string, list, ...) must NOT crash the load — it would
+    take the whole startup down with it (dead air). A bad value falls back to ``0.0``
+    so the row simply sorts oldest in the banlist rather than raising."""
+    if value is None:
+        return time.time()
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def block_meta(display: str = "", *, banned_by: str = "operator", banned_at: float | None = None) -> dict:
     """Build a blocklist row's metadata (display + provenance) for the unban view."""
     return {
         "display": str(display or ""),
         "banned_by": str(banned_by or "operator"),
-        "banned_at": time.time() if banned_at is None else float(banned_at),
+        "banned_at": _coerce_banned_at(banned_at),
     }
 
 
@@ -118,6 +131,10 @@ def save_blocklist(cache_dir: Path | str, blocklist: dict[BlockKey, dict]) -> bo
         except OSError:
             pass
         return True
-    except OSError as exc:
+    except Exception as exc:
+        # Best-effort + never-raises is the whole contract: a full disk (OSError),
+        # an un-encodable title (UnicodeEncodeError), or any other write failure
+        # must leave the in-memory ban holding for the session and the caller on
+        # the air — only durability across restart is lost.
         logger.warning("Failed to persist blocklist.json: %s", exc)
         return False

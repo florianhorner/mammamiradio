@@ -75,9 +75,33 @@ def _recent_music_identity_keys(state: StationState) -> set[str]:
     return recent_keys
 
 
+def _is_blocklisted(path: Path, blocklist: object) -> bool:
+    """True if this cache file's ``(artist, title)`` is on the operator blocklist.
+
+    The blocklist key is ``(track.artist.lower(), track.title.lower())`` and the norm
+    sidecar stores exactly ``track.title``/``track.artist`` (producer.save_track_metadata),
+    so the sidecar maps straight onto the ban identity. A file with no sidecar can't be
+    identified and is left selectable (best-effort — banned songs almost always carry one)."""
+    if not blocklist or not isinstance(blocklist, dict):
+        return False
+    sidecar = load_track_metadata(path)
+    if not sidecar:
+        return False
+    key = (str(sidecar.get("artist") or "").strip().lower(), str(sidecar.get("title") or "").strip().lower())
+    return key in blocklist
+
+
 def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
-    """Pick a cache rescue clip without replaying the current/recent song first."""
+    """Pick a cache rescue clip without replaying the current/recent song first.
+
+    A banned song must never re-air, even through the rescue path — so blocklisted
+    cache files are dropped first, before the recent-identity de-dup. If every file is
+    banned (nothing left) the rescue degrades to ``None`` and the caller's next layer
+    (canned clip / forced banter) keeps audio flowing rather than airing a banned song."""
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    blocklist = getattr(state, "blocklist", None)
+    if blocklist:
+        norm_files = [path for path in norm_files if not _is_blocklisted(path, blocklist)]
     if not norm_files:
         return None
 

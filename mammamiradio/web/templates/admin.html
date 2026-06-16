@@ -2271,7 +2271,9 @@ function notifyExternalAddNotices(notices){
       toast('Added “'+name+'” to rotation — it’ll play soon.');
       continue;
     }
-    const msg=n.reason==='source_changed'
+    const msg=n.reason==='banned'
+      ? '“'+name+'” is banned — unban it from the Banned list first, then add it.'
+      : n.reason==='source_changed'
       ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
       : 'Couldn’t download “'+name+'” — try another result.';
     if(typeof window.errorToast==='function')window.errorToast(msg);else toast(msg);
@@ -3229,6 +3231,10 @@ function updatePl(tracks,page){
     return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Ban from rotation">&#10005;</button></div></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
+  // The 3s refreshFast() poll rebuilds these rows with fresh (unchecked) checkboxes,
+  // so re-sync the bulk-select toolbar — otherwise it could keep showing "N selected"
+  // and an active "Ban selected" that targets rows no longer checked.
+  updatePlSelBar();
 }
 async function loadMorePlaylist(){
   if(_plLoadingMore||!_plPage.has_more)return;
@@ -3288,7 +3294,7 @@ async function moveNext(i){
 // Index-based and immediate (no deferred-undo) — a second removal in an undo window
 // would post a stale index after the first ban shifts the list. To bring a song back,
 // use the Banned manager (toggleBanlist) → Unban.
-async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast('Banned — won’t come back');await refreshFast();}else{toast((r&&r.error)||'Could not ban that one');}}
+async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast(r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back');await refreshFast();}else{toast((r&&r.error)||'Could not ban that one');}}
 
 // --- Bulk select + ban -------------------------------------------------------
 function _checkedPlRows(){return [...document.querySelectorAll('.pl-check:checked')].map(c=>c.closest('.pl-row')).filter(Boolean);}
@@ -3307,7 +3313,7 @@ async function banSelected(){
   const keys=rows.map(r=>[r.getAttribute('data-artist')||'',r.getAttribute('data-title')||'']);
   if(!confirm(`Ban ${keys.length} song${keys.length===1?'':'s'} for good? They won’t come back after a restart.`))return;
   const r=await api('POST','/api/track/ban',{keys});
-  if(r&&r.ok){toast(`Banned ${r.banned?r.banned.length:keys.length} song${(r.banned&&r.banned.length===1)?'':'s'}`);clearPlSel();await refreshFast();}
+  if(r&&r.ok){const n=r.banned?r.banned.length:keys.length;toast(r.persisted===false?`Banned ${n} song${n===1?'':'s'} for now — but I couldn’t save it, so they may come back after a restart`:`Banned ${n} song${n===1?'':'s'}`);clearPlSel();await refreshFast();}
   else{toast((r&&r.error)||'Could not ban those');}
 }
 
@@ -3323,15 +3329,18 @@ async function renderBanlist(){
   const r=await api('GET','/api/track/banlist');
   const rows=(r&&r.banned)||[];
   if(!rows.length){panel.innerHTML='<div class="banlist-head">Banned songs</div><div class="empty">Nothing banned yet. The ✕ on a track bans it for good.</div>';panel.style.display='block';return;}
+  // Artist/title ride in data attributes (esc() makes them HTML-attribute-safe and
+  // the browser decodes them back on read) instead of inline JS-string args — an
+  // apostrophe like O'Connor used to break the generated onclick handler.
   panel.innerHTML='<div class="banlist-head">Banned songs ('+rows.length+')</div>'+rows.map(row=>{
-    const a=esc(row.artist||'');const t=esc(row.title||'');
-    return `<div class="banlist-row"><span class="banlist-t">${esc(row.display||(row.artist+' - '+row.title))}</span><button type="button" class="btn btn-chip" onclick="unbanOne(this,'${a.replace(/'/g,'&#39;')}','${t.replace(/'/g,'&#39;')}')">Unban</button></div>`;
+    return `<div class="banlist-row"><span class="banlist-t">${esc(row.display||(row.artist+' - '+row.title))}</span><button type="button" class="btn btn-chip" data-artist="${esc(row.artist||'')}" data-title="${esc(row.title||'')}" onclick="unbanOne(this)">Unban</button></div>`;
   }).join('');
   panel.style.display='block';
 }
-async function unbanOne(btn,artist,title){
+async function unbanOne(btn){
+  const artist=btn.getAttribute('data-artist')||'';const title=btn.getAttribute('data-title')||'';
   const r=await api('POST','/api/track/unban',{keys:[[artist,title]]});
-  if(r&&r.ok){toast('Unbanned — it can come back on the next refresh');await renderBanlist();}
+  if(r&&r.ok){toast(r.persisted===false?'Unbanned for now — but I couldn’t save it, so it may stay banned after a restart':'Unbanned — it can come back on the next refresh');await renderBanlist();}
   else{toast((r&&r.error)||'Could not unban');}
 }
 

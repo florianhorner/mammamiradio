@@ -287,7 +287,10 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
             state.blocklist[key] = block_meta(display, banned_by=banned_by)
         elif display and not existing.get("display"):
             existing["display"] = display
-    save_blocklist(config.cache_dir, state.blocklist)
+    # Durability is best-effort: an unwritable/full cache dir means the ban holds
+    # for this session but may not survive a restart. Surface that honestly rather
+    # than promising "won't come back" (leadership #5) — the caller relays it.
+    persisted = save_blocklist(config.cache_dir, state.blocklist)
 
     banned_keys = set(keys)
     before = len(state.playlist)
@@ -305,6 +308,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         "banned": [state.blocklist[k].get("display") or f"{k[0]} - {k[1]}" for k in keys],
         "removed": removed,
         "purged": purged,
+        "persisted": persisted,
     }
 
 
@@ -315,9 +319,8 @@ def _apply_unban(state: StationState, config, keys: list[tuple[str, str]]) -> di
         if key in state.blocklist:
             del state.blocklist[key]
             unbanned += 1
-    if unbanned:
-        save_blocklist(config.cache_dir, state.blocklist)
-    return {"ok": True, "unbanned": unbanned}
+    persisted = save_blocklist(config.cache_dir, state.blocklist) if unbanned else True
+    return {"ok": True, "unbanned": unbanned, "persisted": persisted}
 
 
 def _session_stopped_flag(config) -> Path:
@@ -2771,7 +2774,7 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
         track = state.playlist[idx]
         result = _apply_ban(state, config, [track], queue=request.app.state.queue)
         display = result["banned"][0] if result.get("banned") else track.display
-        return {"ok": True, "removed": display, "banned": True}
+        return {"ok": True, "removed": display, "banned": True, "persisted": result.get("persisted", True)}
     return {"ok": False, "error": "Invalid index"}
 
 
@@ -2809,10 +2812,15 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
         return {"ok": False, "error": "Pick at least one song to ban."}
 
     # D5: a bulk ban must not starve the rotation pool onto the emergency rescue path.
+    # Floor is MIN_ROTATION_AFTER_BAN for a healthy pool, but even an already-small
+    # pool (< MIN) must keep at least one song — otherwise a single bulk ban could
+    # empty the rotation entirely and force permanent rescue playback. (Per-row
+    # removal stays exempt: the operator asked for that one song gone.)
     banned_keys = {normalized_track_key(t) for t in tracks}
     in_pool = sum(1 for t in state.playlist if normalized_track_key(t) in banned_keys)
     remaining = len(state.playlist) - in_pool
-    if len(state.playlist) >= MIN_ROTATION_AFTER_BAN and remaining < MIN_ROTATION_AFTER_BAN:
+    floor = MIN_ROTATION_AFTER_BAN if len(state.playlist) >= MIN_ROTATION_AFTER_BAN else 1
+    if remaining < floor:
         return {
             "ok": False,
             "error": "That would leave too few songs for the station to keep playing. "
@@ -3056,9 +3064,10 @@ async def _commit_external_download(
     so benign edits (enrich / move-to-next / festival toggle) do NOT drop the
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
-    the rotation pool but the play-next slot was occupied), or "dropped" (source
-    switched / consumed). Raises on download failure / cancellation for the caller
-    to surface. Shared by the admin and listener download paths."""
+    the rotation pool but the play-next slot was occupied), "banned" (the song is on
+    the operator blocklist and was refused), or "dropped" (source switched / consumed).
+    Raises on download failure / cancellation for the caller to surface. Shared by the
+    admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import download_external_track
 
@@ -3087,9 +3096,11 @@ async def _commit_external_download(
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         # Doorway: an admin queue-from-search OR a listener song request must not
-        # resurrect a banned song. Drop it here rather than committing to rotation.
+        # resurrect a banned song. A distinct "banned" status (not "dropped") lets
+        # each caller surface an honest, specific message — the admin sees "it's
+        # banned", the listener stops spinning on "searching…" with a real answer.
         if normalized_track_key(track) in state.blocklist:
-            return "dropped"
+            return "banned"
         state.playlist.append(track)
         state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
@@ -3133,6 +3144,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
     except Exception:
         logger.warning("External track download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
         _notice(False, "download_failed")
+        return
+
+    if status == "banned":
+        logger.info("Admin external track refused — song is on the operator blocklist: %s", track.display)
+        _notice(False, "banned")
         return
 
     if status == "dropped":

@@ -114,7 +114,9 @@ async def test_remove_endpoint_is_a_durable_ban(tmp_path):
 
 @pytest.mark.asyncio
 async def test_unban_lifts_the_ban(tmp_path):
-    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    # Two-track pool so the bulk ban clears the starvation floor (banning the only
+    # song in a 1-track pool is now refused — see the empty-pool guard test).
+    app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicità", "Al Bano")])
     state = app.state.station_state
     async with _client(app) as c:
         await c.post("/api/track/ban", json={"keys": [["Modugno", "Volare"]]})
@@ -169,7 +171,8 @@ async def test_ban_purges_not_yet_started_queued_music_segment(tmp_path):
 @pytest.mark.asyncio
 async def test_commit_external_download_drops_banned_song(tmp_path):
     """4th ingest doorway: an admin queue-from-search / listener request for a
-    banned song must be dropped, not committed to rotation."""
+    banned song must be refused, not committed to rotation. The status is the
+    distinct "banned" (not "dropped") so each caller can surface an honest answer."""
     app = _make_app(tmp_path, [])
     state = app.state.station_state
     state.blocklist = {
@@ -191,6 +194,43 @@ async def test_commit_external_download_drops_banned_song(tmp_path):
             should_commit=lambda: True,
             should_pin=lambda: True,
         )
-    assert status == "dropped"
+    assert status == "banned"
     assert banned not in state.playlist
     assert state.playlist == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_ban_cannot_empty_an_already_small_pool(tmp_path):
+    """The starvation guard must also fire below the floor: a bulk ban that would
+    drop a small pool to zero is refused, otherwise the station starves onto rescue."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    async with _client(app) as c:
+        # 2-track pool, ban both -> would leave 0 -> refuse, change nothing.
+        r = await c.post("/api/track/ban", json={"indices": [0, 1]})
+        body = r.json()
+        assert body["ok"] is False
+        assert "too few songs" in body["error"].lower()
+    assert len(state.playlist) == 2
+    assert state.blocklist == {}
+    # Banning just one still leaves a song, so it is allowed.
+    async with _client(app) as c:
+        r = await c.post("/api/track/ban", json={"indices": [0]})
+        assert r.json()["ok"] is True
+    assert len(state.playlist) == 1
+
+
+@pytest.mark.asyncio
+async def test_ban_reports_not_persisted_when_disk_write_fails(tmp_path):
+    """A failed save must not let the API promise a durable ban: the ban holds for
+    the session (in-memory) but the response says persisted=False so the UI is honest."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    with patch("mammamiradio.web.streamer.save_blocklist", return_value=False):
+        async with _client(app) as c:
+            r = await c.post("/api/track/ban", json={"keys": [["Modugno", "Volare"]]})
+            body = r.json()
+    assert body["ok"] is True
+    assert body["persisted"] is False
+    # In-memory ban still holds for the session.
+    assert ("modugno", "volare") in state.blocklist
