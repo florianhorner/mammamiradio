@@ -29,6 +29,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
     _FALLBACK_REASON_LABELS,
+    BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
     BRIDGE_HEALTH_THRESHOLD,
     BRIDGE_HEALTH_WINDOW_SECONDS,
     LiveStreamHub,
@@ -1070,6 +1071,7 @@ def test_bridge_health_snapshot_unhealthy_at_threshold():
     assert bh["session_count"] == BRIDGE_HEALTH_THRESHOLD
     assert bh["window_count"] == BRIDGE_HEALTH_THRESHOLD
     assert bh["unhealthy"] is True
+    assert bh["unhealthy_reasons"] == ["bridge_frequency"]
     assert bh["last_fire"]["bridge_type"] == "drain"
     assert bh["last_fire"]["source"] == "norm_cache"
 
@@ -1085,6 +1087,24 @@ def test_bridge_health_snapshot_below_threshold_is_healthy():
 
     assert bh["window_count"] == BRIDGE_HEALTH_THRESHOLD - 1
     assert bh["unhealthy"] is False
+    assert bh["unhealthy_reasons"] == []
+
+
+def test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes():
+    now = 20_000.0
+    state = StationState()
+    state.queue_empty_since = now - BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+
+    with (
+        patch("mammamiradio.web.streamer.time.time", return_value=now),
+        patch("mammamiradio.web.streamer._runtime_monotonic", return_value=now),
+    ):
+        bh = _bridge_health_snapshot(state)
+
+    assert bh["window_count"] == 0
+    assert bh["queue_empty_elapsed_s"] == BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+    assert bh["unhealthy"] is True
+    assert bh["unhealthy_reasons"] == ["queue_empty"]
 
 
 def test_bridge_health_snapshot_ignores_events_outside_window():
@@ -1119,3 +1139,39 @@ def test_runtime_status_snapshot_includes_bridge_health():
 
     assert "bridge_health" in rs
     assert rs["bridge_health"]["session_count"] == 1
+
+
+def test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air():
+    app = _make_app()
+    state = app.state.station_state
+    now = 10_000.0
+    for i in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("drain", "norm_cache", timestamp=now - i)
+
+    req = _fake_request(app)
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        rs = _runtime_status_snapshot(req)
+
+    assert rs["health_state"] == "degraded"
+    assert rs["station_on_air"] is True
+    assert rs["bridge_health"]["unhealthy"] is True
+
+
+def test_runtime_status_snapshot_includes_producer_headroom():
+    app = _make_app()
+    app.state.config.pacing.lookahead_segments = 4
+    app.state.queue = asyncio.Queue(maxsize=6)
+    app.state.station_state.queued_segments = [
+        {"type": "music", "duration_sec": 180.0},
+        {"type": "music", "duration_sec": 180.0},
+    ]
+
+    req = _fake_request(app)
+    runtime_health = _runtime_health_snapshot(req)
+    rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    headroom = rs["producer_headroom"]
+    assert headroom["queue_capacity"] == 6
+    assert headroom["lookahead_target"] == 4
+    assert headroom["buffered_audio_sec"] == 360.0
+    assert headroom["headroom_ok"] is False

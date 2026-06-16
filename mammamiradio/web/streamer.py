@@ -164,8 +164,10 @@ SILENCE_FAILURE_SECONDS = 30.0
 # audio plays, but it is cached rotation, not the real station. BRIDGE_HEALTH_*
 # defines that line: this many bridges inside the rolling window flips runtime
 # status to unhealthy so the operator sees it instead of a falsely-green station.
-BRIDGE_HEALTH_WINDOW_SECONDS = 900.0  # 15-minute rolling window
-BRIDGE_HEALTH_THRESHOLD = 3  # bridges within the window before "running on rescue"
+BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
+BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
+BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
+BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
@@ -459,6 +461,7 @@ def _runtime_health_snapshot(request: Request) -> dict:
     state = request.app.state.station_state
     queue = getattr(request.app.state, "queue", None)
     queue_depth = queue.qsize() if queue else -1
+    queue_capacity = queue.maxsize if queue else -1
     shadow_depth = len(state.queued_segments)
     now_streaming = state.now_streaming or {}
     now_metadata = now_streaming.get("metadata", {}) if isinstance(now_streaming, dict) else {}
@@ -479,6 +482,7 @@ def _runtime_health_snapshot(request: Request) -> dict:
     queue_empty_elapsed = _queue_empty_elapsed(state)
     return {
         "queue_depth": queue_depth,
+        "queue_capacity": queue_capacity,
         "shadow_queue_depth": shadow_depth,
         "shadow_queue_in_sync": queue_depth == shadow_depth,
         "producer_task_alive": producer_alive,
@@ -706,6 +710,8 @@ def _runtime_status_snapshot(
     tasks_alive = runtime_health.get("producer_task_alive", True) and runtime_health.get("playback_task_alive", True)
     silence_with_listeners = bool(runtime_health.get("silence_with_listeners", False))
     station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
+    bridge_health = _bridge_health_snapshot(state)
+    bridge_unhealthy = bool(bridge_health.get("unhealthy"))
     if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
@@ -722,6 +728,10 @@ def _runtime_status_snapshot(
         health_state = "blocked"
         health_color = "red"
         health_explanation = "Listeners are connected but playback is silent; playback needs operator attention."
+    elif bridge_unhealthy:
+        health_state = "degraded"
+        health_color = "yellow"
+        health_explanation = "Queue rescue is firing often; the station is building more runway."
     elif fallback_active:
         health_state = "degraded"
         health_color = "yellow"
@@ -766,7 +776,27 @@ def _runtime_status_snapshot(
         "recent_events": recent_events,
         "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
-        "bridge_health": _bridge_health_snapshot(state),
+        "bridge_health": bridge_health,
+        "producer_headroom": _producer_headroom_snapshot(request, runtime_health),
+    }
+
+
+def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
+    """Best-effort producer runway status for Pi-sized render latency."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    target_segments = max(4, int(config.pacing.lookahead_segments))
+    queue_depth = int(runtime_health.get("queue_depth", 0))
+    buffered_audio_sec = round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1)
+    queue_capacity = int(runtime_health.get("queue_capacity", 0))
+    headroom_ok = queue_depth >= target_segments
+    return {
+        "queue_depth": queue_depth,
+        "queue_capacity": queue_capacity,
+        "lookahead_target": target_segments,
+        "buffered_audio_sec": buffered_audio_sec,
+        "headroom_ok": headroom_ok,
+        "reason": "ready runway" if headroom_ok else "building runway",
     }
 
 
@@ -774,24 +804,35 @@ def _bridge_health_snapshot(state: StationState) -> dict:
     """Producer rescue-bridge health for the admin Runtime Status card (#547).
 
     Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
-    fires; ``unhealthy`` trips once the count reaches ``BRIDGE_HEALTH_THRESHOLD``
-    inside ``BRIDGE_HEALTH_WINDOW_SECONDS``. Session counts and the queue-empty
-    elapsed (reused from the existing health probe) ride along so the operator
-    sees one honest "running on rescue" readout instead of a falsely-green card.
+    fires; ``unhealthy`` trips once either repeated bridge fires or sustained
+    queue-empty time indicate the station is "running on rescue". Session counts
+    and queue-empty elapsed ride along so the operator sees one honest readout
+    instead of a falsely-green card.
     """
     now = time.time()
     window = BRIDGE_HEALTH_WINDOW_SECONDS
     recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
     last_fire = state.bridge_events[-1] if state.bridge_events else None
+    queue_empty_elapsed = round(_queue_empty_elapsed(state), 1)
+    recent_unhealthy = len(recent) >= BRIDGE_HEALTH_THRESHOLD
+    empty_unhealthy = queue_empty_elapsed >= BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+    unhealthy_reasons = []
+    if recent_unhealthy:
+        unhealthy_reasons.append("bridge_frequency")
+    if empty_unhealthy:
+        unhealthy_reasons.append("queue_empty")
     return {
         "window_seconds": window,
         "threshold": BRIDGE_HEALTH_THRESHOLD,
+        "queue_empty_window_seconds": BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS,
+        "queue_empty_threshold_s": BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
         "session_count": state.bridge_fires_total,
         "by_type": dict(state.bridge_fires_by_type),
         "window_count": len(recent),
         "last_fire": dict(last_fire) if last_fire else None,
-        "queue_empty_elapsed_s": round(_queue_empty_elapsed(state), 1),
-        "unhealthy": len(recent) >= BRIDGE_HEALTH_THRESHOLD,
+        "queue_empty_elapsed_s": queue_empty_elapsed,
+        "unhealthy": bool(unhealthy_reasons),
+        "unhealthy_reasons": unhealthy_reasons,
     }
 
 
