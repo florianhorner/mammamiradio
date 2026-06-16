@@ -794,8 +794,13 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
     assert "max_completion_tokens" in call_kwargs
-    assert call_kwargs["max_completion_tokens"] > 0
     assert "max_tokens" not in call_kwargs
+    # gpt-5.x counts hidden reasoning tokens against this cap, so the OpenAI cap
+    # must reserve headroom above the caller's visible-output budget or a
+    # reasoning model can return an empty message that drops to stock copy.
+    from mammamiradio.hosts.scriptwriter import _OPENAI_REASONING_HEADROOM
+
+    assert call_kwargs["max_completion_tokens"] > _OPENAI_REASONING_HEADROOM
 
 
 @pytest.mark.asyncio
