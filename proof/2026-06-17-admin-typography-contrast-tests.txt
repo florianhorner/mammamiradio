@@ -1,0 +1,31 @@
+Proof: admin producer-desk typography + segment-colour harmonisation + AA-contrast labels
+Branch: florianhorner/fix/admin-typography-regression
+Date (UTC): 2026-06-16T22:48:40Z
+Head: 0aa170ac
+========================================================================
+## tests + lint + typecheck (make check surface)
+$ ruff check .
+All checks passed!
+$ ruff format --check tests/web/test_design_tokens.py
+1 file already formatted
+$ mypy mammamiradio/ tests/  (errors only)
+Success: no issues found in 189 source files
+$ pytest tests/ -q
+3040 passed, 2 skipped, 19 deselected, 1 warning in 56.79s
+$ pytest tests/web/test_design_tokens.py -q  (the new + tightened guards)
+18 passed in 0.27s
+$ bash scripts/check-release-invariants.sh
+
+All invariants passed.
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+========================================================================
+## runtime verification — live /admin on 127.0.0.1:8100 (loopback, browse binary, pixel-level)
+- HTTP 200, 0 console errors on /admin
+- .rotation-sort computed font-family = "JetBrains Mono", 10px (was Outfit/body 11px)
+- no text below the 9px legibility floor anywhere in admin.html (was 5.5px/8px host labels)
+- --seg-music=#2563EB and --seg-banter=#F4D048 resolve; no live segment element references --ok/--sun/--sun2
+- host-config labels now meet WCAG AA vs --surface: host-preview-label 1.93->4.69:1,
+  host-presets-label 2.13->4.69, host-reset 2.34->4.69, ha-labels 2.66->4.69, host-style 3.20->8.63
+- protected UI intact: cost counter '<$1 est', .play-btn.playing blue --ok #2563EB,
+  gold .mi rgb(244,208,72), tricolor stripe present, --surface #251E19
