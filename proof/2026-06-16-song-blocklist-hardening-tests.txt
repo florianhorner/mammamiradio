@@ -1,0 +1,27 @@
+# Proof artifact — song blocklist hardening (PR open)
+# Branch: florianhorner/feat/song-backlog-management
+# HEAD: 5ca98b4f82258a14e71ef8a8ef0eb2748261236d
+# Generated: 2026-06-16T07:35:11Z
+
+== ruff check . ==
+All checks passed!
+
+== ruff format --check mammamiradio/ tests/ ==
+189 files already formatted
+
+== mypy mammamiradio/ tests/ ==
+tests/scheduling/test_producer_unit.py:2423: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/scheduling/test_producer_unit.py:2474: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 189 source files
+
+== pre-release-check.sh (version sync + invariants + changelog) ==
+  Passed: 8  Failed: 0
+=======================================
+
+All checks passed. Safe to bump the version.
+
+== pytest (full suite) ==
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3029 passed, 2 skipped, 19 deselected, 1 warning in 56.37s
