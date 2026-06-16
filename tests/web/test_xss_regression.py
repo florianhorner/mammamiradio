@@ -58,6 +58,26 @@ def test_admin_events_summary_esc_before_replace() -> None:
     )
 
 
+def test_programme_actions_do_not_interpolate_ids_into_inline_handlers() -> None:
+    """Programme row IDs must cross the DOM as escaped attributes, not JS in onclick.
+
+    A spotify_id containing a double quote previously broke out of the double-quoted
+    onclick attribute around focusPlaylistTrack(..., '<id>'), creating an attribute
+    injection path in the admin panel.
+    """
+    html = ADMIN_HTML.read_text()
+    render_block = html[html.index("function renderProgramme") : html.index("async function removeQueueItem")]
+
+    assert 'onclick="focusPlaylistTrack' not in render_block
+    assert "removeQueueItem('${" not in render_block
+    assert "escJs(" not in render_block
+    assert 'data-playlist-link="true"' in render_block
+    assert "data-spotify-id=\"${esc(it.spotify_id||'')}\"" in render_block
+    assert "data-queue-remove-id=\"${esc(it.id||'')}\"" in render_block
+    assert "getAttribute('data-spotify-id')" in html
+    assert "getAttribute('data-queue-remove-id')" in html
+
+
 def test_admin_csp_allows_inline() -> None:
     """The /admin CSP must use 'unsafe-inline' so inline event handlers are allowed.
 
