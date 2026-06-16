@@ -771,6 +771,34 @@ async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
 
 
 @pytest.mark.asyncio
+async def test_openai_fallback_uses_max_completion_tokens(config, state):
+    """Regression: gpt-5.x models 400 on `max_tokens` and require
+    `max_completion_tokens`. Sending the old name silently killed the entire
+    OpenAI fallback whenever Anthropic was unavailable (observed live on the
+    HA edge addon). Lock the token-limit kwarg name."""
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    call_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert "max_completion_tokens" in call_kwargs
+    assert call_kwargs["max_completion_tokens"] > 0
+    assert "max_tokens" not in call_kwargs
+
+
+@pytest.mark.asyncio
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"

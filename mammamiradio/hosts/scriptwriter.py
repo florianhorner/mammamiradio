@@ -558,7 +558,10 @@ async def _generate_json_response(
     def _call_openai():
         return client.chat.completions.create(
             model=openai_model,
-            max_tokens=max_tokens,
+            # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and
+            # require `max_completion_tokens`. Sending the old name here silently
+            # broke the entire OpenAI fallback whenever Anthropic was unavailable.
+            max_completion_tokens=max_tokens,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
