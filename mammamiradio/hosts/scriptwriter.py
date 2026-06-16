@@ -75,16 +75,14 @@ _anthropic_auth_blocked_until: float = 0.0
 _anthropic_blocked_reason: str = "provider error"
 _anthropic_blocked_model: str = ""
 _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
-# gpt-5.x reasoning models count hidden reasoning tokens against
-# `max_completion_tokens`, so a caller's small Anthropic-style visible-output
-# budget (as low as 100 for a transition, 300 for news) can be fully consumed
-# by reasoning — returning an empty/truncated message that fails JSON parsing
-# and silently drops to stock copy even though the API call succeeded. Reserve
-# headroom on the OpenAI cap so the visible script always has room. The cap is a
-# ceiling, not a target — the model stops at natural completion and is only
-# billed for tokens actually produced, so the reserve is safe (and effectively
-# free) across the whole OpenAI catalog, reasoning model or not.
-_OPENAI_REASONING_HEADROOM = 2048
+# gpt-5.x reasoning models bill hidden reasoning tokens against
+# `max_completion_tokens`. We request `reasoning_effort="minimal"` for these
+# short radio snippets (see _call_openai) so reasoning is near-zero — that keeps
+# the visible JSON from being starved AND keeps the per-request cap small, since
+# OpenAI estimates rate-limit (TPM) usage from the requested cap, not the actual
+# output. This small residual buffer covers minimal-reasoning + JSON framing
+# without inflating every short fallback into a multi-thousand-token request.
+_OPENAI_REASONING_HEADROOM = 512
 # Serializes Anthropic attempts so concurrent async tasks can't all race past
 # the block check and issue parallel 401 floods before the first failure trips
 # the circuit. Created lazily inside the running event loop.
@@ -565,22 +563,33 @@ async def _generate_json_response(
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
+    # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and require
+    # `max_completion_tokens`. Sending the old name silently broke the entire
+    # OpenAI fallback whenever Anthropic was unavailable.
+    openai_kwargs = dict(
+        model=openai_model,
+        max_completion_tokens=max_tokens + _OPENAI_REASONING_HEADROOM,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
     def _call_openai():
-        return client.chat.completions.create(
-            model=openai_model,
-            # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and
-            # require `max_completion_tokens`. Sending the old name here silently
-            # broke the entire OpenAI fallback whenever Anthropic was unavailable.
-            # Reserve reasoning headroom (see _OPENAI_REASONING_HEADROOM) so the
-            # visible JSON script isn't starved by a reasoning model's hidden
-            # tokens.
-            max_completion_tokens=max_tokens + _OPENAI_REASONING_HEADROOM,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-        )
+        try:
+            # "minimal" reasoning keeps these short snippets from spending the
+            # completion cap on hidden reasoning tokens (which would starve the
+            # visible JSON) while keeping the request — and its TPM footprint —
+            # small and low-latency.
+            return client.chat.completions.create(reasoning_effort="minimal", **openai_kwargs)
+        except Exception as exc:
+            # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
+            # that rejects `reasoning_effort` with a 400. Retry once without it
+            # rather than re-introducing the total-failure mode this path fixes.
+            if "reasoning_effort" not in str(exc):
+                raise
+            return client.chat.completions.create(**openai_kwargs)
 
     t_start = time.perf_counter()
     resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
