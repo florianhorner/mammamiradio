@@ -1,0 +1,12 @@
+Branch: ci/quality-pr-read-only
+Commit: 5fdac4c06d3f7606bd926a997ac56777861d6fe7
+
+$ uv run python -m pytest -q tests/repo/test_quality_workflow.py tests/repo/test_coverage_ratchet.py
+....                                                                     [100%]
+4 passed in 0.17s
+
+$ uv run ruff check scripts/coverage-ratchet.py tests/repo/test_quality_workflow.py tests/repo/test_coverage_ratchet.py
+All checks passed!
+
+$ uv run ruff format --check scripts/coverage-ratchet.py tests/repo/test_quality_workflow.py tests/repo/test_coverage_ratchet.py
+3 files already formatted
