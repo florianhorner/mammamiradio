@@ -21,8 +21,14 @@ from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
+from mammamiradio.playlist.blocklist import load_blocklist
 from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
-from mammamiradio.playlist.playlist import DEMO_TRACKS, fetch_startup_playlist, read_persisted_source
+from mammamiradio.playlist.playlist import (
+    DEMO_TRACKS,
+    fetch_startup_playlist,
+    filter_blocklisted,
+    read_persisted_source,
+)
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -194,12 +200,26 @@ async def startup():
             selected_at=time.time(),
         )
         startup_source_error = str(e)
+
+    # Persistent operator blocklist: a song the operator banned must never re-enter
+    # the pool, including on this cold-start re-fetch (the reported "deleted songs
+    # come back after restart" bug). Filter the freshly fetched pool before it ever
+    # reaches the producer. Best-effort load — a missing/corrupt file bans nothing.
+    blocklist = load_blocklist(config.cache_dir)
+    pre_blocklist_count = len(tracks)
+    tracks = filter_blocklisted(tracks, blocklist)
+    if pre_blocklist_count != len(tracks):
+        logger.info(
+            "Blocklist: filtered %d banned track(s) from the startup pool",
+            pre_blocklist_count - len(tracks),
+        )
     logger.info("Loaded %d tracks", len(tracks))
 
     state = StationState(
         playlist=tracks,
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
+        blocklist=blocklist,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
         verbal_gag_ledger=verbal_gag_ledger,

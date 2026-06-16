@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
+
 ### Fixed
 
 - **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.

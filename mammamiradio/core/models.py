@@ -512,6 +512,14 @@ class StationState:
     chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it
     pinned_track: Track | None = None
+    # Persistent operator blocklist: normalized (artist, title) -> {display,
+    # banned_by, banned_at}. A banned song never re-enters the rotation pool, across
+    # HA restarts and every music source. Loaded from blocklist.json at startup
+    # (main.py) and enforced at every ingest doorway via playlist.filter_blocklisted.
+    # Mutated ONLY by the ban/unban endpoints, synchronously (no await between the
+    # read-modify-write and the disk save), so handlers cannot interleave and lose an
+    # update — the same single-loop discipline switch_playlist / queue_remove_item use.
+    blocklist: dict[tuple[str, str], dict] = field(default_factory=dict)
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
     # Recently consumed requests kept for 5 min so the admin can see what happened

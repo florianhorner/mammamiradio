@@ -42,9 +42,12 @@ from mammamiradio.home.catalog import generation_in_progress, schedule_label_gen
 from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
+from mammamiradio.playlist.blocklist import block_meta, save_blocklist
 from mammamiradio.playlist.playlist import (
     ExplicitSourceError,
+    filter_blocklisted,
     load_explicit_source,
+    normalized_track_key,
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
@@ -212,6 +215,109 @@ def _purge_queue_and_shadow(q, state: StationState) -> int:
     purged = _purge_segment_queue(q)
     state.queued_segments.clear()
     return purged
+
+
+# Floor of rotation tracks a BULK ban must leave behind. Below this the producer
+# leans on the rescue path (demo assets / forced banter) — the emergency surface,
+# not routine. A bulk ban that would cross the floor is rejected with a warm
+# message rather than silently starving the station (leadership #1 + #5). A single
+# per-row removal is never rejected — the operator asked for that one song gone.
+MIN_ROTATION_AFTER_BAN = 5
+
+
+def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple[str, str]]) -> int:
+    """Drop not-yet-started music segments whose track was just banned (D4-A).
+
+    The current/airing segment has already left the queue, so it finishes normally
+    (never interrupt mid-segment, never a gap). Synchronous drain + filter + repush:
+    no ``await`` between draining the real queue and rebuilding the shadow, so the
+    producer and streamer cannot interleave (same discipline as queue_remove_item).
+    Returns the number of queued segments dropped.
+    """
+    items: list = []
+    while not q.empty():
+        try:
+            items.append(q.get_nowait())
+            q.task_done()
+        except asyncio.QueueEmpty:
+            break
+    dropped_ids: set[str] = set()
+    survivors: list = []
+    for seg in items:
+        meta = getattr(seg, "metadata", {}) or {}
+        if seg.type == SegmentType.MUSIC:
+            key = (
+                str(meta.get("artist", "")).strip().lower(),
+                str(meta.get("title_only", "")).strip().lower(),
+            )
+            if key in banned_keys:
+                qid = meta.get("queue_id")
+                if isinstance(qid, str):
+                    dropped_ids.add(qid)
+                if getattr(seg, "ephemeral", False):
+                    seg.path.unlink(missing_ok=True)
+                continue
+        survivors.append(seg)
+    for seg in survivors:
+        q.put_nowait(seg)
+    if dropped_ids:
+        state.queued_segments = [s for s in state.queued_segments if s.get("id") not in dropped_ids]
+    return len(dropped_ids)
+
+
+def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "operator", queue=None) -> dict:
+    """Ban tracks durably: persist, drop from rotation, clear pin, purge queue.
+
+    Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
+    disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
+    an update — the single-loop discipline the queue code already relies on. Returns
+    ``{"ok", "banned": [display], "removed": int, "purged": int}``.
+    """
+    keys: dict[tuple[str, str], str] = {}
+    for track in tracks:
+        key = normalized_track_key(track)
+        if key not in keys:
+            keys[key] = getattr(track, "display", "") or ""
+    if not keys:
+        return {"ok": True, "banned": [], "removed": 0, "purged": 0}
+
+    for key, display in keys.items():
+        existing = state.blocklist.get(key)
+        if existing is None:
+            state.blocklist[key] = block_meta(display, banned_by=banned_by)
+        elif display and not existing.get("display"):
+            existing["display"] = display
+    save_blocklist(config.cache_dir, state.blocklist)
+
+    banned_keys = set(keys)
+    before = len(state.playlist)
+    state.playlist = [t for t in state.playlist if normalized_track_key(t) not in banned_keys]
+    removed = before - len(state.playlist)
+    pin_cleared = False
+    if state.pinned_track is not None and normalized_track_key(state.pinned_track) in banned_keys:
+        state.pinned_track = None
+        pin_cleared = True
+    if removed or pin_cleared:
+        state.playlist_revision += 1
+    purged = _purge_blocklisted_from_queue(queue, state, banned_keys) if queue is not None else 0
+    return {
+        "ok": True,
+        "banned": [state.blocklist[k].get("display") or f"{k[0]} - {k[1]}" for k in keys],
+        "removed": removed,
+        "purged": purged,
+    }
+
+
+def _apply_unban(state: StationState, config, keys: list[tuple[str, str]]) -> dict:
+    """Lift bans so the songs can return on the next fetch/refresh."""
+    unbanned = 0
+    for key in keys:
+        if key in state.blocklist:
+            del state.blocklist[key]
+            unbanned += 1
+    if unbanned:
+        save_blocklist(config.cache_dir, state.blocklist)
+    return {"ok": True, "unbanned": unbanned}
 
 
 def _session_stopped_flag(config) -> Path:
@@ -768,6 +874,9 @@ def _apply_loaded_source(
 ) -> dict:
     """Atomically swap the station source and trigger immediate cutover."""
     state = request.app.state.station_state
+
+    # Doorway: a banned song must not return when the operator switches sources.
+    tracks = filter_blocklisted(tracks, state.blocklist)
 
     state.switch_playlist(tracks, resolved_source)
 
@@ -2646,15 +2755,106 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a track from playlist by index."""
+    """Remove a track from the rotation pool by index — a DURABLE ban.
+
+    Removal now persists: the song joins the operator blocklist so it never re-enters
+    the pool on restart, source switch, or mid-session chart refresh (the reported
+    "deleted songs come back" bug). Also clears the pin and drops any not-yet-started
+    queued segment of it. A single removal is never rejected for starvation. Body:
+    {index: int}.
+    """
     body = await request.json()
     idx = _as_int_index(body.get("index", -1))
     state = request.app.state.station_state
+    config = request.app.state.config
     if 0 <= idx < len(state.playlist):
-        removed = state.playlist.pop(idx)
-        state.playlist_revision += 1
-        return {"ok": True, "removed": removed.display}
+        track = state.playlist[idx]
+        result = _apply_ban(state, config, [track], queue=request.app.state.queue)
+        display = result["banned"][0] if result.get("banned") else track.display
+        return {"ok": True, "removed": display, "banned": True}
     return {"ok": False, "error": "Invalid index"}
+
+
+@router.post("/api/track/ban")
+async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
+    """Permanently ban one or more songs (durable across restarts and sources).
+
+    Body: {"indices": [int, ...]} (rotation rows), {"index": int}, or
+    {"keys": [[artist, title], ...]}. A bulk ban that would leave fewer than
+    MIN_ROTATION_AFTER_BAN songs is refused with a warm, way-out message rather than
+    starving the station onto the rescue path.
+    """
+    from mammamiradio.core.models import Track
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    state = request.app.state.station_state
+    config = request.app.state.config
+
+    tracks: list = []
+    raw_indices = body.get("indices")
+    if raw_indices is None and "index" in body:
+        raw_indices = [body.get("index")]
+    if isinstance(raw_indices, list):
+        for raw in raw_indices:
+            idx = _as_int_index(raw)
+            if 0 <= idx < len(state.playlist):
+                tracks.append(state.playlist[idx])
+    for raw_key in body.get("keys", []) or []:
+        if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+            tracks.append(Track(title=str(raw_key[1]), artist=str(raw_key[0]), duration_ms=0))
+
+    if not tracks:
+        return {"ok": False, "error": "Pick at least one song to ban."}
+
+    # D5: a bulk ban must not starve the rotation pool onto the emergency rescue path.
+    banned_keys = {normalized_track_key(t) for t in tracks}
+    in_pool = sum(1 for t in state.playlist if normalized_track_key(t) in banned_keys)
+    remaining = len(state.playlist) - in_pool
+    if len(state.playlist) >= MIN_ROTATION_AFTER_BAN and remaining < MIN_ROTATION_AFTER_BAN:
+        return {
+            "ok": False,
+            "error": "That would leave too few songs for the station to keep playing. "
+            "Unban a few or add more music first.",
+        }
+
+    return _apply_ban(state, config, tracks, queue=request.app.state.queue)
+
+
+@router.post("/api/track/unban")
+async def unban_tracks(request: Request, _: None = Depends(require_admin_access)):
+    """Lift a ban so the song can return on the next fetch. Body: {"keys": [[a, t], ...]}."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    state = request.app.state.station_state
+    config = request.app.state.config
+    keys: list[tuple[str, str]] = []
+    for raw_key in body.get("keys", []) or []:
+        if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+            keys.append((str(raw_key[0]).strip().lower(), str(raw_key[1]).strip().lower()))
+    if not keys:
+        return {"ok": False, "error": "Pick at least one song to unban."}
+    return _apply_unban(state, config, keys)
+
+
+@router.get("/api/track/banlist")
+async def banlist(request: Request, _: None = Depends(require_admin_access)):
+    """List banned songs for the admin 'banned' view (newest ban first)."""
+    state = request.app.state.station_state
+    rows = [
+        {
+            "artist": key[0],
+            "title": key[1],
+            "display": meta.get("display") or f"{key[0]} - {key[1]}",
+            "banned_by": meta.get("banned_by", "operator"),
+            "banned_at": meta.get("banned_at", 0.0),
+        }
+        for key, meta in state.blocklist.items()
+    ]
+    rows.sort(key=lambda r: r["banned_at"], reverse=True)
+    return {"ok": True, "banned": rows, "count": len(rows)}
 
 
 @router.post("/api/playlist/move")
@@ -2886,6 +3086,10 @@ async def _commit_external_download(
     async with app_state.source_switch_lock:
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
+        # Doorway: an admin queue-from-search OR a listener song request must not
+        # resurrect a banned song. Drop it here rather than committing to rotation.
+        if normalized_track_key(track) in state.blocklist:
+            return "dropped"
         state.playlist.append(track)
         state.playlist_revision += 1
         # Don't clobber a pin that's still pending — claim the play-next slot only
@@ -3008,6 +3212,12 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
         except Exception as exc:
             logger.error("Playlist enrich failed: %s", exc)
             return {"ok": False, "error": "Failed to load playlist source"}
+
+        # Doorway: /enrich is a bulk source import — it must honor the operator's
+        # bans (re-importing the same source should not resurrect a banned song).
+        # Only an explicit single /api/playlist/add is treated as an intentional
+        # override and bypasses the blocklist.
+        tracks = filter_blocklisted(tracks, state.blocklist)
 
         seen = {track.cache_key for track in state.playlist}
         new_tracks: list[Track] = []

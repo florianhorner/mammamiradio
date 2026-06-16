@@ -75,7 +75,7 @@ from mammamiradio.playlist.downloader import (
     reject_cached_download,
     validate_download,
 )
-from mammamiradio.playlist.playlist import fetch_chart_refresh
+from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.scheduling.scheduler import next_segment_type
 
@@ -1431,6 +1431,9 @@ async def run_producer(
                 _last_playlist_refresh = now
                 existing_ids = {t.spotify_id for t in state.playlist}
                 new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
+                # Doorway: a banned song must not slip back in via the mid-session
+                # chart refresh either (no restart needed to reintroduce it).
+                new_tracks = filter_blocklisted(new_tracks, state.blocklist)
                 if new_tracks:
                     state.playlist.extend(new_tracks)
                     logger.info(
