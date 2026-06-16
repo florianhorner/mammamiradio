@@ -81,6 +81,20 @@
    * surface (now-type, prog-border/badge, le-type, progress-fill, segment-inline). */
   --seg-ad:          var(--accent-warm);
 
+  /* ── Segment-type color: music ──
+   * Music is the only non-AI segment. Blue (the colorblind-safe anchor) reads
+   * "calm / on the air" and stays clear of every warm AI-segment hue. A
+   * dedicated token, never an alias of --ok (the OK/connected status blue), so
+   * a music badge and an OK status chip stay decoupled. */
+  --seg-music:       #2563EB;
+
+  /* ── Segment-type color: banter ──
+   * Banter is the station's gold voice. One gold — banter rules previously split
+   * between --sun and --sun2, which read as a shifting shade. A dedicated token,
+   * never an alias of the accent golds, so banter and accent borders/buttons
+   * stay decoupled. */
+  --seg-banter:      #F4D048;
+
   /* ── AI content marker — purple reserved exclusively for AI-generated
        segments so operators can distinguish AI from human/music content
        at a glance. Added for Regia Screen 1 ON AIR prototype. ── */

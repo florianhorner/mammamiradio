@@ -79,8 +79,8 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
   padding: 2px 8px; border-radius: 10px; margin-bottom: 6px;
 }
-.now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
-.now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
+.now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--seg-music); }
+.now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--seg-banter); }
 .now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .now-type[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
 
@@ -105,9 +105,9 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .sidebar-progress-fill {
   height: 100%; border-radius: 1px; transition: width 1s linear; width: 0;
-  background: var(--ok);
+  background: var(--seg-music);
 }
-.sidebar-progress-fill[data-t="banter"] { background: var(--sun); }
+.sidebar-progress-fill[data-t="banter"] { background: var(--seg-banter); }
 .sidebar-progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .sidebar-progress-fill[data-t="news_flash"] { background: var(--news); }
 .sidebar-time {
@@ -273,8 +273,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
   position: absolute; left: 0; top: 0; bottom: 0;
   width: 3px;
 }
-.prog-row[data-type="music"] .prog-border { background: var(--ok); }
-.prog-row[data-type="banter"] .prog-border { background: var(--sun2); }
+.prog-row[data-type="music"] .prog-border { background: var(--seg-music); }
+.prog-row[data-type="banter"] .prog-border { background: var(--seg-banter); }
 .prog-row[data-type="ad"] .prog-border { background: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-border { background: var(--news); }
 
@@ -282,8 +282,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
   font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   padding: 1px 7px; border-radius: 8px; white-space: nowrap; flex-shrink: 0;
 }
-.prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--ok); }
-.prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--sun); }
+.prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--seg-music); }
+.prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--seg-banter); }
 .prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-badge { background: rgba(224,112,56,0.15); color: var(--news); }
 
@@ -424,7 +424,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .host-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
 .host-name { font-weight: 700; font-size: 13px; }
 .host-style { font-size: 10px; color: rgba(245,237,216,0.38); margin-bottom: 10px; line-height: 1.4; }
-.host-presets-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.25); margin-bottom: 6px; }
+.host-presets-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.25); margin-bottom: 6px; }
 .host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
 .host-preset {
   flex: 1; padding: 7px 5px 6px; border-radius: 8px; cursor: pointer;
@@ -444,9 +444,9 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .preset-bar { width: 5px; border-radius: 2px 2px 0 0; background: rgba(245,237,216,0.14); transition: background 0.15s; }
 .host-preset.active .preset-bar { background: var(--sun2); }
 .host-preset:hover .preset-bar { background: rgba(244,208,72,0.48); }
-.preset-axis-labels { display: flex; gap: 2px; justify-content: center; margin-top: 3px; }
-.preset-axis-lbl { width: 5px; font-size: 5.5px; color: rgba(245,237,216,0.18); text-align: center; font-weight: 700; }
-.host-preset.active .preset-axis-lbl { color: rgba(244,208,72,0.36); }
+/* The preset mini-bars are an unlabeled sparkline preview; the five axes are
+   named in full and legibly by the .ha-axis sliders below, so the old 5.5px
+   E/C/W/V/N initials were redundant illegible clutter and were removed. */
 .ha { margin-bottom: 9px; }
 .ha-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 .ha-axis { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.4); }
@@ -471,7 +471,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
   border-right: 1px solid rgba(245,237,216,0.05);
   border-bottom: 1px solid rgba(245,237,216,0.05);
 }
-.host-preview-label { font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.22); margin-bottom: 5px; }
+.host-preview-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(245,237,216,0.22); margin-bottom: 5px; }
 .host-preview-text { font-size: 12px; font-style: italic; color: var(--cream-dk); line-height: 1.6; font-family: 'Playfair Display', Georgia, serif; transition: opacity 0.2s; min-height: 38px; }
 .host-reset { font-size: 10px; margin-top: 10px; padding: 0; background: transparent; border: none; cursor: pointer; color: rgba(245,237,216,0.28); font-family: inherit; transition: color 0.15s; }
 .host-reset:hover { color: var(--error); }
@@ -480,8 +480,8 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; }
 .le-time { color: rgba(245,237,216,0.3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
-.le-type[data-t="music"] { color: var(--ok); }
-.le-type[data-t="banter"] { color: var(--sun); }
+.le-type[data-t="music"] { color: var(--seg-music); }
+.le-type[data-t="banter"] { color: var(--seg-banter); }
 .le-type[data-t="ad"] { color: var(--seg-ad); }
 .le-type[data-t="news_flash"] { color: var(--news); }
 .le-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(245,237,216,0.7); }
@@ -768,8 +768,8 @@ body::before {
 .a-now-compact .artist { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-now-compact .progress-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .a-now-compact .progress-track { flex: 1; height: 2px; background: var(--surface-strong); border-radius: 1px; overflow: hidden; }
-.a-now-compact .progress-fill { height: 100%; border-radius: 1px; transition: width 1s linear; width: 0; background: var(--ok); }
-.a-now-compact .progress-fill[data-t="banter"] { background: var(--sun); }
+.a-now-compact .progress-fill { height: 100%; border-radius: 1px; transition: width 1s linear; width: 0; background: var(--seg-music); }
+.a-now-compact .progress-fill[data-t="banter"] { background: var(--seg-banter); }
 .a-now-compact .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
@@ -955,8 +955,8 @@ body::before {
   white-space: nowrap;
 }
 .segment-inline { color: var(--muted); }
-.segment-inline.segment-music { color: var(--ok); }
-.segment-inline.segment-banter { color: var(--sun2); }
+.segment-inline.segment-music { color: var(--seg-music); }
+.segment-inline.segment-banter { color: var(--seg-banter); }
 .segment-inline.segment-ad { color: var(--seg-ad); } /* dedicated ad token — distinct from --warning (degraded) */
 .segment-inline.segment-news_flash { color: var(--news); }
 .segment-inline.segment-station_id,
@@ -1138,7 +1138,7 @@ body::before {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 8px; border-radius: 999px;
   background: rgba(160,32,24,0.18); border: 1px solid rgba(184,44,32,0.4);
-  color: var(--lancia2); font-size: 8px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; font-family: var(--font-body);
+  color: var(--lancia2); font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; font-family: var(--font-body);
 }
 .a-host .live-tag .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 6px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 
@@ -1420,9 +1420,9 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   border-radius: 999px;
   transition: width 1s linear;
   width: 0;
-  background: var(--ok);
+  background: var(--seg-music);
 }
-.on-air-progress-track .progress-fill[data-t="banter"] { background: var(--sun); }
+.on-air-progress-track .progress-fill[data-t="banter"] { background: var(--seg-banter); }
 .on-air-progress-track .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
 .on-air-actions {
@@ -1536,8 +1536,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   margin-bottom: 12px;
 }
 .rotation-sort {
-  font-family: var(--font-body);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--muted);
 }
 /* Bulk-select toolbar (appears only when ≥1 song is checked) */
@@ -3570,7 +3570,6 @@ const HOST_PRESETS={
   Calm:{energy:25,chaos:25,warmth:65,verbosity:40,nostalgia:60},
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
-const AX_SHORT=['E','C','W','V','N'];
 const PRESET_LABEL={Balanced:'EQUILIBRATO',Calm:'CALMO',Hype:'HYPE'};
 const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
 
@@ -3619,8 +3618,7 @@ function renderHosts(hosts){
     const nm=esc(h.name);
     const presetBtns=Object.keys(HOST_PRESETS).map(p=>{
       const bars=PRESET_BARS[p].map((b,i)=>`<div class="preset-bar" style="height:${b}%"></div>`).join('');
-      const axLabels=AX_SHORT.map(s=>`<span class="preset-axis-lbl">${s}</span>`).join('');
-      return `<button class="host-preset" data-preset="${p}" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name"><span class="preset-check" aria-hidden="true">&#10003;</span>${PRESET_LABEL[p]||p}</span><div class="preset-bars">${bars}</div><div class="preset-axis-labels">${axLabels}</div></button>`;
+      return `<button class="host-preset" data-preset="${p}" onclick="applyHostPreset('${nm}','${p}')"><span class="host-preset-name"><span class="preset-check" aria-hidden="true">&#10003;</span>${PRESET_LABEL[p]||p}</span><div class="preset-bars">${bars}</div></button>`;
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
