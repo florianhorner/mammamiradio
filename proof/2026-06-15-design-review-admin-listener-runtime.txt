@@ -1,0 +1,29 @@
+Proof: runtime — design-review batch (admin + listener)
+Branch: florianhorner/chore/design-review-admin-listener
+Date: 2026-06-15
+Method: live instance at http://127.0.0.1:8100, exhaustive /qa (Player + Admin), headless browser.
+
+== Player QA (/) — every distinct control exercised, 0 console errors ==
+- Play button (#np-play / #hero-play): starts playback, .playing state = rgb(37,99,235) (--ok blue, protected)
+- Footer: links now [Palinsesto, Dediche, About, Install app] — NO /stream, /admin, GitHub
+- Footer wordmark "Mi" stays Lancia red (intentional light-surface accent)
+- .mmr-play-btn / .foot-link-btn render Outfit (var(--font-body)) — zero Arial on the surface
+- Dedication form submit -> warm success copy, no raw d.error
+- Clip share -> "Saving your clip…" (clip_saving house copy)
+- Nav anchors x4 scroll to valid targets; Schedule (#hero-palinsesto) scrolls
+- Mobile 390px: no real horizontal scroll (scrollWidth==clientWidth)
+- Protected intact: gold h1 "Mi" rgb(244,208,72), 2 tricolor blocks
+
+== Admin QA (/admin) — every distinct control exercised, 0 console errors ==
+- Ad-segment colour resolves rgb(232,160,48)=#E8A030 (--seg-ad) on all 4 ad surfaces
+  (le-type, prog-badge, prog-border, segment-inline); never --warning #D97706
+- Failure toast renders house copy: "Couldn't move that — give it a few seconds and try again."
+- Drawers (Diretta/Conduttori/Archivio/Motore/Setup) open + render
+- Toggles Chaos/Festival/Super-Italian flip + restore; Quality select cycles
+- Action buttons fired: Flag song, Reload scripts, Re-check setup, Trigger banter,
+  Skip, Shuffle — all warm toasts. Stop->Resume protected stopped-state correct.
+- Mobile rotation-row .pl-btn tap target = 44px at <=768px (desktop stays 20px dense)
+- Protected intact: --surface #251E19, token cost counter #sidebarCost "<$1 est", tricolor
+
+Full QA report (gitignored, local): .gstack/qa-reports/qa-report-mammamiradio-2026-06-15.md
+Health 99/100. No bugs found in the changed surfaces.

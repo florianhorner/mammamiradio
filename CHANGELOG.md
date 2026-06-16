@@ -26,6 +26,14 @@ The current version source of truth is `pyproject.toml`.
 
 - **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
 
+- **The producer panel speaks plainly when an action doesn't go through.** When a control in the producer desk can't reach the station — triggering a segment, saving keys, reordering the queue, changing the On-Air Sound, and the rest — it now says what happened in plain words and what to do next ("give it a few seconds and try again", or "check the connection and try again") instead of flashing a raw error code. The codes stay in the logs where they belong. The listener page got the same treatment: a dedication that doesn't send, or a clip that won't share, now gets a warm message with a way out instead of a bare error.
+
+- **The listener page footer is for listeners again.** The public listener page no longer carries operator and developer links (the raw stream address, the admin panel, the source repository) in its footer — those belong to the operator, not to someone tuning in. The station's own sections stay.
+
+- **Ad segments have their own colour in the producer panel.** Ads were tinted the same amber the panel uses for "running on the backup writer", so at a glance you couldn't tell an ad apart from a degraded state. Ads now have a dedicated warm amber that reads as its own thing.
+
+- **The per-track buttons in the rotation list are easier to tap on a phone.** The "play next" and "remove" controls on each rotation row now give a full-size touch target on small screens, while staying compact on the desktop control room.
+
 ### Added
 
 - **Switch the on-air radio sound on or off live, from the panel.** The FM "On-Air Sound" colouring now has a toggle in the producer's Engine Room, so you can flip it mid-broadcast and hear the difference on the next track — no restart, nothing interrupted. Handy for deciding whether you prefer the warm over-the-air character or a cleaner studio sound while the station is playing. Your choice sticks across restarts.

@@ -484,7 +484,7 @@
       nextState = 'shared';
     } catch (err) {
       console.warn('doShare failed', err);
-      _showToast(_t('clip_error', 'Errore clip'));
+      _showToast(_t('clip_error', "That clip didn't take — give it a moment and tap Share again."));
     } finally {
       btn.disabled = false;
       if (labelEl) labelEl.textContent = origLabel;
@@ -577,7 +577,7 @@
             ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
             : 'Coda piena, riprova tra poco.';
         } else {
-          sentEl.textContent = d.error || 'Invio non riuscito. Riprova.';
+          sentEl.textContent = 'Il saluto non è partito — aspetta un attimo e riprova.';
         }
       }
       setTimeout(() => {

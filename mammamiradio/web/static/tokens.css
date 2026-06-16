@@ -74,6 +74,13 @@
   --news:            #e07038;
   --muted:           #9B8574;
 
+  /* ── Segment-type color: ad ──
+   * Ads use the warm amber accent, deliberately distinct from --warning
+   * (the degraded-status amber) so an operator never confuses an "ad" segment
+   * badge with a "system degraded" status. Single source for every ad-segment
+   * surface (now-type, prog-border/badge, le-type, progress-fill, segment-inline). */
+  --seg-ad:          var(--accent-warm);
+
   /* ── AI content marker — purple reserved exclusively for AI-generated
        segments so operators can distinguish AI from human/music content
        at a glance. Added for Regia Screen 1 ON AIR prototype. ── */
