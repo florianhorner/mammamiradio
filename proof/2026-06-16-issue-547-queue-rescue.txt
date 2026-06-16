@@ -1,9 +1,84 @@
 Branch: fix/producer-queue-starvation-headroom
-Commit: afdf3c7df8e46f2957a001d9f5310c5b7fc1c965
+Commit: 0f57195642c1ebae82f8415eca3b2765a9e3c624
 
-$ uv run python -m pytest -q tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_empty_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_at_threshold tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_below_threshold_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_ignores_events_outside_window tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_bridge_health tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_producer_headroom
-........                                                                 [100%]
-8 passed in 0.37s
+$ uv run python -m pytest -q tests/addon/test_addon_radio_sync.py tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_empty_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_at_threshold tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_below_threshold_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_ignores_events_outside_window tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_bridge_health tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_producer_headroom
+.........                                                                [100%]
+9 passed in 0.55s
+
+$ bash scripts/validate-addon.sh
+=== HA Addon Pre-Flight Validation ===
+
+1. Version sync
+  [0;34mPASS[0m  config.yaml (2.13.0) == pyproject.toml (2.13.0)
+2. Image path
+  [0;34mPASS[0m  Image path: ghcr.io/florianhorner/mammamiradio-addon-{arch}
+3. Options contract
+  [0;34mPASS[0m  options and schema key order match
+  [0;34mPASS[0m  All schema keys mapped in run.sh
+4. Critical files
+  [0;34mPASS[0m  mammamiradio/__init__.py
+  [0;34mPASS[0m  radio.toml
+  [0;34mPASS[0m  ha-addon/mammamiradio/Dockerfile
+  [0;34mPASS[0m  ha-addon/mammamiradio/rootfs/run.sh
+  [0;34mPASS[0m  ha-addon/mammamiradio/config.yaml
+  [0;34mPASS[0m  ha-addon/mammamiradio/build.yaml
+  [0;34mPASS[0m  ha-addon/mammamiradio/apparmor.txt
+  [0;34mPASS[0m  ha-addon/mammamiradio/translations/en.yaml
+5. Python import
+  [0;34mPASS[0m  import mammamiradio
+6. Config parse
+  [0;34mPASS[0m  radio.toml is valid TOML
+6b. radio.toml sync
+  [0;34mPASS[0m  ha-addon/mammamiradio/radio.toml matches root radio.toml
+7. Shell syntax
+  [0;34mPASS[0m  run.sh syntax OK
+8. Hardcoded value sync
+  [0;34mPASS[0m  stable add-on stage: stable
+  [0;34mPASS[0m  Port 8000 consistent (config.yaml, run.sh)
+  [0;34mPASS[0m  host_network: true (required for local network stream access)
+  [0;34mPASS[0m  timeout: 240 (>= 120)
+9. Translations
+  [0;34mPASS[0m  All options have translations
+10. Ingress safety
+  [0;34mPASS[0m  Ingress prefix injection only rewrites safe patterns
+11. Dockerfile safety
+  [0;34mPASS[0m  No COPY to /data/ (persistent volume safe)
+  [0;34mPASS[0m  Dockerfile label: io.hass.version="${BUILD_VERSION}"
+  [0;34mPASS[0m  Dockerfile label: io.hass.type="app"
+  [0;34mPASS[0m  Dockerfile label: io.hass.arch="${BUILD_ARCH}"
+  [0;34mPASS[0m  No unsafe 2>&1 in eval context
+12. Repository discovery
+  [0;34mPASS[0m  repository.yaml exists
+13. Edge add-on
+  [0;34mPASS[0m  edge config.yaml is valid YAML
+  [0;34mPASS[0m  edge slug: mammamiradio-edge
+  [0;34mPASS[0m  edge image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
+  [0;34mPASS[0m  edge version format: d2e25af
+  [0;34mPASS[0m  edge stage: experimental
+  [0;34mPASS[0m  edge options block matches stable
+  [0;34mPASS[0m  edge schema block matches stable
+  [0;34mPASS[0m  edge translations block matches stable
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/icon.png
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/logo.png
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/apparmor.txt
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/translations/en.yaml
+  [0;34mPASS[0m  edge AppArmor profile matches stable
+  [0;34mPASS[0m  edge host_network: true
+  [0;34mPASS[0m  edge ingress_port: 8000
+  [0;34mPASS[0m  edge timeout: 240 (>= 120)
+
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.
+
+$ bash tests/workflows/test_validate_addon_edge.sh
+PASS: wrong slug rejected ('edge slug must be')
+PASS: malformed version rejected ('edge version must be')
+PASS: short-SHA edge version (make edge-release) accepted
+PASS: wrong image rejected ('edge image mismatch')
+PASS: wrong stage rejected ('edge stage must stay experimental')
+PASS: schema drift rejected ('edge schema block drifted')
+PASS: options drift rejected ('edge options block drifted')
+All validate-addon edge-block scenarios passed.
 
 $ uv run ruff check mammamiradio/web/streamer.py tests/web/test_shadow_queue_sync.py tests/web/test_ui_control_contracts.py
 All checks passed!
