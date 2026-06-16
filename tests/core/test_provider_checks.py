@@ -84,6 +84,46 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
 
 
 @pytest.mark.asyncio
+async def test_openai_chat_probe_uses_max_completion_tokens(monkeypatch):
+    """Regression: gpt-5.x rejects `max_tokens` with a 400. The chat probe must
+    send `max_completion_tokens`, otherwise a valid OpenAI key is falsely
+    reported as down by the provider/key check."""
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-secret"
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
+
+    chat_payloads: list[dict] = []
+    async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/v1/chat/completions"):
+            chat_payloads.append(json.loads(request.content))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        if str(request.url).endswith("/v1/audio/speech"):
+            return httpx.Response(200, content=b"mp3", headers={"content-type": "audio/mpeg"})
+        return httpx.Response(500, json={"error": {"message": "unexpected URL"}})
+
+    transport = httpx.MockTransport(handler)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["providers"]["openai_chat"]["ok"] is True
+    assert chat_payloads, "expected at least one chat/completions probe"
+    for payload in chat_payloads:
+        assert payload.get("max_completion_tokens") == 1
+        assert "max_tokens" not in payload
+
+
+@pytest.mark.asyncio
 async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
     """The setup check must catch a broken fast-role OpenAI model before a live
     transition tries to use it."""
