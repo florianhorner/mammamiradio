@@ -16,6 +16,7 @@ This script reads coverage JSON output, so run pytest with:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -23,6 +24,10 @@ from pathlib import Path
 
 FLOORS_FILE = Path(".coverage-floors.json")
 PYPROJECT = Path("pyproject.toml")
+COVERAGE_SNAPSHOT = (
+    Path(os.environ["COVERAGE_RATCHET_SNAPSHOT"]) if os.environ.get("COVERAGE_RATCHET_SNAPSHOT") else None
+)
+COVERAGE_INPUT = Path(os.environ["COVERAGE_RATCHET_INPUT"]) if os.environ.get("COVERAGE_RATCHET_INPUT") else None
 
 
 def run_coverage() -> tuple[dict[str, int], int]:
@@ -77,7 +82,34 @@ def run_coverage() -> tuple[dict[str, int], int]:
         )
         sys.exit(1)
 
+    if COVERAGE_SNAPSHOT:
+        COVERAGE_SNAPSHOT.write_text(
+            json.dumps({"modules": modules, "total_pct": total_pct}, indent=2, sort_keys=True) + "\n"
+        )
+        print(f"Wrote coverage ratchet snapshot to {COVERAGE_SNAPSHOT}")
+
     return modules, total_pct
+
+
+def load_coverage_input() -> tuple[dict[str, int], int] | None:
+    """Load a coverage snapshot produced by a read-only quality job."""
+    if not COVERAGE_INPUT:
+        return None
+    data = json.loads(COVERAGE_INPUT.read_text())
+    modules = data.get("modules")
+    total_pct = data.get("total_pct")
+    if not isinstance(modules, dict) or not isinstance(total_pct, int):
+        raise ValueError(f"Invalid coverage ratchet snapshot: {COVERAGE_INPUT}")
+    return {str(module): int(percent) for module, percent in modules.items()}, total_pct
+
+
+def current_coverage() -> tuple[dict[str, int], int]:
+    """Return current coverage, either from an artifact snapshot or fresh pytest."""
+    loaded = load_coverage_input()
+    if loaded is not None:
+        print(f"Loaded coverage ratchet snapshot from {COVERAGE_INPUT}")
+        return loaded
+    return run_coverage()
 
 
 def load_floors() -> dict[str, int]:
@@ -108,7 +140,7 @@ def set_aggregate_threshold(new_value: int) -> None:
 
 def cmd_check() -> int:
     """Check mode: fail if any module dropped below its floor."""
-    current, total_pct = run_coverage()
+    current, total_pct = current_coverage()
     floors = load_floors()
     aggregate_floor = get_aggregate_threshold()
 
@@ -148,7 +180,7 @@ def cmd_check() -> int:
 
 def cmd_update() -> int:
     """Update mode: ratchet all floors up to current coverage. Never down."""
-    current, total_pct = run_coverage()
+    current, total_pct = current_coverage()
     floors = load_floors()
     aggregate_floor = get_aggregate_threshold()
 
@@ -189,7 +221,7 @@ def cmd_update() -> int:
 
 def cmd_init() -> int:
     """Init mode: generate initial floors from current coverage."""
-    current, total_pct = run_coverage()
+    current, total_pct = current_coverage()
     save_floors(current)
     print(f"Initialized {len(current)} module floors in {FLOORS_FILE} (total: {total_pct}%)")
     for module, pct in sorted(current.items()):
