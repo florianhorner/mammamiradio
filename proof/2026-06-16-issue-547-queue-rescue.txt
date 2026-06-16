@@ -1,0 +1,12 @@
+Branch: fix/producer-queue-starvation-headroom
+Commit: afdf3c7df8e46f2957a001d9f5310c5b7fc1c965
+
+$ uv run python -m pytest -q tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_empty_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_at_threshold tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_below_threshold_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_ignores_events_outside_window tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_bridge_health tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_producer_headroom
+........                                                                 [100%]
+8 passed in 0.37s
+
+$ uv run ruff check mammamiradio/web/streamer.py tests/web/test_shadow_queue_sync.py tests/web/test_ui_control_contracts.py
+All checks passed!
+
+$ uv run ruff format --check mammamiradio/web/streamer.py tests/web/test_shadow_queue_sync.py tests/web/test_ui_control_contracts.py
+3 files already formatted
