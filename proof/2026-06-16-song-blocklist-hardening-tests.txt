@@ -1,27 +1,18 @@
-# Proof artifact — song blocklist hardening (PR open)
+# Proof artifact — song blocklist (Phase 1) — PR open
 # Branch: florianhorner/feat/song-backlog-management
-# HEAD: 5ca98b4f82258a14e71ef8a8ef0eb2748261236d
-# Generated: 2026-06-16T07:35:11Z
+# HEAD: 28eaf1a44780c25dda07396003e20971924bd70e
+# Generated: 2026-06-16T07:40:01Z
+# Note: fresh PR — quality.yml has not run on a branch push yet, so this
+#       committed artifact is the test/lint/type evidence (no CI URL exists yet).
 
-== ruff check . ==
+== make check (ruff + ruff format + mypy + full suite + coverage gate) ==
 All checks passed!
-
-== ruff format --check mammamiradio/ tests/ ==
-189 files already formatted
-
-== mypy mammamiradio/ tests/ ==
-tests/scheduling/test_producer_unit.py:2423: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
-tests/scheduling/test_producer_unit.py:2474: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
 Success: no issues found in 189 source files
+Required test coverage of 92.0% reached. Total coverage: 93.84%
+3030 passed, 2 skipped, 19 deselected, 1 warning in 66.41s (0:01:06)
 
-== pre-release-check.sh (version sync + invariants + changelog) ==
-  Passed: 8  Failed: 0
-=======================================
-
-All checks passed. Safe to bump the version.
-
-== pytest (full suite) ==
-    from starlette.testclient import TestClient as TestClient  # noqa
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-3029 passed, 2 skipped, 19 deselected, 1 warning in 56.37s
+== blocklist-specific suites ==
+tests/playlist/test_blocklist.py            — data layer + post-restart regression
+tests/web/test_song_blocklist.py            — endpoints, doorways, queue purge, pin clear
+tests/audio/test_norm_cache.py              — rescue-path blocklist filter (both directions)
+tests/scheduling/test_producer_unit.py      — post-restart resume guard + enqueue-funnel gate
