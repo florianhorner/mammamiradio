@@ -2615,3 +2615,41 @@ class TestAdTitle:
         from mammamiradio.scheduling.producer import _ad_title
 
         assert _ad_title(["   ", "Real Brand"]) == "Ad: Real Brand"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_funnel_drops_a_banned_music_segment(tmp_path):
+    """Final blocklist gate: a banned MUSIC segment must never reach the queue, even
+    if a selection-path race (ban mid-render / zombie pin / purge-missed rescue) got
+    it to the funnel. Music with a banned (artist, title) is dropped (returns False,
+    queue stays empty, ephemeral render unlinked); a non-banned song still enqueues."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    state = _make_state()
+    state.blocklist = {("artista", "canzone uno"): {"display": "Artista - Canzone Uno"}}
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    banned_path = tmp_path / "norm_banned.mp3"
+    banned_path.write_bytes(b"x")
+    banned_seg = Segment(
+        type=SegmentType.MUSIC,
+        path=banned_path,
+        ephemeral=True,
+        metadata={"artist": "Artista", "title_only": "Canzone Uno"},
+    )
+    # Banned: dropped before egress, queue empty, the ephemeral render cleaned up.
+    assert await _enqueue_with_egress(queue, state, config, banned_seg) is False
+    assert queue.empty()
+    assert not banned_path.exists()
+
+    # Control: a non-banned song passes the gate and is queued (egress stubbed out).
+    ok_seg = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "norm_ok.mp3",
+        ephemeral=False,
+        metadata={"artist": "Artista", "title_only": "Canzone Due"},
+    )
+    with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=ok_seg):
+        assert await _enqueue_with_egress(queue, state, config, ok_seg) is True
+    assert queue.qsize() == 1
