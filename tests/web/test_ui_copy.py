@@ -118,10 +118,11 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
     patterns = (
         # A toast literal that opens with a machine phrase.
         r"toast\(\s*['\"](?:Error:|Failed |Network error)",
-        # A toast that interpolates a raw backend error field.
-        r"toast\([^;\n]*\b(?:r\.error|r\.exception|error_code|r\.detail|resp\.error)\b",
+        # A toast that interpolates a raw backend error field. [^;] (no \n
+        # exclusion) + DOTALL so a multiline toast() can't slip the field past.
+        r"toast\([^;]*\b(?:r\.error|r\.exception|error_code|r\.detail|resp\.error)\b",
     )
-    pattern_hits = [m.group(0) for p in patterns for m in re.finditer(p, text)]
+    pattern_hits = [m.group(0) for p in patterns for m in re.finditer(p, text, re.DOTALL)]
     assert not pattern_hits, (
         "admin.html has a toast() that shows a machine phrase or a raw error "
         "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)
@@ -138,7 +139,7 @@ def test_listener_never_shows_raw_server_error():
         "listener.js renders a raw server error (d.error) to a listener — show "
         "warm copy with a way-out instead (breaks the illusion + dev-lingo)."
     )
-    assert "'Errore clip'" not in text, (
+    assert not re.search(r"['\"]Errore clip['\"]", text), (
         "listener.js clip_error fallback is the dead-end 'Errore clip' again — "
         "use way-out copy that tells the listener what to do next."
     )

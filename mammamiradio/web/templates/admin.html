@@ -2352,7 +2352,7 @@ initOnAirSticky();
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
-async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut())}
+async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
@@ -2361,18 +2361,22 @@ async function doQuickAction(action,el){
     const ok=await savePacingField('songs_between_banter',v,{silent:true});
     if(ok)toast('Fewer banter: every '+v+' tracks');
   }else if(action==='more_chaos'){
-    const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Chaos incoming — banter queued':wayOut());
+    try{
+      const r=await api('POST','/api/trigger',{type:'banter'});
+      toast(r.ok?'Chaos incoming — banter queued':wayOut());
+    }catch(_){toast(offlineMsg());}
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
     const ok=await savePacingField('songs_between_ads',v,{silent:true});
     if(ok)toast('Fewer ads: every '+v+' segments');
   }else if(action==='hot_reload'){
-    const r=await api('POST','/api/hot-reload',{});
-    if(r.ok)toast('Scripts reloaded in '+r.duration_ms+'ms');
-    else if(r.error_code==='debounced')toast('Reload skipped — give it '+r.retry_after_s+'s and try again.');
-    else toast(wayOut('reload that'));
+    try{
+      const r=await api('POST','/api/hot-reload',{});
+      if(r.ok)toast('Scripts reloaded in '+r.duration_ms+'ms');
+      else if(r.error_code==='debounced')toast('Reload skipped — give it '+r.retry_after_s+'s and try again.');
+      else toast(wayOut('reload that'));
+    }catch(_){toast(offlineMsg());}
   }
 }
 let _modeChaos=false,_modeFestival=false;
@@ -3245,8 +3249,10 @@ function focusPlaylistTrack(index, trackId){
 }
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
-  const r=await api('POST','/api/playlist/move_to_next',{index:i});
-  if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
+  try{
+    const r=await api('POST','/api/playlist/move_to_next',{index:i});
+    if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
+  }catch(_){toast(offlineMsg());}
 }
 // Delayed-commit undo: hide the row, defer /api/playlist/remove by 5s, allow
 // Undo to restore it. The rotation list only re-renders on explicit reload, so
@@ -3373,8 +3379,10 @@ function initDragDrop(){
       row.classList.remove('drag-over');
       const dst=parseInt(row.dataset.i);
       if(_dragSrc===null||_dragSrc===dst)return;
-      const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-      if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
+      try{
+        const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
+        if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
+      }catch(_){toast(offlineMsg());}
       _dragSrc=null;
     });
   });
