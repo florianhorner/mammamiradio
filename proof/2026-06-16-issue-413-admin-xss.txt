@@ -1,0 +1,12 @@
+Branch: fix/admin-spotify-id-xss
+Commit: cb70e51f64372aaa60ae85e75b73b00b06e454ca
+
+$ uv run python -m pytest -q tests/web/test_xss_regression.py tests/web/test_admin_mobile_invariants.py::test_scaletta_actions_only_apply_to_rendered_queue_rows tests/web/test_admin_regia_polish.py::test_predicted_rows_render_no_action_button
+...........                                                              [100%]
+11 passed in 0.36s
+
+$ uv run ruff check tests/web/test_xss_regression.py tests/web/test_admin_mobile_invariants.py
+All checks passed!
+
+$ uv run ruff format --check tests/web/test_xss_regression.py tests/web/test_admin_mobile_invariants.py
+2 files already formatted
