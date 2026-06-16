@@ -142,7 +142,7 @@ The station degrades gracefully instead of failing:
 |----------------|-------------|
 | `MAMMAMIRADIO_ALLOW_YTDLP` not set | Skips chart downloads; falls back to Jamendo CC music, then local `music/` files, then bundled demo assets |
 | `jamendo_client_id` not set | Skips Jamendo; falls back to local `music/` files, then bundled demo assets |
-| Anthropic API key | Falls back to OpenAI `gpt-4o-mini`, then stock copy |
+| Anthropic API key | Falls back to OpenAI via the active quality profile (`gpt-5.5` for creative copy in balanced/premium), then stock copy |
 | OpenAI / Azure / ElevenLabs TTS key | Provider-routed voices fall back to their configured Edge voices |
 | Home Assistant token | Continues without home context |
 | Ad brands in config | Skips ads instead of crashing |

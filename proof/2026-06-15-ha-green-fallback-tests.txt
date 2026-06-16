@@ -1,0 +1,26 @@
+Proof: tests — fix(hosts) tolerate string-shaped banter lines from OpenAI fallback
+Branch: florianhorner/fix/ha-green-fallback-investigation
+Date: 2026-06-15
+
+== full suite (.venv/bin/python -m pytest tests/) ==
+$ python -m pytest tests/ -q
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2959 passed, 2 skipped, 19 deselected, 1 warning in 55.58s
+
+== banter-targeted (the changed path) ==
+$ python -m pytest tests/hosts/test_scriptwriter.py -q -k banter
+.....................................                                    [100%]
+37 passed, 89 deselected in 0.57s
+
+== lint / format / typecheck ==
+$ ruff check . (changed files)
+All checks passed!
+$ ruff format --check (changed files)
+2 files already formatted
+$ mypy mammamiradio/hosts/scriptwriter.py
+Success: no issues found in 1 source file
+
+== changelog editorial-boundary lint ==
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.

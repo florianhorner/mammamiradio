@@ -51,9 +51,13 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   /* Espresso foundation — warm dark, not cold charcoal */
   --bg:            #14110F;   /* page background */
   --bg-elevated:   #1C1714;   /* raised surfaces, ticker bg */
-  --surface:       #54453A;   /* card backgrounds — ~2.07:1 vs --bg, schedule + hero stage */
-  --surface-hover: #5E4D40;   /* interactive hover */
-  --surface-strong:#6E5B49;   /* emphasized — ~2.96:1 vs --bg, about-card, dedica, ghost button */
+  --surface:       #251E19;   /* card backgrounds — espresso Pi-baseline (PROTECTED, see CLAUDE.md) */
+  --surface-hover: #2E2520;   /* interactive hover */
+  --surface-strong:#362B25;   /* emphasized — about-card, dedica, ghost button (PROTECTED) */
+  /* Listener cards inline a lighter surface (#54453A / hover #5E4D40 / strong #6E5B49,
+   * ~2.07:1 and ~2.96:1 vs --bg) for visibility on the warm-dark listener page — those
+   * live inline on .mmr-* in listener.css, never on these shared tokens. See CLAUDE.md
+   * "Protected UI elements" and the listener-visibility rule. */
 
   /* Text hierarchy */
   --cream:         #F5EDD8;   /* primary text */
@@ -75,10 +79,11 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --error:         #c44a4a;
   --warning:       #D97706;
   --news:          #e07038;   /* news_flash segment type — warm orange, distinct from warning amber */
+  --seg-ad:        var(--accent-warm);  /* ad segment type — warm amber, deliberately NOT --warning (degraded) */
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
-  --line-strong:   rgba(245,237,216,0.32);  /* listener cards, hero stage, ghost button — visible at rest */
+  --line-strong:   rgba(245,237,216,0.16);  /* admin emphasized borders — espresso Pi-baseline (PROTECTED). Listener cards inline a brighter rgba(...,0.32) for visibility, in listener.css — never here. */
   --shadow:        rgba(0,0,0,0.35);
 }
 ```
@@ -256,7 +261,7 @@ Organic momentum-based drift with overshoot-and-settle locking. Keep the wobble.
 ## Components
 
 ### Cards
-Every card surface is **opaque** `--surface` (#54453A). Never semi-transparent.
+Every card surface is **opaque** `--surface` (#251E19 espresso baseline; listener cards inline a lighter #54453A for visibility). Never semi-transparent.
 ```css
 .card {
   background: var(--surface);

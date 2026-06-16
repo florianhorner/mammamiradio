@@ -57,9 +57,23 @@ def test_fast_role_is_low_latency_in_every_profile(models):
 
 def test_openai_fallback_resolves_same_role(models):
     models.active_profile = "premium"
-    # premium openai: creative=large(gpt-4o), fast=small(gpt-4o-mini)
-    assert resolve_model(models, "banter", "openai") == "gpt-4o"
-    assert resolve_model(models, "transition", "openai") == "gpt-4o-mini"
+    # premium openai: creative=large(gpt-5.5), fast=small(gpt-5.4-mini)
+    assert resolve_model(models, "banter", "openai") == "gpt-5.5"
+    assert resolve_model(models, "transition", "openai") == "gpt-5.4-mini"
+
+
+def test_openai_balanced_creative_matches_frontier_parity(models):
+    models.active_profile = "balanced"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.5"
+    assert resolve_model(models, "news_flash", "openai") == "gpt-5.5"
+    assert resolve_model(models, "ad", "openai") == "gpt-5.5"
+    assert resolve_model(models, "transition", "openai") == "gpt-5.4-mini"
+
+
+def test_openai_economy_stays_on_small_model(models):
+    models.active_profile = "economy"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.4-mini"
+    assert resolve_model(models, "transition", "openai") == "gpt-5.4-mini"
 
 
 def test_explicit_profile_arg_overrides_active(models):

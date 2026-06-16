@@ -81,7 +81,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--ok); }
 .now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--sun); }
-.now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--warning); }
+.now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .now-type[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
 
 .sidebar-now .now-title {
@@ -108,7 +108,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   background: var(--ok);
 }
 .sidebar-progress-fill[data-t="banter"] { background: var(--sun); }
-.sidebar-progress-fill[data-t="ad"] { background: var(--warning); }
+.sidebar-progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .sidebar-progress-fill[data-t="news_flash"] { background: var(--news); }
 .sidebar-time {
   font-family: var(--font-mono); font-size: 10px; color: var(--muted);
@@ -275,7 +275,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .prog-row[data-type="music"] .prog-border { background: var(--ok); }
 .prog-row[data-type="banter"] .prog-border { background: var(--sun2); }
-.prog-row[data-type="ad"] .prog-border { background: var(--warning); }
+.prog-row[data-type="ad"] .prog-border { background: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-border { background: var(--news); }
 
 .prog-badge {
@@ -284,7 +284,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--ok); }
 .prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--sun); }
-.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--warning); }
+.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
 .prog-row[data-type="news_flash"] .prog-badge { background: rgba(224,112,56,0.15); color: var(--news); }
 
 .now-badge {
@@ -414,7 +414,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .pace-row input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--cream-dk); border: 2px solid var(--sienna); cursor: pointer;
+  background: var(--cream-dk); border: 2px solid var(--surface); cursor: pointer;
 }
 .pace-row input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
 .pace-row .pv { font-size: 13px; font-weight: 600; color: var(--sun); width: 24px; text-align: right; }
@@ -458,7 +458,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 }
 .ha input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--cream-dk); border: 2px solid var(--sienna); cursor: pointer;
+  background: var(--cream-dk); border: 2px solid var(--surface); cursor: pointer;
   box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 .ha input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
@@ -482,7 +482,7 @@ body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
 .le-type[data-t="music"] { color: var(--ok); }
 .le-type[data-t="banter"] { color: var(--sun); }
-.le-type[data-t="ad"] { color: var(--warning); }
+.le-type[data-t="ad"] { color: var(--seg-ad); }
 .le-type[data-t="news_flash"] { color: var(--news); }
 .le-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(245,237,216,0.7); }
 
@@ -770,7 +770,7 @@ body::before {
 .a-now-compact .progress-track { flex: 1; height: 2px; background: var(--surface-strong); border-radius: 1px; overflow: hidden; }
 .a-now-compact .progress-fill { height: 100%; border-radius: 1px; transition: width 1s linear; width: 0; background: var(--ok); }
 .a-now-compact .progress-fill[data-t="banter"] { background: var(--sun); }
-.a-now-compact .progress-fill[data-t="ad"] { background: var(--warning); }
+.a-now-compact .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 
@@ -957,7 +957,7 @@ body::before {
 .segment-inline { color: var(--muted); }
 .segment-inline.segment-music { color: var(--ok); }
 .segment-inline.segment-banter { color: var(--sun2); }
-.segment-inline.segment-ad { color: var(--accent-warm); } /* secondary accent — distinct from --warning (degraded) */
+.segment-inline.segment-ad { color: var(--seg-ad); } /* dedicated ad token — distinct from --warning (degraded) */
 .segment-inline.segment-news_flash { color: var(--news); }
 .segment-inline.segment-station_id,
 .segment-inline.segment-sweeper,
@@ -1254,6 +1254,10 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .pl-row, .sr-row { flex-wrap: wrap; }
   .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
+  /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
+   * on phones — give them a real touch height here without bloating the dense
+   * desktop list. */
+  .pl-btn, .sr-add { min-height: 44px; }
   .force-badge { margin-left: 28px; }
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
@@ -1419,7 +1423,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   background: var(--ok);
 }
 .on-air-progress-track .progress-fill[data-t="banter"] { background: var(--sun); }
-.on-air-progress-track .progress-fill[data-t="ad"] { background: var(--warning); }
+.on-air-progress-track .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
 .on-air-actions {
   display: flex;
@@ -2248,6 +2252,10 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 
 function toast(m){const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600)}
+// Human, always-a-way-out copy for a failed action. Raw error codes/exceptions
+// never reach the screen (leadership principle #5) — they stay in the logs.
+function wayOut(action){return (action?"Couldn't "+action:"That didn't go through")+" — give it a few seconds and try again.";}
+function offlineMsg(){return "Can't reach the studio right now — check the connection and try again.";}
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
 // toast any whose ts we haven't shown yet. The first poll only primes the
@@ -2389,7 +2397,7 @@ initOnAirSticky();
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
-async function doTrigger(t,el){flash(el);const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast('Error: '+(r.error||'unknown'))}
+async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
@@ -2398,18 +2406,22 @@ async function doQuickAction(action,el){
     const ok=await savePacingField('songs_between_banter',v,{silent:true});
     if(ok)toast('Fewer banter: every '+v+' tracks');
   }else if(action==='more_chaos'){
-    const r=await api('POST','/api/trigger',{type:'banter'});
-    toast(r.ok?'Chaos incoming — banter queued':'Error: '+(r.error||'unknown'));
+    try{
+      const r=await api('POST','/api/trigger',{type:'banter'});
+      toast(r.ok?'Chaos incoming — banter queued':wayOut());
+    }catch(_){toast(offlineMsg());}
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
     document.getElementById('pAds').value=v;document.getElementById('pvAds').textContent=v;
     const ok=await savePacingField('songs_between_ads',v,{silent:true});
     if(ok)toast('Fewer ads: every '+v+' segments');
   }else if(action==='hot_reload'){
-    const r=await api('POST','/api/hot-reload',{});
-    if(r.ok)toast('Scripts reloaded in '+r.duration_ms+'ms');
-    else if(r.error_code==='debounced')toast('Reload skipped — retry in '+r.retry_after_s+'s');
-    else toast('Reload failed: '+(r.exception||r.error_code||r.error||'unknown'));
+    try{
+      const r=await api('POST','/api/hot-reload',{});
+      if(r.ok)toast('Scripts reloaded in '+r.duration_ms+'ms');
+      else if(r.error_code==='debounced')toast('Reload skipped — give it '+r.retry_after_s+'s and try again.');
+      else toast(wayOut('reload that'));
+    }catch(_){toast(offlineMsg());}
   }
 }
 let _modeChaos=false,_modeFestival=false;
@@ -2441,12 +2453,12 @@ async function toggleChaosMode(el){
     }else{
       el.checked=!value;
       updateChaosState({enabled:!value});
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
     updateChaosState({enabled:!value});
-    toast('Error: connection failed');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -2479,12 +2491,12 @@ async function toggleFestivalMode(el){
     }else{
       el.checked=!value;
       updateFestivalState({active:!value});
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
     updateFestivalState({active:!value});
-    toast('Error: connection failed');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -2604,7 +2616,7 @@ async function flagCurrentTrack(el) {
   if (!rule) return;
   flash(el);
   const r = await api('POST', '/api/track-rules', { youtube_id: ytId, rule });
-  toast(r.ok ? 'Rule saved' : 'Error: ' + (r.error || 'unknown'));
+  toast(r.ok ? 'Rule saved' : wayOut('save the rule'));
 }
 
 // ── Now Playing (sidebar) ──
@@ -2843,7 +2855,7 @@ async function removeQueueItem(id,el){
   if(typeof window.undoableToast!=='function'){
     const r=await api('POST','/api/queue/remove',{id});
     if(r.ok){toast('Removed: '+(r.removed||'segment'));_lastProgrammeHash='';await refreshFast();}
-    else toast('Remove failed: '+(r.error||r.detail||'unknown'));
+    else toast(wayOut('remove that'));
     return;
   }
   if(_pendingRemovals.has(id))return;
@@ -3070,7 +3082,7 @@ async function setupSaveKeys(el){
   if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
   const resp=await api('POST','/api/setup/save-keys',payload);
-  if(!resp.ok){toast(resp.error||'Saving keys failed');return}
+  if(!resp.ok){toast(wayOut('save your keys'));return}
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
   document.getElementById('setupAzureSpeechKey').value='';
@@ -3170,7 +3182,7 @@ function updateSourceControls(st,caps){
 async function shufflePlaylist(el){
   flash(el);
   const r=await api('POST','/api/shuffle',{});
-  if(!r.ok){toast('Error: '+(r.error||'unknown'));return;}
+  if(!r.ok){toast(wayOut());return;}
   toast('Playlist shuffled');
   await refreshFast();
 }
@@ -3180,7 +3192,7 @@ async function enrichPlaylistSource(kind,el){
   const url=dispatch.url;
   const r=await api('POST','/api/playlist/enrich',{url,position:'end'});
   if(!r.ok){
-    toast('Error: '+(r.error||'unknown'));
+    toast(wayOut());
     return;
   }
   toast(dispatch.toast+` (${r.added} nuovi)`);
@@ -3286,8 +3298,10 @@ function focusPlaylistTrack(index, trackId){
 }
 async function moveNext(i){
   const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
-  const r=await api('POST','/api/playlist/move_to_next',{index:i});
-  if(r.ok)toast('Queued next: '+r.moved);else toast('Move failed');
+  try{
+    const r=await api('POST','/api/playlist/move_to_next',{index:i});
+    if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
+  }catch(_){toast(offlineMsg());}
 }
 // The per-row ✕ now BANS the song for good: /api/playlist/remove persists it to the
 // operator blocklist so it never returns on restart, source switch, or chart refresh.
@@ -3432,10 +3446,10 @@ async function addExternal(i){
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
-      toast('Error: '+(r.error||'queue failed'));
+      toast(wayOut('add that to the queue'));
     }
   }catch(_){
-    toast('Failed to add to queue');
+    toast(offlineMsg());
   }finally{
     if(btn){btn.classList.remove('loading');btn.textContent='↓ Queue';}
   }
@@ -3459,8 +3473,10 @@ function initDragDrop(){
       row.classList.remove('drag-over');
       const dst=parseInt(row.dataset.i);
       if(_dragSrc===null||_dragSrc===dst)return;
-      const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-      if(r.ok)toast('Moved: '+r.moved);else toast('Move failed');
+      try{
+        const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
+        if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
+      }catch(_){toast(offlineMsg());}
       _dragSrc=null;
     });
   });
@@ -3504,7 +3520,7 @@ async function savePacingField(field,value,{silent=false}={}){
   try{
     const r=await api('PATCH','/api/pacing',{[field]:+value});
     if(r&&r.detail){
-      toast('Pacing not saved: '+r.detail);
+      toast(wayOut('save pacing'));
       if(_st.pacing)applyPacingResponse(_st.pacing,field);
       await refreshFast();
       return false;
@@ -3513,7 +3529,7 @@ async function savePacingField(field,value,{silent=false}={}){
     if(!silent)toast('Pacing saved');
     return true;
   }catch(_){
-    toast('Pacing not saved: network error');
+    toast(offlineMsg());
     if(_st.pacing)applyPacingResponse(_st.pacing,field);
     return false;
   }
@@ -3820,11 +3836,11 @@ async function toggleSuperItalian(el){
     if(r&&r.ok)toast(value?'Italian mode: ON':'Italian mode: OFF');
     else{
       el.checked=!value;
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut());
     }
   }catch(_){
     el.checked=!value;
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -3846,11 +3862,11 @@ async function toggleBroadcastChain(el){
     if(r&&r.ok)toast(value?'On-Air Sound: ON — from the next track':'On-Air Sound: OFF — from the next track');
     else{
       el.checked=!value;
-      toast('Error: '+((r&&r.error)||'unknown'));
+      toast(wayOut('change the On-Air Sound'));
     }
   }catch(_){
     el.checked=!value;
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     el.disabled=false;
   }
@@ -3902,10 +3918,10 @@ async function setQuality(value){
       if(sel)sel.value=active;
       toast('AI quality: '+active);
     }
-    else{if(sel)sel.value=_activeQualityProfile;toast('Error: '+((r&&r.error)||'unknown'));}
+    else{if(sel)sel.value=_activeQualityProfile;toast(wayOut());}
   }catch(_){
     if(sel)sel.value=_activeQualityProfile;  // restore — server state unchanged
-    toast('Network error');
+    toast(offlineMsg());
   }finally{
     if(sel)sel.disabled=false;
   }

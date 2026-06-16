@@ -10,7 +10,15 @@ The current version source of truth is `pyproject.toml`.
 
 - **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
 
+### Changed
+
+- **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
+
 ### Fixed
+
+- **News flashes now invent a fresh premise every time instead of repeating the same scenarios.** The traffic, weather, breaking news, sports, and culture bulletin prompts no longer hand the host a set of concrete joke setups to fall back on — each prompt now describes the *shape* and *tone* of what to invent, leaving the host to arrive at something new each time. Traffic incidents, weather reports, and cultural controversies all felt similar after enough listens; now each flash starts from a blank slate.
+
+- **The hosts keep their real chatter even when the station runs on its backup writer.** If the main host-script engine is unavailable and the station leans on its backup, the backup would occasionally hand back the banter in a slightly different shape — and the station quietly dropped to a generic stock line instead of airing it. The station now understands that shape too, so the DJs keep their in-the-moment chatter while on the backup writer; only a genuinely empty response falls back to stock copy.
 
 - **The admin desk shows a calm "waiting for a listener" state when no one is tuned in.** When the station is running but nobody is connected, the producer desk now reads as cued and waiting instead of airing — the On Air glow quiets and the now-playing timer holds steady at the cued position instead of ticking on as if someone were listening. The moment a listener tunes in, the desk returns to full On Air and the timer resumes. The station is never treated as stopped; Start/Stop stays the only control that pauses it.
 
@@ -21,6 +29,14 @@ The current version source of truth is `pyproject.toml`.
 - **The connected-home hello now retries if the host script falls back.** If AI banter generation fails and the station uses its stock banter instead, the first connected-home moment stays queued for a later real host break instead of being marked done. Homes with safe labels but no room metadata can still qualify for the hello. A running joke that didn't make it to air for the same reason keeps its turn too, instead of quietly going on cooldown.
 
 - **Direct `/admin` access from your home network now works.** If you open `http://<pi-ip>:8000/admin` in a browser on your local Wi-Fi, the admin panel loads without needing a token. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`) — no HA sidebar required for any of them. Configuring a custom `admin_token` in the add-on options still enforces that token even from the LAN.
+
+- **The producer panel speaks plainly when an action doesn't go through.** When a control in the producer desk can't reach the station — triggering a segment, saving keys, reordering the queue, changing the On-Air Sound, and the rest — it now says what happened in plain words and what to do next ("give it a few seconds and try again", or "check the connection and try again") instead of flashing a raw error code. The codes stay in the logs where they belong. The listener page got the same treatment: a dedication that doesn't send, or a clip that won't share, now gets a warm message with a way out instead of a bare error.
+
+- **The listener page footer is for listeners again.** The public listener page no longer carries operator and developer links (the raw stream address, the admin panel, the source repository) in its footer — those belong to the operator, not to someone tuning in. The station's own sections stay.
+
+- **Ad segments have their own colour in the producer panel.** Ads were tinted the same amber the panel uses for "running on the backup writer", so at a glance you couldn't tell an ad apart from a degraded state. Ads now have a dedicated warm amber that reads as its own thing.
+
+- **The per-track buttons in the rotation list are easier to tap on a phone.** The "play next" and "remove" controls on each rotation row now give a full-size touch target on small screens, while staying compact on the desktop control room.
 
 ### Added
 

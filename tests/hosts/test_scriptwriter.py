@@ -203,6 +203,44 @@ def test_transitions_fallbacks_extraction_structural_and_reexport():
     assert scriptwriter_module._transition_stem is transitions._transition_stem
 
 
+def test_news_flash_category_prompts_do_not_seed_recycled_premises():
+    """News flash category prompts must not hand the model tired concrete jokes.
+
+    The categories should describe shape and tone, leaving the LLM to invent a
+    fresh premise for each bulletin instead of copying hardcoded examples.
+    """
+    joined = " ".join(scriptwriter_module.NEWS_FLASH_CATEGORIES.values()).lower()
+
+    for stale_fragment in (
+        "buffalo",
+        "autostrada",
+        "pavarotti",
+        "all restaurants",
+        "vatican has released",
+        "leaning tower",
+        "raining espresso",
+        "panna on carbonara",
+    ):
+        assert stale_fragment not in joined
+
+    for copied_submission_fragment in (
+        "almost a crime",
+        "where to have lunch",
+        "with this heat, better",
+        "record highs",
+        "still undefeated",
+        "second medical opinion",
+        "cannot be translated into words",
+        "nobody wanted more lasagna",
+        "not that way. listen to me",
+        "broke spaghetti in half",
+    ):
+        assert copied_submission_fragment not in joined
+
+    for category, prompt in scriptwriter_module.NEWS_FLASH_CATEGORIES.items():
+        assert "invent" in prompt.lower(), f"{category} prompt should require fresh premises"
+
+
 # --- _host_expression_block tests ---
 
 
@@ -521,6 +559,159 @@ async def test_write_banter_falls_back_on_malformed_json(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_handles_string_shaped_lines(config, state):
+    # The OpenAI fallback (gpt-4o-mini) sometimes returns `lines` as a list of
+    # plain strings instead of {"host","text"} dicts. This must air as banter,
+    # not crash to stock copy (observed live: AttributeError at scriptwriter.py).
+    response_json = json.dumps(
+        {
+            "lines": ["Ciao a tutti!", "Che ridere!", "Restate con noi!"],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 3
+    assert [text for _, text in result] == ["Ciao a tutti!", "Che ridere!", "Restate con noi!"]
+    for host, _ in result:
+        assert host in config.hosts
+    # With two or more hosts, string lines alternate so it reads as a real exchange.
+    if len(config.hosts) >= 2:
+        assert result[0][0] is not result[1][0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_handles_mixed_and_empty_lines(config, state):
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": host_name, "text": "Eccoci!"},
+                "una battuta veloce",
+                {"host": host_name, "text": ""},  # empty dict line dropped
+                {"host": host_name},  # dict line missing "text" key dropped
+                {"host": host_name, "text": None},  # null text dropped (never aired as "None")
+                {"host": host_name, "text": ["x"]},  # container text dropped (never aired as "['x']")
+                "",  # empty string dropped
+                123,  # non-str/dict dropped
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["Eccoci!", "una battuta veloce"]
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_no_usable_lines(config, state):
+    # A response with only empty/unusable lines has nothing airable → stock copy.
+    response_json = json.dumps({"lines": ["", "   ", None], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    # Falls back to the stock multi-line exchange, never empty/silence.
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_lines_key_missing(config, state):
+    # Valid dict but no "lines" key at all → nothing airable → stock copy.
+    response_json = json.dumps({"new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_falls_back_when_data_not_dict(config, state):
+    # A confused model returns a top-level JSON array instead of an object.
+    # The parser must degrade to stock copy, never raise into the audio path.
+    response_json = json.dumps(["Ciao a tutti!", "Che ridere!"])
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) >= 2
+    for host, text in result:
+        assert isinstance(host, HostPersonality)
+        assert text.strip()
+
+
+@pytest.mark.asyncio
+async def test_write_banter_string_lines_single_host(config, state):
+    # A single-host operator config: string lines all assign the only host
+    # (alternation degenerates cleanly, no crash).
+    config.hosts = config.hosts[:1]
+    response_json = json.dumps({"lines": ["Ciao!", "Ancora noi!"], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 2
+    assert all(host is config.hosts[0] for host, _ in result)
+
+
+@pytest.mark.asyncio
+async def test_write_banter_string_lines_alternate_around_blanks(config, state):
+    # Interleaved blank strings must not collapse two aired lines onto one host:
+    # alternation counts only emitted string lines, not raw positions.
+    if len(config.hosts) < 2:
+        pytest.skip("needs at least two hosts to assert alternation")
+    response_json = json.dumps({"lines": ["uno", "", "due"], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["uno", "due"]
+    assert result[0][0] is not result[1][0]
+
+
+@pytest.mark.asyncio
 async def test_write_banter_no_llm_returns_language_fallback(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
@@ -557,8 +748,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
-    """Lock the production default: when no override is set, OpenAI is called with gpt-4o-mini."""
+async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.5."""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -576,15 +767,15 @@ async def test_openai_fallback_default_model_is_gpt_4o_mini(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["model"] == "gpt-5.5"
 
 
 @pytest.mark.asyncio
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "small"
-    config.models.catalog["openai"]["small"] = "gpt-5-mini"
+    # banter → creative role → balanced openai creative = "large"
+    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -601,7 +792,44 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5-mini"
+    assert call_kwargs["model"] == "gpt-5.5-test"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_model"),
+    [
+        ("news_flash", "gpt-5.5"),
+        ("ad", "gpt-5.5"),
+        ("transition", "gpt-5.4-mini"),
+    ],
+)
+async def test_openai_fallback_routes_by_caller_role(config, state, caller, expected_model):
+    """Creative fallbacks use GPT-5.5; latency-sensitive transitions use GPT-5.4-mini."""
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": True}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("anthropic invalid"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await scriptwriter_module._generate_json_response(
+            prompt="Return JSON.",
+            config=config,
+            state=state,
+            model=resolve_model(config.models, caller, "anthropic"),
+            max_tokens=100,
+            caller=caller,
+        )
+
+    call_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == expected_model
 
 
 @pytest.mark.asyncio
@@ -629,7 +857,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-4o-mini"
+    assert record.model == "gpt-5.5"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True

@@ -273,20 +273,11 @@
       <p class="fine">Radio scritta dall'intelligenza artificiale. Musica umana. Made with espresso.</p>
     </div>
     <div class="foot-col">
-      <div class="foot-head">{{ copy.get('footer_listen', 'Listen') }}</div>
-      <a href="{{ ingress_prefix }}/stream">/stream · MP3</a>
-      <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>{{ copy.get('install_app', 'Install app') }}</button>
-    </div>
-    <div class="foot-col">
       <div class="foot-head">Stazione</div>
       <a href="#palinsesto">Palinsesto</a>
       <a href="#dediche">Dediche</a>
       <a href="#about">About</a>
-    </div>
-    <div class="foot-col">
-      <div class="foot-head">Operatore</div>
-      <a href="{{ ingress_prefix }}/admin">/admin</a>
-      <a href="https://github.com/florianhorner/mammamiradio">GitHub</a>
+      <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>{{ copy.get('install_app', 'Install app') }}</button>
     </div>
   </div>
 </footer>
