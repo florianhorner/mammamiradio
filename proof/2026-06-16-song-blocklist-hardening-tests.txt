@@ -16,3 +16,14 @@ tests/playlist/test_blocklist.py            — data layer + post-restart regres
 tests/web/test_song_blocklist.py            — endpoints, doorways, queue purge, pin clear
 tests/audio/test_norm_cache.py              — rescue-path blocklist filter (both directions)
 tests/scheduling/test_producer_unit.py      — post-restart resume guard + enqueue-funnel gate
+
+== Admin QA (live, headless browser against running server) ==
+Surface: /admin Rotazione panel. Result: PASS — 0 bugs, console clean throughout.
+- Load /admin: 72-track demo pool renders with checkboxes; no console errors.
+- Per-row ✕ = durable ban: 72 -> 71, list refreshes, toast fires.
+- Bulk select: "Select all" -> 72 checked + bar "72 selected"; "Clear" -> 0 + bar hidden.
+- "Ban selected": 71 -> 69 (2 banned).
+- Banned manager: Unban -> 5 -> 4 in panel AND on disk (cache_dir/blocklist.json).
+- Persistence: blocklist.json holds normalized-key rows; unban removes from disk.
+Full outcome: ~/.gstack/projects/florianhorner-mammamiradio/*-test-outcome-*.md
+Design review (diff-aware, docs/design/system.md): clean, no fixes.
