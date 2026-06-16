@@ -377,7 +377,8 @@ def test_playlist_pagination_keeps_accessible_absolute_index_rows() -> None:
     assert 'role="button"' in update_block
     assert 'aria-label="Drag to reorder"' in update_block
     assert 'aria-label="Move to next"' in update_block
-    assert 'aria-label="Remove from rotation"' in update_block
+    # The ✕ is now a durable ban (persisted blocklist), not an in-memory remove.
+    assert 'aria-label="Ban from rotation"' in update_block
     assert "moveNext(${idx})" in update_block
     assert "removeTr(${idx})" in update_block
 

@@ -2170,6 +2170,44 @@ async def test_download_listener_song_success(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
+    """A listener requesting a banned song gets a terminal answer (song_error),
+    not a silent drop that leaves the dashboard spinning on 'searching…' forever."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.blocklist = {("vasco rossi", "albachiara"): {"display": "Vasco Rossi - Albachiara"}}
+    original_len = len(state.playlist)
+    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {
+                    "title": "Albachiara",
+                    "artist": "Vasco Rossi",
+                    "duration_ms": 120000,
+                    "youtube_id": "yt123",
+                    "album_art": "",
+                }
+            ],
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_error"] is True
+    assert req["song_found"] is False
+    # The banned song never joined rotation.
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path

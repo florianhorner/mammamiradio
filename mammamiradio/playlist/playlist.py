@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
@@ -265,6 +266,24 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
 
 def _normalized_track_key(track: Track) -> tuple[str, str]:
     return (track.artist.strip().lower(), track.title.strip().lower())
+
+
+# Public alias: the single canonical (artist, title) identity used for both
+# playlist dedup AND the persistent operator blocklist (see playlist/blocklist.py
+# and core/models.py StationState.blocklist). One key definition, reused everywhere.
+normalized_track_key = _normalized_track_key
+
+
+def filter_blocklisted(tracks: Sequence[Track], blocklist: Mapping[tuple[str, str], object] | None) -> list[Track]:
+    """Drop tracks whose normalized ``(artist, title)`` is in the operator blocklist.
+
+    The enforcement primitive applied at every ingest doorway (startup, source
+    switch, mid-session chart refresh, external/listener download). Returns a fresh
+    list; a falsy blocklist is a cheap passthrough.
+    """
+    if not blocklist:
+        return list(tracks)
+    return [track for track in tracks if _normalized_track_key(track) not in blocklist]
 
 
 def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Track]) -> int:

@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
+
 ### Changed
 
 - **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.

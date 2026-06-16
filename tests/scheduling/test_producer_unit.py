@@ -2220,6 +2220,58 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
 
 
 @pytest.mark.asyncio
+async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
+    """Audio-delivery Scenario 3 (post-restart): a banned song must not re-air even
+    through the norm-cache resume bridge. The only cached file on disk is banned, so
+    the rescue selector returns None and the bridge fires nothing — it must never
+    queue the banned song. (The selector itself is unit-tested both ways in
+    tests/audio/test_norm_cache.py; this proves the blocklist filter composes with
+    the producer's resume-bridge guard end to end.)"""
+    state = _make_state()
+    state.session_stopped = True
+    state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    banned_file = tmp_path / "norm_banned.mp3"
+    banned_file.write_bytes(b"pre-normalized banned audio")
+    save_track_metadata(banned_file, title="Ordinary", artist="Alex Warren")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            await asyncio.sleep(1.5)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # The banned norm file must never have been queued, and no resume bridge may
+    # have fired off the norm cache (the only file there was banned).
+    queued = []
+    while not queue.empty():
+        queued.append(queue.get_nowait())
+    assert all(seg.path != banned_file for seg in queued)
+    assert all(
+        not (ev.get("bridge_type") == "resume" and ev.get("source") == "norm_cache") for ev in state.bridge_events
+    )
+
+
+@pytest.mark.asyncio
 async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
     """When a listener reconnects after idle and no canned clips exist, the idle
     bridge seeds a recent-aware pre-normalized track from cache_dir."""
@@ -2563,3 +2615,41 @@ class TestAdTitle:
         from mammamiradio.scheduling.producer import _ad_title
 
         assert _ad_title(["   ", "Real Brand"]) == "Ad: Real Brand"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_funnel_drops_a_banned_music_segment(tmp_path):
+    """Final blocklist gate: a banned MUSIC segment must never reach the queue, even
+    if a selection-path race (ban mid-render / zombie pin / purge-missed rescue) got
+    it to the funnel. Music with a banned (artist, title) is dropped (returns False,
+    queue stays empty, ephemeral render unlinked); a non-banned song still enqueues."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    state = _make_state()
+    state.blocklist = {("artista", "canzone uno"): {"display": "Artista - Canzone Uno"}}
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    banned_path = tmp_path / "norm_banned.mp3"
+    banned_path.write_bytes(b"x")
+    banned_seg = Segment(
+        type=SegmentType.MUSIC,
+        path=banned_path,
+        ephemeral=True,
+        metadata={"artist": "Artista", "title_only": "Canzone Uno"},
+    )
+    # Banned: dropped before egress, queue empty, the ephemeral render cleaned up.
+    assert await _enqueue_with_egress(queue, state, config, banned_seg) is False
+    assert queue.empty()
+    assert not banned_path.exists()
+
+    # Control: a non-banned song passes the gate and is queued (egress stubbed out).
+    ok_seg = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "norm_ok.mp3",
+        ephemeral=False,
+        metadata={"artist": "Artista", "title_only": "Canzone Due"},
+    )
+    with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=ok_seg):
+        assert await _enqueue_with_egress(queue, state, config, ok_seg) is True
+    assert queue.qsize() == 1

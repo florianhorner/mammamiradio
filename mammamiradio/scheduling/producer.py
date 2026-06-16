@@ -75,7 +75,7 @@ from mammamiradio.playlist.downloader import (
     reject_cached_download,
     validate_download,
 )
-from mammamiradio.playlist.playlist import fetch_chart_refresh
+from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.scheduling.scheduler import next_segment_type
 
@@ -691,6 +691,26 @@ async def _enqueue_with_egress(
     entry point. FX run BEFORE the front-insert critical section so it stays a
     no-await drain→prepend→repush.
     """
+    # Final blocklist gate: a banned song must never reach the playback queue, no
+    # matter which selection-path race put it here — a ban landing mid-render (the
+    # stale-generation check can miss the exact track being rendered), a listener
+    # request committed just before the ban that later re-pins, or a rescue segment
+    # a targeted purge missed. The ingest doorways stop banned songs ENTERING the
+    # pool; this is the last gate before AIR. Music only — banter/ads/bridges carry
+    # no song identity, and a non-song bridge title ("Resume bridge") can't match a
+    # real ban key. Checked before _apply_egress so we never orphan a coloured render.
+    if segment.type == SegmentType.MUSIC and state.blocklist:
+        _meta = segment.metadata or {}
+        _key = (
+            str(_meta.get("artist", "")).strip().lower(),
+            str(_meta.get("title_only") or _meta.get("title") or "").strip().lower(),
+        )
+        if _key in state.blocklist:
+            logger.info("Blocklist gate: dropped a banned song at the enqueue funnel (%s - %s)", _key[0], _key[1])
+            if segment.ephemeral:
+                segment.path.unlink(missing_ok=True)
+            return False
+
     # Validate the front-insert contract BEFORE any egress work so a programming error
     # never leaves a coloured egress tmp render orphaned on disk.
     if front_insert and shadow_entry is None:  # operator air-next must always supply a shadow entry
@@ -1431,6 +1451,9 @@ async def run_producer(
                 _last_playlist_refresh = now
                 existing_ids = {t.spotify_id for t in state.playlist}
                 new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
+                # Doorway: a banned song must not slip back in via the mid-session
+                # chart refresh either (no restart needed to reintroduce it).
+                new_tracks = filter_blocklisted(new_tracks, state.blocklist)
                 if new_tracks:
                     state.playlist.extend(new_tracks)
                     logger.info(

@@ -123,6 +123,46 @@ async def test_startup_creates_state_and_tasks():
 
 
 @pytest.mark.asyncio
+async def test_startup_filters_blocklisted_tracks_from_pool():
+    """A banned song must not survive the cold-start re-fetch (the reported bug):
+    startup() loads the persisted blocklist and filters the fresh pool before it
+    reaches the producer."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+
+    pool = [
+        Track(title="Volare", artist="Modugno", duration_ms=1000, spotify_id="t1"),
+        Track(title="Felicità", artist="Al Bano", duration_ms=1000, spotify_id="t2"),
+    ]
+    blocklist = {("modugno", "volare"): {"display": "Modugno - Volare", "banned_by": "operator", "banned_at": 1.0}}
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(pool, None, "")),
+        patch(f"{MODULE}.load_blocklist", return_value=blocklist),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+        titles = [t.title for t in app.state.station_state.playlist]
+        assert titles == ["Felicità"]
+        assert app.state.station_state.blocklist == blocklist
+
+
+@pytest.mark.asyncio
 async def test_startup_wires_loudness_targets_from_config():
     """startup() must thread radio.toml's [audio] LUFS targets into the normalizer
     (the config -> startup -> normalizer-global seam). Patched on the normalizer
