@@ -1,9 +1,9 @@
 Branch: ci/quality-pr-read-only
-Commit: 5fdac4c06d3f7606bd926a997ac56777861d6fe7
+Commit: ee05f6f63e6ddbc536ea737cb02510292eeb584e
 
 $ uv run python -m pytest -q tests/repo/test_quality_workflow.py tests/repo/test_coverage_ratchet.py
 ....                                                                     [100%]
-4 passed in 0.17s
+4 passed in 0.15s
 
 $ uv run ruff check scripts/coverage-ratchet.py tests/repo/test_quality_workflow.py tests/repo/test_coverage_ratchet.py
 All checks passed!
