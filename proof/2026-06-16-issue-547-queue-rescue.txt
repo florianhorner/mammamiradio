@@ -1,9 +1,9 @@
 Branch: fix/producer-queue-starvation-headroom
-Commit: 0f57195642c1ebae82f8415eca3b2765a9e3c624
+Commit: a1a525b093c69c9db4c747e783b0d0914b0d7af2
 
 $ uv run python -m pytest -q tests/addon/test_addon_radio_sync.py tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_empty_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_at_threshold tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_below_threshold_is_healthy tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_ignores_events_outside_window tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_bridge_health tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air tests/web/test_shadow_queue_sync.py::test_runtime_status_snapshot_includes_producer_headroom
 .........                                                                [100%]
-9 passed in 0.55s
+9 passed in 0.39s
 
 $ bash scripts/validate-addon.sh
 === HA Addon Pre-Flight Validation ===
