@@ -252,6 +252,46 @@ def test_segment_colors_are_decoupled_from_semantic_and_accent_tokens(
     )
 
 
+# Music is the DEFAULT segment, so its progress fills are colored by the
+# unqualified base `.progress-fill` rule (no [data-t="music"] selector). The
+# parametrized guard above keys on explicit `music` selectors, so it cannot see
+# these: a revert of one base rule to var(--ok) would slip past it. Guard the
+# base fills explicitly so the decoupling holds end to end.
+_MUSIC_DEFAULT_FILL_SELECTORS = [
+    ".sidebar-progress-fill",
+    ".a-now-compact .progress-fill",
+    ".on-air-progress-track .progress-fill",
+]
+
+
+def _base_rule_block(text: str, selector: str) -> str:
+    """Return the body of the rule whose selector is EXACTLY `selector`.
+
+    Anchored at a rule boundary (start-of-line or after a `}`) so a longer
+    compound selector that ends in the same string (e.g.
+    `body[data-fader-down="true"] .on-air-progress-track .progress-fill`) cannot
+    shadow the base rule via a substring match.
+    """
+    match = re.search(
+        rf"(?:^|\}})\s*{re.escape(selector)}\s*\{{([^}}]*)\}}",
+        _strip_comments(text),
+        re.MULTILINE,
+    )
+    assert match, f"base rule not found for selector: {selector}"
+    return match.group(1)
+
+
+@pytest.mark.parametrize("selector", _MUSIC_DEFAULT_FILL_SELECTORS)
+def test_default_music_fill_uses_seg_music(selector: str) -> None:
+    """The default (music) progress-fill base rules must use var(--seg-music)."""
+    background = _css_declarations(_base_rule_block(_ADMIN_HTML_TEXT, selector)).get("background")
+    assert background == "var(--seg-music)", (
+        f"{selector} colors the default (music) segment and must use var(--seg-music), "
+        f"not a semantic/accent token. Got {background!r}. (--ok is the status blue; "
+        f"reusing it re-couples music to OK/connected status.)"
+    )
+
+
 # Eyebrow floor from docs/design/system.md, Typography (9-10px). Below this,
 # uppercase labels stop rendering legibly on the dense admin surface (the
 # regression caught after the design-review scrub: 5.5px preset axis initials,
