@@ -2220,6 +2220,58 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
 
 
 @pytest.mark.asyncio
+async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
+    """Audio-delivery Scenario 3 (post-restart): a banned song must not re-air even
+    through the norm-cache resume bridge. The only cached file on disk is banned, so
+    the rescue selector returns None and the bridge fires nothing — it must never
+    queue the banned song. (The selector itself is unit-tested both ways in
+    tests/audio/test_norm_cache.py; this proves the blocklist filter composes with
+    the producer's resume-bridge guard end to end.)"""
+    state = _make_state()
+    state.session_stopped = True
+    state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    banned_file = tmp_path / "norm_banned.mp3"
+    banned_file.write_bytes(b"pre-normalized banned audio")
+    save_track_metadata(banned_file, title="Ordinary", artist="Alex Warren")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            await asyncio.sleep(1.5)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # The banned norm file must never have been queued, and no resume bridge may
+    # have fired off the norm cache (the only file there was banned).
+    queued = []
+    while not queue.empty():
+        queued.append(queue.get_nowait())
+    assert all(seg.path != banned_file for seg in queued)
+    assert all(
+        not (ev.get("bridge_type") == "resume" and ev.get("source") == "norm_cache") for ev in state.bridge_events
+    )
+
+
+@pytest.mark.asyncio
 async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
     """When a listener reconnects after idle and no canned clips exist, the idle
     bridge seeds a recent-aware pre-normalized track from cache_dir."""
