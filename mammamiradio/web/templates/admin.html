@@ -3308,7 +3308,7 @@ async function moveNext(i){
 // Index-based and immediate (no deferred-undo) — a second removal in an undo window
 // would post a stale index after the first ban shifts the list. To bring a song back,
 // use the Banned manager (toggleBanlist) → Unban.
-async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast(r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back');await refreshFast();}else{toast((r&&r.error)||'Could not ban that one');}}
+async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast(r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back');await refreshFast();}else{const m=(r&&r.error)||wayOut('ban that one');toast(m);}}
 
 // --- Bulk select + ban -------------------------------------------------------
 function _checkedPlRows(){return [...document.querySelectorAll('.pl-check:checked')].map(c=>c.closest('.pl-row')).filter(Boolean);}
@@ -3328,7 +3328,7 @@ async function banSelected(){
   if(!confirm(`Ban ${keys.length} song${keys.length===1?'':'s'} for good? They won’t come back after a restart.`))return;
   const r=await api('POST','/api/track/ban',{keys});
   if(r&&r.ok){const n=r.banned?r.banned.length:keys.length;toast(r.persisted===false?`Banned ${n} song${n===1?'':'s'} for now — but I couldn’t save it, so they may come back after a restart`:`Banned ${n} song${n===1?'':'s'}`);clearPlSel();await refreshFast();}
-  else{toast((r&&r.error)||'Could not ban those');}
+  else{const m=(r&&r.error)||wayOut('ban those songs');toast(m);}
 }
 
 // --- Banned manager ----------------------------------------------------------
@@ -3355,7 +3355,7 @@ async function unbanOne(btn){
   const artist=btn.getAttribute('data-artist')||'';const title=btn.getAttribute('data-title')||'';
   const r=await api('POST','/api/track/unban',{keys:[[artist,title]]});
   if(r&&r.ok){toast(r.persisted===false?'Unbanned for now — but I couldn’t save it, so it may stay banned after a restart':'Unbanned — it can come back on the next refresh');await renderBanlist();}
-  else{toast((r&&r.error)||'Could not unban');}
+  else{const m=(r&&r.error)||wayOut('unban that');toast(m);}
 }
 
 // ── Search ──
