@@ -204,7 +204,10 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
                     headers=openai_headers,
                     payload={
                         "model": _m,
-                        "max_tokens": 1,
+                        # gpt-5.x rejects `max_tokens` (use `max_completion_tokens`);
+                        # the old name made this probe 400 and falsely report a
+                        # valid OpenAI key as down.
+                        "max_completion_tokens": 1,
                         "messages": [{"role": "user", "content": "Reply ok."}],
                     },
                 )
