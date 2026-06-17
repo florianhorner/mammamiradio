@@ -1,17 +1,19 @@
 Proof: welcome-clip generator script (scripts/generate_welcome_clips.py)
 Branch: florianhorner/mammamiradio claude/todo-implementation-l7j4es
-Date (UTC): 2026-06-17T23:19:33Z
+Date (UTC): 2026-06-17T23:26:42Z
 ========================================================================
 ## tests
 $ pytest tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py -q
-....................                                                     [100%]
-20 passed in 0.38s
+.....................                                                    [100%]
+21 passed in 0.36s
 
 Covers: contract shape, normal generation, skip-existing, --overwrite,
 --dry-run (incl. existing clips shown as skipped), one-failure-does-not-abort,
-silent-TTS-fallback rejection, fallback-voice-substitution rejection,
-silent-clip cleanup-failure handling, unwritable-output-dir handling,
-and main() exit codes. Each batch test asserts the full per-clip result count.
+failed-render partial-artifact cleanup, silent-TTS-fallback rejection,
+fallback-voice-substitution rejection, silent-clip cleanup-failure handling,
+unwritable-output-dir handling, and main() exit codes. Each batch test
+asserts the full per-clip result count. Edge engine only (contract voices
+are Edge IDs), so a cloud-engine voice substitution can't slip through.
 Note: the authoritative full-suite + coverage run is the CI Quality job
 (this sandbox has no ffmpeg, which the audio test suite requires).
 ========================================================================

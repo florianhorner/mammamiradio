@@ -112,15 +112,17 @@ async def generate_clips(
     clips: tuple[WelcomeClip, ...],
     output_dir: Path,
     *,
-    engine: str = "edge",
     overwrite: bool = False,
     dry_run: bool = False,
 ) -> list[ClipResult]:
     """Synthesize each welcome clip into output_dir, skipping ones that exist.
 
-    Returns one ClipResult per clip. Best-effort per clip: a single failure (a
-    flaky voice, an unwritable output dir, or a silent TTS fallback) is recorded
-    as STATUS_FAILED and does not abort the remaining clips.
+    Always renders through the Edge engine: the contract voices are Edge voice
+    IDs, so any cloud engine would fall back to a default voice (wrong speaker)
+    without signalling it. Returns one ClipResult per clip. Best-effort per clip:
+    a single failure (a flaky voice, an unwritable output dir, a silent fallback,
+    or a substituted voice) is recorded as STATUS_FAILED and does not abort the
+    remaining clips.
     """
     results: list[ClipResult] = []
     for clip in clips:
@@ -135,9 +137,11 @@ async def generate_clips(
             continue
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
-            await tts_module.synthesize(clip.text, clip.voice, dest, engine=engine)
+            await tts_module.synthesize(clip.text, clip.voice, dest, engine="edge")
         except Exception as exc:  # one bad voice / FS error must not abort the batch
-            results.append(ClipResult(clip, dest, STATUS_FAILED, error=str(exc)))
+            # Drop any partial render so a rerun doesn't mistake it for a good clip.
+            note = _discard(dest)
+            results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{exc}{note}"))
             continue
         if _looks_like_silence(dest):
             # The TTS backend was unreachable and fell back to silence. Discard
@@ -200,11 +204,6 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Directory to write clips into (default: {DEFAULT_OUTPUT_DIR}).",
     )
     parser.add_argument(
-        "--engine",
-        default="edge",
-        help="TTS engine to use (default: edge — free, no API key).",
-    )
-    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Rebuild clips that already exist (default: skip existing).",
@@ -220,7 +219,6 @@ def main(argv: list[str] | None = None) -> int:
         generate_clips(
             WELCOME_CLIPS,
             args.output_dir,
-            engine=args.engine,
             overwrite=args.overwrite,
             dry_run=args.dry_run,
         )

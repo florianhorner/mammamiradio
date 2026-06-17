@@ -42,7 +42,7 @@ async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch) ->
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, engine="edge")
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
 
     assert [r.status for r in results] == [gen.STATUS_GENERATED] * len(gen.WELCOME_CLIPS)
     assert len(calls) == len(gen.WELCOME_CLIPS)
@@ -51,7 +51,7 @@ async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch) ->
     for result in results:
         assert result.output_path == tmp_path / result.clip.filename
         assert result.output_path.read_bytes() == b"fake mp3"
-    # Engine choice is forwarded to the TTS pipeline.
+    # Always rendered through Edge — the contract voices are Edge voice IDs.
     assert all(engine == "edge" for _, _, engine in calls)
 
 
@@ -169,6 +169,28 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("silence" in r.error for r in results)
     # Silent files are discarded, not left on disk for an operator to commit.
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_render_partial_artifact_is_removed(tmp_path, monkeypatch) -> None:
+    """A synth failure after a partial write must not leave a corrupt file behind.
+
+    Otherwise the next default run would see it via dest.exists() and report the
+    corrupt artifact as 'skipped' instead of regenerating it.
+    """
+
+    async def synth_then_fail(text, voice, output_path, *, engine="edge", **kwargs):
+        output_path.write_bytes(b"partial")  # opened/wrote before the pipeline failed
+        raise RuntimeError("normalize timed out")
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", synth_then_fail)
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+
+    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert all(r.status == gen.STATUS_FAILED for r in results)
+    # No partial files survive to be mis-reported as "skipped" on a rerun.
     assert list(tmp_path.iterdir()) == []
 
 
