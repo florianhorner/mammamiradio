@@ -173,6 +173,33 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_generate_clips_rejects_fallback_voice_substitution(tmp_path, monkeypatch) -> None:
+    """synthesize() silently swaps in a default voice when the requested one fails.
+
+    A non-silent render in the wrong speaker (Giulia's line in a male voice) must
+    be rejected, not shipped as the contract voice.
+    """
+
+    async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
+        output_path.write_bytes(b"real speech, wrong voice")
+        return output_path
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
+    # Every requested voice has failed this session → synthesize would substitute
+    # the default Edge fallback voice. (_loud_by_default keeps it non-silent.)
+    failed = {clip.voice for clip in gen.WELCOME_CLIPS}
+    monkeypatch.setattr(gen.tts_module, "_failed_edge_voices", failed)
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+
+    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert all(r.status == gen.STATUS_FAILED for r in results)
+    assert all("fallback voice" in r.error for r in results)
+    # Wrong-speaker renders are discarded, not left for an operator to commit.
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monkeypatch) -> None:
     """If discarding a silent clip fails, the batch records it and keeps going.
 

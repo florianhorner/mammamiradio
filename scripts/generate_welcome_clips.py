@@ -82,6 +82,15 @@ class ClipResult:
     error: str = ""
 
 
+def _discard(path: Path) -> str:
+    """Best-effort delete of a rejected render; returns a note if it couldn't be removed."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:  # a cleanup failure must not abort the batch
+        return f"; could not delete the file ({exc})"
+    return ""
+
+
 def _looks_like_silence(path: Path) -> bool:
     """True if a rendered clip is effectively silent (the TTS silence fallback).
 
@@ -133,17 +142,27 @@ async def generate_clips(
         if _looks_like_silence(dest):
             # The TTS backend was unreachable and fell back to silence. Discard
             # the file so an operator can't unknowingly commit a silent greeting.
-            cleanup_note = ""
-            try:
-                dest.unlink(missing_ok=True)
-            except OSError as exc:  # a cleanup failure must not abort the batch
-                cleanup_note = f"; could not delete the silent file ({exc})"
+            note = _discard(dest)
             results.append(
                 ClipResult(
                     clip,
                     dest,
                     STATUS_FAILED,
-                    error=f"voice backend unreachable — TTS returned silence; clip discarded{cleanup_note}",
+                    error=f"voice backend unreachable — TTS returned silence; clip discarded{note}",
+                )
+            )
+            continue
+        if clip.voice in tts_module._failed_edge_voices:
+            # synthesize() silently substitutes the default Edge fallback voice when
+            # the requested voice fails, so this render would be the right words in the
+            # wrong speaker. Reject it rather than ship a mismatched greeting.
+            note = _discard(dest)
+            results.append(
+                ClipResult(
+                    clip,
+                    dest,
+                    STATUS_FAILED,
+                    error=f"requested voice unavailable — rendered in a fallback voice; clip discarded{note}",
                 )
             )
             continue
