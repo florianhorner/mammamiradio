@@ -116,11 +116,13 @@ async def generate_clips(
     results: list[ClipResult] = []
     for clip in clips:
         dest = output_dir / clip.filename
-        if dry_run:
-            results.append(ClipResult(clip, dest, STATUS_PLANNED))
-            continue
+        # Check existence before the dry-run short-circuit so a preview reports
+        # already-present clips as "skipped" (what a real run would do), not "planned".
         if dest.exists() and not overwrite:
             results.append(ClipResult(clip, dest, STATUS_SKIPPED))
+            continue
+        if dry_run:
+            results.append(ClipResult(clip, dest, STATUS_PLANNED))
             continue
         try:
             output_dir.mkdir(parents=True, exist_ok=True)

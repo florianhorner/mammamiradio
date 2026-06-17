@@ -98,6 +98,33 @@ async def test_generate_clips_dry_run_writes_nothing(tmp_path, monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_dry_run_reports_existing_clips_as_skipped(tmp_path, monkeypatch) -> None:
+    """A preview must reflect what a real run would do: existing clips are skipped.
+
+    Without the existence check running before the dry-run short-circuit, an
+    already-present clip would be previewed as 'planned' even though a real run
+    would skip it — a misleading preview.
+    """
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("dry-run must not synthesize")
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", fail_if_called)
+    existing = gen.WELCOME_CLIPS[0]
+    (tmp_path / existing.filename).write_bytes(b"already here")
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, dry_run=True)
+    by_name = {r.clip.filename: r for r in results}
+
+    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert by_name[existing.filename].status == gen.STATUS_SKIPPED
+    # The rest are previewed as planned; the dry run writes nothing new.
+    planned = [r for r in results if r.clip.filename != existing.filename]
+    assert all(r.status == gen.STATUS_PLANNED for r in planned)
+    assert list(tmp_path.iterdir()) == [tmp_path / existing.filename]
+
+
+@pytest.mark.asyncio
 async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeypatch) -> None:
     fail_for = gen.WELCOME_CLIPS[0].filename
 
