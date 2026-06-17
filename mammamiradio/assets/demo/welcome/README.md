@@ -1,7 +1,9 @@
 # Welcome Clips
 
-Pre-generated welcome clips that play when the station starts.
-The DJ "interrupts" the broadcast to greet the listener.
+Short greetings where the DJ "interrupts" the broadcast to welcome a listener.
+They are one of the station's instant-audio fallbacks: the playback loop reaches
+for them via `_pick_canned_clip("welcome")` to keep sound flowing during queue
+recovery, so a listener hears a warm greeting instead of a gap.
 
 ## Generating clips
 

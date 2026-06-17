@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mammamiradio.audio import tts as tts_module
+from mammamiradio.audio.audio_quality import AudioToolError, _probe_volume
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "mammamiradio" / "assets" / "demo" / "welcome"
@@ -37,6 +38,10 @@ STATUS_GENERATED = "generated"
 STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 STATUS_PLANNED = "planned"
+
+# Pure digital silence (the TTS silence fallback) measures near the floor
+# (~-91 dBFS peak); real speech peaks far above this, so -80 cleanly splits them.
+SILENCE_PEAK_DBFS = -80.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,23 @@ class ClipResult:
     error: str = ""
 
 
+def _looks_like_silence(path: Path) -> bool:
+    """True if a rendered clip is effectively silent (the TTS silence fallback).
+
+    ``synthesize()`` never raises: when every Edge attempt fails (network blocked,
+    Edge down) it returns 2s of ``generate_silence()`` rather than erroring.
+    Measuring the peak level lets us reject that instead of committing a silent
+    greeting. Best-effort — if the level can't be measured we do NOT claim silence
+    (avoid false failures); ``synthesize`` already needed ffmpeg to produce the
+    file at all.
+    """
+    try:
+        _mean_db, peak_db = _probe_volume(path)
+    except (AudioToolError, OSError):
+        return False
+    return peak_db is not None and peak_db <= SILENCE_PEAK_DBFS
+
+
 async def generate_clips(
     clips: tuple[WelcomeClip, ...],
     output_dir: Path,
@@ -85,9 +107,9 @@ async def generate_clips(
 ) -> list[ClipResult]:
     """Synthesize each welcome clip into output_dir, skipping ones that exist.
 
-    Returns one ClipResult per clip. Best-effort per clip: a single TTS failure
-    is recorded as STATUS_FAILED and does not abort the remaining clips, so one
-    flaky voice never blocks regenerating the rest.
+    Returns one ClipResult per clip. Best-effort per clip: a single failure (a
+    flaky voice, an unwritable output dir, or a silent TTS fallback) is recorded
+    as STATUS_FAILED and does not abort the remaining clips.
     """
     results: list[ClipResult] = []
     for clip in clips:
@@ -98,12 +120,26 @@ async def generate_clips(
         if dest.exists() and not overwrite:
             results.append(ClipResult(clip, dest, STATUS_SKIPPED))
             continue
-        output_dir.mkdir(parents=True, exist_ok=True)
         try:
+            output_dir.mkdir(parents=True, exist_ok=True)
             await tts_module.synthesize(clip.text, clip.voice, dest, engine=engine)
-            results.append(ClipResult(clip, dest, STATUS_GENERATED))
-        except Exception as exc:  # one bad voice must not abort the batch
+        except Exception as exc:  # one bad voice / FS error must not abort the batch
             results.append(ClipResult(clip, dest, STATUS_FAILED, error=str(exc)))
+            continue
+        if _looks_like_silence(dest):
+            # The TTS backend was unreachable and fell back to silence. Discard
+            # the file so an operator can't unknowingly commit a silent greeting.
+            dest.unlink(missing_ok=True)
+            results.append(
+                ClipResult(
+                    clip,
+                    dest,
+                    STATUS_FAILED,
+                    error="voice backend unreachable — TTS returned silence; clip discarded",
+                )
+            )
+            continue
+        results.append(ClipResult(clip, dest, STATUS_GENERATED))
     return results
 
 

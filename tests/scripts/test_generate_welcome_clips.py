@@ -5,6 +5,17 @@ import pytest
 from scripts import generate_welcome_clips as gen
 
 
+@pytest.fixture(autouse=True)
+def _loud_by_default(monkeypatch):
+    """Treat every rendered clip as real speech by default.
+
+    The generator probes each output's peak level to reject the TTS silence
+    fallback; stubbing it keeps the generation tests off ffmpeg/volumedetect.
+    The silence test overrides this with a floor-level reading.
+    """
+    monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-18.0, -3.0))
+
+
 def test_welcome_clip_contract_is_italian_and_well_formed() -> None:
     """The contract must stay non-empty, .mp3-named, and free of empty text/voice.
 
@@ -104,6 +115,52 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
     # Every other clip still got written despite the one failure.
     others = [r for r in results if r.clip.filename != fail_for]
     assert all(r.status == gen.STATUS_GENERATED for r in others)
+
+
+@pytest.mark.asyncio
+async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch) -> None:
+    """synthesize() returns silence (not an error) when the voice backend is down.
+
+    The generator must treat that as a failure and discard the file, so an
+    operator never commits a silent welcome greeting.
+    """
+
+    async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
+        output_path.write_bytes(b"silent mp3")
+        return output_path
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
+    # Simulate the silence fallback: every rendered file measures near the floor.
+    monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-91.0, -91.0))
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+
+    assert all(r.status == gen.STATUS_FAILED for r in results)
+    assert all("silence" in r.error for r in results)
+    # Silent files are discarded, not left on disk for an operator to commit.
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatch) -> None:
+    """A filesystem error creating the output dir is recorded, not raised.
+
+    Placing a regular file where the output directory should be makes
+    mkdir(exist_ok=True) raise — the batch must record failures and continue
+    rather than crashing with a traceback.
+    """
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("synthesize must not run when the output dir can't be made")
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", fail_if_called)
+    blocker = tmp_path / "welcome"
+    blocker.write_text("i am a file, not a directory")
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, blocker)
+
+    assert results, "every clip should produce a result"
+    assert all(r.status == gen.STATUS_FAILED for r in results)
 
 
 def test_main_dry_run_returns_zero_and_writes_nothing(tmp_path, monkeypatch, capsys) -> None:
