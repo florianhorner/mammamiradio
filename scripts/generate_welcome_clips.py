@@ -28,10 +28,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from mammamiradio.audio import tts as tts_module
-from mammamiradio.audio.audio_quality import AudioToolError, _probe_volume
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from mammamiradio.audio import tts as tts_module  # noqa: E402
+from mammamiradio.audio.audio_quality import AudioToolError, _probe_volume  # noqa: E402
+
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "mammamiradio" / "assets" / "demo" / "welcome"
 
 STATUS_GENERATED = "generated"
