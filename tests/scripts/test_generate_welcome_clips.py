@@ -78,6 +78,7 @@ async def test_generate_clips_skips_existing_unless_overwrite(tmp_path, monkeypa
 
     # --overwrite rebuilds everything, including the pre-existing clip.
     rebuilt = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, overwrite=True)
+    assert len(rebuilt) == len(gen.WELCOME_CLIPS)
     assert all(r.status == gen.STATUS_GENERATED for r in rebuilt)
     assert (tmp_path / existing.filename).read_bytes() == b"regenerated"
 
@@ -91,6 +92,7 @@ async def test_generate_clips_dry_run_writes_nothing(tmp_path, monkeypatch) -> N
 
     results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, dry_run=True)
 
+    assert len(results) == len(gen.WELCOME_CLIPS)
     assert all(r.status == gen.STATUS_PLANNED for r in results)
     assert list(tmp_path.iterdir()) == []
 
@@ -110,6 +112,7 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
     results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
     by_name = {r.clip.filename: r for r in results}
 
+    assert len(results) == len(gen.WELCOME_CLIPS)
     assert by_name[fail_for].status == gen.STATUS_FAILED
     assert by_name[fail_for].error == "voice unavailable"
     # Every other clip still got written despite the one failure.
@@ -135,6 +138,7 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
 
     results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
 
+    assert len(results) == len(gen.WELCOME_CLIPS)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("silence" in r.error for r in results)
     # Silent files are discarded, not left on disk for an operator to commit.
@@ -163,6 +167,7 @@ async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monk
 
     results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
 
+    assert len(results) == len(gen.WELCOME_CLIPS)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("silence" in r.error for r in results)
     assert all("could not delete" in r.error for r in results)
@@ -186,7 +191,7 @@ async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatc
 
     results = await gen.generate_clips(gen.WELCOME_CLIPS, blocker)
 
-    assert results, "every clip should produce a result"
+    assert len(results) == len(gen.WELCOME_CLIPS)
     assert all(r.status == gen.STATUS_FAILED for r in results)
 
 

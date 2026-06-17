@@ -1,19 +1,21 @@
 Proof: welcome-clip generator script (scripts/generate_welcome_clips.py)
 Branch: florianhorner/mammamiradio claude/todo-implementation-l7j4es
-Date (UTC): 2026-06-17T23:06:58Z
+Date (UTC): 2026-06-17T23:13:26Z
 ========================================================================
 ## tests
 $ pytest tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py -q
 ..................                                                       [100%]
-18 passed in 0.38s
+18 passed in 0.36s
 
 Covers: contract shape, normal generation, skip-existing, --overwrite,
 --dry-run, one-failure-does-not-abort, silent-TTS-fallback rejection,
 silent-clip cleanup-failure handling, unwritable-output-dir handling,
-and main() exit codes.
+and main() exit codes. Each batch test asserts full per-clip result count.
+Note: the authoritative full-suite + coverage run is the CI Quality job
+(this sandbox has no ffmpeg, which the audio test suite requires).
 ========================================================================
 ## lint
-$ ruff check scripts/generate_welcome_clips.py tests/scripts/test_generate_welcome_clips.py
+$ ruff check .
 All checks passed!
 $ ruff format --check scripts/generate_welcome_clips.py tests/scripts/test_generate_welcome_clips.py
 2 files already formatted
@@ -21,8 +23,8 @@ $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.
 ========================================================================
 ## typecheck
-$ mypy scripts/generate_welcome_clips.py
-Success: no issues found in 1 source file
+$ mypy mammamiradio/ tests/
+Success: no issues found in 192 source files
 ========================================================================
 ## runtime — offline CLI, no audio path touched
 $ python scripts/generate_welcome_clips.py --dry-run
