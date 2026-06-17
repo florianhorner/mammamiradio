@@ -10,7 +10,9 @@ Demo asset tree for the station. Only `sfx/studio/` is currently populated — t
 
 ## Generation
 
-There is no `generate_demo_assets` module yet. If and when we ship one, it will regenerate banter/ad clips via the existing TTS pipeline. Until then these directories stay empty.
+Welcome clips have a generator: `scripts/generate_welcome_clips.py` renders the fixed welcome-clip contract through the existing TTS pipeline (free Edge engine by default — no API key). Run it, listen, and commit the MP3s if they sound right.
+
+The `banter/`, `ads/`, `music/`, and `jingles/` directories stay empty pending the demo-asset contract decision (see the 2026-04-16 documentation audit in `docs/`). If and when we ship a generator for those, it will likewise route through the existing TTS pipeline.
 
 ## Licensing
 
