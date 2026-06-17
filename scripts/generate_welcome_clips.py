@@ -129,13 +129,17 @@ async def generate_clips(
         if _looks_like_silence(dest):
             # The TTS backend was unreachable and fell back to silence. Discard
             # the file so an operator can't unknowingly commit a silent greeting.
-            dest.unlink(missing_ok=True)
+            cleanup_note = ""
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError as exc:  # a cleanup failure must not abort the batch
+                cleanup_note = f"; could not delete the silent file ({exc})"
             results.append(
                 ClipResult(
                     clip,
                     dest,
                     STATUS_FAILED,
-                    error="voice backend unreachable — TTS returned silence; clip discarded",
+                    error=f"voice backend unreachable — TTS returned silence; clip discarded{cleanup_note}",
                 )
             )
             continue
@@ -144,6 +148,7 @@ async def generate_clips(
 
 
 def _print_summary(results: list[ClipResult], output_dir: Path) -> None:
+    """Print one status line per clip plus an aggregate count breakdown."""
     counts: dict[str, int] = {}
     for result in results:
         counts[result.status] = counts.get(result.status, 0) + 1
@@ -157,6 +162,10 @@ def _print_summary(results: list[ClipResult], output_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI args, run generation, print the summary, and return an exit code.
+
+    Returns 1 if any clip failed (so an operator or CI notices), otherwise 0.
+    """
     parser = argparse.ArgumentParser(
         prog="generate_welcome_clips.py",
         description="Generate the bundled Italian welcome clips for the demo asset tree.",

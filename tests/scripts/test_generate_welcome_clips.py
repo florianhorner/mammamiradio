@@ -142,6 +142,33 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monkeypatch) -> None:
+    """If discarding a silent clip fails, the batch records it and keeps going.
+
+    A locked/permission-denied unlink must not escape and abort the remaining
+    clips; the failure note is folded into the result instead.
+    """
+
+    async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
+        output_path.write_bytes(b"silent mp3")
+        return output_path
+
+    monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
+    monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-91.0, -91.0))
+
+    def boom(*_args, **_kwargs):
+        raise OSError("file locked")
+
+    monkeypatch.setattr(gen.Path, "unlink", boom)
+
+    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+
+    assert all(r.status == gen.STATUS_FAILED for r in results)
+    assert all("silence" in r.error for r in results)
+    assert all("could not delete" in r.error for r in results)
+
+
+@pytest.mark.asyncio
 async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatch) -> None:
     """A filesystem error creating the output dir is recorded, not raised.
 
