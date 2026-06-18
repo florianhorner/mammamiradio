@@ -122,11 +122,24 @@ def test_broadcast_filter_chain_shape_is_sigabrt_safe():
     chain = _broadcast_filter_chain()
     assert "equalizer=" not in chain
     assert "loudnorm" not in chain
-    # The intended 4-stage transmitter colour is present.
-    assert "aphaser=" in chain  # subtle multipath movement (clamped helper)
+    # The intended 3-stage transmitter colour is present.
     assert "treble=" in chain  # gentle pre-emphasis HF shelf
     assert "lowpass=f=15000" in chain  # ~15 kHz FM band-limit
-    assert "acompressor=" in chain  # soft broadcast leveller
+    assert "volume=" in chain  # flat loudness-offset trim (replaces the dynamics stage)
+    # No dynamics stage: a compressor here is redundant (segments are pre-reconciled)
+    # and was not loudness-neutral across content. Flat trim only.
+    assert "acompressor" not in chain
+
+
+def test_broadcast_filter_chain_has_no_stereo_swirl():
+    """Regression guard for the 'binaural swirl' illusion-break (#1): the egress chain
+    must contain NO swept-phaser or stereo-decorrelating filter. A swept ``aphaser``
+    once sat here as faux multipath and smeared the white-noise ad-bed transition into
+    an audible binaural swirl. If any of these reappear in egress, fail loudly — the
+    deliberate version of this effect belongs in Chaos mode, never in clean egress."""
+    chain = _broadcast_filter_chain()
+    for swirl in ("aphaser=", "stereotools", "extrastereo", "haas", "stereowiden"):
+        assert swirl not in chain, f"stereo-swirl filter {swirl!r} must not be in egress"
 
 
 def test_broadcast_failure_is_best_effort(tmp_path):

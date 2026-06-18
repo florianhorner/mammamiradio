@@ -109,12 +109,14 @@ class AudioSection:
     # so ads still pop, without the old jarring 2-LU jump.
     lufs_target: float = -16.0
     ad_lufs_target: float = -15.0
-    # FM broadcast "transmitter" chain: when true (default), every aired non-rescue
-    # segment gets one extra ffmpeg pass that colours it like an over-the-air FM
-    # signal (subtle multipath, gentle pre-emphasis, ~15 kHz band-limit, soft
-    # leveller) so the station sounds like radio, not a clean studio file. Set false
-    # for studio-clean output.
-    broadcast_chain: bool = True
+    # FM broadcast "transmitter" chain: when true, every aired non-rescue segment gets
+    # one extra ffmpeg pass that colours it like an over-the-air FM signal (gentle
+    # pre-emphasis HF shelf, ~15 kHz band-limit, flat loudness-offset trim — no stereo
+    # swirl, no dynamics) so the station sounds like radio, not a clean studio file.
+    # Default OFF (studio-clean): the colour is deliberately subtle and often
+    # imperceptible on good speakers, and the "what should the station sound like"
+    # strategy is being revisited. Set true to opt in.
+    broadcast_chain: bool = False
 
 
 # ── Dynamic LLM routing ───────────────────────────────────────────────────

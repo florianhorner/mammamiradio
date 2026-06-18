@@ -157,8 +157,9 @@ def test_broadcast_chain_env_enable_overrides_toml(monkeypatch, tmp_path):
     assert load_config(str(toml_file)).audio.broadcast_chain is True
 
 
-def test_broadcast_chain_defaults_on_without_env(monkeypatch):
-    """No env set → the radio.toml/default value stands (on by default)."""
+def test_broadcast_chain_defaults_off_without_env(monkeypatch):
+    """No env set → the radio.toml/default value stands (OFF by default — studio-clean;
+    the FM colour is opt-in)."""
     monkeypatch.delenv("MAMMAMIRADIO_BROADCAST_CHAIN", raising=False)
     config = load_config(TOML_PATH)
-    assert config.audio.broadcast_chain is True
+    assert config.audio.broadcast_chain is False

@@ -124,7 +124,7 @@ Current config options:
 | `super_italian_mode` | `bool?` | `MAMMAMIRADIO_SUPER_ITALIAN` |
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
-| `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default on, set false for studio-clean) |
+| `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 

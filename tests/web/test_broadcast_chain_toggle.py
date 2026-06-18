@@ -69,11 +69,11 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 # ── GET ───────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_get_broadcast_chain_returns_flag():
-    app = _make_test_app()  # radio.toml ships broadcast_chain = true
+    app = _make_test_app()  # radio.toml ships broadcast_chain = false (studio-clean default)
     async with _client(app) as client:
         resp = await client.get("/api/broadcast-chain")
     assert resp.status_code == 200
-    assert resp.json() == {"broadcast_chain": True}
+    assert resp.json() == {"broadcast_chain": False}
 
 
 # ── POST hot-apply: the dial actually (dis)arms the egress chain ────────────
@@ -136,6 +136,7 @@ async def test_post_broadcast_chain_persist_failure_does_not_change_live():
     what survives a restart."""
     normalizer.configure_broadcast_chain(True)  # armed
     app = _make_test_app(is_addon=False)
+    app.state.config.audio.broadcast_chain = True  # operator had opted in (default is off)
     assert app.state.config.audio.broadcast_chain is True
     with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
         async with _client(app) as client:
