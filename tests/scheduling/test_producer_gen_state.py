@@ -233,3 +233,15 @@ async def test_producer_records_music_phase_in_gen_recent(tmp_path):
     assert entry["phase"] == "finding"
     assert entry["ok"] is True
     assert entry["label"].startswith("Finding")
+
+
+def test_ad_production_label_uses_brand_name_not_repr():
+    """The In-Produzione ad label must use the brand NAME, never the AdBrand
+    object. F-stringing the object leaks 'AdBrand(name=..., tagline=..., ...)'
+    into the admin feed — machine words on a human screen (leadership #5)."""
+    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "scheduling" / "producer.py").read_text(
+        encoding="utf-8"
+    )
+    assert '_ad_brand = spot_params[0][0].name if spot_params else ""' in src
+    # Regression guard: the raw AdBrand object must not be assigned for f-stringing.
+    assert '_ad_brand = spot_params[0][0] if spot_params' not in src

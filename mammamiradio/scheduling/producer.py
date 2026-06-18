@@ -2591,7 +2591,10 @@ async def run_producer(
                 _ad_attempt_id = uuid4().hex
                 _ad_collector = CallCollector(attempt_id=_ad_attempt_id, ad_break_id=_ad_attempt_id)
                 _ad_prov_tok = set_collector(_ad_collector)
-                _ad_brand = spot_params[0][0] if spot_params else ""
+                # Use the brand NAME, never the AdBrand object — f-stringing the
+                # object leaks its repr ("AdBrand(name='Gelato Infinito', ...)")
+                # into the admin In-Produzione feed (machine words on a human screen).
+                _ad_brand = spot_params[0][0].name if spot_params else ""
                 state.set_gen("writing", "ad", f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break")
                 # Callback Director: offer one cross-domain verbal gag for the
                 # break, handed to the FIRST spot only (at most one callback per
