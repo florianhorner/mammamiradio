@@ -12,6 +12,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **A one-command way to record the station's welcome greetings.** `scripts/generate_welcome_clips.py` renders the short Italian "someone just tuned in!" greetings the DJs play when a listener connects, using the station's own voices. It needs no API key (free voice engine by default), skips greetings you've already recorded unless you ask it to rebuild them, and has a preview mode that lists what it would make without writing anything. These greetings are one of the things the station can reach for to keep sound playing the instant you connect.
+
 - **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
 
 ### Changed
