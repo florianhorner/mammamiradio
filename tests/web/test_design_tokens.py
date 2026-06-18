@@ -311,14 +311,6 @@ def test_admin_inline_style_has_no_sub_floor_font_size() -> None:
     )
 
 
-def test_rotation_sort_is_mono_typeface() -> None:
-    """The rotation-order readout is operator-only technical metadata → JetBrains Mono.
-
-    docs/design/system.md reserves --font-mono for "queue positions, operator-only
-    technical readouts". A scrub flipped .rotation-sort to --font-body (Outfit),
-    so a mono-context label rendered in the body face next to real mono labels.
-    """
-    block = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".rotation-sort"))
-    assert block.get("font-family") == "var(--font-mono)", (
-        f".rotation-sort is a technical readout and must use var(--font-mono), got {block.get('font-family')!r}."
-    )
+# test_rotation_sort_is_mono_typeface removed: the "order: current rotation"
+# readout it guarded was a dead, non-interactive label (no sort control behind it)
+# and was removed in the Concept B producer-desk redesign.
