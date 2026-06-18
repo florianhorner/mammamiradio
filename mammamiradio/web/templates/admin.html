@@ -2150,7 +2150,6 @@ function notifyExternalAddNotices(notices){
   }
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function fmtRuntimeTs(ts){
   if(!ts)return'—';
   const d=new Date(Number(ts)*1000);
@@ -2253,6 +2252,25 @@ function initTabs(){
   }
 }
 initTabs();
+
+function initProgrammeActions(){
+  const el=document.getElementById('programmeList');
+  if(!el)return;
+  el.addEventListener('click',event=>{
+    const removeBtn=event.target.closest('[data-queue-remove-id]');
+    if(removeBtn&&el.contains(removeBtn)){
+      event.stopPropagation();
+      removeQueueItem(removeBtn.getAttribute('data-queue-remove-id')||'',removeBtn);
+      return;
+    }
+    const row=event.target.closest('tr[data-playlist-link="true"]');
+    if(!row||!el.contains(row))return;
+    const rawIndex=parseInt(row.getAttribute('data-playlist-index')||'-1',10);
+    const playlistIndex=Number.isFinite(rawIndex)?rawIndex:-1;
+    focusPlaylistTrack(playlistIndex,row.getAttribute('data-spotify-id')||'');
+  });
+}
+initProgrammeActions();
 
 function initOnAirSticky(){
   const onAir=document.getElementById('on-air');
@@ -2680,7 +2698,7 @@ function renderProgramme(st){
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
-    const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${escJs(it.spotify_id||'')}')" style="cursor:pointer"`:'';
+    const clickAttrs=linked?`data-playlist-link="true" data-playlist-index="${Number.isInteger(it.playlist_index)?it.playlist_index:-1}" data-spotify-id="${esc(it.spotify_id||'')}" style="cursor:pointer"`:'';
     const parts=splitTrackLabel(it);
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
@@ -2692,7 +2710,7 @@ function renderProgramme(st){
     // Predicted (non-actionable) rows render NO control — clickable things must
     // look clickable (Steve Krug). Only rendered_queue rows get a remove button.
     const action=actionable
-      ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
+      ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
     const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
     const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
