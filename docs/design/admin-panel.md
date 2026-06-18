@@ -40,39 +40,45 @@ The admin panel is a **producer desk**: opening `/admin` answers two questions
 fast — is the station alive and sounding right, and what plays next. Set-and-forget
 config and debug never occupy the default view.
 
-**Default view — three zones, top to bottom:**
+**Default view — pinned live console + tabbed work area.**
 
-1. **On Air** — now-playing card (segment type, title, artist, progress), a
-   station-health `.status-chip`, the compact token cost counter, skip/pause.
-   The full card sits at the top at rest; once scrolled past, it collapses to a
-   slim sticky strip pinned to the top (title + status + cost). It is the trust
-   glance and must survive scrolling.
-2. **Live Queue** — forward-only rundown of up to ~8 upcoming items, each with a
-   relative label (`next` / `after that` / `later`) + rough duration. Pending
-   listener requests sit in a strip at the top of this zone. No played history.
-3. **Rotation Pool** — separate searchable/prunable music library, distinct from
-   the Live Queue.
+The **live console** (`.mmr-console`, `position: sticky`) is pinned to the top and
+never scrolls away. It carries the whole live glance in one block:
 
-**Drawers — collapsed by default, inline `<details>` accordion, one open at a
-time.** Four drawers below the zones:
+- **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
+  Skip / Stop, and the compact token cost counter. There is no "session N" counter
+  — that number meant nothing to an operator.
+- **Right:** the four **air-next** triggers (Banter / Ad break / News flash / More
+  chaos) and the live **In Produzione** "cooking now" feed (per-segment phase +
+  label). This is the only place an operator sees work in flight, so it stays in
+  view at all times.
 
-1. **Diretta** (steer) — one section with four `role="group"` subgroups:
-   `Modalità live` (Chaos/Festival toggles), `Azioni immediate` (banter / ad /
-   news / more chaos), `Azioni rapide` (fewer banter / fewer ads / reload /
-   flag, plus a Lancia-red `Purge queue`), `Cadenza` (pacing sliders).
-2. **Conduttori** — host personality config. Active preset chips carry a
-   checkmark shape cue alongside the gold fill (colorblind safety).
-3. **Archivio** — filterable segment history. Search box + type chips
-   (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available).
-   Filter state persists across drawer toggles via sessionStorage
-   (`mmr.admin.archivio.filters`), cleared on browser close.
-4. **Motore** (diagnostics) — three subgroups: `Status` (systems, runtime
-   health, capabilities, HA context), `Costi` (token cost counter + segment
-   counts — always visible), `Setup` (a collapsible `<details>` that
-   auto-collapses when every readiness item is ready and auto-expands when any
-   needs attention; shows an `All ready ✓` blue badge when collapsed).
+Below the console, a **tab bar** swaps a single **work area** — one panel visible
+at a time, choice persisted in `sessionStorage['adminTab']`:
 
-On mobile the drawer row stacks vertically.
+1. **Diretta** — `Modalità live` (Chaos/Festival toggles), `Azioni rapide` (fewer
+   banter / fewer ads / reload / flag, plus a Lancia-red `Purge queue`), `Cadenza`
+   (pacing sliders). The `Azioni immediate` triggers moved up into the console.
+2. **Scaletta** (default tab) — forward-only rundown of up to ~8 upcoming items,
+   each with a relative label (`next` / `after that` / `later`) + rough duration.
+   Pending listener requests sit in a strip at the top and collapse when empty. No
+   played history.
+3. **Rotazione** — searchable/prunable music library. Row checkboxes select songs
+   to ban; the selection is keyed by artist/title and survives the 3s status poll
+   (it used to be wiped on every rebuild).
+4. **Conduttori** — host personality config. Active preset chips carry a checkmark
+   shape cue alongside the gold fill (colorblind safety).
+5. **Archivio** — filterable segment history. Search box + type chips
+   (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available). Filter
+   state persists via sessionStorage (`mmr.admin.archivio.filters`).
+6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
+   context), `Costi` (token cost counter + segment counts — always visible),
+   `Setup` (a collapsible `<details>` that auto-collapses when every readiness item
+   is ready; shows an `All ready ✓` blue badge when collapsed).
+
+Each panel carries exactly one header (Playfair title); the old per-drawer summary
+plus inner-panel double header is gone. On narrow viewports the console stacks to
+one column and the tab bar scrolls horizontally.
 
 **Destructive actions use a 5s undo toast** (`undoableToast` in
 `static/admin.js`): the row is removed optimistically, the backend call is
