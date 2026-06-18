@@ -93,7 +93,7 @@ class PacingSection:
     songs_between_banter: int = 2
     songs_between_ads: int = 4
     ad_spots_per_break: int = 1
-    lookahead_segments: int = 3
+    lookahead_segments: int = 4
 
 
 @dataclass
