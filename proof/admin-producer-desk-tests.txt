@@ -1,0 +1,9 @@
+Proof: admin producer-desk redesign (Concept B) — local test suite
+Branch: florianhorner/feat/admin-panel-ux-overhaul
+HEAD: 15a281ddcd8c6bbc81477f2c2fc4ebb57b5ff01d
+Captured: 2026-06-18T20:03:59Z
+Command: python -m pytest tests/ -q
+---
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3058 passed, 2 skipped, 19 deselected, 1 warning in 55.18s
