@@ -78,7 +78,7 @@
    * Ads use the warm amber accent, deliberately distinct from --warning
    * (the degraded-status amber) so an operator never confuses an "ad" segment
    * badge with a "system degraded" status. Single source for every ad-segment
-   * surface (now-type, prog-border/badge, le-type, progress-fill, segment-inline). */
+   * surface (le-type, progress-fill, segment-inline). */
   --seg-ad:          var(--accent-warm);
 
   /* ── Segment-type color: music ──
