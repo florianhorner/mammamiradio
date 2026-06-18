@@ -116,14 +116,18 @@ keeps playing, but it is rotation/canned fallback, not fresh content. The fields
   `drain` (queue emptied mid-playback), `resume` (waking from a stopped session),
   and `idle` (a listener returned after the station went idle).
 - `window_count` — bridge fires inside the rolling window (`window_seconds`,
-  default 900s / 15 min).
+  default 1800s / 30 min).
 - `last_fire` — the most recent bridge `{bridge_type, source, timestamp}`.
 - `queue_empty_elapsed_s` — how long the queue has been empty right now.
-- `unhealthy` — `true` once `window_count` reaches `threshold` (default **3
-  bridges in 15 minutes**). That is the documented line for "the station is
-  running on rescue": one startup or resume bridge is normal, but repeated
-  bridging means the queue is starving (most visibly on the Pi, where
-  normalization latency is high) and needs attention even though audio plays.
+- `unhealthy` — `true` once **either** signal trips: `window_count` reaches
+  `threshold` (default **2 bridges in 30 minutes**), **or** `queue_empty_elapsed_s`
+  passes `queue_empty_threshold_s` (default **60s of continuous queue-empty
+  time**, measured over `queue_empty_window_seconds`). `unhealthy_reasons` lists
+  which signal(s) fired (`bridge_frequency`, `queue_empty`, or both). That is the
+  documented line for "the station is running on rescue": one startup or resume
+  bridge is normal, but repeated bridging — or a queue that stays empty — means
+  the queue is starving (most visibly on the Pi, where normalization latency is
+  high) and needs attention even though audio plays.
 
 The Engine Room **Queue rescue** row renders this as "Healthy" or "Running on
 rescue", with the window/session counts, the last bridge, and current
@@ -131,6 +135,24 @@ queue-empty seconds. A `producer_bridge_fire` structured log event is emitted on
 every fire so log aggregators can alert on sustained starvation. Counts are
 session-local by design and reset on restart. This is observability only — it
 does not change scheduling, prefetch depth, or rescue selection.
+
+### Reading producer headroom
+
+`runtime_status.producer_headroom` shows how full the lookahead queue is relative
+to the configured runway target, so a starving queue is visible before it has to
+bridge. The fields:
+
+- `queue_depth` — segments currently queued (`-1` if the queue is not yet attached).
+- `queue_capacity` — the queue's hard cap.
+- `lookahead_target` — the runway target, `max(4, pacing.lookahead_segments)`
+  (default `lookahead_segments = 4`).
+- `buffered_audio_sec` — total seconds of audio already queued, summed from
+  segment durations.
+- `headroom_ok` — `true` once `queue_depth >= lookahead_target`.
+- `reason` — human-readable: `"ready runway"` or `"building runway"`.
+
+This is observability only; the producer's own backpressure (`lookahead_segments`)
+governs how deep it prefetches.
 
 ### Detecting a not-working provider key
 

@@ -788,7 +788,7 @@ def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
     target_segments = max(4, int(config.pacing.lookahead_segments))
     queue_depth = int(runtime_health.get("queue_depth", 0))
     buffered_audio_sec = round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1)
-    queue_capacity = int(runtime_health.get("queue_capacity", 0))
+    queue_capacity = int(runtime_health.get("queue_capacity", -1))
     headroom_ok = queue_depth >= target_segments
     return {
         "queue_depth": queue_depth,

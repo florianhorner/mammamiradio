@@ -1175,3 +1175,27 @@ def test_runtime_status_snapshot_includes_producer_headroom():
     assert headroom["lookahead_target"] == 4
     assert headroom["buffered_audio_sec"] == 360.0
     assert headroom["headroom_ok"] is False
+    assert headroom["reason"] == "building runway"
+
+
+def test_runtime_status_snapshot_producer_headroom_ready_runway():
+    app = _make_app()
+    app.state.config.pacing.lookahead_segments = 4
+    app.state.queue = asyncio.Queue(maxsize=6)
+    for _ in range(4):
+        app.state.queue.put_nowait({"type": "music"})
+    app.state.station_state.queued_segments = [
+        {"type": "music", "duration_sec": 180.0},
+        {"type": "music", "duration_sec": 180.0},
+        {"type": "music", "duration_sec": 180.0},
+        {"type": "music", "duration_sec": 180.0},
+    ]
+
+    req = _fake_request(app)
+    runtime_health = _runtime_health_snapshot(req)
+    rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    headroom = rs["producer_headroom"]
+    assert headroom["queue_depth"] == 4
+    assert headroom["headroom_ok"] is True
+    assert headroom["reason"] == "ready runway"
