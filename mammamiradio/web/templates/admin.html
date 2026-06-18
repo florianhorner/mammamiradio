@@ -958,10 +958,10 @@ body[data-stopped="true"] .a-topbar .live-pill .dot { animation-play-state: paus
 body[data-stopped="true"] .a-station-card .dot.on { animation-play-state: paused; }
 /* Fader Down is not stopped: the transport is cued with no active listeners.
    Keep controls available, but quiet the motion so it does not read as airing. */
-body[data-fader-down="true"] .on-air-zone {
+body[data-fader-down="true"] .mmr-console {
   border-color: rgba(236,204,48,0.42);
 }
-body[data-fader-down="true"] .on-air-status-line .dot.on,
+body[data-fader-down="true"] .mmr-air-top .dot.on,
 body[data-fader-down="true"] .a-topbar .live-pill .dot,
 body[data-fader-down="true"] .a-station-card .dot.on {
   animation-play-state: paused;
@@ -1132,53 +1132,6 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 .producer-zone {
   border-radius: 8px;
 }
-.zone-eyebrow {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--sun2);
-  margin-bottom: 8px;
-}
-.on-air-zone {
-  border-color: rgba(236,204,48,0.45);
-  background:
-    linear-gradient(180deg, rgba(93,74,58,0.72) 0%, rgba(55,43,35,0.82) 100%),
-    var(--surface);
-}
-.on-air-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  align-items: center;
-}
-.on-air-now-main {
-  min-width: 0;
-}
-.on-air-now-main #nowType {
-  display: inline-flex;
-  margin-bottom: 10px;
-}
-.on-air-title {
-  font-family: var(--font-display);
-  font-size: 34px;
-  font-style: italic;
-  font-weight: 700;
-  line-height: 1.08;
-  color: var(--cream);
-  overflow-wrap: anywhere;
-}
-.on-air-artist {
-  margin-top: 4px;
-  color: var(--cream-dk);
-  font-size: 14px;
-}
-.on-air-progress-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-}
 .on-air-progress-track {
   flex: 1;
   height: 4px;
@@ -1196,51 +1149,6 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 .on-air-progress-track .progress-fill[data-t="banter"] { background: var(--seg-banter); }
 .on-air-progress-track .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
-.on-air-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: flex-end;
-  min-width: 190px;
-}
-.on-air-status-line,
-.on-air-cost-line {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--cream-dk);
-}
-.on-air-cost-line .lbl {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.on-air-cost-line b {
-  color: var(--sun);
-  font-weight: 600;
-}
-/* Session output: segments is the headline (larger, cream), cost is the
-   secondary muted line. Two separate single-pair rows — never a collapsed row. */
-.on-air-output-line b#sidebarSegments {
-  font-size: 18px;
-  color: var(--cream);
-  line-height: 1.1;
-}
-.on-air-cost-line b#sidebarCost {
-  font-size: 11px;
-  color: var(--muted);
-  font-weight: 500;
-}
-.on-air-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
 .producer-sticky-strip {
   display: none;
   position: sticky;
@@ -1306,11 +1214,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   flex-wrap: wrap;
   margin-bottom: 12px;
 }
-.rotation-sort {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-}
 /* Bulk-select toolbar (appears only when ≥1 song is checked) */
 .rotation-select {
   display: flex;
@@ -1353,58 +1256,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   align-self: center;
   margin-right: 2px;
 }
-.producer-drawers {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  align-items: start;
-}
-.producer-drawer {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(20,17,15,0.36);
-  overflow: hidden;
-}
-.producer-drawer[open] {
-  grid-column: 1 / -1;
-  background: rgba(37,30,25,0.88);
-  border-color: var(--line-strong);
-}
-.producer-drawer summary {
-  min-height: 56px;
-  padding: 12px 14px;
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.producer-drawer summary::-webkit-details-marker { display: none; }
-.drawer-title {
-  display: block;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--cream);
-}
-.drawer-meta {
-  display: block;
-  margin-top: 2px;
-  font-size: 10px;
-  color: var(--muted);
-}
 .drawer-arrow {
   color: var(--muted);
   transition: transform 0.15s;
-}
-.producer-drawer[open] .drawer-arrow {
-  transform: rotate(90deg);
-  color: var(--sun);
-}
-.drawer-body {
-  padding: 4px 16px 18px;
 }
 .drawer-section {
   padding-top: 14px;
@@ -1472,23 +1326,66 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
 @media (max-width: 960px) {
   .a-app.producer-desk { padding: 20px 18px 56px; }
-  .producer-drawers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .on-air-body { grid-template-columns: 1fr; }
-  .on-air-actions { align-items: flex-start; min-width: 0; }
-  .on-air-buttons { justify-content: flex-start; }
 }
 
 @media (max-width: 600px) {
   .producer-header { flex-direction: column; align-items: flex-start; }
   .producer-clock { text-align: left; }
   .producer-header .a-brand .wm { font-size: 25px; }
-  .producer-drawers { grid-template-columns: 1fr; }
-  .producer-drawer[open] { grid-column: auto; }
-  .on-air-title { font-size: 28px; }
   .producer-sticky-strip { top: 0; }
   .producer-sticky-strip { flex-wrap: wrap; }
   .topbar-cost { align-items: flex-start; }
   .drawer-section > header { flex-direction: column; align-items: flex-start; }
+}
+/* ══════════ Producer Desk — Concept B: pinned console + tabbed work area ══════════ */
+.producer-desk .producer-main{max-width:1100px}
+/* Sticky deck — console + tab bar pin together (one sticky unit, never overlap) */
+.mmr-deck{position:sticky;top:0;z-index:40;background:var(--bg);padding-top:8px;margin-bottom:16px}
+/* Pinned live console */
+.mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:16px;
+  background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 12px 38px -20px rgba(0,0,0,.85);
+  overflow:hidden;margin-bottom:14px}
+.mmr-console::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1}
+.mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}
+.mmr-console-air{padding:18px 22px}
+.mmr-console-side{padding:18px 20px;border-left:1px solid var(--line)}
+.mmr-air-top{display:flex;align-items:center;gap:9px}
+.mmr-air-top .status-chip{margin:0}
+.mmr-air-sig{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--muted)}
+.mmr-air-title{font-family:var(--font-display);font-style:italic;font-size:27px;line-height:1.1;margin-top:8px;color:var(--cream);overflow-wrap:anywhere}
+.mmr-air-artist{font-size:12.5px;color:var(--muted);margin-top:2px;min-height:1em}
+.mmr-air-progress{display:flex;align-items:center;gap:11px;margin-top:13px}
+.mmr-air-progress .progress-time{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);min-width:34px}
+.mmr-air-progress .on-air-progress-track{flex:1}
+.mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:14px}
+.mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
+.mmr-air-cost b{color:var(--cream-dk)}
+.mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:9px}
+.mmr-side-label.sun{color:var(--sun)}
+.mmr-console-triggers{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.mmr-console-triggers .a-trigger{min-height:0}
+.mmr-console-triggers .a-trigger .hi{display:none}
+.mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+/* Tab bar */
+.mmr-tabbar{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--line-strong);overflow-x:auto}
+.mmr-tab{position:relative;padding:12px 18px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap}
+.mmr-tab:hover{color:var(--cream-dk)}
+.mmr-tab.is-active{color:var(--cream)}
+.mmr-tab.is-active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--sun);border-radius:2px}
+.mmr-tab-alert{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:6px;vertical-align:middle}
+/* Tab panels — one visible at a time */
+.mmr-tabpanel{display:none}
+.mmr-tabpanel.is-active{display:block}
+/* One header per panel */
+.mmr-panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+.mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0}
+.mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
+@media (max-width:760px){
+  .mmr-console-grid{grid-template-columns:1fr}
+  .mmr-console-side{border-left:0;border-top:1px solid var(--line)}
+  .mmr-air-title{font-size:22px}
 }
 </style>
 </head>
@@ -1537,34 +1434,27 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Station paused · press Start when you're ready.</div>
 
-    <!-- In Onda zone -->
-    <section class="a-panel producer-zone on-air-zone" id="on-air">
-      <div class="zone-eyebrow">In onda</div>
-      <div class="on-air-body">
-        <div class="on-air-now-main">
-          <div class="status-chip idle" id="nowType" aria-label="status: idle">—</div>
-          <div class="on-air-title" id="nowTitle">Waiting for signal...</div>
-          <div class="on-air-artist" id="nowArtist"></div>
-          <div class="on-air-progress-row">
+    <!-- ══ Sticky deck — console + tab bar pin together so the tabs never hide behind the console ══ -->
+    <div class="mmr-deck">
+
+    <!-- ══ Pinned live console — transport + triggers + cooking feed, always in view ══ -->
+    <section class="mmr-console" id="on-air" aria-label="Console live">
+      <div class="mmr-console-grid">
+        <div class="mmr-console-air">
+          <div class="mmr-air-top">
+            <span class="dot on" id="onAirDot"></span>
+            <span class="status-chip idle" id="nowType" aria-label="status: idle">—</span>
+            <span class="mmr-air-sig" id="stationSignal">Live signal</span>
+          </div>
+          <div class="mmr-air-title" id="nowTitle">Waiting for signal...</div>
+          <div class="mmr-air-artist" id="nowArtist"></div>
+          <div class="mmr-air-progress">
             <span class="progress-time" id="nowElapsed">—</span>
             <div class="on-air-progress-track">
               <div class="progress-fill" id="progFill" data-t="music"></div>
             </div>
           </div>
-        </div>
-        <div class="on-air-actions">
-          <div class="on-air-status-line">
-            <span class="dot on" id="onAirDot"></span>
-            <span class="label on" id="onAirBadge">In onda</span>
-            <span id="stationSignal">Live signal</span>
-          </div>
-          <div class="on-air-cost-line on-air-output-line">
-            <span class="lbl">Produced · Session</span><b id="sidebarSegments">—</b>
-          </div>
-          <div class="on-air-cost-line">
-            <span class="lbl">Session cost</span><b id="sidebarCost">—</b>
-          </div>
-          <div class="on-air-buttons">
+          <div class="mmr-air-controls">
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
@@ -1574,13 +1464,40 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
             </button>
+            <span class="mmr-air-badge label on" id="onAirBadge">In onda</span>
+            <span class="mmr-air-cost"><span class="lbl">cost</span> <b id="sidebarCost">—</b></span>
+          </div>
+        </div>
+        <div class="mmr-console-side">
+          <div class="mmr-side-label">Interventi — air next</div>
+          <div class="a-triggers mmr-console-triggers">
+            <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
+              <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
+              <span class="lb">Banter</span>
+            </button>
+            <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
+              <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
+              <span class="lb">Ad break</span>
+            </button>
+            <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
+              <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
+              <span class="lb">News flash</span>
+            </button>
+            <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
+              <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
+              <span class="lb">More chaos</span>
+            </button>
+          </div>
+          <div class="mmr-console-cooking" id="queue-production" style="display:none">
+            <div class="mmr-side-label sun">In produzione · live</div>
+            <div id="productionFeed"></div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Sticky On Air strip -->
-    <div class="a-topbar producer-sticky-strip" id="topBar">
+    <!-- Legacy sticky strip — superseded by the pinned console; kept hidden so its JS writer targets stay valid -->
+    <div class="a-topbar producer-sticky-strip" id="topBar" hidden style="display:none">
       <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">In onda</span></span>
       <span id="headerHealth" class="status-dot working" aria-label="status: working" title="Runtime status">
         <span class="dot"></span>Checking
@@ -1599,13 +1516,24 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
     </div>
 
+    <!-- ══ Tab strip — swaps the work area below; the console above stays pinned ══ -->
+    <nav class="mmr-tabbar" id="adminTabs" aria-label="Sezioni regia">
+      <button type="button" class="mmr-tab" data-tab="diretta">Diretta</button>
+      <button type="button" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
+      <button type="button" class="mmr-tab" data-tab="rotazione">Rotazione</button>
+      <button type="button" class="mmr-tab" data-tab="conduttori">Conduttori</button>
+      <button type="button" class="mmr-tab" data-tab="archivio">Archivio</button>
+      <button type="button" class="mmr-tab" data-tab="motore">Motore<span class="mmr-tab-alert" id="motoreTabAlert" style="display:none"></span></button>
+    </nav>
+
+    </div><!-- /mmr-deck -->
+
+    <div class="mmr-tabpanels">
+
     <!-- Scaletta zone -->
-    <section class="a-panel producer-zone" id="live-queue">
-      <header>
-        <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Regia</div>
-          <h2>Scaletta</h2>
-        </div>
+    <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta">
+      <header class="mmr-panel-head">
+        <h2>Scaletta</h2>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
           <span class="filter-count" id="bufferedReady" title="Audio rendered and ready to air"></span>
@@ -1617,13 +1545,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           </div>
         </div>
       </header>
-      <div class="queue-requests">
+      <div class="queue-requests" id="queue-requests" style="display:none">
         <div class="card-label">Pending requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody"><div class="empty">No requests</div></div>
-      </div>
-      <div class="queue-production" id="queue-production" style="display:none">
-        <div class="card-label">In produzione</div>
-        <div id="productionFeed"></div>
       </div>
       <div id="programmeList">
         <div class="prog-empty">Building queue...</div>
@@ -1631,12 +1555,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </section>
 
     <!-- Rotation Pool zone -->
-    <section class="a-panel producer-zone" id="rotation-pool">
-      <header>
-        <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Regia</div>
-          <h2>Rotazione</h2>
-        </div>
+    <section class="a-panel producer-zone mmr-tabpanel" id="rotation-pool" data-panel="rotazione">
+      <header class="mmr-panel-head">
+        <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
       </header>
       <div class="rotation-toolbar">
@@ -1650,7 +1571,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" onclick="toggleBanlist()" title="Songs you've banned for good">Banned</button>
         </div>
-        <div class="rotation-sort">order: current rotation</div>
       </div>
       <div class="rotation-select" id="plSelectBar" style="display:none">
         <span id="plSelCount">0 selected</span>
@@ -1668,13 +1588,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
     </section>
 
-    <section class="producer-drawers" id="producer-drawers" aria-label="Cassetti regia">
-      <details class="producer-drawer" id="drawer-steer">
-        <summary>
-          <span><span class="drawer-title">Diretta</span><span class="drawer-meta">cadenza · modalità · interventi</span></span>
-          <span class="drawer-arrow" aria-hidden="true">›</span>
-        </summary>
-        <div class="drawer-body">
+    <!-- Diretta zone -->
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-steer" data-panel="diretta">
+      <header class="mmr-panel-head"><h2>Diretta</h2><div class="sub">cadenza · modalità · azioni</div></header>
     <section class="drawer-section" id="triggers">
 
       <!-- Subgroup 1: Modalità live -->
@@ -1705,33 +1621,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <input type="checkbox" id="festivalToggle" aria-label="Toggle Festival Mode" onchange="toggleFestivalMode(this)">
             <span class="festival-slider"></span>
           </label>
-        </div>
-      </div>
-
-      <!-- Subgroup 2: Azioni immediate -->
-      <div class="drawer-subgroup" role="group" aria-labelledby="dg-now-h">
-        <div class="ttl-eyebrow" id="dg-now-h">Azioni immediate</div>
-        <div class="a-triggers">
-          <button type="button" class="a-trigger" onclick="doTrigger('banter',this)">
-            <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/><path d="M5.5 14h5"/></svg></span>
-            <span class="lb">Trigger banter</span>
-            <span class="hi">After the current track</span>
-          </button>
-          <button type="button" class="a-trigger" onclick="doTrigger('ad',this)">
-            <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="12" height="8" rx="1.2"/><path d="M5 4l8-2"/><circle cx="11" cy="10" r="1.6"/><path d="M4.5 9h2M4.5 11h3"/></svg></span>
-            <span class="lb">Ad break</span>
-            <span class="hi">Next block — absurd Italian</span>
-          </button>
-          <button type="button" class="a-trigger" onclick="doTrigger('news_flash',this)">
-            <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.5 13H1.5z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.6" r="0.6" fill="currentColor"/></svg></span>
-            <span class="lb">News flash</span>
-            <span class="hi">Written from today's feed</span>
-          </button>
-          <button type="button" class="a-trigger chaos" onclick="doQuickAction('more_chaos',this)">
-            <span class="ico-wrap"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.7 1L3 9h4l-1 6 6-8H8z"/></svg></span>
-            <span class="lb">More chaos</span>
-            <span class="hi">Off-schedule</span>
-          </button>
         </div>
       </div>
 
@@ -1779,40 +1668,24 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
 
     </section>
-        </div>
-      </details>
+    </section>
 
-      <details class="producer-drawer" id="drawer-hosts">
-        <summary>
-          <span><span class="drawer-title">Conduttori</span><span class="drawer-meta">personalità</span></span>
-          <span class="drawer-arrow" aria-hidden="true">›</span>
-        </summary>
-        <div class="drawer-body">
+    <!-- Conduttori zone -->
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-hosts" data-panel="conduttori">
       <section class="drawer-section" id="hosts">
-        <header>
-          <div class="ttl-wrap">
-            <div class="ttl-eyebrow">Conduttori</div>
-            <h2>Conduttori</h2>
-          </div>
+        <header class="mmr-panel-head">
+          <h2>Conduttori</h2>
           <div class="sub" id="hostsMeta">Loading...</div>
         </header>
         <div id="hostsBody"><div class="empty" style="padding:10px 0;font-size:12px;font-style:italic;color:var(--muted)">Loading hosts...</div></div>
       </section>
-        </div>
-      </details>
+    </section>
 
-      <details class="producer-drawer" id="drawer-history">
-        <summary>
-          <span><span class="drawer-title">Archivio</span><span class="drawer-meta">past segments</span></span>
-          <span class="drawer-arrow" aria-hidden="true">›</span>
-        </summary>
-        <div class="drawer-body">
+    <!-- Archivio zone -->
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-history" data-panel="archivio">
     <section class="drawer-section" id="log">
-      <header>
-        <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Archivio</div>
-          <h2>Archivio</h2>
-        </div>
+      <header class="mmr-panel-head">
+        <h2>Archivio</h2>
         <div class="sub">History</div>
       </header>
       <div class="archivio-controls">
@@ -1832,27 +1705,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <div class="a-log" id="logBody"></div>
     </section>
-        </div>
-      </details>
+    </section>
 
-      <details class="producer-drawer" id="drawer-diagnostics">
-        <summary>
-          <span><span class="drawer-title">Motore</span><span class="drawer-meta">costi · provider · setup</span></span>
-          <span class="drawer-arrow" aria-hidden="true">›</span>
-        </summary>
-        <div class="drawer-body">
+    <!-- Motore zone -->
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore">
+      <header class="mmr-panel-head"><h2>Motore</h2><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></header>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
 
     <!-- ── MOTORE PANEL ── -->
     <section class="drawer-section" id="engine">
-      <header>
-        <div class="ttl-wrap">
-          <div class="ttl-eyebrow">Motore</div>
-          <h2>Motore</h2>
-        </div>
-        <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span>
-      </header>
       <div>
 
         <!-- Super Italian Mode toggle (station personality dial) -->
@@ -1977,9 +1839,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
       </div>
     </section>
-        </div>
-      </details>
     </section>
+
+    </div><!-- /mmr-tabpanels -->
 
   </main>
 
@@ -2142,22 +2004,30 @@ function toggleAccordion(head){
 // ── Legacy collapse (used in dynamically rendered content) ──
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
-function initProducerDrawers(){
-  document.querySelectorAll('.producer-drawer').forEach(drawer=>{
-    drawer.addEventListener('toggle',()=>{
-      if(!drawer.open)return;
-      document.querySelectorAll('.producer-drawer').forEach(other=>{
-        if(other!==drawer)other.open=false;
-      });
-    });
-  });
+let _activeTab='scaletta';
+function initTabs(){
+  const tabs=Array.from(document.querySelectorAll('.mmr-tab[data-tab]'));
+  const panels=Array.from(document.querySelectorAll('.mmr-tabpanel[data-panel]'));
+  function show(name,render){
+    if(!panels.some(p=>p.dataset.panel===name))name='scaletta';
+    _activeTab=name;
+    tabs.forEach(t=>{const on=t.dataset.tab===name;t.classList.toggle('is-active',on);if(on)t.setAttribute('aria-current','true');else t.removeAttribute('aria-current');});
+    panels.forEach(p=>p.classList.toggle('is-active',p.dataset.panel===name));
+    try{sessionStorage.setItem('adminTab',name);}catch(_){}
+    // Render the newly-shown panel immediately from cached state so switching
+    // tabs doesn't wait up to 3s for the next poll.
+    if(render)renderActiveTab();
+  }
+  tabs.forEach(t=>t.addEventListener('click',()=>show(t.dataset.tab,true)));
+  let initTab='scaletta';try{initTab=sessionStorage.getItem('adminTab')||'scaletta';}catch(_){}
+  show(initTab,false);
   // Once the operator manually toggles the Setup group, stop auto-collapsing it.
   const setupGroup=document.getElementById('setupGroup');
   if(setupGroup){
     setupGroup.querySelector('summary')?.addEventListener('click',()=>{setupGroup.dataset.userPinned='true';});
   }
 }
-initProducerDrawers();
+initTabs();
 
 function initProgrammeActions(){
   const el=document.getElementById('programmeList');
@@ -2851,6 +2721,10 @@ function renderSetup(setup){
   const needsAction=(setup.onboarding_steps||[]).some(s=>s.status==='todo'||s.status==='blocked');
   const alertDot=document.getElementById('engineAlertDot');
   if(alertDot)alertDot.style.display=needsAction?'inline-block':'none';
+  // Mirror the alert onto the Motore TAB so the operator sees "needs attention"
+  // from any tab without opening the (hidden) Motore panel.
+  const tabAlert=document.getElementById('motoreTabAlert');
+  if(tabAlert)tabAlert.style.display=needsAction?'inline-block':'none';
 
   // Auto-collapse the Setup group when everything is ready (eng review T5/E5).
   if(typeof window.motoreSetupAutoCollapse==='function')window.motoreSetupAutoCollapse(!needsAction);
@@ -3009,6 +2883,10 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
+// Selection survives the 3s poll re-render: track chosen songs by a stable key
+// (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
+let _plSelected=new Set();
+function _plKey(artist,title){return JSON.stringify([(artist||'').trim().toLowerCase(),(title||'').trim().toLowerCase()]);}
 function updatePl(tracks,page){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
@@ -3034,12 +2912,11 @@ function updatePl(tracks,page){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Ban from rotation">&#10005;</button></div></div>`;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Ban from rotation">&#10005;</button></div></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
-  // The 3s refreshFast() poll rebuilds these rows with fresh (unchecked) checkboxes,
-  // so re-sync the bulk-select toolbar — otherwise it could keep showing "N selected"
-  // and an active "Ban selected" that targets rows no longer checked.
+  // Rows are re-checked from _plSelected above, so selection survives the 3s poll
+  // rebuild; re-sync the bulk-select toolbar count from the Set.
   updatePlSelBar();
 }
 async function loadMorePlaylist(){
@@ -3105,20 +2982,25 @@ async function moveNext(i){
 async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast(r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back');await refreshFast();}else{const m=(r&&r.error)||wayOut('ban that one');toast(m);}}
 
 // --- Bulk select + ban -------------------------------------------------------
-function _checkedPlRows(){return [...document.querySelectorAll('.pl-check:checked')].map(c=>c.closest('.pl-row')).filter(Boolean);}
 function updatePlSelBar(){
-  const n=document.querySelectorAll('.pl-check:checked').length;
+  const n=_plSelected.size;
   const bar=document.getElementById('plSelectBar');const cnt=document.getElementById('plSelCount');
-  if(cnt)cnt.textContent=n+(n===1?' selected':' selected');
+  if(cnt)cnt.textContent=n+' selected';
   if(bar)bar.style.display=n>0?'flex':'none';
 }
-function onPlCheck(e){e.stopPropagation();updatePlSelBar();}
-function selectAllPl(){document.querySelectorAll('.pl-check').forEach(c=>{c.checked=true;});updatePlSelBar();}
-function clearPlSel(){document.querySelectorAll('.pl-check:checked').forEach(c=>{c.checked=false;});updatePlSelBar();}
+function onPlCheck(e){
+  e.stopPropagation();
+  const cb=e.target,row=cb.closest('.pl-row');
+  if(row){const k=_plKey(row.getAttribute('data-artist'),row.getAttribute('data-title'));if(cb.checked)_plSelected.add(k);else _plSelected.delete(k);}
+  updatePlSelBar();
+}
+// Select all LOADED rows from the data (not just DOM-rendered/filtered ones) so the
+// "N selected" count and Ban-selected scope match what 'Select all' means.
+function selectAllPl(){_plRows.forEach(t=>_plSelected.add(_plKey(t.artist,t.title)));document.querySelectorAll('.pl-check').forEach(c=>{c.checked=true;});updatePlSelBar();}
+function clearPlSel(){_plSelected.clear();document.querySelectorAll('.pl-check:checked').forEach(c=>{c.checked=false;});updatePlSelBar();}
 async function banSelected(){
-  const rows=_checkedPlRows();
-  if(!rows.length){toast('Pick at least one song first');return;}
-  const keys=rows.map(r=>[r.getAttribute('data-artist')||'',r.getAttribute('data-title')||'']);
+  const keys=[..._plSelected].map(k=>JSON.parse(k));
+  if(!keys.length){toast('Pick at least one song first');return;}
   if(!confirm(`Ban ${keys.length} song${keys.length===1?'':'s'} for good? They won’t come back after a restart.`))return;
   const r=await api('POST','/api/track/ban',{keys});
   if(r&&r.ok){const n=r.banned?r.banned.length:keys.length;toast(r.persisted===false?`Banned ${n} song${n===1?'':'s'} for now — but I couldn’t save it, so they may come back after a restart`:`Banned ${n} song${n===1?'':'s'}`);clearPlSel();await refreshFast();}
@@ -3472,14 +3354,17 @@ async function applyHostPreset(n,presetName){
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
+  const wrap=document.getElementById('queue-requests');
   _lrReqs=reqs||[];
   consumed=consumed||[];
   let html='';
   if(!_lrReqs.length&&!consumed.length){
+    if(wrap)wrap.style.display='none';
     el.innerHTML='<div class="empty">No requests — listeners can ask for tracks or shout-outs from the radio</div>';
     meta.textContent='';
     return;
   }
+  if(wrap)wrap.style.display='';
   meta.textContent=_lrReqs.length?_lrReqs.length+' pending':'';
   html+=_lrReqs.map((r,i)=>{
     const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
@@ -3743,10 +3628,8 @@ function updateEngineRoom(st,caps){
   if(sidebarCost)sidebarCost.textContent=cost;
   const topBarCost=document.getElementById('topBarCost');
   if(topBarCost)topBarCost.textContent=cost;
-  // Sidebar headline: segments produced this session (exact count). '—' until the
-  // first segment airs, so a cold-boot 0 isn't a sad empty headline.
-  const sidebarSegments=document.getElementById('sidebarSegments');
-  if(sidebarSegments)sidebarSegments.textContent=(st.segments_produced>0?st.segments_produced:'—');
+  // (The produced-segments session headline was retired in the Concept B console:
+  // a raw counter that meant nothing to an operator. Token cost stays above.)
 
   // Update sidebar uptime
   const sidebarUptime=document.getElementById('sidebarUptime');
@@ -3841,6 +3724,16 @@ function updateEngineRoom(st,caps){
 }
 
 // ── Polling ──
+// Only the visible tab's heavy list gets (re)rendered each poll — the other
+// panels are display:none, so rebuilding their innerHTML 20×/min is wasted work.
+// Switching tabs renders the newly-shown panel immediately from cached _st.
+function renderActiveTab(){
+  if(_activeTab==='rotazione')updatePl(_st.playlist||[],_st.playlist_page||null);
+  else if(_activeTab==='archivio')updateLog(_st.stream_log);
+  else if(_activeTab==='scaletta')renderProgramme(_st);
+  // diretta / conduttori / motore have no poll-driven list here — their content
+  // is fed by the always-on calls (updateRecent, renderHosts one-shot, updateEngineRoom).
+}
 async function refreshFast(){
   try{
     const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
@@ -3855,11 +3748,9 @@ async function refreshFast(){
     updateFaderDownState(_st);
     updateNow(_st.now_streaming);
     renderProduction(_st);
-    renderProgramme(_st);
+    renderActiveTab();
     updateBufferedReady(_st);
     updateRecent(_st);
-    updateLog(_st.stream_log);
-    updatePl(_st.playlist||[],_st.playlist_page||null);
     updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);

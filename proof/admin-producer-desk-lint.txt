@@ -1,0 +1,8 @@
+Proof: admin producer-desk redesign — lint + typecheck
+HEAD: f784fdfd119342d007ea8cf5655b9b339a9265ea
+Captured: 2026-06-18T20:06:20Z
+--- ruff check (changed py tests) ---
+All checks passed!
+--- mypy (producer.py) ---
+mammamiradio/audio/tts.py:493: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 1 source file

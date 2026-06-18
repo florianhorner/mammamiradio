@@ -197,15 +197,22 @@ def test_admin_transport_buttons_have_44px_touch_targets() -> None:
     _assert_touch_target(".btn-primary-sm")
 
 
-def test_producer_desk_drawers_have_responsive_grid_rules() -> None:
-    """Drawers are 4-up on desktop, 2-up on tablet, and stacked on phone."""
+def test_producer_desk_console_is_responsive() -> None:
+    """Concept B: the console is two-column on desktop, stacks to one column on
+    narrow screens, and the tab bar scrolls horizontally instead of wrapping."""
     css = _admin_css()
-    phone_css = _phone_css()
 
-    assert re.search(r"\.producer-drawers\s*\{[^}]*repeat\(4,\s*minmax\(0,\s*1fr\)\)", css, re.DOTALL)
-    assert "@media (max-width: 960px)" in css
-    assert ".producer-drawers { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in css
-    assert re.search(r"\.producer-drawers\s*\{[^}]*grid-template-columns\s*:\s*1fr", phone_css, re.DOTALL)
+    # Desktop: two columns (air | triggers+cooking).
+    assert ".mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}" in css
+    # Narrow: single column.
+    assert "@media (max-width:760px)" in css
+    assert re.search(
+        r"@media \(max-width:760px\)\{[^}]*\.mmr-console-grid\{grid-template-columns:1fr\}",
+        css,
+        re.DOTALL,
+    )
+    # The tab bar scrolls sideways rather than wrapping onto two rows.
+    assert re.search(r"\.mmr-tabbar\{[^}]*overflow-x:auto", css)
 
 
 def test_on_air_sticky_strip_survives_scrolling() -> None:

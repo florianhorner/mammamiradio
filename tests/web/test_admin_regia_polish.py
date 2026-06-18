@@ -63,9 +63,11 @@ def test_undo_toast_button_is_focusable_target() -> None:
 # ── Diretta drawer rename + ARIA subgroups (T4) ─────────────────────
 
 
-def test_steer_drawer_titled_diretta_not_regia() -> None:
+def test_steer_panel_titled_diretta_not_regia() -> None:
     html = _html()
-    assert '<span class="drawer-title">Diretta</span>' in html
+    # Concept B: Diretta is a tab + a single panel header (no drawer summary).
+    assert 'data-tab="diretta">Diretta</button>' in html
+    assert "<h2>Diretta</h2>" in html
     assert '<span class="drawer-title">Regia</span>' not in html
     # The sr-only / subtitle "Regia — Control Room" is a protected ingress label
     # and must survive.
@@ -74,10 +76,12 @@ def test_steer_drawer_titled_diretta_not_regia() -> None:
 
 def test_diretta_subgroups_have_role_group_and_labelledby() -> None:
     html = _html()
-    for hid in ("dg-modes-h", "dg-now-h", "dg-quick-h", "dg-pacing-h"):
+    # "Azioni immediate" (dg-now-h) moved to the pinned console; the Diretta tab
+    # keeps Modalità live, Azioni rapide, and Cadenza.
+    for hid in ("dg-modes-h", "dg-quick-h", "dg-pacing-h"):
         assert f'aria-labelledby="{hid}"' in html, f"subgroup must reference {hid}"
         assert f'id="{hid}"' in html, f"subgroup header {hid} must exist"
-    assert html.count('class="drawer-subgroup"') >= 4
+    assert html.count('class="drawer-subgroup"') >= 3
 
 
 def test_mode_toggles_keep_shape_icons() -> None:
@@ -168,18 +172,21 @@ def test_token_cost_counter_survives_in_costs_group() -> None:
 
 
 def test_session_cost_reframe_template_invariants() -> None:
-    """Protected cost display: session estimate copy and render targets survive."""
+    """Protected cost display: the token-cost estimate copy and render targets
+    survive the Concept B console rewrite. The 'Produced · Session N' segment
+    counter was intentionally dropped (operator-noise); the cost stays."""
     html = _html()
 
     assert "AI cost · 24h" not in html
-    assert "Session cost" in html
-    for target in ("sidebarSegments", "sidebarCost", "topBarCost", "apiCostEl"):
+    # Token cost render targets survive (protected element).
+    for target in ("sidebarCost", "topBarCost", "apiCostEl"):
         assert target in html
+    # The meaningless segment-count headline + its writer were retired.
+    assert "sidebarSegments" not in html
 
     assert ".toFixed(4)" not in html
     assert "'<$1'" in html
     assert "'~$'+Math.round(_rawCost)" in html
-    assert "st.segments_produced>0?st.segments_produced:'—'" in html
 
 
 # ── Archivio filters + sessionStorage (T6) ──────────────────────────
