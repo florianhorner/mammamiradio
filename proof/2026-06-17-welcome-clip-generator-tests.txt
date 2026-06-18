@@ -1,33 +1,39 @@
 Proof: welcome-clip generator script (scripts/generate_welcome_clips.py)
 Branch: florianhorner/mammamiradio claude/todo-implementation-l7j4es
-Date (UTC): 2026-06-17T23:26:42Z
+Date (UTC): 2026-06-18T20:21:39Z
 ========================================================================
 ## tests
-$ pytest tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py -q
-.....................                                                    [100%]
-21 passed in 0.36s
+$ .venv/bin/python -m pytest tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py -q
+..........................                                               [100%]
+26 passed in 0.36s
 
 Covers: contract shape, normal generation, skip-existing, --overwrite,
---dry-run (incl. existing clips shown as skipped), one-failure-does-not-abort,
-failed-render partial-artifact cleanup, silent-TTS-fallback rejection,
-fallback-voice-substitution rejection, silent-clip cleanup-failure handling,
-unwritable-output-dir handling, and main() exit codes. Each batch test
-asserts the full per-clip result count. Edge engine only (contract voices
-are Edge IDs), so a cloud-engine voice substitution can't slip through.
+--dry-run (incl. existing clips shown as skipped), overwrite failure preserving
+the last known-good clip, truncated non-silent render rejection,
+one-failure-does-not-abort, failed-render partial-artifact cleanup,
+silent-TTS-fallback rejection, fallback-voice-substitution rejection,
+silent-clip cleanup-failure handling, unwritable-output-dir handling, and main()
+exit codes. Renders go through a hidden .staging/ subdir then publish via an
+atomic replace, so an interrupted run can never leave a servable partial clip in
+the runtime-globbed welcome dir — guarded by a mid-render test that asserts the
+clip dir exposes only already-published contract clips. The new Python CLI is
+also covered by the scripts/ --help smoke test. Each batch test asserts the full
+per-clip result count. Edge engine only (contract voices are Edge IDs), so a
+cloud-engine voice substitution can't slip through.
 Note: the authoritative full-suite + coverage run is the CI Quality job
 (this sandbox has no ffmpeg, which the audio test suite requires).
 ========================================================================
 ## lint
-$ ruff check .
+$ ruff check scripts/generate_welcome_clips.py tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py
 All checks passed!
-$ ruff format --check scripts/generate_welcome_clips.py tests/scripts/test_generate_welcome_clips.py
-2 files already formatted
+$ ruff format --check scripts/generate_welcome_clips.py tests/scripts/test_generate_welcome_clips.py tests/test_scripts_help.py
+3 files already formatted
 $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.
 ========================================================================
 ## typecheck
-$ mypy mammamiradio/ tests/
-Success: no issues found in 192 source files
+$ mypy scripts/generate_welcome_clips.py
+Success: no issues found in 1 source file
 ========================================================================
 ## runtime — offline CLI, no audio path touched
 $ python scripts/generate_welcome_clips.py --dry-run
@@ -36,5 +42,5 @@ planned	marco_welcome_2.mp3	(it-IT-GiuseppeMultilingualNeural)
 planned	giulia_welcome_1.mp3	(it-IT-ElsaNeural)
 planned	giulia_welcome_2.mp3	(it-IT-ElsaNeural)
 
-Output: /home/user/mammamiradio/mammamiradio/assets/demo/welcome
+Output: <repo>/mammamiradio/assets/demo/welcome
 Counts: planned=4

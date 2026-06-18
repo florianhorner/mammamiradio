@@ -24,15 +24,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from mammamiradio.audio import tts as tts_module  # noqa: E402
-from mammamiradio.audio.audio_quality import AudioToolError, _probe_volume  # noqa: E402
+from mammamiradio.audio.audio_quality import (  # noqa: E402
+    AudioQualityError,
+    AudioToolError,
+    _probe_duration_sec,
+    _probe_volume,
+)
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "mammamiradio" / "assets" / "demo" / "welcome"
 
@@ -44,6 +51,15 @@ STATUS_PLANNED = "planned"
 # Pure digital silence (the TTS silence fallback) measures near the floor
 # (~-91 dBFS peak); real speech peaks far above this, so -80 cleanly splits them.
 SILENCE_PEAK_DBFS = -80.0
+MIN_CLIP_BYTES = 1024
+MIN_CLIP_DURATION_SEC = 0.5
+
+# Render intermediates here, never directly in the clip dir. The playback loop
+# serves any ``*.mp3`` directly under welcome/ — and Path.glob matches dotfiles —
+# while synthesize() also drops a sibling ``.raw.mp3``. Staging in a subdirectory
+# (still on the same filesystem, so the final publish stays an atomic replace)
+# keeps every partial/raw artifact out of that glob.
+STAGING_DIRNAME = ".staging"
 
 
 @dataclass(frozen=True)
@@ -108,6 +124,43 @@ def _looks_like_silence(path: Path) -> bool:
     return peak_db is not None and peak_db <= SILENCE_PEAK_DBFS
 
 
+def _staging_path(dest: Path) -> Path:
+    """Path for a render inside the hidden staging subdir of dest's directory.
+
+    Keeps the in-progress render (and synthesize's sibling ``.raw.mp3``) out of
+    the runtime-globbed clip directory, so an interrupted generation can never
+    leave a servable partial clip behind. The publish back into the clip dir is a
+    same-filesystem atomic ``replace`` (see STAGING_DIRNAME).
+    """
+    return dest.parent / STAGING_DIRNAME / f"{dest.stem}.{uuid4().hex}.tmp{dest.suffix}"
+
+
+def _cleanup_staging_dir(output_dir: Path) -> None:
+    """Best-effort removal of the staging subdir once a batch is done.
+
+    Leftover staging files are already invisible to the runtime glob (they live
+    in a subdirectory), so this is hygiene, not safety: a failure to remove the
+    dir is ignored rather than allowed to abort or mask the batch result.
+    """
+    shutil.rmtree(output_dir / STAGING_DIRNAME, ignore_errors=True)
+
+
+def _validate_render(path: Path) -> str:
+    """Return a failure reason if the rendered clip is clearly unusable."""
+    if not path.exists():
+        return "rendered clip missing"
+    size = path.stat().st_size
+    if size < MIN_CLIP_BYTES:
+        return f"rendered clip too small ({size} bytes < {MIN_CLIP_BYTES} bytes)"
+    try:
+        duration = _probe_duration_sec(path)
+    except (AudioQualityError, AudioToolError, OSError) as exc:
+        return f"could not measure rendered clip duration ({exc})"
+    if duration is not None and duration < MIN_CLIP_DURATION_SEC:
+        return f"rendered clip too short ({duration:.2f}s < {MIN_CLIP_DURATION_SEC:.2f}s)"
+    return ""
+
+
 async def generate_clips(
     clips: tuple[WelcomeClip, ...],
     output_dir: Path,
@@ -125,52 +178,75 @@ async def generate_clips(
     remaining clips.
     """
     results: list[ClipResult] = []
-    for clip in clips:
-        dest = output_dir / clip.filename
-        # Check existence before the dry-run short-circuit so a preview reports
-        # already-present clips as "skipped" (what a real run would do), not "planned".
-        if dest.exists() and not overwrite:
-            results.append(ClipResult(clip, dest, STATUS_SKIPPED))
-            continue
-        if dry_run:
-            results.append(ClipResult(clip, dest, STATUS_PLANNED))
-            continue
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            await tts_module.synthesize(clip.text, clip.voice, dest, engine="edge")
-        except Exception as exc:  # one bad voice / FS error must not abort the batch
-            # Drop any partial render so a rerun doesn't mistake it for a good clip.
-            note = _discard(dest)
-            results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{exc}{note}"))
-            continue
-        if _looks_like_silence(dest):
-            # The TTS backend was unreachable and fell back to silence. Discard
-            # the file so an operator can't unknowingly commit a silent greeting.
-            note = _discard(dest)
-            results.append(
-                ClipResult(
-                    clip,
-                    dest,
-                    STATUS_FAILED,
-                    error=f"voice backend unreachable — TTS returned silence; clip discarded{note}",
+    staging_dir_ready = False
+    try:
+        for clip in clips:
+            dest = output_dir / clip.filename
+            staging = _staging_path(dest)
+            # Check existence before the dry-run short-circuit so a preview reports
+            # already-present clips as "skipped" (what a real run would do), not "planned".
+            if dest.exists() and not overwrite:
+                results.append(ClipResult(clip, dest, STATUS_SKIPPED))
+                continue
+            if dry_run:
+                results.append(ClipResult(clip, dest, STATUS_PLANNED))
+                continue
+            try:
+                if not staging_dir_ready:
+                    # Create the staging subdir once, on the first real render — this
+                    # also creates output_dir (its parent). Skipped entirely for a dry
+                    # run or an all-skipped batch, which therefore write nothing.
+                    staging.parent.mkdir(parents=True, exist_ok=True)
+                    staging_dir_ready = True
+                await tts_module.synthesize(clip.text, clip.voice, staging, engine="edge")
+            except Exception as exc:  # one bad voice / FS error must not abort the batch
+                # Drop any partial render so a rerun doesn't mistake it for a good clip.
+                note = _discard(staging)
+                results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{exc}{note}"))
+                continue
+            render_error = _validate_render(staging)
+            if render_error:
+                note = _discard(staging)
+                results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{render_error}; clip discarded{note}"))
+                continue
+            if _looks_like_silence(staging):
+                # The TTS backend was unreachable and fell back to silence. Discard
+                # the file so an operator can't unknowingly commit a silent greeting.
+                note = _discard(staging)
+                results.append(
+                    ClipResult(
+                        clip,
+                        dest,
+                        STATUS_FAILED,
+                        error=f"voice backend unreachable — TTS returned silence; clip discarded{note}",
+                    )
                 )
-            )
-            continue
-        if clip.voice in tts_module._failed_edge_voices:
-            # synthesize() silently substitutes the default Edge fallback voice when
-            # the requested voice fails, so this render would be the right words in the
-            # wrong speaker. Reject it rather than ship a mismatched greeting.
-            note = _discard(dest)
-            results.append(
-                ClipResult(
-                    clip,
-                    dest,
-                    STATUS_FAILED,
-                    error=f"requested voice unavailable — rendered in a fallback voice; clip discarded{note}",
+                continue
+            if clip.voice in tts_module._failed_edge_voices:
+                # synthesize() silently substitutes the default Edge fallback voice when
+                # the requested voice fails, so this render would be the right words in the
+                # wrong speaker. Reject it rather than ship a mismatched greeting.
+                note = _discard(staging)
+                results.append(
+                    ClipResult(
+                        clip,
+                        dest,
+                        STATUS_FAILED,
+                        error=f"requested voice unavailable — rendered in a fallback voice; clip discarded{note}",
+                    )
                 )
-            )
-            continue
-        results.append(ClipResult(clip, dest, STATUS_GENERATED))
+                continue
+            try:
+                staging.replace(dest)
+            except OSError as exc:
+                note = _discard(staging)
+                results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"could not publish clip ({exc}){note}"))
+                continue
+            results.append(ClipResult(clip, dest, STATUS_GENERATED))
+    finally:
+        # Always clear the staging subdir — even on Ctrl-C / task cancellation
+        # (BaseException), so no partial render lingers in the packaged asset tree.
+        _cleanup_staging_dir(output_dir)
     return results
 
 
