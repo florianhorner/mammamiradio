@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
+
 ### Changed
 
 - **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
