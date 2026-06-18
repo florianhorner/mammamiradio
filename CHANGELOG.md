@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Security
+
+- **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
+
 ### Added
 
 - **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
