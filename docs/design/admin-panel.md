@@ -89,10 +89,11 @@ section names and on-air flair** — independent of the super-italian toggle. Th
 mirrors the `MAMMAMIRADIO_SUPER_ITALIAN` OFF contract (English utility copy,
 Italian headlines and station-feel words).
 
-- **Italian (flair):** section/drawer names (`Diretta`, `Scaletta`, `Rotazione`,
-  `Conduttori`, `Motore`, `Archivio`), the `Regia` eyebrow, subgroup eyebrow
-  labels (`Modalità live`, `Azioni immediate`, `Azioni rapide`, `Cadenza`), the
-  `In onda` / `Fermo` on-air badge, and the `Anni '70/'80/'90` era chips.
+- **Italian (flair):** tab / section names (`Diretta`, `Scaletta`, `Rotazione`,
+  `Conduttori`, `Motore`, `Archivio`), the `Regia` eyebrow, Diretta subgroup
+  eyebrow labels (`Modalità live`, `Azioni rapide`, `Cadenza`), the console
+  `In produzione` and `In onda` / `Fermo` on-air labels, and the `Anni '70/'80/'90`
+  era chips.
 - **English (utility):** every button, tooltip, toast, form subhead, search
   state, empty state, status label, and helper line.
 - Regression guard: `tests/web/test_admin_regia_polish.py::test_no_italian_utility_strings_remain`.

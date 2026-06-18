@@ -97,3 +97,41 @@ def test_empty_pending_requests_collapses() -> None:
     block = block[: block.index("function ", 1)]
     assert "getElementById('queue-requests')" in block
     assert "wrap.style.display='none'" in block
+
+
+def test_poll_renders_only_the_active_tab() -> None:
+    """The 3s poll routes heavy list renders through renderActiveTab() (visible tab
+    only). A regression that drops the dispatch (panels go stale) or reverts to
+    rendering all three lists every poll (wasted work) must fail here."""
+    html = _html()
+    assert "function renderActiveTab()" in html
+    refresh = html[html.index("async function refreshFast()") : html.index("async function refreshSlow()")]
+    assert "renderActiveTab();" in refresh
+    # old unconditional trio must NOT run every poll
+    assert "renderProgramme(_st);" not in refresh
+    assert "updatePl(_st.playlist" not in refresh
+    # the gate maps each tab to its renderer
+    rat = html[html.index("function renderActiveTab()") : html.index("async function refreshFast()")]
+    assert "_activeTab==='rotazione'" in rat and "updatePl(" in rat
+    assert "_activeTab==='archivio'" in rat and "updateLog(" in rat
+    assert "_activeTab==='scaletta'" in rat and "renderProgramme(" in rat
+
+
+def test_select_all_is_data_driven() -> None:
+    """Select-all iterates the loaded data (_plRows), not just DOM-rendered rows, so
+    the count and ban scope match what 'Select all' means even under a filter."""
+    html = _html()
+    line_start = html.index("function selectAllPl()")
+    sel = html[line_start : html.index("\n", line_start)]
+    assert "_plRows.forEach" in sel
+    assert "_plSelected.add(_plKey(" in sel
+
+
+def test_active_tab_persists_in_sessionstorage() -> None:
+    """The chosen tab persists across reloads; an unknown stored tab falls back to
+    Scaletta so the work area is never blank."""
+    html = _html()
+    init = html[html.index("function initTabs()") : html.index("initTabs();")]
+    assert "sessionStorage.setItem('adminTab'" in init
+    assert "sessionStorage.getItem('adminTab')" in init
+    assert "name='scaletta'" in init  # unknown-tab fallback
