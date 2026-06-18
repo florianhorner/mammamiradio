@@ -92,12 +92,12 @@ Every segment reaches the playback queue through one funnel —
 `_enqueue_with_egress()` in `scheduling/producer.py` — so music, dialogue, ads, and
 bridges all leave through a single chokepoint after every mix, concat, and
 transition-sting merge is done. The funnel runs an ordered egress FX pipeline whose
-always-on final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
+optional final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
 `audio/normalizer.py`): one extra FFmpeg pass that colours the finished audio like an
-over-the-air FM signal — a subtle multipath movement, a gentle pre-emphasis HF shelf,
-the ~15 kHz channel band-limit, and a soft broadcast leveller. Voice and music exit
+over-the-air FM signal — a gentle pre-emphasis HF shelf, the ~15 kHz channel band-limit,
+and a flat loudness-offset trim (no stereo swirl, no dynamics). Voice and music exit
 through the same final stage, so there is no "FM music next to studio-clean voice"
-seam. Toggle it with `[audio] broadcast_chain` (default on) — or, on the HA add-on,
+seam. Toggle it with `[audio] broadcast_chain` (default off — studio-clean) — or, on the HA add-on,
 the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
 can switch to studio-clean without rebuilding the baked-in `radio.toml`. It is also
 operator-toggleable **live** from the admin Engine Room On-Air Sound dial

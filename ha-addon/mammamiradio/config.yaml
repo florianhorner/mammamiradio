@@ -38,7 +38,7 @@ options:
   super_italian_mode: false
   chaos_mode_active: false
   festival_mode: false
-  broadcast_chain: true
+  broadcast_chain: false
 schema:
   station_name: str?
   jamendo_client_id: password?

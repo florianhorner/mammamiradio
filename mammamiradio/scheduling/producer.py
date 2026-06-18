@@ -629,7 +629,8 @@ async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
 
     Returns the processed segment (a baked cache render or a fresh ephemeral tmp render)
     or the original, unchanged, when no stage applied. The FM broadcast chain is the
-    always-on final stage — "the transmitter"; the chaos (#482) and interference (#483)
+    optional final stage — "the transmitter" (default off — studio-clean; opt-in); the
+    chaos (#482) and interference (#483)
     content stages will slot in BEFORE it so effects colour the content and the broadcast
     chain colours the channel last. Emergency / bridge / rescue fills skip the pipeline
     entirely (see ``_is_rescue_fill``). Best-effort: a stage failure leaves the prior
@@ -683,8 +684,8 @@ async def _enqueue_with_egress(
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
-    The outgoing egress FX pipeline (the always-on FM broadcast chain; the chaos
-    and interference stages slot in later) runs here, so music, dialogue, ads and
+    The outgoing egress FX pipeline (the optional FM broadcast chain, default off; the
+    chaos and interference stages slot in later) runs here, so music, dialogue, ads and
     bridges all leave through one chokepoint — the audio equivalent of the
     transmitter every signal passes through last. Operator air-next still routes
     through the synchronous front-insert critical section, just behind this one
