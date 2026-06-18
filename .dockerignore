@@ -17,3 +17,4 @@ go-librespot/
 .pytest_cache
 node_modules
 .claude/
+**/.staging/
