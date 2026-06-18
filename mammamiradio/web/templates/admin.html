@@ -73,8 +73,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 
 /* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
    Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
-body[data-stopped="true"] .live-dot,
-body[data-stopped="true"] .on-air-dot { animation-play-state: paused; }
+body[data-stopped="true"] .live-dot { animation-play-state: paused; }
 /* Producer actions are meaningless while paused — dim and disable them so the
    operator can't fire a banter/ad/news trigger into a stopped stream. */
 body[data-stopped="true"] .btn-trigger,
@@ -82,10 +81,6 @@ body[data-stopped="true"] .btn-chip,
 body[data-stopped="true"] .btn-util {
   opacity: 0.35; pointer-events: none; filter: saturate(0.5);
 }
-/* Freeze the sidebar progress fill so it stops advancing visually. */
-body[data-stopped="true"] .sidebar-progress-fill { animation-play-state: paused; }
-body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
-
 .prog-empty { padding: 20px; text-align: center; font-size: 12px; font-style: italic; color: var(--muted); }
 
 /* ── ACCORDION SECTIONS ── */
@@ -1013,19 +1008,18 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 /* Mobile fix: panel header stacks vertically so subtitle doesn't collide with wrapped h2 */
   .a-panel header { flex-direction: column; align-items: flex-start; gap: 8px; }
   .a-panel header .sub { flex-shrink: 1; }
-  .admin-layout, .a-app {
+  .a-app {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }
-  .admin-sidebar, .a-sidebar {
+  .a-sidebar {
     position: static;
     height: auto;
     border-left: none;
     border-bottom: 1px solid rgba(245,237,216,0.08);
     border-top: 3px solid var(--sun2);
   }
-  .admin-content, .a-content { padding: 16px 16px; }
-  .sidebar-bottom { display: none; }
+  .a-content { padding: 16px 16px; }
   .search-row { flex-direction: column; }
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
