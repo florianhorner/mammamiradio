@@ -74,8 +74,15 @@ def test_programme_actions_do_not_interpolate_ids_into_inline_handlers() -> None
     assert 'data-playlist-link="true"' in render_block
     assert "data-spotify-id=\"${esc(it.spotify_id||'')}\"" in render_block
     assert "data-queue-remove-id=\"${esc(it.id||'')}\"" in render_block
-    assert "getAttribute('data-spotify-id')" in html
-    assert "getAttribute('data-queue-remove-id')" in html
+
+    # The delegated listener must be the place that reads those attributes back.
+    # Scoping to initProgrammeActions() (not the whole file) means a future edit
+    # that moves the reads into an inline onclick again fails here, even if some
+    # other getAttribute('data-spotify-id') survives elsewhere in admin.html.
+    init_block = html[html.index("function initProgrammeActions") : html.index("\ninitProgrammeActions();")]
+    assert "getAttribute('data-spotify-id')" in init_block
+    assert "getAttribute('data-queue-remove-id')" in init_block
+    assert "getAttribute('data-playlist-index')" in init_block
 
 
 def test_admin_csp_allows_inline() -> None:
