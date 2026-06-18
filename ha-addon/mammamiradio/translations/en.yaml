@@ -40,4 +40,4 @@ configuration:
     description: "Turns your station into a theatrical music competition. Hosts announce songs as fictional Italian regional delegations, assign dramatic points, and call drinking game triggers. Toggleable live from the admin panel without a restart."
   broadcast_chain:
     name: On-Air Sound
-    description: "On (default): every song, host break, and ad gets a gentle on-air colouring — the warm, slightly band-limited character of an FM broadcast — so the station sounds like a station you tuned into, not a clean studio file. Off: studio-clean output."
+    description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect on the next few tracks as the buffered queue cycles through, not the one playing now."

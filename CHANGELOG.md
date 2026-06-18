@@ -12,9 +12,13 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **On-Air Sound (the FM colouring) is now off by default — the station ships studio-clean.** It is a deliberately subtle effect: on good speakers most people can't tell it apart from a clean studio file. Rather than colour everything by default, the station now plays clean and you can opt into the FM character from the admin Engine Room ("On-Air Sound") or the add-on options. The admin control now explains, in plain language, what it does, how subtle it is, where it's most noticeable, and that it takes a few tracks to take effect.
+
 - **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
 
 ### Fixed
+
+- **Ad breaks no longer have a strange "swirling" sound.** The on-air FM colouring included a moving effect that smeared the radio-static sound between an ad's spoken lines into an odd, headphone-like swirl — the one moment the colouring was ever clearly audible, and it sounded wrong rather than like real radio. That effect has been removed; the on-air colouring is now gentle tone shaping with no swirl.
 
 - **The admin producer desk reads cleanly again.** Some labels had drifted out of step: the queue-order line had switched out of the technical typeface so it stopped matching the other readouts, and a few labels in the host-personality panel were shrunk so small they were hard to read. Type is consistent again and nothing renders below a legible size. Segment colours are clearer too: music and banter now have their own dedicated colours, so the blue that means "music" is no longer the same blue that means "all good", and the gold that means "banter" is no longer the same gold used for accents — each segment type keeps its own colour and is always paired with its label.
 

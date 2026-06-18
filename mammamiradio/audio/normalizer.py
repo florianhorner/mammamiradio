@@ -376,27 +376,38 @@ def configure_broadcast_chain(
 def _broadcast_filter_chain() -> str:
     """The FM 'transmitter' colour applied LAST in the egress pipeline.
 
-    Deliberately conservative — a subtle multipath movement, a gentle pre-emphasis
-    HF shelf at the real ~75 µs turnover (~2.1 kHz, not 3180 Hz), the ~15 kHz FM
-    channel band-limit, and a soft broadcast leveller. NO equalizer + loudnorm
-    stack (that is the psymodel.c:576 SIGABRT surface on ffmpeg 8.x / Pi aarch64),
-    and no loudnorm at all — the segment is already at target from the upstream
-    reconcile pass. Filter VALUES are a starting point pending the A/B listening
-    sign-off; the chain SHAPE (no stacked EQ, no loudnorm) is the safety contract.
+    Deliberately conservative — a gentle pre-emphasis HF shelf at the real ~75 µs
+    turnover (~2.1 kHz, not 3180 Hz), the ~15 kHz FM channel band-limit, and a flat
+    loudness-offset trim. NO equalizer + loudnorm stack (that is the psymodel.c:576
+    SIGABRT surface on ffmpeg 8.x / Pi aarch64), and no loudnorm at all — the segment
+    is already at target from the upstream reconcile pass. NO stereo-decorrelating
+    filter (phaser / stereotools / haas / inter-channel delay): a swept ``aphaser``
+    used to sit here as faux "multipath", but its 0.5 Hz LFO swirled broadband stereo
+    content (the white-noise static bed between ad voice lines) into an audible
+    "binaural" smear — a #1 illusion-break, so it was removed. NO dynamics stage
+    either — segments are already loudness-reconciled before egress, so the old
+    ``acompressor`` leveller was redundant AND not loudness-neutral across content;
+    it is replaced by a flat ``volume`` trim that keeps the chain neutral by
+    construction. The chain SHAPE (no stacked EQ, no loudnorm, no stereo swirl, no
+    dynamics) is the safety contract; filter VALUES remain a starting point pending
+    the A/B listening sign-off (the broader "what should the station sound like"
+    strategy is being revisited separately).
     """
     return ",".join(
         [
-            # Subtle multipath / transmitter movement (clamped aphaser helper).
-            _aphaser(in_gain=0.9, out_gain=0.85, delay=2.0, decay=0.25, speed=0.5),
             # FM pre-emphasis: gentle HF shelf at the ~75 µs turnover (~2.1 kHz).
             "treble=g=2:f=2100",
             # FM channel band-limit: roll off the top above ~15 kHz.
             "lowpass=f=15000",
-            # Soft broadcast leveller — glue. makeup is a LINEAR gain (not dB); 1.3
-            # (~+2.3 dB) offsets the compression + band-limit so the coloured segment
-            # lands back on the reconciled target (measured neutral at -16.3 LUFS),
-            # preserving the consistent-loudness contract instead of airing quieter.
-            "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:makeup=1.3",
+            # Flat trim (content-independent): offsets the ~+0.85 LU the pre-emphasis
+            # shelf adds so the coloured segment holds its reconciled target. A flat
+            # gain, NOT a compressor: the old acompressor was not loudness-neutral
+            # across content (over-pulled a hot voice vs broadband; its makeup floored
+            # at 1.0 so it couldn't be flatly compensated), and the removed phaser's
+            # attenuation had been masking that. Segments are already loudness-
+            # reconciled before egress, so a dynamic leveller here is redundant.
+            # Measured broadband +0.7 / voice +1.0 LU pre-trim, ~±0.2 LU after.
+            "volume=-0.85dB",
         ]
     )
 
