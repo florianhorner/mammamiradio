@@ -211,3 +211,114 @@ def test_ad_segment_color_is_distinct_from_warning() -> None:
     assert not offenders, (
         "ad-segment rules must use var(--seg-ad), not var(--warning) (degraded-status color):\n" + "\n".join(offenders)
     )
+
+
+@pytest.mark.parametrize(
+    ("segment", "token", "forbidden", "forbidden_label"),
+    [
+        ("music", "--seg-music", ("--ok",), "--ok (OK/connected/playing status blue)"),
+        ("banter", "--seg-banter", ("--sun", "--sun2"), "--sun / --sun2 (accent golds)"),
+    ],
+)
+def test_segment_colors_are_decoupled_from_semantic_and_accent_tokens(
+    segment: str, token: str, forbidden: tuple[str, ...], forbidden_label: str
+) -> None:
+    """music/banter must own dedicated --seg-* tokens, never semantic/accent ones.
+
+    Reusing --ok for music meant the OK/connected status blue also meant
+    "music segment"; reusing --sun/--sun2 for banter meant the accent gold also
+    meant "banter" (and banter flip-flopped between the two golds). A scrub that
+    later retuned --ok or --sun for status/accent reasons would silently shift
+    segment colours. Decouple via dedicated tokens and forbid re-aliasing —
+    mirrors the --seg-ad ≠ --warning guard. The colorblind-safe pairing still
+    holds: every segment also carries its type label text.
+    """
+    assert token in _primitives_in(TOKENS_CSS), f"tokens.css must define {token} (the {segment}-segment color)."
+
+    tokens_text = _strip_comments(TOKENS_CSS.read_text(encoding="utf-8"))
+    for bad in forbidden:
+        assert not re.search(rf"{re.escape(token)}\s*:\s*var\(\s*{re.escape(bad)}\s*\)", tokens_text), (
+            f"{token} must not alias var({bad}) — that re-couples {segment} to {forbidden_label}."
+        )
+
+    text = _strip_comments(_ADMIN_HTML_TEXT)
+    rule_re = re.compile(
+        rf'[^\n{{}}]*(?:\[data-t="{segment}"\]|\[data-type="{segment}"\]|\.segment-{segment})[^\n{{}}]*\{{[^}}]*\}}'
+    )
+    bad_refs = {f"var({bad})" for bad in forbidden}
+    offenders = [m.group(0).strip() for m in rule_re.finditer(text) if any(ref in m.group(0) for ref in bad_refs)]
+    assert not offenders, f"{segment}-segment rules must use var({token}), not {forbidden_label}:\n" + "\n".join(
+        offenders
+    )
+
+
+# Music is the DEFAULT segment, so its progress fills are colored by the
+# unqualified base `.progress-fill` rule (no [data-t="music"] selector). The
+# parametrized guard above keys on explicit `music` selectors, so it cannot see
+# these: a revert of one base rule to var(--ok) would slip past it. Guard the
+# base fills explicitly so the decoupling holds end to end.
+_MUSIC_DEFAULT_FILL_SELECTORS = [
+    ".sidebar-progress-fill",
+    ".a-now-compact .progress-fill",
+    ".on-air-progress-track .progress-fill",
+]
+
+
+def _base_rule_block(text: str, selector: str) -> str:
+    """Return the body of the rule whose selector is EXACTLY `selector`.
+
+    Anchored at a rule boundary (start-of-line or after a `}`) so a longer
+    compound selector that ends in the same string (e.g.
+    `body[data-fader-down="true"] .on-air-progress-track .progress-fill`) cannot
+    shadow the base rule via a substring match.
+    """
+    match = re.search(
+        rf"(?:^|\}})\s*{re.escape(selector)}\s*\{{([^}}]*)\}}",
+        _strip_comments(text),
+        re.MULTILINE,
+    )
+    assert match, f"base rule not found for selector: {selector}"
+    return match.group(1)
+
+
+@pytest.mark.parametrize("selector", _MUSIC_DEFAULT_FILL_SELECTORS)
+def test_default_music_fill_uses_seg_music(selector: str) -> None:
+    """The default (music) progress-fill base rules must use var(--seg-music)."""
+    background = _css_declarations(_base_rule_block(_ADMIN_HTML_TEXT, selector)).get("background")
+    assert background == "var(--seg-music)", (
+        f"{selector} colors the default (music) segment and must use var(--seg-music), "
+        f"not a semantic/accent token. Got {background!r}. (--ok is the status blue; "
+        f"reusing it re-couples music to OK/connected status.)"
+    )
+
+
+# Eyebrow floor from docs/design/system.md, Typography (9-10px). Below this,
+# uppercase labels stop rendering legibly on the dense admin surface (the
+# regression caught after the design-review scrub: 5.5px preset axis initials,
+# 8px section labels).
+_FONT_SIZE_PX_RE = re.compile(r"font-size:\s*([0-9]+(?:\.[0-9]+)?)px")
+_EYEBROW_FLOOR_PX = 9.0
+
+
+def test_admin_inline_style_has_no_sub_floor_font_size() -> None:
+    """No font-size in admin.html may fall below the 9px legibility floor."""
+    text = _strip_comments(_ADMIN_HTML_TEXT)
+    offenders = sorted({m.group(1) for m in _FONT_SIZE_PX_RE.finditer(text) if float(m.group(1)) < _EYEBROW_FLOOR_PX})
+    assert not offenders, (
+        "admin.html declares font-size below the 9px eyebrow floor "
+        f"(docs/design/system.md § Typography): {', '.join(f'{v}px' for v in offenders)}. "
+        "Raise to >=9px or remove the label."
+    )
+
+
+def test_rotation_sort_is_mono_typeface() -> None:
+    """The rotation-order readout is operator-only technical metadata → JetBrains Mono.
+
+    docs/design/system.md reserves --font-mono for "queue positions, operator-only
+    technical readouts". A scrub flipped .rotation-sort to --font-body (Outfit),
+    so a mono-context label rendered in the body face next to real mono labels.
+    """
+    block = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".rotation-sort"))
+    assert block.get("font-family") == "var(--font-mono)", (
+        f".rotation-sort is a technical readout and must use var(--font-mono), got {block.get('font-family')!r}."
+    )

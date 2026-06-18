@@ -86,7 +86,7 @@ jamendo_limit = 200              # Jamendo API result depth, 1-200
 songs_between_banter = 2
 songs_between_ads = 4
 ad_spots_per_break = 2
-lookahead_segments = 3
+lookahead_segments = 4
 
 [[hosts]]
 name = "Marco"

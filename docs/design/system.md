@@ -80,6 +80,8 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --warning:       #D97706;
   --news:          #e07038;   /* news_flash segment type — warm orange, distinct from warning amber */
   --seg-ad:        var(--accent-warm);  /* ad segment type — warm amber, deliberately NOT --warning (degraded) */
+  --seg-music:     #2563EB;   /* music segment type — blue, a DEDICATED token (never an alias of --ok) so the OK/connected status blue and a music badge stay decoupled */
+  --seg-banter:    #F4D048;   /* banter segment type — one gold, a DEDICATED token (never --sun/--sun2) so accent gold and a banter badge stay decoupled */
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
@@ -87,6 +89,19 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --shadow:        rgba(0,0,0,0.35);
 }
 ```
+
+**Segment-type colours are a dedicated, decoupled palette.** Every segment type
+(`music`, `banter`, `ad`, `news_flash`) colours from its own `--seg-*` / `--news`
+token, never from a semantic (`--ok`, `--warning`, `--error`) or accent (`--sun`,
+`--sun2`) token. This keeps one colour from meaning two things: `--ok` blue stays
+"OK / connected / playing" while `--seg-music` blue means "music segment"; accent
+gold stays an active/border accent while `--seg-banter` gold means "banter". Colour
+is never the only channel — each segment also carries its type label text
+(colorblind safety). Guarded by `tests/web/test_design_tokens.py`.
+
+**Legibility floor: 9px.** No admin label renders below the 9–10px eyebrow floor
+(above). The producer desk is dense, but sub-9px uppercase text stops rendering
+clearly — also guarded by `test_design_tokens.py`.
 
 ### Background gradient
 ```css
