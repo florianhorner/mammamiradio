@@ -1,0 +1,25 @@
+Proof: remove dead CSS from superseded admin layouts (+ sweep dangling rules)
+Branch: florianhorner/refactor/admin-dead-css-cleanup
+Date (UTC): 2026-06-18T19:51:15Z
+Head: 81e5e25d
+Net diff vs origin/main: admin.html -237 lines, tokens.css comment, test -1 selector
+========================================================================
+## tests + lint
+$ ruff check .
+All checks passed!
+$ pytest tests/ -q
+3047 passed, 2 skipped, 19 deselected, 1 warning in 56.40s
+$ pytest tests/web/test_design_tokens.py tests/web/test_admin_status_invariants.py -q
+34 passed in 0.28s
+$ inline <style> brace balance
+open 578 close 578
+========================================================================
+## adversarial pre-ship review: CLEAN (no P0/P1)
+- all 30+ deleted classes verified zero live emitters (class=/classList/className/template-literal) across admin.html, admin.js, whole repo
+- interleaved live rules preserved: .tricolor-stripe, .eyebrow, .prog-empty, .a-brand (.a-brand .wm .mi protected gold accent), @keyframes btn-flash + a-live-pulse (both retain live users)
+- one P2 (leftover body[data-stopped] + media-query dangling rules) found AND fixed in the sweep commit
+========================================================================
+## runtime verification — live /admin on 127.0.0.1:8100 (loopback, browse binary)
+- HTTP 200, 0 console errors; renders identically to pre-cleanup (5021 chars content)
+- protected UI intact: gold .mi rgb(244,208,72), tricolor present, cost counter '<$1 est', --surface #251E19
+- mobile 390px: no horizontal scroll (scrollWidth==clientWidth) — the responsive media query selectors edited in the sweep are correct
