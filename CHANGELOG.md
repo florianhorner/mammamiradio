@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Security
+
+- **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
+
 ### Added
 
 - **Banning a song now sticks.** Removing a track from the rotation pool used to be temporary — it came back every time the add-on restarted. Now the ✕ on a track bans it for good: it never returns after a restart, a source switch, or a refresh, and it won't sneak back in through a song request either. Select several tracks with the new checkboxes and "Ban selected" to clear a batch at once. Changed your mind? The "Banned" button opens the list so you can let any of them back in. (Banning a batch so large it would leave the station with too few songs is gently refused, so the music never stops.)
@@ -60,7 +64,7 @@ The current version source of truth is `pyproject.toml`.
 
 - **The "on again tonight" home callbacks now work in any home.** When the same thing keeps happening around the house over an evening — the coffee machine, a fan, the front door — the host can bring it back later as a warm, knowing aside. The station now recognises the right devices in your home automatically (any switch, fan, lock, vacuum, doorbell, or presence sensor), so it's no longer tuned to one particular setup. You can shape what counts, or hush a chatty sensor, with `[home.running_gags]` in `radio.toml`. A quiet evening with nothing happening for a few hours gently resets, so last night's tallies don't bleed into today.
 
-- **The Engine Room tells you when the station is running on rescue.** A new Queue rescue row shows how often the station has to bridge a gap with cached, canned, or stand-in audio when fresh content isn't ready in time. Now and then is normal; if it starts happening repeatedly (three times in fifteen minutes) the row flips to a warning, so you can tell a station that's genuinely live from one that only sounds live because something keeps filling the gaps. It also shows the last bridge and how long the queue has been empty right now.
+- **The Engine Room tells you when the station is running on rescue.** A new Queue rescue row shows how often the station has to bridge a gap with cached, canned, or stand-in audio when fresh content isn't ready in time. Now and then is normal; if it starts happening repeatedly (twice in half an hour), or the queue stays empty for a stretch, the row flips to a warning, so you can tell a station that's genuinely live from one that only sounds live because something keeps filling the gaps. It also shows the last bridge and how long the queue has been empty right now.
 
 - **The host gives your connected home a warm first hello.** The first time the station has a clear read on your Home Assistant home, the host slips one or two real details about it into a break — naturally, like a DJ who just noticed where you are, not by reading off a sensor list. It lands once, then the host settles back into the usual mix. The Engine Room shows how much home context the host is working with and whether that first moment has aired yet.
 

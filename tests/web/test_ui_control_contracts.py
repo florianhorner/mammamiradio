@@ -1015,6 +1015,17 @@ class TestRuntimeProviderTransparencyUI:
         assert bridge_health["window_seconds"] > 0
         assert "last_fire" in bridge_health
         assert "queue_empty_elapsed_s" in bridge_health
+        assert "unhealthy_reasons" in bridge_health
+
+        # #547: producer headroom makes the runway target visible instead of
+        # relying on a raw queue-depth count hidden in logs.
+        producer_headroom = runtime_status["producer_headroom"]
+        assert isinstance(producer_headroom["queue_depth"], int)
+        assert isinstance(producer_headroom["queue_capacity"], int)
+        assert producer_headroom["lookahead_target"] >= 4
+        assert isinstance(producer_headroom["buffered_audio_sec"], int | float)
+        assert isinstance(producer_headroom["headroom_ok"], bool)
+        assert producer_headroom["reason"] in {"ready runway", "building runway"}
 
     def test_status_helpers_emit_accessible_state_labels(self):
         html = ADMIN_HTML.read_text()

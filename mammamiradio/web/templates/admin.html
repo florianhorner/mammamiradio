@@ -30,28 +30,6 @@ html {
 
 body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 
-/* ── TWO-COLUMN LAYOUT ── */
-.admin-layout {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  min-height: 100vh;
-  gap: 0;
-}
-
-/* ── SIDEBAR ── */
-.admin-sidebar {
-  background: #1C1714;
-  border-right: 1px solid rgba(245,237,216,0.08);
-  border-left: 3px solid var(--sun2);
-  padding: 20px 16px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
 .tricolor-stripe {
   height: 2px; width: 140px; margin-top: 6px; border-radius: 1px;
   background: linear-gradient(90deg, #009246 33%, rgba(255,255,255,0.85) 33%, rgba(255,255,255,0.85) 66%, #CE2B37 66%);
@@ -66,134 +44,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
   letter-spacing: 0.05em;
 }
 
-/* ── SIDEBAR NOW PLAYING ── */
-.sidebar-now {
-  background: rgba(20,17,15,0.5);
-  border: 1px solid rgba(245,237,216,0.1);
-  border-radius: 8px;
-  padding: 10px 12px;
-  min-height: 90px;
-}
-.sidebar-now .now-type {
-  display: inline-block;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: 10px; margin-bottom: 6px;
-}
-.now-type[data-t="music"] { background: rgba(37,99,235,0.2); color: var(--seg-music); }
-.now-type[data-t="banter"] { background: rgba(244,208,72,0.15); color: var(--seg-banter); }
-.now-type[data-t="ad"] { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
-.now-type[data-t="news_flash"] { background: rgba(224,112,56,0.15); color: var(--news); }
-
-.sidebar-now .now-title {
-  font-family: var(--font-display);
-  font-size: 16px; font-weight: 700; font-style: italic;
-  color: var(--cream); line-height: 1.2; margin-bottom: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.sidebar-now .now-artist {
-  font-size: 11px; color: var(--muted); margin-bottom: 8px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-.sidebar-now .waveform { margin-bottom: 6px; }
-
-.sidebar-progress-row {
-  display: flex; align-items: center; gap: 6px;
-}
-.sidebar-progress {
-  flex: 1; height: 2px; background: rgba(20,17,15,0.6); border-radius: 1px; overflow: hidden;
-}
-.sidebar-progress-fill {
-  height: 100%; border-radius: 1px; transition: width 1s linear; width: 0;
-  background: var(--seg-music);
-}
-.sidebar-progress-fill[data-t="banter"] { background: var(--seg-banter); }
-.sidebar-progress-fill[data-t="ad"] { background: var(--seg-ad); }
-.sidebar-progress-fill[data-t="news_flash"] { background: var(--news); }
-.sidebar-time {
-  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
-  white-space: nowrap;
-}
-
-/* ── SIDEBAR CONTROLS GRID ── */
-.sidebar-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 10px;
-}
-.ctrl-btn {
-  font-family: var(--font-body); font-size: 11px; font-weight: 600;
-  padding: 8px 6px; border-radius: 6px; min-height: 44px;
-  display: flex; align-items: center; justify-content: center;
-  border: 1px solid rgba(245,237,216,0.15);
-  background: rgba(20,17,15,0.4); color: rgba(245,237,216,0.8);
-  cursor: pointer; text-align: center;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
-  user-select: none;
-}
-.ctrl-btn:hover { background: rgba(245,237,216,0.07); border-color: rgba(245,237,216,0.3); color: var(--cream); }
-.ctrl-toggle-cell { display: contents; }
-.ctrl-btn:active { transform: scale(0.95); }
-.ctrl-btn.flash { animation: btn-flash 0.4s ease; }
 @keyframes btn-flash { 0% { box-shadow: 0 0 0 3px rgba(244,208,72,0.5); } 100% { box-shadow: 0 0 0 3px transparent; } }
-.ctrl-btn.danger { border-color: rgba(196,74,74,0.3); color: var(--error); }
-.ctrl-btn.danger:hover { background: rgba(196,74,74,0.15); }
-.ctrl-btn.resume { border-color: rgba(37,99,235,0.4); color: var(--ok); }
-.ctrl-btn.resume:hover { background: rgba(37,99,235,0.15); }
-
-.sidebar-divider {
-  height: 1px; background: rgba(245,237,216,0.08);
-  margin: 14px 0;
-}
-
-/* ── SIDEBAR STATUS ── */
-.sidebar-status {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; color: rgba(245,237,216,0.6);
-}
-.pipeline-status { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.on-air-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--sun); box-shadow: 0 0 8px var(--sun);
-  animation: blink 1.4s ease-in-out infinite;
-  display: inline-block;
-}
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
-
-.sidebar-bottom {
-  margin-top: auto;
-  padding-top: 14px;
-  border-top: 1px solid rgba(245,237,216,0.06);
-}
-.sidebar-live-line {
-  font-family: var(--font-mono); font-size: 9px;
-  color: rgba(245,237,216,0.35); letter-spacing: 0.04em;
-}
-
-/* ── CONTENT AREA ── */
-.admin-content {
-  background: var(--bg);
-  padding: 24px 28px;
-  min-height: 100vh;
-  overflow-y: auto;
-}
-
-/* ── CONTENT HEADER ── */
-.content-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 16px;
-}
-.content-header h2 {
-  font-family: var(--font-display);
-  font-size: 24px; font-weight: 700; font-style: italic;
-  color: var(--cream);
-}
-.content-clock {
-  font-family: var(--font-mono); font-size: 11px;
-  color: var(--muted); text-align: right;
-}
-
 /* ── FILTER PILLS ── */
 .filter-pills {
   display: flex; align-items: center; gap: 6px;
@@ -222,92 +73,13 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 
 /* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
    Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
-body[data-stopped="true"] .live-dot,
-body[data-stopped="true"] .on-air-dot { animation-play-state: paused; }
+body[data-stopped="true"] .live-dot { animation-play-state: paused; }
 /* Producer actions are meaningless while paused — dim and disable them so the
    operator can't fire a banter/ad/news trigger into a stopped stream. */
 body[data-stopped="true"] .btn-trigger,
 body[data-stopped="true"] .btn-chip,
 body[data-stopped="true"] .btn-util {
   opacity: 0.35; pointer-events: none; filter: saturate(0.5);
-}
-/* Freeze the sidebar progress fill so it stops advancing visually. */
-body[data-stopped="true"] .sidebar-progress-fill { animation-play-state: paused; }
-body[data-stopped="true"] .sidebar-live-line { color: var(--cream-dk); }
-
-/* ── PROGRAMME LIST ── */
-.programme-list {
-  display: flex; flex-direction: column;
-  background: rgba(20,17,15,0.3);
-  border: 1px solid rgba(245,237,216,0.08);
-  border-radius: 10px;
-  overflow: hidden;
-  margin-bottom: 16px;
-}
-.prog-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 14px;
-  height: 36px;
-  border-bottom: 1px solid rgba(245,237,216,0.05);
-  position: relative;
-  transition: background 0.15s;
-}
-.prog-row:last-child { border-bottom: none; }
-.prog-row.past { opacity: 0.55; }
-.prog-row.current {
-  height: 44px;
-  background: rgba(244,208,72,0.07);
-}
-.prog-divider {
-  display: flex; align-items: center; justify-content: center;
-  padding: 6px 14px; font-family: var(--font-display);
-  font-size: 11px; font-style: italic; color: var(--muted);
-  border-bottom: 1px solid rgba(245,237,216,0.05);
-  gap: 8px;
-}
-.prog-divider::before, .prog-divider::after {
-  content: ''; flex: 1; height: 1px;
-  background: rgba(245,237,216,0.06);
-}
-.prog-border {
-  position: absolute; left: 0; top: 0; bottom: 0;
-  width: 3px;
-}
-.prog-row[data-type="music"] .prog-border { background: var(--seg-music); }
-.prog-row[data-type="banter"] .prog-border { background: var(--seg-banter); }
-.prog-row[data-type="ad"] .prog-border { background: var(--seg-ad); }
-.prog-row[data-type="news_flash"] .prog-border { background: var(--news); }
-
-.prog-badge {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 1px 7px; border-radius: 8px; white-space: nowrap; flex-shrink: 0;
-}
-.prog-row[data-type="music"] .prog-badge { background: rgba(37,99,235,0.2); color: var(--seg-music); }
-.prog-row[data-type="banter"] .prog-badge { background: rgba(244,208,72,0.15); color: var(--seg-banter); }
-.prog-row[data-type="ad"] .prog-badge { background: rgba(196,160,74,0.15); color: var(--seg-ad); }
-.prog-row[data-type="news_flash"] .prog-badge { background: rgba(224,112,56,0.15); color: var(--news); }
-
-.now-badge {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
-  color: var(--sun); margin-left: 2px; flex-shrink: 0;
-}
-.prog-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-.prog-title {
-  font-family: var(--font-display); font-size: 14px; font-style: italic;
-  color: var(--cream); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  line-height: 1.3;
-}
-.prog-artist {
-  font-size: 10px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.prog-dur {
-  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
-  flex-shrink: 0; min-width: 32px; text-align: right;
-}
-.prog-time {
-  font-family: var(--font-mono); font-size: 10px; color: rgba(245,237,216,0.3);
-  flex-shrink: 0; min-width: 38px; text-align: right;
 }
 .prog-empty { padding: 20px; text-align: center; font-size: 12px; font-style: italic; color: var(--muted); }
 
@@ -1236,19 +1008,18 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 /* Mobile fix: panel header stacks vertically so subtitle doesn't collide with wrapped h2 */
   .a-panel header { flex-direction: column; align-items: flex-start; gap: 8px; }
   .a-panel header .sub { flex-shrink: 1; }
-  .admin-layout, .a-app {
+  .a-app {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }
-  .admin-sidebar, .a-sidebar {
+  .a-sidebar {
     position: static;
     height: auto;
     border-left: none;
     border-bottom: 1px solid rgba(245,237,216,0.08);
     border-top: 3px solid var(--sun2);
   }
-  .admin-content, .a-content { padding: 16px 16px; }
-  .sidebar-bottom { display: none; }
+  .a-content { padding: 16px 16px; }
   .search-row { flex-direction: column; }
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
@@ -2293,7 +2064,6 @@ function notifyExternalAddNotices(notices){
   }
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function fmtRuntimeTs(ts){
   if(!ts)return'—';
   const d=new Date(Number(ts)*1000);
@@ -2388,6 +2158,25 @@ function initProducerDrawers(){
   }
 }
 initProducerDrawers();
+
+function initProgrammeActions(){
+  const el=document.getElementById('programmeList');
+  if(!el)return;
+  el.addEventListener('click',event=>{
+    const removeBtn=event.target.closest('[data-queue-remove-id]');
+    if(removeBtn&&el.contains(removeBtn)){
+      event.stopPropagation();
+      removeQueueItem(removeBtn.getAttribute('data-queue-remove-id')||'',removeBtn);
+      return;
+    }
+    const row=event.target.closest('tr[data-playlist-link="true"]');
+    if(!row||!el.contains(row))return;
+    const rawIndex=parseInt(row.getAttribute('data-playlist-index')||'-1',10);
+    const playlistIndex=Number.isFinite(rawIndex)?rawIndex:-1;
+    focusPlaylistTrack(playlistIndex,row.getAttribute('data-spotify-id')||'');
+  });
+}
+initProgrammeActions();
 
 function initOnAirSticky(){
   const onAir=document.getElementById('on-air');
@@ -2815,7 +2604,7 @@ function renderProgramme(st){
     totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
-    const clickAttrs=linked?`onclick="focusPlaylistTrack(${Number.isInteger(it.playlist_index)?it.playlist_index:-1},'${escJs(it.spotify_id||'')}')" style="cursor:pointer"`:'';
+    const clickAttrs=linked?`data-playlist-link="true" data-playlist-index="${Number.isInteger(it.playlist_index)?it.playlist_index:-1}" data-spotify-id="${esc(it.spotify_id||'')}" style="cursor:pointer"`:'';
     const parts=splitTrackLabel(it);
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
@@ -2827,7 +2616,7 @@ function renderProgramme(st){
     // Predicted (non-actionable) rows render NO control — clickable things must
     // look clickable (Steve Krug). Only rendered_queue rows get a remove button.
     const action=actionable
-      ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" onclick="event.stopPropagation();removeQueueItem('${escJs(it.id||'')}',this)"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
+      ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
     const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
     const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;

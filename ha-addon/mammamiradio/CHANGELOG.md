@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
+
 ### Changed
 
 - **On-Air Sound is now off by default (studio-clean).** This add-on option applies a deliberately subtle FM-style colouring that is often imperceptible on good speakers, so the station now ships clean. Turn it on from the add-on options or the admin Engine Room if you want the FM character. The option's description now explains what it does and how subtle it is.

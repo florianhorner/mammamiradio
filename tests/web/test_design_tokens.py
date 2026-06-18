@@ -258,7 +258,6 @@ def test_segment_colors_are_decoupled_from_semantic_and_accent_tokens(
 # these: a revert of one base rule to var(--ok) would slip past it. Guard the
 # base fills explicitly so the decoupling holds end to end.
 _MUSIC_DEFAULT_FILL_SELECTORS = [
-    ".sidebar-progress-fill",
     ".a-now-compact .progress-fill",
     ".on-air-progress-track .progress-fill",
 ]
