@@ -244,4 +244,4 @@ def test_ad_production_label_uses_brand_name_not_repr():
     )
     assert '_ad_brand = spot_params[0][0].name if spot_params else ""' in src
     # Regression guard: the raw AdBrand object must not be assigned for f-stringing.
-    assert '_ad_brand = spot_params[0][0] if spot_params' not in src
+    assert "_ad_brand = spot_params[0][0] if spot_params" not in src
