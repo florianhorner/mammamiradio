@@ -1808,6 +1808,77 @@ def test_plan_listener_request_block_song_found_announcement(state):
     assert state.force_next == SegmentType.MUSIC
 
 
+def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
+    """A request whose song was already pinned at download time (song_pinned) must
+    NOT be re-pinned by the dedication banter — re-pinning aired the song a SECOND
+    time (the 2026-06-19 Linkin Park double-play). The dedication still airs and the
+    request still consumes; only the duplicate pin is suppressed."""
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="yt456",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Linkin Park - Somewhere I Belong",
+        "song_track_obj": requested_track,
+        "song_pinned": True,  # download commit already claimed the play-next slot
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    # Dedication text + consume still happen; the song is NOT pinned a second time.
+    assert "Linkin Park - Somewhere I Belong" in prompt
+    assert commit is not None
+    assert commit.consume is True
+    assert state.pinned_track is None
+    assert state.force_next is None
+
+
+def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
+    """A not-yet-pinned (queued) request IS pinned by the dedication banter, and the
+    pin is marked on the request (song_pinned) so a second peek — the lookahead race
+    where two banters see the same pending request before either commit applies —
+    does not pin it again."""
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="yt456",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Linkin Park - Somewhere I Belong",
+        "song_track_obj": requested_track,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+
+    # First peek: pins the song and stamps the marker.
+    _plan_listener_request_block(state)
+    assert state.pinned_track is requested_track
+    assert req.get("song_pinned") is True
+
+    # Simulate the next music slot consuming the pin (request still pending — the
+    # deferred commit has not applied), then a second banter peeking the same req.
+    state.pinned_track = None
+    state.force_next = None
+    _plan_listener_request_block(state)
+    assert state.pinned_track is None  # not re-pinned -> no double-play
+    assert state.force_next is None
+
+
 def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
     first_req = {
         "name": "Luca",

@@ -168,9 +168,18 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
-        if track_obj is not None:
+        # Pin the requested song exactly ONCE. The background download may have
+        # already claimed the play-next slot (_download_listener_song marks
+        # req["song_pinned"] when its commit returned "pinned"). The request lingers
+        # in pending_requests until THIS banter's deferred commit is applied, so a
+        # second pin here would force the song to air a SECOND time after it already
+        # played from the download pin. Setting the marker synchronously (here, at
+        # peek time — not in the deferred commit) also makes it safe against the
+        # lookahead race where two banters peek the same pending request.
+        if track_obj is not None and not req.get("song_pinned"):
             state.pinned_track = track_obj
             state.force_next = SegmentType.MUSIC
+            req["song_pinned"] = True
         return (
             f"""
 LISTENER REQUEST:
