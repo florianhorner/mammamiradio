@@ -2518,7 +2518,6 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
     env_value = "true" if value else "false"
     loop = asyncio.get_running_loop()
     purged = 0
-    old_value = state.chaos_mode_active
 
     async with _chaos_lock:
         try:
@@ -2534,6 +2533,10 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             )
 
         os.environ["MAMMAMIRADIO_CHAOS_MODE"] = env_value
+        # Capture old_value INSIDE the lock, immediately before the mutation, so a
+        # concurrent chaos toggle can't record a stale before-value (matches the
+        # other four toggle endpoints).
+        old_value = state.chaos_mode_active
         if value:
             first_strike = _random.choice([ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM])
             state.chaos_mode_active = True
