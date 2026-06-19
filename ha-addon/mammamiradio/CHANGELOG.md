@@ -16,6 +16,8 @@
 
 ### Fixed
 
+- **A station-wide setting now fails cleanly if it can't be saved.** Turning Super Italian or Festival on or off used to change the live station before saving your choice — so if the add-on couldn't write to `/data` (full or read-only), the change applied but wouldn't survive a restart, and Festival had already cleared the buffered queue. Every Engine Room toggle now saves first and only changes the station if the save succeeds, so a failed save leaves everything exactly as it was.
+
 - **A song you request no longer plays twice.** When a listener asked the hosts for a track, it could occasionally air a second time a few minutes later: the request claimed the "play next" slot once when it finished downloading and again when the hosts gave its dedication. A requested song is now pinned exactly once, so it airs a single time alongside its shout-out.
 
 - **Ad breaks no longer have a strange "swirling" sound.** The On-Air Sound colouring included a moving effect that smeared the radio-static sound between an ad's spoken lines into an odd, headphone-like swirl. That effect has been removed; the colouring is now gentle tone shaping with no swirl.
