@@ -22,7 +22,7 @@ The current version source of truth is `pyproject.toml`.
 
 - **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
 
-- **Clearer confirmation when you change the station's character — and a record of it.** Turning Super Italian Mode off now says, in plain words, that the hosts switch to English-first (with Italian flavour) and the listener page changes to English, instead of a cryptic "Italian mode: OFF". And every station-wide change you make in the Engine Room — language, Chaos, Festival, AI quality, On-Air Sound — is now written to the station's private Show Memory, so you can later see exactly what you changed and when (handy when the station suddenly sounds different and you're not sure what you touched).
+- **Clearer confirmation when you change the station's character — and a record of it.** Turning Super Italian Mode off now says, in plain words, that the hosts switch to English-first (with Italian flavour) and the listener page changes to English, instead of a cryptic "Italian mode: OFF". And when the station's private Show Memory is on (it is by default in the add-on), every station-wide change you make in the Engine Room — language, Chaos, Festival, AI quality, On-Air Sound — is recorded there, so you can later see what you changed and when (handy when the station suddenly sounds different and you're not sure what you touched).
 
 ### Fixed
 

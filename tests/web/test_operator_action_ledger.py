@@ -235,15 +235,25 @@ async def test_operator_action_old_new_per_field(path, payload, mutate, old, new
     assert row["new_value"] == new
 
 
+# (path, payload, drift-probe) — every toggle persists BEFORE mutating, so a failed
+# persist must return 500, leave runtime state untouched (no drift from what survives a
+# restart), and record NO operator_action row (don't log a change that didn't happen).
+_PERSIST_FAIL = [
+    ("/api/chaos", {"enabled": True}, lambda app: app.state.station_state.chaos_mode_active is False),
+    ("/api/super-italian", {"super_italian_mode": True}, lambda app: app.state.config.super_italian_mode is False),
+    ("/api/party", {"action": "enable", "mode": "festival"}, lambda app: app.state.config.party_mode is None),
+]
+
+
 @pytest.mark.asyncio
-async def test_persist_failure_records_no_row():
-    """A toggle whose persist fails returns 500 BEFORE _record_operator_action — the
-    change never took effect, so the ledger must NOT log a change that didn't happen."""
+@pytest.mark.parametrize("path,payload,unchanged", _PERSIST_FAIL)
+async def test_persist_failure_records_no_row_and_no_drift(path, payload, unchanged):
     ledger = _FakeLedger(enabled=True)
     app = _make_app(ledger)
     transport = httpx.ASGITransport(app=app)
     with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/chaos", json={"enabled": True})
+            resp = await client.post(path, json=payload)
     assert resp.status_code == 500
     assert _operator_rows(ledger) == []
+    assert unchanged(app)  # runtime did not drift from the failed persist

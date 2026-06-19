@@ -2586,12 +2586,23 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     loop = asyncio.get_running_loop()
     async with _super_italian_lock:
         old_value = config.super_italian_mode
+        # Persist FIRST: if the write fails, leave runtime/env untouched so the live
+        # setting never drifts from what survives a restart (matches chaos/quality/
+        # broadcast-chain). The operator_action row then only fires on a real,
+        # persisted change.
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
+        except Exception:
+            logger.error("Failed to persist Super Italian toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist super italian mode"},
+            )
         config.super_italian_mode = value
         os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
-        if config.is_addon:
-            await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
-        else:
-            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
     _record_operator_action(request, "super_italian_mode", old_value, value)
     return {"ok": True, "super_italian_mode": value}
 
@@ -2822,18 +2833,29 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
     async with _party_lock:
         if config.party_mode == target_mode:
             return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
+        val = "true" if target_mode == "festival" else "false"
+        # Persist FIRST. The enable path purges the live lookahead queue and forces a
+        # banter, so a persist failure AFTER that would leave the station re-buffering
+        # from empty (dead-air risk, leadership #2) on a toggle the UI reported as
+        # failed. Persisting first means a failed write changes nothing.
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
+        except Exception:
+            logger.error("Failed to persist Festival Mode toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist festival mode"},
+            )
         old_on = config.party_mode == "festival"
         config.party_mode = target_mode
-        val = "true" if target_mode == "festival" else "false"
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
             state.playlist_revision += 1
             _purge_queue_and_shadow(segment_queue, state)
             state.force_next = SegmentType.BANTER
-        if config.is_addon:
-            await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
-        else:
-            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
 
     logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")
     _record_operator_action(request, "festival_mode", old_on, target_mode == "festival")

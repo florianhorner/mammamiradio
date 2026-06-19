@@ -1869,6 +1869,8 @@ def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
     _plan_listener_request_block(state)
     assert state.pinned_track is requested_track
     assert req.get("song_pinned") is True
+    # Locks the immediate-play contract: the dedication forces the next slot to music.
+    assert state.force_next is not None and state.force_next.value == "music"
 
     # Simulate the next music slot consuming the pin (request still pending — the
     # deferred commit has not applied), then a second banter peeking the same req.
