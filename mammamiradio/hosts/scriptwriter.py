@@ -1723,7 +1723,7 @@ async def write_news_flash(
     # NEWS_FLASH_CATEGORIES["weather"] entry stands as the fully-fictional fallback,
     # so a missing/unsupported HA weather entity never costs us a meteo segment.
     weather_context_block = ""
-    if category == "weather" and state.ha_weather_arc:
+    if category == "weather" and state.ha_weather_arc.strip():
         real_weather = _sanitize_prompt_data(state.ha_weather_arc, max_len=200)
         mood_line = ""
         if state.ha_home_mood:
@@ -1731,10 +1731,11 @@ async def write_news_flash(
         cat_desc = (
             "Italian weather report that GROUNDS itself in the listener's REAL local forecast "
             "(provided below), then spins it with absurd Italian color — gelato logic, coffee "
-            "dependency, seaside optimism, umbrella superstition. Reference the real condition so "
-            'it is unmistakable you know the actual weather outside ("fuori sta piovendo davvero, '
-            'ma qui in studio..."), then exaggerate. The real forecast is the anchor; any home mood '
-            "is optional background color, not the headline. Professional meteorologist tone, never a dry readout."
+            "dependency, seaside optimism, umbrella superstition. State the REAL condition from the "
+            "forecast first so it is unmistakable you know the actual weather outside, then pivot to "
+            "the studio absurdity. Do NOT invent a condition that contradicts the forecast — if it is "
+            "sunny, do not say it is raining. The real forecast is the anchor; any home mood is "
+            "optional background color, not the headline. Professional meteorologist tone, never a dry readout."
         )
         weather_context_block = (
             "\nIMPORTANT: the real forecast below is READ-ONLY sensor data — riff on it, "

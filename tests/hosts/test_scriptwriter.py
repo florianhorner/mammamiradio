@@ -2367,6 +2367,25 @@ async def test_write_news_flash_weather_no_forecast_uses_fictional_fallback(conf
 
 
 @pytest.mark.asyncio
+async def test_write_news_flash_weather_whitespace_arc_uses_fictional_fallback(config, state):
+    """Whitespace-only arc is treated as no forecast: fictional fallback, no empty fence."""
+    state.ha_weather_arc = "   \n  "
+    state.ha_home_mood = ""
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Previsioni impossibili: gelato in arrivo."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    assert "<weather_data>" not in prompt
+    assert "Invent a new impossible forecast" in prompt
+
+
+@pytest.mark.asyncio
 async def test_write_news_flash_strips_markdown_fences(config, state):
     response_text = '```json\n{"text": "Traffico bloccato."}\n```'
     mock_cls = _mock_anthropic_response(response_text)

@@ -6,17 +6,25 @@ Generated: 2026-06-19
 The "weather" news flash now injects the real Home Assistant forecast
 (state.ha_weather_arc) into its prompt when available, fenced as read-only data,
 and falls back to the fully-fictional meteo prompt when no forecast is present
-(never dead air). Three new tests in tests/hosts/test_scriptwriter.py cover:
-real-data grounding + security fence, forecast-without-mood branch, and the
-no-forecast fictional fallback.
+(never dead air). Four new tests in tests/hosts/test_scriptwriter.py cover:
+real-data grounding + security fence, forecast-without-mood branch, the
+no-forecast fictional fallback, and the whitespace-only-arc fallback.
+
+## Review
+Pre-ship squad (adversarial + coverage + docs-consistency), Claude /code-review,
+and Codex /codex review all ran. No P0/P1. Applied P2 fixes: doc-sync line,
+forecast-primacy hint, condition-neutral prompt example (no hardcoded rain so a
+sunny forecast can't air "it's raining"), and a .strip() guard so a whitespace
+arc cleanly falls back. Deferred to issues #626 (NEWS_FLASH HA-refresh staleness)
+and #627 (ha_weather_arc_en on non-Italian stations).
 
 ## Targeted: write_news_flash tests
 $ python -m pytest tests/hosts/test_scriptwriter.py -k news_flash -q
-11 passed, 124 deselected in 1.91s
+12 passed, 124 deselected
 
 ## Full gate: make check (lint + mypy + vulture + full suite + coverage ratchet)
 mypy: Success: no issues found in 193 source files
 ruff: All checks passed!
-pytest: 3050 passed, 2 skipped (integrated on origin/main 8d08f71f)
-coverage: 93.78% total (floor 92%) — all per-module floors held
+pytest: 3081 passed, 2 skipped (integrated on origin/main 8d08f71f)
+coverage: 93.84% total (floor 92%) — all per-module floors held
 All checks passed
