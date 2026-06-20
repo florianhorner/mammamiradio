@@ -6,6 +6,16 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared when you hovered over a row, so on a phone or tablet it was unreachable and on a computer it was easy to miss entirely. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, and a short note in the rotation list explains how it works until you've banned your first track. Banned one by accident? An "Undo" prompt appears right afterward — one tap lifts the ban.
+
+### Fixed
+
+- **The Engine Room health readout no longer flags the station a hair early.** When the music buffer ran dry, the "queue empty" health warning could trip a fraction of a second before it should have, because the displayed time was rounded up before being checked against the limit. The check now uses the exact elapsed time, so the warning lights at the real one-minute mark, not a blink before it.
+
+- **Clicking a track in the Live Queue to jump to it now always works.** Some tracks carry an internal ID that contains punctuation. Tapping one of those to scroll to and highlight its row could silently do nothing. The row lookup now handles any ID, so the jump-and-highlight always lands.
+
 ## [2.13.0] - 2026-06-20
 
 ### Security
