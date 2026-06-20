@@ -213,7 +213,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
-- `conductor.json` and `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior. Commit those files, but keep `.context/` runtime state out of git.
+- `scripts/conductor-*.sh` define Conductor workspace setup/run/archive behavior (wired through the app-managed `.conductor/settings.toml`, which is not committed). Commit the scripts, but keep `.context/` runtime state out of git.
 - If the user has a live stream running, do not stop, restart, or reload it unless they explicitly ask. Protect the illusion first.
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Built-in demo music should favor current modern tracks, not nostalgic or older fallback selections.

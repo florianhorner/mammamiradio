@@ -101,7 +101,7 @@ Useful URLs:
 Fast tests:
 
 ```bash
-pytest tests/test_config.py tests/test_scheduler.py
+pytest tests/core/test_config.py tests/scheduling/test_scheduler.py
 ```
 
 Full suite:
