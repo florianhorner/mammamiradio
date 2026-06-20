@@ -9,7 +9,7 @@ An AI-powered Italian radio station that nobody questions is real. Two hosts ban
 ```bash
 git clone https://github.com/florianhorner/mammamiradio.git && cd mammamiradio
 cp .env.example .env
-# Set ADMIN_TOKEN in .env, then:
+# ADMIN_TOKEN is optional — auto-generated if unset. Then:
 docker compose up
 ```
 
@@ -34,7 +34,8 @@ docker compose up
 ```bash
 git clone https://github.com/florianhorner/mammamiradio.git
 cd mammamiradio && cp .env.example .env
-# Set ADMIN_TOKEN in .env first — required because the container binds to 0.0.0.0
+# ADMIN_TOKEN is optional — the container auto-generates one and saves it to
+# /data/admin_token if unset (read it with: docker compose exec mammamiradio cat /data/admin_token)
 docker compose up
 ```
 
@@ -43,7 +44,7 @@ Open `http://localhost:8000` for the listener page (`/admin` for the control roo
 **Verify it's working:**
 
 ```bash
-curl http://localhost:8000/healthz   # → {"ok":true}
+curl http://localhost:8000/healthz   # → {"status":"ok","uptime_s":...}
 ```
 
 Expect music within ~10s on a warm cache. First boot can take 30–60s while yt-dlp pulls the Italian chart. The dashboard's tier badge (Demo Radio / Full AI Radio / Connected Home) tells you what's active.
@@ -77,9 +78,11 @@ python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .
 
 Open `http://localhost:8000` for the listener page, `/admin` for the control room.
 
+Standalone defaults `MAMMAMIRADIO_ALLOW_YTDLP=false` (copyright-safe), so set it to `true` or drop MP3s into `music/` to hear music — Docker and Conductor enable it for you.
+
 #### Conductor
 
-This repo ships a [`conductor.json`](conductor.json) that handles `.venv` creation, port binding, cache isolation, and `MAMMAMIRADIO_ALLOW_YTDLP=true` by default.
+This repo ships `scripts/conductor-*.sh` lifecycle hooks (wired through Conductor's own workspace settings) that handle `.venv` creation, port binding, cache isolation, and `MAMMAMIRADIO_ALLOW_YTDLP=true` by default.
 
 </details>
 

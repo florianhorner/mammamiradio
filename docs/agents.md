@@ -11,7 +11,7 @@ This file supplements the global instructions for the `mammamiradio` repository.
 
 - Conventional commits only: `feat:`, `fix:`, `chore:`, `ci:`, `deps:`
 - Never modify `.context/` runtime state
-- If Conductor lifecycle hooks change, update `conductor.json` and the related `scripts/conductor-*.sh` files in the same change
+- If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
 
