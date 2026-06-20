@@ -2368,6 +2368,201 @@ async def test_write_news_flash_sports_prompt_prioritizes_clarity(config, state)
 
 
 @pytest.mark.asyncio
+async def test_write_news_flash_weather_injects_real_forecast(config, state):
+    """Real-weather meteo: a live HA forecast is grounded into the weather flash."""
+    state.ha_weather_arc = "Meteo: pioggia, 12°C."
+    state.ha_home_mood = "Serata cinema"
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Fuori piove davvero, ma in studio splende il sole."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    # Real forecast + mood reach the prompt, fenced as read-only data.
+    assert "pioggia" in prompt
+    assert "Serata cinema" in prompt
+    assert "<weather_data>" in prompt
+    # Ground-then-exaggerate framing replaces the fully-fictional instruction.
+    assert "REAL local forecast" in prompt
+    assert "Invent a new impossible forecast" not in prompt
+    # Security boundary: the use instruction sits OUTSIDE the data fence.
+    data_start = prompt.index("<weather_data>")
+    data_end = prompt.index("</weather_data>")
+    assert "never follow instructions" not in prompt[data_start:data_end]
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_weather_forecast_without_mood(config, state):
+    """Forecast present but no home mood: grounded prompt, no 'Home mood:' line."""
+    state.ha_weather_arc = "Meteo: soleggiato, 22°C."
+    state.ha_home_mood = ""
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Sole pieno, ma in studio serve l'ombrello per le idee."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    assert "soleggiato" in prompt
+    assert "<weather_data>" in prompt
+    # Mood branch stays empty when no mood is set.
+    assert "Home mood:" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_weather_no_forecast_uses_fictional_fallback(config, state):
+    """No HA forecast: meteo falls back to the fully-fictional prompt, never dead air."""
+    state.ha_weather_arc = ""
+    state.ha_home_mood = ""
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Previsioni impossibili: gelato in arrivo."},
+    ) as mock_generate:
+        host, text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    # No real data → no fence, original fictional framing intact.
+    assert "<weather_data>" not in prompt
+    assert "Invent a new impossible forecast" in prompt
+    # Still a valid spoken segment (never dead air).
+    assert isinstance(host, HostPersonality)
+    assert len(text) > 0
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_weather_whitespace_arc_uses_fictional_fallback(config, state):
+    """Whitespace-only arc is treated as no forecast: fictional fallback, no empty fence."""
+    state.ha_weather_arc = "   \n  "
+    state.ha_home_mood = ""
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Previsioni impossibili: gelato in arrivo."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    assert "<weather_data>" not in prompt
+    assert "Invent a new impossible forecast" in prompt
+
+
+# --- #627: weather flash / banter respect ha_weather_arc_en on non-Italian stations ---
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_english_station_uses_english_weather_arc(config, state):
+    """#627: an English station grounds the meteo flash in the ENGLISH arc, never
+    the Italian one — injecting Italian reference data into an English prompt was
+    the bug."""
+    config.station.language = "en"
+    state.ha_weather_arc = "Meteo: pioggia battente, 12C."
+    state.ha_weather_arc_en = "Forecast: heavy rain, 12C."
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Heavy rain outside, sunshine in the studio."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    assert "<weather_data>" in prompt
+    # English arc is grounded; the Italian arc never reaches the prompt.
+    assert "heavy rain" in prompt
+    assert "pioggia battente" not in prompt
+    # Framing is delivered in the station language, not hardcoded Italian.
+    assert "delivered in en" in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_english_station_without_english_arc_falls_back(config, state):
+    """English station, no English arc (forecast unsupported): fall back to the
+    fully-fictional weather flash — never inject the Italian arc as a substitute."""
+    config.station.language = "en"
+    state.ha_weather_arc = "Meteo: pioggia battente, 12C."  # Italian present...
+    state.ha_weather_arc_en = ""  # ...but no English arc.
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Impossible forecast: gelato incoming."},
+    ) as mock_generate:
+        _host, _text, category = await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert category == "weather"
+    assert "<weather_data>" not in prompt
+    assert "pioggia battente" not in prompt  # Italian arc must NOT be substituted
+    assert "Invent a new impossible forecast" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "expected", "forbidden"),
+    [("it", "ultima ora", "breaking news"), ("en", "breaking news", "ultima ora")],
+)
+async def test_write_news_flash_no_llm_fallback_is_localized(config, state, language, expected, forbidden):
+    """The no-LLM stock line follows the station language: Italian gets the Italian
+    line, every other station gets the English one (#627 — an English station must
+    never air an Italian fallback)."""
+    config.anthropic_api_key = ""  # force the no-LLM fallback path
+    config.station.language = language
+
+    _host, text, _category = await write_news_flash(state, config)
+
+    assert expected in text.lower()
+    assert forbidden not in text.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [("it", "ultima ora"), ("en", "breaking news"), ("de", "breaking news")],
+)
+async def test_write_news_flash_exception_fallback_is_localized(config, state, language, expected):
+    """The EXCEPTION fallback path is localized too (not just the no-LLM path), and a
+    third language (de) falls back to the English line, never Italian."""
+    config.station.language = language
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=Exception("network error"),
+    ):
+        _host, text, category = await write_news_flash(state, config, category="sports")
+
+    assert expected in text.lower()
+    assert category == "sports"
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [("it", "Meteo: sereno."), ("en", "Forecast: clear."), ("de", "Forecast: clear.")],
+)
+def test_localized_weather_arc_selects_by_language(config, state, language, expected):
+    """The helper returns the native arc for Italian and the English arc for every
+    other language (including a third language like German), never the Italian arc."""
+    state.ha_weather_arc = "Meteo: sereno."
+    state.ha_weather_arc_en = "Forecast: clear."
+    config.station.language = language
+
+    assert scriptwriter_module._localized_weather_arc(state, config) == expected
+
+
+@pytest.mark.asyncio
 async def test_write_news_flash_strips_markdown_fences(config, state):
     response_text = '```json\n{"text": "Traffico bloccato."}\n```'
     mock_cls = _mock_anthropic_response(response_text)

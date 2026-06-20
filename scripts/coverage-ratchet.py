@@ -91,16 +91,58 @@ def run_coverage() -> tuple[dict[str, int], int]:
     return modules, total_pct
 
 
+def _validate_pct(value: object, label: str) -> int:
+    """A coverage percentage must be a real int in 0..100.
+
+    bool is an int subclass in Python, so ``isinstance(True, int)`` is True —
+    reject it explicitly so a stray ``true``/``false`` in a snapshot can't pose
+    as 1/0 and quietly ratchet a floor. ``None`` (a missing field) also fails
+    the int check, which is the behaviour we want.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label}: coverage percentage must be an int, got {value!r}")
+    if not 0 <= value <= 100:
+        raise ValueError(f"{label}: coverage percentage {value} out of range 0..100")
+    return value
+
+
+def _validate_coverage_map(modules: object, source: str, *, require_nonempty: bool) -> dict[str, int]:
+    """Validate a ``{module: pct}`` mapping and return it unchanged.
+
+    Rejects a non-dict, non-string or empty module keys, bool/non-int values,
+    and out-of-range percentages. ``require_nonempty`` guards the snapshot path
+    (a coverage run that produced zero modules must never be treated as
+    authoritative — see ``cmd_update``); the floors file may legitimately be
+    empty at init, so it passes ``require_nonempty=False``.
+    """
+    if not isinstance(modules, dict):
+        raise ValueError(f"{source}: 'modules' must be an object, got {type(modules).__name__}")
+    if require_nonempty and not modules:
+        raise ValueError(
+            f"{source}: 'modules' is empty — refusing to treat a coverage run that "
+            "produced zero modules as authoritative (it would wipe every floor)."
+        )
+    validated: dict[str, int] = {}
+    for module, pct in modules.items():
+        if not isinstance(module, str) or not module.strip():
+            raise ValueError(f"{source}: module key must be a non-empty string, got {module!r}")
+        validated[module] = _validate_pct(pct, f"{source}: module {module!r}")
+    return validated
+
+
 def load_coverage_input() -> tuple[dict[str, int], int] | None:
     """Load a coverage snapshot produced by a read-only quality job."""
     if not COVERAGE_INPUT:
         return None
-    data = json.loads(COVERAGE_INPUT.read_text())
-    modules = data.get("modules")
-    total_pct = data.get("total_pct")
-    if not isinstance(modules, dict) or not isinstance(total_pct, int):
-        raise ValueError(f"Invalid coverage ratchet snapshot: {COVERAGE_INPUT}")
-    return {str(module): int(percent) for module, percent in modules.items()}, total_pct
+    try:
+        data = json.loads(COVERAGE_INPUT.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid coverage ratchet snapshot {COVERAGE_INPUT}: malformed JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid coverage ratchet snapshot {COVERAGE_INPUT}: top level must be an object")
+    modules = _validate_coverage_map(data.get("modules"), f"snapshot {COVERAGE_INPUT}", require_nonempty=True)
+    total_pct = _validate_pct(data.get("total_pct"), f"snapshot {COVERAGE_INPUT}: total_pct")
+    return modules, total_pct
 
 
 def current_coverage() -> tuple[dict[str, int], int]:
@@ -113,10 +155,20 @@ def current_coverage() -> tuple[dict[str, int], int]:
 
 
 def load_floors() -> dict[str, int]:
-    """Load per-module floors from JSON file."""
+    """Load per-module floors from JSON file.
+
+    The committed floors file is just as load-bearing as the snapshot — a
+    corrupt or out-of-range value here would poison every comparison in
+    ``cmd_check`` — so it gets the same validation. An empty file is allowed
+    (the init/no-floors-yet state).
+    """
     if not FLOORS_FILE.exists():
         return {}
-    return json.loads(FLOORS_FILE.read_text())
+    try:
+        data = json.loads(FLOORS_FILE.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid coverage floors file {FLOORS_FILE}: malformed JSON ({exc})") from exc
+    return _validate_coverage_map(data, str(FLOORS_FILE), require_nonempty=False)
 
 
 def save_floors(floors: dict[str, int]) -> None:
@@ -181,6 +233,18 @@ def cmd_check() -> int:
 def cmd_update() -> int:
     """Update mode: ratchet all floors up to current coverage. Never down."""
     current, total_pct = current_coverage()
+    if not current:
+        # An empty coverage map would make every existing floor look "deleted"
+        # below and wipe the whole file — then commit the wipe under the
+        # main-push write token. A coverage run that yields zero modules is a
+        # parser/snapshot failure, never a real state; refuse instead of ratchet.
+        print(
+            "ERROR: current coverage has zero modules — refusing to ratchet. "
+            "An empty coverage map would delete every per-module floor. This "
+            "usually means the coverage parser or snapshot failed upstream.",
+            file=sys.stderr,
+        )
+        return 1
     floors = load_floors()
     aggregate_floor = get_aggregate_threshold()
 
@@ -222,6 +286,15 @@ def cmd_update() -> int:
 def cmd_init() -> int:
     """Init mode: generate initial floors from current coverage."""
     current, total_pct = current_coverage()
+    if not current:
+        # Same wipe risk as cmd_update: an empty coverage map would write an
+        # empty floors file. init is bootstrap-only, but refuse all the same.
+        print(
+            "ERROR: current coverage has zero modules — refusing to initialize "
+            "floors from an empty coverage map (parser/snapshot failure).",
+            file=sys.stderr,
+        )
+        return 1
     save_floors(current)
     print(f"Initialized {len(current)} module floors in {FLOORS_FILE} (total: {total_pct}%)")
     for module, pct in sorted(current.items()):
@@ -232,14 +305,18 @@ def cmd_init() -> int:
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "check"
 
-    if mode == "check":
-        return cmd_check()
-    elif mode == "update":
-        return cmd_update()
-    elif mode == "init":
-        return cmd_init()
-    else:
+    handlers = {"check": cmd_check, "update": cmd_update, "init": cmd_init}
+    handler = handlers.get(mode)
+    if handler is None:
         print(f"Usage: {sys.argv[0]} [check|update|init]")
+        return 1
+    try:
+        return handler()
+    except ValueError as exc:
+        # A corrupt snapshot or floors file raises ValueError from the loaders.
+        # Surface the clean one-line reason (matching every other failure path)
+        # instead of a raw traceback, and fail the job.
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
 

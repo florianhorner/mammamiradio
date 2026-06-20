@@ -1,0 +1,26 @@
+PR #624 — real-weather meteo flash + #626 (HA refresh gate) + #627 (language-aware arc)
+Branch: florianhorner/chore/italian-radio-segments (advanced from sacramento-v1)
+Commit: 48b35637 (pending)
+Generated: 2026-06-20T14:40:27Z
+
+=== ruff check ===
+All checks passed!
+=== ruff format --check ===
+4 files already formatted
+=== mypy ===
+Success: no issues found in 2 source files
+
+=== #626 producer HA-refresh-gate (weather + sports flash) ===
+..                                                                       [100%]
+2 passed in 0.46s
+=== #627 scriptwriter language tests ===
+.................................                                        [100%]
+33 passed, 115 deselected in 0.32s
+
+=== full suite ===
+................                                                         [100%]
+3110 passed, 2 skipped, 19 deselected in 59.47s
+=== changelog lint + release invariants ===
+Changelog lint clean.
+
+All invariants passed.

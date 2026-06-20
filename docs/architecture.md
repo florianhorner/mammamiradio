@@ -314,6 +314,7 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
+- the weather news flash grounds itself in the real Home Assistant forecast when available, then spins it into absurd local color; with no forecast (HA disconnected or unsupported) it falls back to the fully fictional meteo prompt, so the segment never goes silent. `NEWS_FLASH` shares the same HA-context refresh gate as banter/ad, so the flash reads a freshly refreshed forecast (bounded by the weather cache TTL plus one poll interval) rather than the startup snapshot. The arc follows the station language: Italian stations use `state.ha_weather_arc`, every other language uses `state.ha_weather_arc_en` — never the Italian arc — and the stock fallback line is localized too
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
 - the listener dashboard shows a "Casa" card with mood, weather, and recent events via `ha_moments` in `/public-status`
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`

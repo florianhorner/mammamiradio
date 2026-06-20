@@ -813,9 +813,14 @@ def _bridge_health_snapshot(state: StationState) -> dict:
     window = BRIDGE_HEALTH_WINDOW_SECONDS
     recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
     last_fire = state.bridge_events[-1] if state.bridge_events else None
-    queue_empty_elapsed = round(_queue_empty_elapsed(state), 1)
+    # Compare on the RAW elapsed; round only for the payload. Rounding before the
+    # threshold check let raw 59.95s round up to 60.0 and trip "queue_empty" ~0.05s
+    # early. The other health readers (/healthz, /readyz, _runtime_health_snapshot)
+    # already keep raw for logic and round only for display — this mirrors them.
+    queue_empty_elapsed_raw = _queue_empty_elapsed(state)
+    queue_empty_elapsed = round(queue_empty_elapsed_raw, 1)
     recent_unhealthy = len(recent) >= BRIDGE_HEALTH_THRESHOLD
-    empty_unhealthy = queue_empty_elapsed >= BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+    empty_unhealthy = queue_empty_elapsed_raw >= BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
     unhealthy_reasons = []
     if recent_unhealthy:
         unhealthy_reasons.append("bridge_frequency")
