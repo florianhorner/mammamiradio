@@ -1131,10 +1131,15 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
-    for i, h in enumerate(config.hosts):
+    regulars = _regular_hosts(config)
+    # Energy/chaos contrast is computed from the regular hosts only, so adding the
+    # guest as a third roster entry doesn't silently disable the two-host foil logic
+    # (one leads the chaos, the other cuts with surgical contrast). The guest gets
+    # no relative pairing — he is a guest, not half of the regular duo.
+    regular_foil = {h.name: regulars[1 - idx] for idx, h in enumerate(regulars)} if len(regulars) == 2 else {}
+    for h in config.hosts:
         line = f"- {h.name}: {h.style} (voice: {h.voice})"
-        # Pass the other host so energy/chaos contrast can be computed relatively
-        other = config.hosts[1 - i] if len(config.hosts) == 2 else None
+        other = regular_foil.get(h.name)
         modifier = _personality_modifier(h.name, h.personality, other_host=other)
         if modifier:
             line += modifier
@@ -1559,10 +1564,13 @@ Return JSON:
         if not isinstance(raw_lines, list):
             raw_lines = []
         str_line_idx = 0
+        # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
+        # so a malformed line can't be put in the guest's mouth regardless of roster order.
+        fallback_hosts = _regular_hosts(config)
         for line in raw_lines:
             if isinstance(line, dict):
                 raw_name = str(line.get("host", ""))
-                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
+                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), fallback_hosts[0])
                 raw_text = line.get("text", "")
                 # Only real strings are airable. A null/list/dict text would otherwise
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
@@ -1574,7 +1582,6 @@ Return JSON:
                 # actually air (counting only emitted lines, so interleaved blanks
                 # don't collapse two lines onto one host) so it still reads as
                 # two-host banter instead of crashing to stock copy.
-                fallback_hosts = _regular_hosts(config)
                 host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
             else:

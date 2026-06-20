@@ -1,5 +1,5 @@
 # Proof: guest-host consolidation (florianhorner/chore/workspace-review)
-# Generated 2026-06-20T14:31:28Z for HEAD 25178a05
+# Generated 2026-06-20T14:41:28Z for HEAD 645d21d2 + working tree
 
 ## lint — ruff check mammamiradio/ tests/
 All checks passed!
@@ -13,5 +13,5 @@ Success: no issues found in 1 source file
 
 ## tests — pytest tests/
 ........................................................................ [ 99%]
-..........                                                               [100%]
-3104 passed, 2 skipped, 19 deselected in 58.82s
+...........                                                              [100%]
+3105 passed, 2 skipped, 19 deselected in 58.44s

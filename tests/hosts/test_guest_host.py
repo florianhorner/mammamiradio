@@ -145,3 +145,24 @@ def test_guest_directive_names_regular_hosts(config):
     ]
     directive = _guest_host_directive(config, super_italian=False)
     assert "Giulia and Marco" in directive
+
+
+def test_regular_pairing_survives_guest_in_roster(config):
+    """Adding the guest must not disable the two-regular energy/chaos foil.
+
+    The relative pairing (one host leads chaos, the other cuts with 'surgical'
+    contrast) only fires when both high-energy/high-chaos regulars are paired
+    against each other. With a third roster entry it used to silently break,
+    because pairing keyed off len(config.hosts) == 2.
+    """
+    config.hosts = [
+        _host("Marco", energy=95, chaos=85),
+        _host("Giulia", energy=92, chaos=88),
+        _host(_LOCAL_BALLOON_GUEST_HOST, energy=92, chaos=65),
+    ]
+    with_guest = _build_system_prompt(config)
+    assert "surgical" in with_guest  # the foil instruction survived the third host
+
+    config.hosts = config.hosts[:2]
+    without_guest = _build_system_prompt(config)
+    assert "surgical" in without_guest  # same behavior as the pure two-host roster
