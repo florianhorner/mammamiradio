@@ -88,8 +88,8 @@ Two modules carry a `# TODO: split` marker referencing the cathedral plan
 (`docs/archive/2026-04-28-cathedral-restructure.md`, PRs 5 & 6, deferred after "the
 cathedral has walls"):
 
-- `mammamiradio/web/streamer.py` (~3,900 LOC)
-- `mammamiradio/hosts/scriptwriter.py` (~2,100 LOC)
+- `mammamiradio/web/streamer.py` (~4,000 LOC)
+- `mammamiradio/hosts/scriptwriter.py` (~2,200 LOC)
 
 **Status — probe-first, NOT a committed program (decided 2026-06-20).** This is real
 but *unbitten* debt, so it is gated on two cheap probes before any multi-cut program is
