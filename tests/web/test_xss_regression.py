@@ -85,6 +85,26 @@ def test_programme_actions_do_not_interpolate_ids_into_inline_handlers() -> None
     assert "getAttribute('data-playlist-index')" in init_block
 
 
+def test_focus_playlist_track_escapes_data_id_selector() -> None:
+    """The data-id fallback selector in focusPlaylistTrack() must use CSS.escape().
+
+    focusPlaylistTrack(index, trackId) first tries `.pl-row[data-i="<index>"]`; only
+    when that misses does it fall back to `.pl-row[data-id="<trackId>"]`. trackId can
+    be the internal queue id (t.id), which — unlike a Base62 Spotify id — may contain
+    CSS selector metacharacters (`.`, `#`, `:`, `]`). The old `.replace(/"/g,'&quot;')`
+    only handled `"`, so any other metachar produced an invalid selector and a
+    querySelector SyntaxError → silent null → the row never focused. Scope the assertion
+    to the function body so a CSS.escape elsewhere (e.g. the host-block lookup) cannot
+    make this pass vacuously — this is the fallback path the bug lives on.
+    """
+    html = ADMIN_HTML.read_text()
+    fn_block = html[html.index("function focusPlaylistTrack") : html.index("async function moveNext")]
+
+    # The data-id fallback must escape via CSS.escape, not the old fragile .replace.
+    assert 'data-id="${CSS.escape(trackId)}"' in fn_block
+    assert '.replace(/"/g' not in fn_block, "fragile quote-only escape must be gone from the fallback selector"
+
+
 def test_admin_csp_allows_inline() -> None:
     """The /admin CSP must use 'unsafe-inline' so inline event handlers are allowed.
 

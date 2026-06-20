@@ -2973,7 +2973,7 @@ function focusPlaylistTrack(index, trackId){
     target=document.querySelector(`.pl-row[data-i="${index}"]`);
   }
   if(!target&&trackId){
-    target=document.querySelector(`.pl-row[data-id="${trackId.replace(/"/g,'&quot;')}"]`);
+    target=document.querySelector(`.pl-row[data-id="${CSS.escape(trackId)}"]`);
   }
   if(!target)return;
   target.classList.add('focus');
