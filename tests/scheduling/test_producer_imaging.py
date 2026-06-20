@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -322,6 +323,66 @@ async def test_news_flash_uses_talk_bed_when_crossfade_unavailable(tmp_path):
     assert seg.path.name.startswith("news_bedded_")
     assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
     imaging.pick_talk_bed.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["weather", "sports"])
+async def test_ha_context_refreshed_for_news_flash(tmp_path, category):
+    """#626: NEWS_FLASH now participates in the HA refresh gate, so the meteo flash
+    grounds itself in a freshly refreshed forecast instead of the startup snapshot.
+    Previously the gate covered only BANTER/AD and a flash could air stale weather.
+
+    The gate fires for EVERY flash category (the category isn't known until
+    write_news_flash runs), so a non-weather flash refreshes HA too — guarded here
+    so narrowing the gate to weather-only would fail."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    mock_context = MagicMock()
+    mock_context.summary = "Il tempo e' bello"
+    mock_context.events_summary = ""
+    mock_context.events_summary_en = ""
+    mock_context.mood = "Caffe in preparazione"
+    mock_context.mood_en = "Coffee brewing"
+    mock_context.weather_arc = "Meteo: soleggiato, 22C."
+    mock_context.weather_arc_en = "Weather: sunny, 22C."
+    mock_context.timestamp = 1234.5
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.label_stats = {}
+    mock_context.registry_source = ""
+    mock_context.raw_states = {}
+    mock_context.events = deque()
+    mock_context.last_event_label_en = ""
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Flash.", category),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context) as mock_fetch,
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = lambda _duration, output_path, _source_track=None: output_path
+
+        await _run_until_queued(queue, state, config)
+
+    # The gate fired for NEWS_FLASH: the forecast was refreshed onto state.
+    mock_fetch.assert_called_once()
+    assert state.ha_weather_arc == "Meteo: soleggiato, 22C."
+    assert state.ha_weather_arc_en == "Weather: sunny, 22C."
+    assert queue.get_nowait().type == SegmentType.NEWS_FLASH
 
 
 @pytest.mark.asyncio

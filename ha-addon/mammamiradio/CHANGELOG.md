@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared on row hover, so on a phone or tablet it was unreachable and on a computer it was easy to miss. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, a short note explains how it works until your first ban, and an "Undo" prompt appears right after a single ban so an accidental tap is one tap away from being lifted.
+
 ## 2.14.0
 
 ## 2.13.0

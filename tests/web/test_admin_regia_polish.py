@@ -116,12 +116,22 @@ def test_queue_removal_defers_by_stable_id_not_index() -> None:
 
 def test_rotation_removal_commits_immediately() -> None:
     """Rotation removal is index-based (/api/playlist/remove) with no id variant,
-    so it must NOT defer — a deferred index goes stale once an earlier commit
-    shifts the list (Codex P2). It commits immediately instead."""
+    so the DELETE must NOT be deferred — a deferred index goes stale once an
+    earlier commit shifts the list (Codex P2). The ban commits immediately; an
+    optional undo toast lifts it by (artist,title) KEY via /api/track/unban, which
+    is index-shift-safe and therefore allowed."""
     html = _html()
-    block = html[html.index("async function removeTr") : html.index("async function removeTr") + 400]
-    assert "undoableToast" not in block, "removeTr must not defer an index-based delete"
+    block = html[html.index("async function removeTr") : html.index("// --- Bulk select")]
     assert "/api/playlist/remove" in block
+    remove_at = block.index("/api/playlist/remove")
+    toast_at = block.find("undoableToast")
+    if toast_at != -1:
+        # the index delete commits BEFORE the undo toast — not deferred into it
+        assert remove_at < toast_at, "the index delete must commit before any undo toast"
+        # undo reverses by key, never by re-posting a (now-stale) index delete
+        undo_region = block[toast_at:]
+        assert "/api/playlist/remove" not in undo_region, "undo must not defer an index delete"
+        assert "/api/track/unban" in undo_region
 
 
 def test_archivio_filters_restored_after_deferred_helpers_load() -> None:

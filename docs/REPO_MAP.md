@@ -84,9 +84,51 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 
 ## God modules pending split
 
-Two modules carry a `# TODO: split` marker referencing the cathedral plan:
+Two modules carry a `# TODO: split` marker referencing the cathedral plan
+(`docs/archive/2026-04-28-cathedral-restructure.md`, PRs 5 & 6, deferred after "the
+cathedral has walls"):
 
-- `mammamiradio/web/streamer.py` (~3,500 LOC) — splits in PR 5 of the cathedral plan into `routes_listener.py`, `routes_admin.py`, `playback_loop.py`, `public_status.py` (`auth.py` is already extracted)
-- `mammamiradio/hosts/scriptwriter.py` (~2,000 LOC) — splits in PR 6 into `prompts.py`, `llm_client.py`, `banter.py`, `ads.py`. Data leaves `prompt_world.py`, `transitions.py`, `fallbacks.py` are already extracted.
+- `mammamiradio/web/streamer.py` (~4,000 LOC)
+- `mammamiradio/hosts/scriptwriter.py` (~2,200 LOC)
 
-Until those PRs land, these modules are postal addresses, not destinations. Ride the structure that exists today; do not pre-split.
+**Status — probe-first, NOT a committed program (decided 2026-06-20).** This is real
+but *unbitten* debt, so it is gated on two cheap probes before any multi-cut program is
+committed. No cadence or floor; remaining cuts defer behind a named tripwire (a feature
+demonstrably harder because of a god module, a token-burn event, or a positive
+degradation probe).
+
+1. **Degradation probe** — does an agent edit a **core-touching** `scriptwriter` task
+   (the Anthropic→OpenAI fallback chain, `_cached_system_prompt`, or the `max_tokens`/
+   GPT-5 path) measurably better against a split than the monolith? A leaf-only task is
+   not valid: host behavior already lives in the extracted leaves and never opens the
+   core. Positive → `scriptwriter` jumps the queue as product work.
+2. **Cost probe** — ship the narrowed first cut (below) and measure what it actually costs.
+
+**The cut menu (parked; the probes size it):**
+
+`streamer.py` → 4 cuts, in order:
+1. `status_payload.py` — the **pure serialize/payload leaf only**: `_serialize_*`,
+   `_paginated_tracks`, `_status_now_playback`, `_page_bounds`, `_golden_path_status`
+   (+TTL), `_cached_cache_size_mb`, `_ha_details_payload`. **Must NOT move** in this cut:
+   `_public_status_payload`, the `_*_snapshot` family, or the live-clock cluster
+   (`_runtime_monotonic`/`_queue_empty_elapsed`/`_silence_with_listeners`) — the playback
+   loop and `/healthz`+`/readyz` call them, so moving them risks an unplanned addon
+   restart. They wait for a later `runtime_health.py` leaf.
+2. `playback_loop.py` — `LiveStreamHub`, `run_playback_loop`, `_purge_queue_and_shadow`,
+   the live-clock cluster, norm-cache rescue (also fix the hardcoded paths in
+   `scripts/check-release-invariants.sh` in the same cut).
+3. `routes_listener.py` — the 12 listener routes (own `APIRouter`, combined in the facade).
+4. `routes_admin.py` — the ~45 admin routes; `streamer.py` becomes a thin facade.
+
+`scriptwriter.py` → 5 cuts, leaf-first: `script_shared.py` → `prompts.py` → `llm_client.py`
+→ `ads.py` → `banter.py` (facade last). Each cut updates the `hot_reload_modules` reload
+chain leaves-first in lockstep. Data leaves `prompt_world.py`, `transitions.py`,
+`fallbacks.py`, `station_name_guard.py` are already extracted.
+
+Every cut is behavior-preserving and byte-faithful: facade re-export + identity-guard
+test, whole-repo patch-string grep, per-module coverage floor, edge-soak on the Pi
+(`/public-status`, `/status`, `/healthz`, `/readyz`, first `/stream` byte). Full per-cut
+discipline: `docs/runbooks/refactor-cuts.md`.
+
+Until the probes run and a cut lands, these modules are postal addresses, not
+destinations. Ride the structure that exists today; do not pre-split.

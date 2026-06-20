@@ -1,0 +1,29 @@
+PR A — post-merge runtime/admin correctness fixes
+Branch: fix/post-merge-runtime-admin-regressions
+Commit: 26178194
+Generated: 2026-06-20T13:46:48Z
+
+=== ruff check (changed python files) ===
+All checks passed!
+
+=== ruff format --check (changed python files) ===
+3 files already formatted
+
+=== targeted regression tests ===
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_unhealthy_exactly_at_threshold PASSED [ 33%]
+tests/web/test_shadow_queue_sync.py::test_bridge_health_snapshot_does_not_round_up_below_threshold PASSED [ 66%]
+tests/web/test_xss_regression.py::test_focus_playlist_track_escapes_data_id_selector PASSED [100%]
+
+============================== 3 passed in 0.24s ===============================
+
+=== full suite (summary) ===
+...                                                                      [100%]
+3097 passed, 2 skipped, 19 deselected in 58.69s
+
+=== changelog lint + release invariants ===
+Changelog lint clean.
+
+All invariants passed.
