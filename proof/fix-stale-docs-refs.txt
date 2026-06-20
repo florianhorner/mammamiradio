@@ -1,0 +1,36 @@
+PR: docs: fix stale conductor.json refs and inaccurate setup examples
+Scope: docs/comment-only (8 files) — README.md, CONTRIBUTING.md, CLAUDE.md,
+docs/agents.md, docs/conductor.md, docs/listener-qs-train.md, docs/operations.md,
+scripts/bootstrap-conductor.sh (comment line only).
+
+Verification (2026-06-20):
+
+1. No stale live `conductor.json` references remain.
+   `git grep -n "conductor\.json" -- ':!docs/archive/**' ':!CHANGELOG.md'` -> (none)
+   (CHANGELOG.md history + docs/archive/* intentionally left as historical record.)
+
+2. conductor.json migration confirmed from git, not assumed.
+   `git log --all --grep="conductor.json"` -> 5f7f0663 "Migrate conductor.json to
+   .conductor/settings.toml (#611)"; `git show 5f7f0663 --stat` -> conductor.json
+   deleted (61 lines), no file added. `.conductor/settings.toml` is Conductor's
+   app-managed per-workspace config (absent here, untracked, not gitignored). So the
+   fix repoints docs to the committed `scripts/conductor-*.sh`, not a phantom file.
+
+3. healthz example matches the route.
+   mammamiradio/web/streamer.py:3828 returns {"status":"ok","uptime_s":...,...},
+   not {"ok":true}. README updated to the real shape.
+
+4. ADMIN_TOKEN wording matches behavior.
+   docker-compose.yml:12-15 + scripts/docker-entrypoint.sh auto-generate and persist
+   a token to /data/admin_token when unset. README "required" -> "optional".
+
+5. CONTRIBUTING test paths exist.
+   `git ls-files` -> tests/core/test_config.py, tests/scheduling/test_scheduler.py
+   (old flat tests/test_config.py / tests/test_scheduler.py do not exist).
+
+6. No test asserts any changed string.
+   `grep -rn "conductor.json|tests/test_config.py|tests/test_scheduler.py" tests/` -> (none)
+
+7. Touched script still valid.
+   `shellcheck scripts/bootstrap-conductor.sh` -> clean
+   `pytest tests/repo/` -> 87 passed in 9.68s (covers bootstrap-conductor.sh help text)
