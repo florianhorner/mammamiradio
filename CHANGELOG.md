@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **The weather report now knows your real weather.** When the station is connected to your home, the meteo flash starts from your actual local forecast and spins it into the hosts' usual absurd flair — so when it is really raining at your place, they know it and say so. The forecast is refreshed right before the flash airs, and on a non-Italian station the hosts read it in the station's own language. With no home connection, or when the forecast is unavailable, the report stays gloriously made-up exactly as before, so the segment never goes quiet.
+
 ### Changed
 
 - **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared when you hovered over a row, so on a phone or tablet it was unreachable and on a computer it was easy to miss entirely. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, and a short note in the rotation list explains how it works until you've banned your first track. Banned one by accident? An "Undo" prompt appears right afterward — one tap lifts the ban.
