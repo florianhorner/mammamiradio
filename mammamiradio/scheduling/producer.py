@@ -796,7 +796,7 @@ async def _synthesize_impossible_moment(
     state: StationState,
 ) -> Path:
     """Synthesize an impossible-moment line via TTS with crossfade. Raises on failure."""
-    host = random.choice(config.hosts)
+    host = random.choice(_sw._regular_hosts(config))
     imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
     await synthesize(
         line,
@@ -2351,7 +2351,7 @@ async def run_producer(
                     sweeper_engine = sb.sweeper_engine
                     sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
-                        sweeper_host = random.choice(config.hosts)
+                        sweeper_host = random.choice(_sw._regular_hosts(config))
                         sweeper_voice = sweeper_host.voice
                         sweeper_engine = sweeper_host.engine
                         sweeper_fallback = sweeper_host.edge_fallback_voice
@@ -2395,7 +2395,7 @@ async def run_producer(
                     sweeper_engine = sb.sweeper_engine
                     sweeper_fallback = sb.sweeper_edge_fallback_voice
                     if not sweeper_voice:
-                        sweeper_host = random.choice(config.hosts)
+                        sweeper_host = random.choice(_sw._regular_hosts(config))
                         sweeper_voice = sweeper_host.voice
                         sweeper_engine = sweeper_host.engine
                         sweeper_fallback = sweeper_host.edge_fallback_voice
@@ -2452,7 +2452,7 @@ async def run_producer(
                 try:
                     voice_path = config.tmp_dir / f"time_voice_{uuid4().hex[:8]}.mp3"
                     chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
-                    host = random.choice(config.hosts)
+                    host = random.choice(_sw._regular_hosts(config))
                     loop = asyncio.get_running_loop()
                     # Voice + chime in parallel (independent)
                     await asyncio.gather(
@@ -2512,7 +2512,7 @@ async def run_producer(
                     used_brands_this_break.append(brand.name)
                     num_voices = len(config.ads.voices) if config.ads.voices else 1
                     ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
-                    voice_map = _cast_voices(brand, config.ads.voices, config.hosts, roles_needed)
+                    voice_map = _cast_voices(brand, config.ads.voices, _sw._regular_hosts(config), roles_needed)
                     logger.info(
                         "  Spot %d/%d: %s (format=%s, roles=%s)",
                         spot_idx + 1,
@@ -2532,7 +2532,7 @@ async def run_producer(
                     try:
                         ihost, itext = await _sw.write_transition(state, config, next_segment="ad")
                     except Exception:
-                        ihost = random.choice(config.hosts)
+                        ihost = random.choice(_sw._regular_hosts(config))
                         itext = random.choice(_sw.AD_BREAK_INTROS)
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
                     await synthesize(
@@ -2693,7 +2693,7 @@ async def run_producer(
 
                 # ── PHASE 4: Closing bumper + outro in parallel ──
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
-                outro_host = random.choice(config.hosts)
+                outro_host = random.choice(_sw._regular_hosts(config))
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
                 outro_text = random.choice(_sw.AD_BREAK_OUTROS)
                 await asyncio.gather(
