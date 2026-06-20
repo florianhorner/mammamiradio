@@ -1,0 +1,22 @@
+PR B — coverage-ratchet validation hardening (closes #616)
+Branch: ci/harden-coverage-ratchet-validation
+Commit: 5270a895
+Generated: 2026-06-20T13:57:11Z
+
+=== ruff check ===
+All checks passed!
+=== ruff format --check ===
+2 files already formatted
+=== mypy ===
+Success: no issues found in 1 source file
+
+=== coverage-ratchet tests ===
+......................                                                   [100%]
+22 passed in 0.28s
+
+=== real .coverage-floors.json still validates ===
+loaded 33 modules OK
+
+=== full suite ===
+..................                                                       [100%]
+3112 passed, 2 skipped, 19 deselected in 57.61s
