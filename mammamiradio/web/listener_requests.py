@@ -376,6 +376,12 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             req["song_found"] = True
             req["song_track"] = track.display
             req["song_track_obj"] = track
+            # Record whether the download already claimed the play-next pin so the
+            # dedication banter (_plan_listener_request_block) does NOT re-pin and
+            # air the song a second time. "queued" means the slot was busy and the
+            # dedication banter is still expected to pin it (the single pin then).
+            if status == "pinned":
+                req["song_pinned"] = True
             logger.info("Listener song request ready: %s", track.display)
         else:
             logger.info("Listener song downloaded but playlist changed or request consumed: %s", track.display)

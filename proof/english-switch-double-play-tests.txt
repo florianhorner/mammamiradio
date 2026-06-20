@@ -1,0 +1,21 @@
+mammamiradio — english-switch-double-play branch — local verification
+Generated from: make check (lint + mypy + full pytest with coverage gate)
+Plus fixed-seed reruns to prove the new tests are hermetic under pytest-randomly.
+
+## make check
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 93.82%
+3092 passed, 2 skipped, 19 deselected, 1 warning in 87.13s (0:01:27)
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
+
+## ruff + mypy
+ruff check: All checks passed   (run inside make check)
+mypy mammamiradio/ tests/: Success, no issues   (run inside make check)
+
+## fixed-seed full-suite reruns (env-leak / order hermeticity)
+pytest -p randomly --randomly-seed=20260619 : 3092 passed, 2 skipped
+pytest -p randomly --randomly-seed=13371337 : 3092 passed, 2 skipped
+
+## changelog editorial lint
+scripts/check-changelog-lint.sh : Changelog lint clean

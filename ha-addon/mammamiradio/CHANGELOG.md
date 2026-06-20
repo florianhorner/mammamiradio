@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.14.0
+
+## 2.13.0
+
 ### Security
 
 - **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
@@ -12,7 +16,13 @@
 
 - **OpenAI script fallback now matches the quality dial.** Anthropic remains the primary scriptwriter, but OpenAI fallback now uses `gpt-5.5` for creative copy in balanced/premium and `gpt-5.4-mini` for fast transitions and economy instead of the older small-model fallback.
 
+- **Clearer confirmation when you change the station's character — and a record of it.** Turning Super Italian Mode off now says, in plain words, that the hosts switch to English-first (with Italian flavour) and the listener page changes to English, instead of a cryptic "Italian mode: OFF". Every station-wide change you make in the Engine Room — language, Chaos, Festival, AI quality, On-Air Sound — is recorded (best-effort) to the add-on's Show Memory at `/data/cache/ledger/`, so you can later see what you changed and when, while auditing why the station suddenly sounded different.
+
 ### Fixed
+
+- **A station-wide setting now fails cleanly if it can't be saved.** Turning Super Italian or Festival on or off used to change the live station before saving your choice — so if the add-on couldn't write to `/data` (full or read-only), the change applied but wouldn't survive a restart, and Festival had already cleared the buffered queue. Every Engine Room toggle now saves first and only changes the station if the save succeeds, so a failed save leaves everything exactly as it was.
+
+- **A song you request no longer plays twice.** When a listener asked the hosts for a track, it could occasionally air a second time a few minutes later: the request claimed the "play next" slot once when it finished downloading and again when the hosts gave its dedication. A requested song is now pinned exactly once, so it airs a single time alongside its shout-out.
 
 - **Ad breaks no longer have a strange "swirling" sound.** The On-Air Sound colouring included a moving effect that smeared the radio-static sound between an ad's spoken lines into an odd, headphone-like swirl. That effect has been removed; the colouring is now gentle tone shaping with no swirl.
 
@@ -113,8 +123,6 @@
 - **Loaded playlist pages no longer snap back on refresh.** Tracks added via "Load more" stay visible across status polls instead of collapsing back to the first page on the next cycle.
 
 - **Admin programme durations are now truthful.** Status payloads expose real current segment duration/progress and stream-log durations, and the admin/live/listener UIs no longer invent music, banter, or ad durations when metadata is missing.
-
-## 2.13.0
 
 ### Added
 

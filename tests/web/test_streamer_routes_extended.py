@@ -2165,6 +2165,9 @@ async def test_download_listener_song_success(tmp_path):
     assert req["song_track_obj"].album_art == "https://img.example/albachiara.jpg"
     assert state.pinned_track is not None
     assert state.pinned_track.album_art == "https://img.example/albachiara.jpg"
+    # The download claimed the play-next pin, so the request is marked so the
+    # dedication banter won't re-pin and double-play the song (2026-06-19 incident).
+    assert req["song_pinned"] is True
     assert len(state.playlist) == original_len + 1
     assert state.playlist_revision == starting_revision + 1
 
@@ -2276,6 +2279,11 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
     assert state.pinned_track is operator_pick
     assert req["song_found"] is True
     assert len(state.playlist) == original_len + 1
+    # "queued" handoff contract: the download did NOT claim the pin, so song_pinned
+    # stays unset and the dedication banter remains the single pin point. If this
+    # were wrongly marked, _plan_listener_request_block would skip pinning and the
+    # listener's requested song would never air (leadership #1).
+    assert not req.get("song_pinned")
 
 
 @pytest.mark.asyncio

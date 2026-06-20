@@ -1502,6 +1502,51 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
         logger.debug("Provenance Tier-3 emit failed: %s", exc)
 
 
+def _record_operator_action(request, action: str, old_value, new_value) -> None:
+    """Record a station-wide operator toggle in the provenance ledger.
+
+    A station-wide character change (Super Italian, Chaos, Festival, AI Quality,
+    On-Air Sound) otherwise leaves no honest trace: FastAPI runs with
+    ``--no-access-log`` so the POST never reaches the logs, and the only operator
+    feedback is a small toast. A later debrief then cannot see WHAT the operator
+    changed or WHEN — the "who switched the hosts to English?" class of mystery.
+    This ``operator_action`` row closes that gap so the change is auditable
+    alongside the aired moments it shaped.
+
+    Best-effort, mirrors :func:`_emit_stream_result`: enabled-check first, and the
+    whole body is wrapped so a ledger failure can NEVER affect whether the toggle
+    applied or what the endpoint returns. No-op when the ledger is off (the
+    standalone default).
+
+    A row is written on every successful toggle *apply*. The Festival endpoint
+    returns early on an idempotent no-op (re-enable while already on), so a no-op
+    festival press records nothing; the other four always re-apply their side
+    effects (re-persist, re-arm/re-purge), so a re-press records an honest
+    ``old_value == new_value`` row — "the operator applied this", not "this changed".
+    """
+    led = getattr(request.app.state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "operator_action",
+                "action": action,
+                "old_value": old_value,
+                "new_value": new_value,
+                "source": "admin",
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never break a toggle
+        logger.debug("Provenance operator_action emit failed: %s", exc)
+
+
 def _track_from_music_metadata(metadata: dict) -> Track | None:
     """Build a lightweight Track object from queued music metadata."""
     title = str(metadata.get("title_only") or metadata.get("title") or "").strip()
@@ -2488,6 +2533,10 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             )
 
         os.environ["MAMMAMIRADIO_CHAOS_MODE"] = env_value
+        # Capture old_value INSIDE the lock, immediately before the mutation, so a
+        # concurrent chaos toggle can't record a stale before-value (matches the
+        # other four toggle endpoints).
+        old_value = state.chaos_mode_active
         if value:
             first_strike = _random.choice([ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM])
             state.chaos_mode_active = True
@@ -2508,6 +2557,7 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
         if value
         else "",
     )
+    _record_operator_action(request, "chaos_mode", old_value, value)
     return {"ok": True, "enabled": value, "purged": purged}
 
 
@@ -2535,12 +2585,25 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     env_value = "true" if value else "false"
     loop = asyncio.get_running_loop()
     async with _super_italian_lock:
+        old_value = config.super_italian_mode
+        # Persist FIRST: if the write fails, leave runtime/env untouched so the live
+        # setting never drifts from what survives a restart (matches chaos/quality/
+        # broadcast-chain). The operator_action row then only fires on a real,
+        # persisted change.
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
+        except Exception:
+            logger.error("Failed to persist Super Italian toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist super italian mode"},
+            )
         config.super_italian_mode = value
         os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = env_value
-        if config.is_addon:
-            await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
-        else:
-            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
+    _record_operator_action(request, "super_italian_mode", old_value, value)
     return {"ok": True, "super_italian_mode": value}
 
 
@@ -2596,6 +2659,7 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
                 status_code=500,
                 content={"ok": False, "error": "failed to persist on-air sound"},
             )
+        old_value = config.audio.broadcast_chain
         config.audio.broadcast_chain = value
         os.environ["MAMMAMIRADIO_BROADCAST_CHAIN"] = env_value
         # Hot-apply: (dis)arm the egress chain so the NEXT produced segment reflects
@@ -2607,6 +2671,7 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
             bitrate=config.audio.bitrate,
         )
     logger.info("On-Air Sound (broadcast chain) %s by admin", "enabled" if value else "disabled")
+    _record_operator_action(request, "broadcast_chain", old_value, value)
     return {"ok": True, "broadcast_chain": value}
 
 
@@ -2656,8 +2721,10 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
         except Exception as exc:
             logger.warning("Failed to persist quality_profile=%s: %s", profile, exc)
             return JSONResponse({"ok": False, "error": "failed to persist quality_profile"}, status_code=500)
+        old_value = config.models.active_profile
         config.models.active_profile = profile
         os.environ["MAMMAMIRADIO_QUALITY"] = profile
+    _record_operator_action(request, "quality_profile", old_value, profile)
     return {"ok": True, "active_profile": profile}
 
 
@@ -2766,19 +2833,32 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
     async with _party_lock:
         if config.party_mode == target_mode:
             return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
-        config.party_mode = target_mode
         val = "true" if target_mode == "festival" else "false"
+        # Persist FIRST. The enable path purges the live lookahead queue and forces a
+        # banter, so a persist failure AFTER that would leave the station re-buffering
+        # from empty (dead-air risk, leadership #2) on a toggle the UI reported as
+        # failed. Persisting first means a failed write changes nothing.
+        try:
+            if config.is_addon:
+                await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
+            else:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
+        except Exception:
+            logger.error("Failed to persist Festival Mode toggle", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "error": "failed to persist festival mode"},
+            )
+        old_on = config.party_mode == "festival"
+        config.party_mode = target_mode
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
             state.playlist_revision += 1
             _purge_queue_and_shadow(segment_queue, state)
             state.force_next = SegmentType.BANTER
-        if config.is_addon:
-            await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
-        else:
-            await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
 
     logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")
+    _record_operator_action(request, "festival_mode", old_on, target_mode == "festival")
     return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
 
 

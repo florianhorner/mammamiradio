@@ -69,6 +69,12 @@ DEBUG Skipping denylisted track (already rejected this session): Some Artist - S
 
 The denylist is process-local — it clears on restart so a track that was transiently bad gets another chance after the next boot.
 
+## A song a listener requested played twice
+
+A listener song request was pinned to the "play next" slot from two places: once by the background download (`_commit_external_download`) when the file finished, and again by the dedication banter (`_plan_listener_request_block`) the next time a host break was produced — because the request lingers in `state.pending_requests` until that banter's deferred commit applies. Each pin is consumed by `select_next_track` *before* the repeat-cooldown filter runs, so the song aired a second time a few minutes later (the 2026-06-19 "double Linkin Park").
+
+The fix marks the request `song_pinned` at whichever site pins first (set synchronously, so it is also safe against two banters peeking the same pending request in the lookahead window), and the dedication banter no longer re-pins an already-pinned request. A requested song now airs exactly once. If you still see a repeat, check that both pin sites consult `req["song_pinned"]` and that `select_next_track`'s pinned-track short-circuit (`core/models.py`) hasn't been changed to skip the marker.
+
 ## The stream works but banter or ads are bland
 
 That usually means script generation failed and the app fell back to stock copy.

@@ -3510,7 +3510,7 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Italian mode: ON':'Italian mode: OFF');
+    if(r&&r.ok)toast(value?'Super Italian ON — hosts go Italian-first, listener page in Italian':'Super Italian OFF — hosts speak English-first (with Italian flavour), listener page in English');
     else{
       el.checked=!value;
       toast(wayOut());
