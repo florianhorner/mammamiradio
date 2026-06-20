@@ -1072,6 +1072,62 @@ def _abbreviated_bank_block() -> str:
     return "\n".join(lines)
 
 
+def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
+    """Brief for the Hans Günther test-balloon guest, appended in either language mode.
+
+    Returns "" when the guest is not in the roster. Applied in both Super Italian and
+    code-switch modes so the guest is governed consistently — without it he is listed
+    among the hosts but given no guest framing, and the LLM treats him as a regular
+    Italian co-host. The only mode-dependent clause is the station's conversation
+    language (Italian-only under Super Italian, Italian/English otherwise).
+    """
+    if not any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
+        return ""
+    regulars = _regular_hosts(config)
+    # Only-guest roster: _regular_hosts falls back to the full list, so the guest
+    # shows up among the "regulars". With no real regular hosts to play off, guest
+    # framing ("hand the floor back to Hans Günther") would point him at himself —
+    # emit nothing and let him host as the sole voice.
+    if any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in regulars):
+        return ""
+    regular_host_names = [h.name for h in regulars]
+    regular_hosts_text = (
+        f"{regular_host_names[0]} and {regular_host_names[1]}"
+        if len(regular_host_names) >= 2
+        else regular_host_names[0]
+    )
+    station_conversation_lang = "Italian" if super_italian else "Italian/English"
+    return (
+        " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
+        "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
+        "roughly 75-85% Italian, enough that he belongs inside the full Italian conversation "
+        "instead of sounding pasted in from a German sketch. Make him about 50% MORE Bavarian "
+        "than before, but as texture: rhythm, swagger, nicknames, comparisons, and short "
+        "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
+        "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
+        "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
+        "'geh weida col caffè', 'des is ned normale', 'a bissl troppo piccolo', "
+        "'wia schee questa radio', 'des is fei a Witz', 'passt wie Arsch auf Eimer'. "
+        "Prefer one phraselet in a Hans line, "
+        "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
+        "Italian banter. No German monologues. Full German is rare and only works as an "
+        "explicit 'nobody understood him' gag; otherwise keep German/Boarisch to 2-6 word "
+        "bursts inside Italian lines. Vary how he enters every time — never reuse the same "
+        "greeting or opener. "
+        f"{regular_hosts_text} "
+        f"keep the station conversation {station_conversation_lang}; they react to his Bavarianisms naturally, "
+        "roasting or misunderstanding the flavor without formally translating every line. "
+        "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
+        "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
+        "Hans Günther is a GUEST STAR, not "
+        "a co-host: when he is on, he bursts in for a few loud lines and then hands "
+        f"the floor back to {regular_hosts_text} — unmistakably present, never carrying the "
+        "whole exchange. He has the fewest lines of the three, but he is not silent. "
+        'Always tag his lines with the exact host name "Hans Günther" (never just '
+        '"Hans") so they attribute to him, not to an Italian host.'
+    )
+
+
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
@@ -1130,45 +1186,9 @@ overhearing a world that exists with or without them."""
             "'RAI domestic broadcast.' The natural Italian fillers below still apply "
             "as sprinkles, never as full sentences."
         )
-        # Test balloon: if the Bavarian guest is in the roster, keep him inside
-        # the Italian show while giving him Bavarian texture.
-        if any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
-            regular_host_names = [h.name for h in _regular_hosts(config)]
-            if len(regular_host_names) >= 2:
-                regular_hosts_text = f"{regular_host_names[0]} and {regular_host_names[1]}"
-            elif regular_host_names:
-                regular_hosts_text = regular_host_names[0]
-            else:
-                regular_hosts_text = "the configured Italian hosts"
-            mode_directive += (
-                " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
-                "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
-                "roughly 75-85% Italian, enough that he belongs inside the full Italian conversation "
-                "instead of sounding pasted in from a German sketch. Make him about 50% MORE Bavarian "
-                "than before, but as texture: rhythm, swagger, nicknames, comparisons, and short "
-                "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
-                "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
-                "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
-                "'geh weida col caffè', 'des is ned normale', 'a bissl troppo piccolo', "
-                "'wia schee questa radio', 'des is fei a Witz', 'passt wie Arsch auf Eimer'. "
-                "Prefer one phraselet in a Hans line, "
-                "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
-                "Italian banter. No German monologues. Full German is rare and only works as an "
-                "explicit 'nobody understood him' gag; otherwise keep German/Boarisch to 2-6 word "
-                "bursts inside Italian lines. Vary how he enters every time — never reuse the same "
-                "greeting or opener. "
-                f"{regular_hosts_text} "
-                "keep the station conversation Italian/English; they react to his Bavarianisms naturally, "
-                "roasting or misunderstanding the flavor without formally translating every line. "
-                "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
-                "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
-                "Hans Günther is a GUEST STAR, not "
-                "a co-host: when he is on, he bursts in for a few loud lines and then hands "
-                f"the floor back to {regular_hosts_text} — unmistakably present, never carrying the "
-                "whole exchange. He has the fewest lines of the three, but he is not silent. "
-                'Always tag his lines with the exact host name "Hans Günther" (never just '
-                '"Hans") so they attribute to him, not to an Italian host.'
-            )
+    # Test balloon: if the Bavarian guest is in the roster, keep him inside the
+    # show as a guest star in either language mode (never described without a brief).
+    mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
 
     return f"""You write scripts for a fake AI radio station called "{config.station.name}".
 {mode_directive}
@@ -1453,7 +1473,7 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
 
-    chaos_hosts = [h.name for h in config.hosts if h.personality.chaos >= 80 or h.personality.energy >= 90]
+    chaos_hosts = [h.name for h in _regular_hosts(config) if h.personality.chaos >= 80 or h.personality.energy >= 90]
     chaos_block = _chaos_prompt_block(state, chaos_subtype)
     festival_block = f"\n\n{FESTIVAL_MODE_BLOCK}" if config.party_mode == "festival" else ""
     if not chaos_block and len(config.hosts) >= 2 and chaos_hosts:
@@ -1644,7 +1664,7 @@ Return JSON:
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
-        hosts = config.hosts
+        hosts = _regular_hosts(config)
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
         if config.station.language == "it":
