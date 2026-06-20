@@ -6,6 +6,12 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Engine Room health readout no longer flags the station a hair early.** When the music buffer ran dry, the "queue empty" health warning could trip a fraction of a second before it should have, because the displayed time was rounded up before being checked against the limit. The check now uses the exact elapsed time, so the warning lights at the real one-minute mark, not a blink before it.
+
+- **Clicking a track in the Live Queue to jump to it now always works.** Some tracks carry an internal ID that contains punctuation. Tapping one of those to scroll to and highlight its row could silently do nothing. The row lookup now handles any ID, so the jump-and-highlight always lands.
+
 ## [2.13.0] - 2026-06-20
 
 ### Security
