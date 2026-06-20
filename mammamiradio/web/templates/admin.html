@@ -354,6 +354,11 @@ body[data-stopped="true"] .btn-util {
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+/* The per-row ban control is ALWAYS visible (not hover-gated like .pl-a) so it
+   is reachable on touch devices and obvious as a destructive action: Lancia red
+   + the ✕ glyph + the word "Ban" (never colour alone — colorblind-safe). */
+.pl-ban { opacity: 1; color: #E8A29B; border-color: rgba(184,44,32,0.5); margin-left: 4px; flex-shrink: 0; }
+.pl-ban:hover { color: var(--cream); background: rgba(184,44,32,0.2); border-color: rgba(184,44,32,0.75); }
 
 /* ── LISTENER REQUESTS ── */
 .lr-item { padding: 8px 0; border-bottom: 1px solid rgba(245,237,216,0.07); }
@@ -1238,6 +1243,13 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   color: #E8A29B !important;
 }
 .btn-ban:hover { background: rgba(184,44,32,0.18) !important; }
+/* Count badge on the "Banned" manager button — at-a-glance "bans exist, and here's
+   where they live". Hidden when zero. */
+.ban-count { display: inline-block; margin-left: 5px; min-width: 15px; padding: 0 4px; border-radius: 8px; background: rgba(184,44,32,0.85); color: var(--cream); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; vertical-align: middle; }
+#banlistToggle.active { border-color: rgba(244,208,72,0.5) !important; color: var(--sun) !important; }
+/* First-use guidance, shown only while nothing is banned yet (see setBanCount). */
+.ban-hint { font-size: 11px; color: var(--muted); margin: 6px 0 2px; line-height: 1.4; }
+.ban-hint strong { color: var(--cream-dk); font-weight: 700; }
 #banlistPanel {
   margin: 8px 0 12px;
   padding: 8px 10px;
@@ -1569,7 +1581,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
-          <button type="button" class="btn btn-chip" onclick="toggleBanlist()" title="Songs you've banned for good">Banned</button>
+          <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
         </div>
       </div>
       <div class="rotation-select" id="plSelectBar" style="display:none">
@@ -1585,6 +1597,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
       <div id="searchResults"></div>
       <div id="banlistPanel" style="display:none"></div>
+      <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo your bans with the <strong>Banned</strong> button above.</div>
       <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
     </section>
 
@@ -2912,7 +2925,7 @@ function updatePl(tracks,page){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button><button class="pl-btn" onclick="removeTr(${idx})" aria-label="Ban from rotation">&#10005;</button></div></div>`;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -2979,7 +2992,27 @@ async function moveNext(i){
 // Index-based and immediate (no deferred-undo) — a second removal in an undo window
 // would post a stale index after the first ban shifts the list. To bring a song back,
 // use the Banned manager (toggleBanlist) → Unban.
-async function removeTr(i){const r=await api('POST','/api/playlist/remove',{index:i});if(r&&r.ok){toast(r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back');await refreshFast();}else{const m=(r&&r.error)||wayOut('ban that one');toast(m);}}
+async function removeTr(i){
+  // Capture the song identity BEFORE the ban so Undo can lift it by key (the row
+  // index shifts the moment the ban lands; unban-by-key is index-shift-safe).
+  const row=document.querySelector('.pl-row[data-i="'+i+'"]');
+  const artist=row?(row.getAttribute('data-artist')||''):'';
+  const title=row?(row.getAttribute('data-title')||''):'';
+  const r=await api('POST','/api/playlist/remove',{index:i});
+  if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban that one');toast(m);return;}
+  await refreshFast();refreshBanCount();
+  const msg=r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back';
+  if(typeof window.undoableToast==='function'&&(artist||title)){
+    // Ban is already committed; this is a reversible-by-key undo, not a deferred commit.
+    window.undoableToast(msg,async()=>{
+      const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
+      toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
+      await refreshFast();refreshBanCount();
+    });
+  }else{
+    toast(msg);
+  }
+}
 
 // --- Bulk select + ban -------------------------------------------------------
 function updatePlSelBar(){
@@ -3003,22 +3036,38 @@ async function banSelected(){
   if(!keys.length){toast('Pick at least one song first');return;}
   if(!confirm(`Ban ${keys.length} song${keys.length===1?'':'s'} for good? They won’t come back after a restart.`))return;
   const r=await api('POST','/api/track/ban',{keys});
-  if(r&&r.ok){const n=r.banned?r.banned.length:keys.length;toast(r.persisted===false?`Banned ${n} song${n===1?'':'s'} for now — but I couldn’t save it, so they may come back after a restart`:`Banned ${n} song${n===1?'':'s'}`);clearPlSel();await refreshFast();}
+  if(r&&r.ok){const n=r.banned?r.banned.length:keys.length;toast(r.persisted===false?`Banned ${n} song${n===1?'':'s'} for now — but I couldn’t save it, so they may come back after a restart`:`Banned ${n} song${n===1?'':'s'}`);clearPlSel();await refreshFast();refreshBanCount();}
   else{const m=(r&&r.error)||wayOut('ban those songs');toast(m);}
+}
+// --- Banned-count badge + first-use hint -------------------------------------
+// Reflect ban count on the "Banned" manager button and hide the first-use hint
+// once at least one song is banned (state-driven "first use" — no localStorage).
+function setBanCount(n){
+  const badge=document.getElementById('banlistCount');
+  if(badge){if(n>0){badge.textContent=n;badge.style.display='';}else{badge.style.display='none';badge.textContent='';}}
+  const hint=document.getElementById('banHint');
+  if(hint)hint.style.display=n>0?'none':'';
+}
+async function refreshBanCount(){
+  try{const r=await api('GET','/api/track/banlist');setBanCount((r&&r.banned)?r.banned.length:0);}
+  catch(_){/* best-effort: leave the badge as-is */}
 }
 
 // --- Banned manager ----------------------------------------------------------
 async function toggleBanlist(){
   const panel=document.getElementById('banlistPanel');
+  const btn=document.getElementById('banlistToggle');
   if(!panel)return;
-  if(panel.style.display!=='none'){panel.style.display='none';panel.innerHTML='';return;}
+  if(panel.style.display!=='none'){panel.style.display='none';panel.innerHTML='';if(btn){btn.setAttribute('aria-expanded','false');btn.classList.remove('active');}return;}
   await renderBanlist();
+  if(btn){btn.setAttribute('aria-expanded','true');btn.classList.add('active');}
 }
 async function renderBanlist(){
   const panel=document.getElementById('banlistPanel');if(!panel)return;
   const r=await api('GET','/api/track/banlist');
   const rows=(r&&r.banned)||[];
-  if(!rows.length){panel.innerHTML='<div class="banlist-head">Banned songs</div><div class="empty">Nothing banned yet. The ✕ on a track bans it for good.</div>';panel.style.display='block';return;}
+  setBanCount(rows.length);
+  if(!rows.length){panel.innerHTML='<div class="banlist-head">Banned songs</div><div class="empty">Nothing banned yet. The ✕ Ban button on a track bans it for good.</div>';panel.style.display='block';return;}
   // Artist/title ride in data attributes (esc() makes them HTML-attribute-safe and
   // the browser decodes them back on read) instead of inline JS-string args — an
   // apostrophe like O'Connor used to break the generated onclick handler.
@@ -3780,6 +3829,7 @@ loadBroadcastChainToggle();
 loadQuality();
 loadChaosToggle();
 loadFestivalToggle();
+refreshBanCount();
 setInterval(refreshFast,3000);
 setInterval(refreshSlow,30000);
 </script>
