@@ -19,7 +19,7 @@ Env:
 Options:
   -h, --help   Show this help and exit
 
-Invoked by Conductor's `setup` hook in conductor.json.
+Invoked by Conductor's `setup` hook (configured in `.conductor/settings.toml`).
 EOF
     exit 0
     ;;

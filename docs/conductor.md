@@ -1,6 +1,6 @@
 # Conductor Workspace
 
-This repo ships a `conductor.json` that defines workspace lifecycle for [Conductor](https://conductor.run).
+This repo's workspace lifecycle for [Conductor](https://conductor.run) is defined by the committed `scripts/conductor-*.sh` hooks below, wired through Conductor's own per-workspace settings (`.conductor/settings.toml`, managed by the Conductor app — not committed to this repo).
 
 ## Scripts
 

@@ -44,9 +44,8 @@ The train should stay reviewable before it absorbs another slice.
   resolution unless the behavior came from a named feature worktree.
 - Keep changelogs and version files unchanged unless a feature slice ships
   user-visible behavior or performs an intentional version bump.
-- If Conductor lifecycle hooks change in an integrated slice, update
-  `conductor.json` and the related `scripts/conductor-*.sh` files in the same
-  integration commit.
+- If Conductor lifecycle hooks change in an integrated slice, update the
+  `scripts/conductor-*.sh` files in the same integration commit.
 - Preserve conventional commits. Use `feat:`, `fix:`, `chore:`, `ci:`, or
   `deps:` only.
 - Prefer small integration commits grouped by feature slice or conflict class.
