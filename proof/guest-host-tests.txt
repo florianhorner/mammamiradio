@@ -1,0 +1,17 @@
+# Proof: guest-host consolidation (florianhorner/chore/workspace-review)
+# Generated 2026-06-20T14:31:28Z for HEAD 25178a05
+
+## lint — ruff check mammamiradio/ tests/
+All checks passed!
+
+## lint — ruff format --check (changed files)
+3 files already formatted
+
+## typecheck — mypy mammamiradio/hosts/scriptwriter.py
+mammamiradio/audio/tts.py:493: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 1 source file
+
+## tests — pytest tests/
+........................................................................ [ 99%]
+..........                                                               [100%]
+3104 passed, 2 skipped, 19 deselected in 58.82s
