@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from urllib.error import URLError
@@ -219,6 +220,29 @@ def evict_cache_lru(
             evicted,
             total_bytes / (1024 * 1024),
         )
+
+
+def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
+    """Delete ``*.mp3`` render scratch in *tmp_dir* older than *max_age_hours*.
+
+    ``tmp_dir`` holds only ephemeral ``{prefix}_{uuid}.mp3`` segment renders that
+    the producer consumes within seconds. A crash or restart can orphan them, and
+    on the HA add-on they pile up unbounded in ``/data/tmp``. Startup runs before
+    the producer/playback loop, so nothing in tmp is in-flight — but the age gate
+    keeps the prune conservative regardless. Best-effort: never raises into startup.
+    """
+    if not tmp_dir.is_dir():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    pruned = 0
+    for f in tmp_dir.glob("*.mp3"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+                pruned += 1
+        except OSError:
+            continue
+    return pruned
 
 
 _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"

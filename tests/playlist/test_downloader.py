@@ -1539,3 +1539,76 @@ def test_search_ytdlp_metadata_filters_non_video_ids():
     # The non-string id is dropped without crashing; only the real video survives.
     assert ids == ["qVSALcVpwkc"]
     assert all(isinstance(i, str) and len(i) == 11 for i in ids)
+
+
+# --- prune_stale_tmp_files ---
+
+
+def _age_file(path, hours: float) -> None:
+    """Back-date a file's mtime/atime by *hours*."""
+    import os
+    import time
+
+    past = time.time() - hours * 3600
+    os.utime(path, (past, past))
+
+
+def test_prune_stale_tmp_files_removes_old_mp3(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    old = tmp_path / "banter_full_abcd1234.mp3"
+    old.write_bytes(b"x" * 2048)
+    _age_file(old, hours=12)  # older than the 6h default
+
+    pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 1
+    assert not old.exists()
+
+
+def test_prune_stale_tmp_files_keeps_recent_mp3(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    fresh = tmp_path / "egress_deadbeef.mp3"
+    fresh.write_bytes(b"x" * 2048)  # just written, well within the window
+
+    pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 0
+    assert fresh.exists()
+
+
+def test_prune_stale_tmp_files_ignores_non_mp3(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    other = tmp_path / "leftover.txt"
+    other.write_text("not audio")
+    _age_file(other, hours=48)
+
+    pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 0
+    assert other.exists()  # only *.mp3 is touched
+
+
+def test_prune_stale_tmp_files_missing_dir_returns_zero(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    assert prune_stale_tmp_files(tmp_path / "does_not_exist") == 0
+
+
+def test_prune_stale_tmp_files_swallows_unlink_error(tmp_path):
+    from unittest.mock import patch
+
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    old = tmp_path / "trans_cafe9999.mp3"
+    old.write_bytes(b"x" * 2048)
+    _age_file(old, hours=12)
+
+    with patch("pathlib.Path.unlink", side_effect=OSError("permission denied")):
+        # Best-effort: must not raise into startup.
+        pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 0
+    assert old.exists()
