@@ -3496,6 +3496,30 @@ def _clear_clip_rate():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
+async def test_release_clip_stamp_only_pops_own_stamp():
+    """A failed request's rollback must not clobber a concurrent request's stamp.
+
+    Models the #519 race: request A wrote stamp tA and is failing slowly; request
+    B (same IP, after the window) wrote its own successful stamp tB. A's rollback
+    must leave tB intact, then a rollback owning tB removes it."""
+    from mammamiradio.web.streamer import _clip_rate, _release_clip_stamp
+
+    ip = "192.168.1.50"
+    t_a = 1000.0
+    t_b = 1000.5  # a newer stamp written by a concurrent successful request
+    _clip_rate[ip] = t_b
+
+    # A's late rollback owns the older t_a — it must NOT remove B's t_b.
+    await _release_clip_stamp(ip, t_a)
+    assert _clip_rate.get(ip) == t_b
+
+    # A rollback that genuinely owns the current stamp removes it.
+    await _release_clip_stamp(ip, t_b)
+    assert ip not in _clip_rate
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_empty_ring_buffer():
     """POST /api/clip returns error when ring buffer is empty."""
     app = _make_test_app()

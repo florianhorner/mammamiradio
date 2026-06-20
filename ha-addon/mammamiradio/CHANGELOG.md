@@ -6,6 +6,12 @@
 
 - **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared on row hover, so on a phone or tablet it was unreachable and on a computer it was easy to miss. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, a short note explains how it works until your first ban, and an "Undo" prompt appears right after a single ban so an accidental tap is one tap away from being lifted.
 
+### Fixed
+
+- **Leftover working audio no longer piles up in `/data`.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The add-on now sweeps away any stale leftovers when it starts, so its storage stays tidy on its own.
+
+- **Sharing a clip can't briefly switch off its own slow-down guard.** The "share this moment" button limits how often it can be tapped. If one tap failed to find audio at the same instant another succeeded, cleaning up after the failed one could wipe the successful tap's record and let the next tap skip the wait. The cleanup now only ever clears its own tap, so the gentle pacing always holds.
+
 ## 2.14.0
 
 ## 2.13.0

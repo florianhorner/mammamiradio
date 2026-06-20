@@ -3610,6 +3610,20 @@ _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
 _clip_rate_lock = asyncio.Lock()
 
 
+async def _release_clip_stamp(client_ip: str, stamp: float) -> None:
+    """Roll back a rate-limit stamp under the lock, only if it's still ours.
+
+    The stamp is written under ``_clip_rate_lock``; the rollback must be too, and
+    must pop only the value this request wrote (``stamp``). A concurrent request
+    from the same IP can overwrite the entry with its own successful stamp before
+    this one's failure path runs — a bare ``pop`` by IP would delete that stamp and
+    briefly disable the rate limit (#519).
+    """
+    async with _clip_rate_lock:
+        if _clip_rate.get(client_ip) == stamp:
+            _clip_rate.pop(client_ip, None)
+
+
 @router.post("/api/clip")
 async def create_clip(request: Request):
     """Extract the last ~30s of audio into a shareable clip."""
@@ -3669,11 +3683,11 @@ async def create_clip(request: Request):
             # Nothing to clip yet (e.g. cold start). Roll back the rate-limit
             # stamp so the listener can retry the moment audio is buffered,
             # instead of being locked out for the full window after a no-op.
-            _clip_rate.pop(client_ip, None)
+            await _release_clip_stamp(client_ip, now)
             return {"ok": False, "reason": "no_audio"}
         clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
     if not clip_data:
-        _clip_rate.pop(client_ip, None)
+        await _release_clip_stamp(client_ip, now)
         return {"ok": False, "reason": "no_audio"}
 
     clips_dir = config.cache_dir / "clips"

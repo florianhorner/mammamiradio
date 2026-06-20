@@ -16,6 +16,10 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Leftover working audio no longer piles up on the home server.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The station now sweeps away any stale leftovers when it starts, so the add-on's storage stays tidy on its own.
+
+- **Sharing a clip can't briefly switch off its own slow-down guard.** The "share this moment" button limits how often it can be tapped. If one tap failed to find audio at the same instant another succeeded, cleaning up after the failed one could wipe the successful tap's record and let the next tap skip the wait. The cleanup now only ever clears its own tap, so the gentle pacing always holds.
+
 - **The Engine Room health readout no longer flags the station a hair early.** When the music buffer ran dry, the "queue empty" health warning could trip a fraction of a second before it should have, because the displayed time was rounded up before being checked against the limit. The check now uses the exact elapsed time, so the warning lights at the real one-minute mark, not a blink before it.
 
 - **Clicking a track in the Live Queue to jump to it now always works.** Some tracks carry an internal ID that contains punctuation. Tapping one of those to scroll to and highlight its row could silently do nothing. The row lookup now handles any ID, so the jump-and-highlight always lands.
