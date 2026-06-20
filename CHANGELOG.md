@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-06-20
+
 ### Security
 
 - **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
@@ -280,8 +282,6 @@ The current version source of truth is `pyproject.toml`.
   enforcement, and trusted-network classification), previously embedded in
   `streamer.py`. No behavior change: every admin route enforces exactly the same
   rules, pinned by the same tests.
-
-## [2.13.0]
 
 ### Added
 

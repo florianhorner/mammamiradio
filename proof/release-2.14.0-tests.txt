@@ -1,0 +1,16 @@
+mammamiradio — open 2.14.0 RC (after cutting v2.13.0) — local verification
+
+## pre-release gate (version sync + ha-addon CHANGELOG head + invariants)
+config.yaml (2.14.0) == pyproject.toml (2.14.0)
+ha-addon CHANGELOG first versioned header (## 2.14.0) == config.yaml (2.14.0)
+All pre-release checks passed. Safe to bump.
+
+## make check (lint + mypy + full pytest with coverage gate)
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 93.85%
+3094 passed, 2 skipped, 19 deselected, 1 warning in 90.09s (0:01:30)
+All coverage floors held. Total: 94% (floor: 92%)
+All checks passed
+
+## changelog editorial lint
+scripts/check-changelog-lint.sh : Changelog lint clean
