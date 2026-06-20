@@ -1107,6 +1107,47 @@ def test_bridge_health_snapshot_unhealthy_when_queue_empty_threshold_passes():
     assert bh["unhealthy_reasons"] == ["queue_empty"]
 
 
+def test_bridge_health_snapshot_does_not_round_up_below_threshold():
+    """Regression: the snapshot must compare the RAW elapsed against the threshold,
+    not the rounded payload value. At raw 59.96s the displayed elapsed rounds up to
+    60.0, but the station is NOT yet unhealthy — rounding before the compare tripped
+    'queue_empty' early. 0.04 (not 0.05) keeps the raw value off the 59.95 banker's-
+    rounding midpoint, so round(raw, 1) == 60.0 unambiguously regardless of float
+    representation."""
+    now = 30_000.0
+    state = StationState()
+    state.queue_empty_since = now - (BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS - 0.04)
+
+    with (
+        patch("mammamiradio.web.streamer.time.time", return_value=now),
+        patch("mammamiradio.web.streamer._runtime_monotonic", return_value=now),
+    ):
+        bh = _bridge_health_snapshot(state)
+
+    # Payload rounds to the threshold for display tidiness...
+    assert bh["queue_empty_elapsed_s"] == BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+    # ...but the raw 59.95s is below threshold, so the station is still healthy.
+    assert bh["unhealthy"] is False
+    assert bh["unhealthy_reasons"] == []
+
+
+def test_bridge_health_snapshot_unhealthy_exactly_at_threshold():
+    """The boundary itself (raw == 60.0) degrades — the fix must not push the trip
+    point past the threshold."""
+    now = 40_000.0
+    state = StationState()
+    state.queue_empty_since = now - BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS
+
+    with (
+        patch("mammamiradio.web.streamer.time.time", return_value=now),
+        patch("mammamiradio.web.streamer._runtime_monotonic", return_value=now),
+    ):
+        bh = _bridge_health_snapshot(state)
+
+    assert bh["unhealthy"] is True
+    assert bh["unhealthy_reasons"] == ["queue_empty"]
+
+
 def test_bridge_health_snapshot_ignores_events_outside_window():
     """Stale fires (older than the rolling window) drop out of window_count but
     still count toward the lifetime session_count."""
