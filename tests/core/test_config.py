@@ -40,9 +40,12 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert config.pacing.songs_between_ads == 4
     assert config.playlist.jamendo_limit == 200
     assert config.super_italian_mode is False
-    assert len(config.hosts) == 2
+    assert len(config.hosts) == 3
     assert config.hosts[0].name == "Marco"
     assert config.hosts[1].name == "Giulia"
+    # Hans Günther is the test-balloon guest, kept LAST in the roster so the
+    # regular-host pools (h0/h1) stay Italian. See radio.toml roster comment.
+    assert config.hosts[2].name == "Hans Günther"
     assert len(config.ads.brands) > 0
     assert len(config.ads.voices) > 0
 
