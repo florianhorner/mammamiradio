@@ -93,6 +93,7 @@ _anthropic_block_expired_logged: bool = False
 _cached_system_prompt: str = ""
 _cached_prompt_key: str = ""
 _cached_system_prompt_hash: str = ""
+_LOCAL_BALLOON_GUEST_HOST = "Hans Günther"
 
 
 @dataclass
@@ -231,6 +232,17 @@ def _get_openai_client(api_key: str):
 def has_script_llm(config: StationConfig) -> bool:
     """Return whether any script-generation backend is configured."""
     return bool(config.anthropic_api_key or config.openai_api_key)
+
+
+def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
+    """Hosts eligible for normal station duties.
+
+    The Hans Günther balloon is a guest in banter, not a regular solo announcer.
+    Keep him out of stock copy, transitions, flashes, sweepers, and ad bumpers.
+    """
+    hosts = list(config.hosts)
+    regular = [h for h in hosts if h.name != _LOCAL_BALLOON_GUEST_HOST]
+    return regular or hosts
 
 
 def reset_provider_backoff() -> None:
@@ -864,7 +876,7 @@ def _chaos_stock_exchange(
     config: StationConfig,
     subtype: ChaosSubtype,
 ) -> list[tuple[HostPersonality, str]]:
-    hosts = config.hosts
+    hosts = _regular_hosts(config)
     h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
     h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
     speakers = cycle([h0, h1])
@@ -1060,13 +1072,74 @@ def _abbreviated_bank_block() -> str:
     return "\n".join(lines)
 
 
+def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
+    """Brief for the Hans Günther test-balloon guest, appended in either language mode.
+
+    Returns "" when the guest is not in the roster. Applied in both Super Italian and
+    code-switch modes so the guest is governed consistently — without it he is listed
+    among the hosts but given no guest framing, and the LLM treats him as a regular
+    Italian co-host. The only mode-dependent clause is the station's conversation
+    language (Italian-only under Super Italian, Italian/English otherwise).
+    """
+    if not any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
+        return ""
+    regulars = _regular_hosts(config)
+    # Only-guest roster: _regular_hosts falls back to the full list, so the guest
+    # shows up among the "regulars". With no real regular hosts to play off, guest
+    # framing ("hand the floor back to Hans Günther") would point him at himself —
+    # emit nothing and let him host as the sole voice.
+    if any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in regulars):
+        return ""
+    regular_host_names = [h.name for h in regulars]
+    regular_hosts_text = (
+        f"{regular_host_names[0]} and {regular_host_names[1]}"
+        if len(regular_host_names) >= 2
+        else regular_host_names[0]
+    )
+    station_conversation_lang = "Italian" if super_italian else "Italian/English"
+    return (
+        " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
+        "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
+        "roughly 75-85% Italian, enough that he belongs inside the full Italian conversation "
+        "instead of sounding pasted in from a German sketch. Make him about 50% MORE Bavarian "
+        "than before, but as texture: rhythm, swagger, nicknames, comparisons, and short "
+        "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
+        "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
+        "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
+        "'geh weida col caffè', 'des is ned normale', 'a bissl troppo piccolo', "
+        "'wia schee questa radio', 'des is fei a Witz', 'passt wie Arsch auf Eimer'. "
+        "Prefer one phraselet in a Hans line, "
+        "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
+        "Italian banter. No German monologues. Full German is rare and only works as an "
+        "explicit 'nobody understood him' gag; otherwise keep German/Boarisch to 2-6 word "
+        "bursts inside Italian lines. Vary how he enters every time — never reuse the same "
+        "greeting or opener. "
+        f"{regular_hosts_text} "
+        f"keep the station conversation {station_conversation_lang}; they react to his Bavarianisms naturally, "
+        "roasting or misunderstanding the flavor without formally translating every line. "
+        "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
+        "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
+        "Hans Günther is a GUEST STAR, not "
+        "a co-host: when he is on, he bursts in for a few loud lines and then hands "
+        f"the floor back to {regular_hosts_text} — unmistakably present, never carrying the "
+        "whole exchange. He has the fewest lines of the three, but he is not silent. "
+        'Always tag his lines with the exact host name "Hans Günther" (never just '
+        '"Hans") so they attribute to him, not to an Italian host.'
+    )
+
+
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
-    for i, h in enumerate(config.hosts):
+    regulars = _regular_hosts(config)
+    # Energy/chaos contrast is computed from the regular hosts only, so adding the
+    # guest as a third roster entry doesn't silently disable the two-host foil logic
+    # (one leads the chaos, the other cuts with surgical contrast). The guest gets
+    # no relative pairing — he is a guest, not half of the regular duo.
+    regular_foil = {h.name: regulars[1 - idx] for idx, h in enumerate(regulars)} if len(regulars) == 2 else {}
+    for h in config.hosts:
         line = f"- {h.name}: {h.style} (voice: {h.voice})"
-        # Pass the other host so energy/chaos contrast can be computed relatively
-        other = config.hosts[1 - i] if len(config.hosts) == 2 else None
+        other = regular_foil.get(h.name)
         modifier = _personality_modifier(h.name, h.personality, other_host=other)
         if modifier:
             line += modifier
@@ -1118,6 +1191,9 @@ overhearing a world that exists with or without them."""
             "'RAI domestic broadcast.' The natural Italian fillers below still apply "
             "as sprinkles, never as full sentences."
         )
+    # Test balloon: if the Bavarian guest is in the roster, keep him inside the
+    # show as a guest star in either language mode (never described without a brief).
+    mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
 
     return f"""You write scripts for a fake AI radio station called "{config.station.name}".
 {mode_directive}
@@ -1228,7 +1304,7 @@ async def write_banter(
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
-        host = random.choice(config.hosts)
+        host = random.choice(_regular_hosts(config))
         fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
         return [(host, fallback.get(config.station.language, fallback["en"]))], None
 
@@ -1402,7 +1478,7 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
 
-    chaos_hosts = [h.name for h in config.hosts if h.personality.chaos >= 80 or h.personality.energy >= 90]
+    chaos_hosts = [h.name for h in _regular_hosts(config) if h.personality.chaos >= 80 or h.personality.energy >= 90]
     chaos_block = _chaos_prompt_block(state, chaos_subtype)
     festival_block = f"\n\n{FESTIVAL_MODE_BLOCK}" if config.party_mode == "festival" else ""
     if not chaos_block and len(config.hosts) >= 2 and chaos_hosts:
@@ -1488,10 +1564,13 @@ Return JSON:
         if not isinstance(raw_lines, list):
             raw_lines = []
         str_line_idx = 0
+        # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
+        # so a malformed line can't be put in the guest's mouth regardless of roster order.
+        fallback_hosts = _regular_hosts(config)
         for line in raw_lines:
             if isinstance(line, dict):
                 raw_name = str(line.get("host", ""))
-                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), config.hosts[0])
+                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), fallback_hosts[0])
                 raw_text = line.get("text", "")
                 # Only real strings are airable. A null/list/dict text would otherwise
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
@@ -1503,7 +1582,7 @@ Return JSON:
                 # actually air (counting only emitted lines, so interleaved blanks
                 # don't collapse two lines onto one host) so it still reads as
                 # two-host banter instead of crashing to stock copy.
-                host = config.hosts[str_line_idx % len(config.hosts)]
+                host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
             else:
                 continue
@@ -1592,7 +1671,7 @@ Return JSON:
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
-        hosts = config.hosts
+        hosts = _regular_hosts(config)
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
         if config.station.language == "it":
@@ -1672,7 +1751,7 @@ def _pick_news_flash_host(config: StationConfig, category: str) -> HostPersonali
     Sports uses a steady-anchor pool so a single manic persona does not monopolize
     match updates. Other categories keep the existing station-wide random casting.
     """
-    hosts = list(config.hosts)
+    hosts = _regular_hosts(config)
     if not hosts:
         return HostPersonality(name="Host", voice="it-IT-DiegoNeural", style="")
 
@@ -1717,7 +1796,7 @@ async def write_news_flash(
     the verbal-gag ledger) to land cross-domain; None means no callback.
     """
     if not has_script_llm(config):
-        host = random.choice(config.hosts)
+        host = random.choice(_regular_hosts(config))
         return (host, "Notizia dell'ultima ora: tutto a posto. Più o meno.", "breaking")
 
     if category is None:
@@ -1793,7 +1872,7 @@ async def write_transition(
     Pass ``[]`` explicitly to suppress cue loading.
     """
     if not has_script_llm(config):
-        host = random.choice(config.hosts)
+        host = random.choice(_regular_hosts(config))
         fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
         return (host, fallback.get(next_segment, "Allora..."))
 
@@ -1811,7 +1890,7 @@ async def write_transition(
             style = "react"
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
-    host = random.choice(config.hosts)
+    host = random.choice(_regular_hosts(config))
     recent_texts = list(state.recent_transition_texts)[-4:]
     recent_openers = [_transition_stem(text) for text in recent_texts if text]
     banned_openers = ", ".join(dict.fromkeys(recent_openers)) if recent_openers else "none"
