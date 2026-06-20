@@ -1510,7 +1510,15 @@ async def run_producer(
         # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
         _t_render = time.perf_counter()
 
-        # Refresh Home Assistant context for banter/ad segments
+        # Refresh Home Assistant context for banter/ad/news-flash segments.
+        # NEWS_FLASH is included so the meteo flash grounds itself in a freshly
+        # refreshed forecast (#626) — without it the weather arc was only ever
+        # refreshed for banter/ad and a flash could air the startup snapshot.
+        # The refresh is poll_interval-gated (cache read in the common case), and
+        # the news-flash category (weather vs sports/traffic) isn't known until
+        # write_news_flash runs, so the gate necessarily covers every flash, not
+        # just weather. Staleness is bounded by the weather cache TTL plus one
+        # poll interval, not made real-time — the TTL is deliberately unchanged.
         if (
             config.homeassistant.enabled
             and config.ha_token
@@ -1518,6 +1526,7 @@ async def run_producer(
             in (
                 SegmentType.BANTER,
                 SegmentType.AD,
+                SegmentType.NEWS_FLASH,
             )
         ):
             ha_cache = await fetch_home_context(

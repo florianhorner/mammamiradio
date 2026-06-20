@@ -1,30 +1,26 @@
-Proof: real-weather meteo — weather news flash grounds in live HA forecast
-Branch: florianhorner/chore/italian-radio-segments
-Generated: 2026-06-19
+PR #624 — real-weather meteo flash + #626 (HA refresh gate) + #627 (language-aware arc)
+Branch: florianhorner/chore/italian-radio-segments (advanced from sacramento-v1)
+Commit: 48b35637 (pending)
+Generated: 2026-06-20T14:40:27Z
 
-## What this proves
-The "weather" news flash now injects the real Home Assistant forecast
-(state.ha_weather_arc) into its prompt when available, fenced as read-only data,
-and falls back to the fully-fictional meteo prompt when no forecast is present
-(never dead air). Four new tests in tests/hosts/test_scriptwriter.py cover:
-real-data grounding + security fence, forecast-without-mood branch, the
-no-forecast fictional fallback, and the whitespace-only-arc fallback.
+=== ruff check ===
+All checks passed!
+=== ruff format --check ===
+4 files already formatted
+=== mypy ===
+Success: no issues found in 2 source files
 
-## Review
-Pre-ship squad (adversarial + coverage + docs-consistency), Claude /code-review,
-and Codex /codex review all ran. No P0/P1. Applied P2 fixes: doc-sync line,
-forecast-primacy hint, condition-neutral prompt example (no hardcoded rain so a
-sunny forecast can't air "it's raining"), and a .strip() guard so a whitespace
-arc cleanly falls back. Deferred to issues #626 (NEWS_FLASH HA-refresh staleness)
-and #627 (ha_weather_arc_en on non-Italian stations).
+=== #626 producer HA-refresh-gate (weather + sports flash) ===
+..                                                                       [100%]
+2 passed in 0.46s
+=== #627 scriptwriter language tests ===
+.................................                                        [100%]
+33 passed, 115 deselected in 0.32s
 
-## Targeted: write_news_flash tests
-$ python -m pytest tests/hosts/test_scriptwriter.py -k news_flash -q
-12 passed, 124 deselected
+=== full suite ===
+................                                                         [100%]
+3110 passed, 2 skipped, 19 deselected in 59.47s
+=== changelog lint + release invariants ===
+Changelog lint clean.
 
-## Full gate: make check (lint + mypy + vulture + full suite + coverage ratchet)
-mypy: Success: no issues found in 193 source files
-ruff: All checks passed!
-pytest: 3081 passed, 2 skipped (integrated on origin/main 8d08f71f)
-coverage: 93.84% total (floor 92%) — all per-module floors held
-All checks passed
+All invariants passed.

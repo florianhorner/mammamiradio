@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **The weather report now knows your real weather.** When the station is connected to your home, the meteo flash starts from your actual local forecast and spins it into the hosts' usual absurd flair — so when it is really raining at your place, they know it and say so. The forecast is refreshed right before the flash airs, and on a non-Italian station the hosts read it in the station's own language. With no home connection, or when the forecast is unavailable, the report stays gloriously made-up exactly as before, so the segment never goes quiet.
+
 ## [2.13.0] - 2026-06-20
 
 ### Security
@@ -13,8 +17,6 @@ The current version source of truth is `pyproject.toml`.
 - **Track IDs in the admin queue can no longer slip code into a click action.** A song or queue entry whose ID contained a double-quote could previously break out of a button's click action in the producer desk's Live Queue and inject unwanted markup — a cross-site scripting gap reachable from the admin panel. Track IDs now ride on each row as escaped data attributes and are read back through a single shared click handler, so an ID's contents can never land inside a JavaScript action again.
 
 ### Added
-
-- **The weather report now knows your real weather.** When the station is connected to your home, the meteo flash starts from your actual local forecast before spinning off into its usual absurd Italian color — so when it is really raining at your place, the host knows it and says so. With no home connection, or when the forecast is unavailable, the report stays gloriously made-up exactly as before, so the segment never goes quiet.
 
 - **A one-command way to record the station's welcome greetings.** `scripts/generate_welcome_clips.py` renders the short Italian "someone just tuned in!" greetings the DJs play when a listener connects, using the station's own voices. It needs no API key (free voice engine by default), skips greetings you've already recorded unless you ask it to rebuild them, and has a preview mode that lists what it would make without writing anything. These greetings are one of the things the station can reach for to keep sound playing the instant you connect.
 
