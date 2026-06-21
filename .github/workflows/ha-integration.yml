@@ -29,7 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: home-assistant/actions/hassfest@master
+      # Scope to our integration: the app ships a PWA web manifest.json elsewhere
+      # in the tree that a whole-workspace hassfest scan misreads as an integration.
+      - name: Hassfest
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/github/workspace" \
+            ghcr.io/home-assistant/hassfest:latest \
+            --integration-path /github/workspace/custom_components/mammamiradio
 
   hacs:
     name: HACS validation
