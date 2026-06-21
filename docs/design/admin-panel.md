@@ -40,10 +40,11 @@ The admin panel is a **producer desk**: opening `/admin` answers two questions
 fast — is the station alive and sounding right, and what plays next. Set-and-forget
 config and debug never occupy the default view.
 
-**Default view — pinned live console + tabbed work area.**
+**Default view — desktop-pinned live console + tabbed work area.**
 
-The **live console** (`.mmr-console`, `position: sticky`) is pinned to the top and
-never scrolls away. It carries the whole live glance in one block:
+On desktop, the **live deck** (`.mmr-deck`, containing `.mmr-console` + `.mmr-tabbar`)
+is pinned to the top and never scrolls away. It carries the whole live glance in
+one block:
 
 - **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
   Skip / Stop, and the compact token cost counter. There is no "session N" counter
@@ -78,7 +79,8 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
 
 Each panel carries exactly one header (Playfair title); the old per-drawer summary
 plus inner-panel double header is gone. On narrow viewports the console stacks to
-one column and the tab bar scrolls horizontally.
+one column, the tab bar scrolls horizontally, and the full upper deck scrolls away
+with the page so it cannot cover the active panel.
 
 **Destructive actions use a 5s undo toast** (`undoableToast` in
 `static/admin.js`): the row is removed optimistically, the backend call is

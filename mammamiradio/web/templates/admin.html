@@ -1353,6 +1353,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .producer-desk .producer-main{max-width:1100px}
 /* Sticky deck — console + tab bar pin together (one sticky unit, never overlap) */
 .mmr-deck{position:sticky;top:0;z-index:40;background:var(--bg);padding-top:8px;margin-bottom:16px}
+@media (max-width:768px){
+  .mmr-deck{position:static;top:auto;z-index:auto}
+}
 /* Pinned live console */
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:16px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 12px 38px -20px rgba(0,0,0,.85);

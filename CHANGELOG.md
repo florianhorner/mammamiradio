@@ -4,7 +4,7 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
-## [Unreleased]
+## [2.14.1] - 2026-06-21
 
 ### Added
 
@@ -15,6 +15,8 @@ The current version source of truth is `pyproject.toml`.
 - **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared when you hovered over a row, so on a phone or tablet it was unreachable and on a computer it was easy to miss entirely. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, and a short note in the rotation list explains how it works until you've banned your first track. Banned one by accident? An "Undo" prompt appears right afterward — one tap lifts the ban.
 
 ### Fixed
+
+- **The admin producer desk no longer traps the phone screen under its header.** On mobile, the live console and tab bar now scroll away with the page instead of staying pinned over the work area. Desktop keeps the pinned producer deck, but phones get the vertical room they need to use Scaletta, Rotazione, and Motore without the upper controls covering the view.
 
 - **A song no longer drifts back under the hosts minutes after it ended.** When the DJs talk over a track or run a quiet bed under their chatter, the station used to reach for the last song it had rendered — even when an ad break or a news flash had aired in between. The result was a track from a few minutes ago suddenly murmuring back under the announcers, which broke the spell of a live station. The hosts now only carry a song under their voice when that song is the thing that *just* played; the moment an ad, news flash, station ID, or any other break comes between, they come through clean. Nothing ever goes quiet — when there is no fresh song to lean on, a gentle house bed fills in instead.
 
