@@ -1,0 +1,48 @@
+PR: three small fixes — coverage-ratchet floor deletion, startup temp prune,
+clip rate-limit rollback race.
+
+Scope (code): scripts/coverage-ratchet.py, mammamiradio/main.py,
+mammamiradio/playlist/downloader.py, mammamiradio/web/streamer.py.
+Tests: tests/repo/test_coverage_ratchet.py, tests/playlist/test_downloader.py,
+tests/web/test_main.py, tests/web/test_streamer_routes_extended.py.
+Docs: CLAUDE.md (Runtime behavior), CHANGELOG.md, ha-addon/mammamiradio/CHANGELOG.md.
+
+Local verification (2026-06-21), run on the merged-with-origin/main branch state:
+
+1. Lint — clean.
+   `ruff check .` -> All checks passed!
+   `ruff format --check .` -> 203 files already formatted
+
+2. Type check — clean.
+   `mypy mammamiradio/ tests/` -> Success: no issues found in 195 source files
+
+3. Tests — full suite green.
+   `pytest tests/` -> 3156 passed, 2 skipped, 19 deselected in 62s
+   New tests added by this PR:
+     tests/repo/test_coverage_ratchet.py::test_cmd_update_keeps_floor_when_source_file_still_exists
+     tests/repo/test_coverage_ratchet.py::test_cmd_update_removes_floor_when_source_file_deleted
+     tests/repo/test_coverage_ratchet.py::test_cmd_update_ratchets_floor_up_for_present_module
+     tests/playlist/test_downloader.py::test_prune_stale_tmp_files_removes_old_mp3
+     tests/playlist/test_downloader.py::test_prune_stale_tmp_files_keeps_recent_mp3
+     tests/playlist/test_downloader.py::test_prune_stale_tmp_files_ignores_non_mp3
+     tests/playlist/test_downloader.py::test_prune_stale_tmp_files_missing_dir_returns_zero
+     tests/playlist/test_downloader.py::test_prune_stale_tmp_files_swallows_unlink_error
+     tests/web/test_main.py::test_startup_boot_summary_and_purge (asserts prune called once)
+     tests/web/test_streamer_routes_extended.py::test_release_clip_stamp_only_pops_own_stamp
+     tests/web/test_streamer_routes_extended.py::test_clip_extract_failure_does_not_lock_out_retry
+
+4. Coverage ratchet — all per-module floors held.
+   `python scripts/coverage-ratchet.py check` -> All coverage floors held.
+   Total: 94% (floor: 92%). No module dropped below its floor.
+
+5. Changelog editorial boundary — clean.
+   `bash scripts/check-changelog-lint.sh` -> Changelog lint clean.
+
+6. No version bump.
+   `git diff origin/main...HEAD -- pyproject.toml ha-addon/mammamiradio/config.yaml`
+   -> (no output) — neither version file touched.
+
+7. Pre-ship review squad (adversarial + test-coverage + docs/config-consistency)
+   ran against this diff. Adversarial: all three fixes sound, no P0/P1/P2 logic
+   issues. Test-coverage: found 1 P1 (clip rollback site-2 retry untested) and
+   1 P2 (ratchet-up path untested) — both fixed in this PR. Docs/config: clean.
