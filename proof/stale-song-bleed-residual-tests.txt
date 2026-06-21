@@ -1,0 +1,22 @@
+# Proof — fix(producer): derive speech-bed adjacency from queued timeline (#641)
+# Generated locally on branch florianhorner/fix/stale-song-bleed-residual
+
+## ruff check (lint)
+All checks passed!
+
+## ruff format --check
+5 files already formatted
+
+## mypy (typecheck)
+mammamiradio/audio/tts.py:493: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 2 source files
+
+## pytest (full suite)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3183 passed, 2 skipped, 19 deselected, 1 warning in 61.11s (0:01:01)
+
+## coverage ratchet (per-module floors)
+  mammamiradio.integrations.now_playing: 92% (floor: 88%)
+  mammamiradio.playlist.playlist: 95% (floor: 91%)
+  mammamiradio.scheduling.producer: 87% (floor: 83%)
