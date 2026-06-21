@@ -5,6 +5,11 @@
 ### Added
 
 - **A new On-air media player push option, and a real media player to go with it.** Mamma Mi Radio now has a Home Assistant integration you can install from HACS that registers the station as a proper, controllable media player (play, stop, next). If you install it, turn this new option off so the add-on stops pushing its own basic media player and lets the integration take over — your sensors keep working either way.
+- **Steer the music by mood, and the hosts notice.** Tap an era or a vibe in the admin panel and the station re-aims its programming toward it. The on-air host picks it up as a feeling rather than a setting — "someone's got a soft spot for the 80s tonight" — so it sounds like the station read the room. It sticks across a restart, clears with one tap back to automatic, respects your banned songs, and never interrupts what's playing.
+
+### Fixed
+
+- **Host chatter beds over the right song now.** When the hosts talk over the tail of a track, the music underneath is the song that actually just played — even right after the station recovers from a quiet stretch by reaching for a backup track.
 
 ## 2.14.1 - 2026-06-21
 

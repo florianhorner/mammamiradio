@@ -1,0 +1,5 @@
+changelog backfill — editorial lint proof
+date: 2026-06-21T23:49:37Z
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
