@@ -21,8 +21,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
+BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
+LISTENER_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.css"
+SYSTEM_MD = REPO_ROOT / "docs" / "design" / "system.md"
+CLIP_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "clip.html"
 _HTML_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "templates").rglob("*.html"))
 _CSS_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "static").glob("*.css"))
 GUARDED_FILES = [path for path in (_HTML_FILES + _CSS_FILES) if path != TOKENS_CSS]
@@ -113,6 +117,16 @@ def _css_block(text: str, selector: str) -> str:
 
 def _css_declarations(block: str) -> dict[str, str]:
     return {match.group("name"): match.group("value").strip() for match in _CSS_DECL_RE.finditer(block)}
+
+
+def _css_root_declarations(text: str) -> dict[str, str]:
+    match = _ROOT_BLOCK_RE.search(_strip_comments(text))
+    assert match, "CSS text must contain a :root { ... } block."
+    return _css_declarations(match.group(1))
+
+
+def _normalized_css_value(value: str) -> str:
+    return re.sub(r"\s+", "", value).lower()
 
 
 def test_every_var_ref_resolves_to_a_defined_token() -> None:
@@ -313,3 +327,118 @@ def test_admin_inline_style_has_no_sub_floor_font_size() -> None:
 # test_rotation_sort_is_mono_typeface removed: the "order: current rotation"
 # readout it guarded was a dead, non-interactive label (no sort control behind it)
 # and was removed in the Concept B producer-desk redesign.
+
+
+def test_listener_card_surfaces_use_card_tokens_not_magic_literals() -> None:
+    """Listener card surfaces must flow through --card* tokens, not inline literals.
+
+    The schedule / dedica / about-card / now-playing surfaces were inlined as
+    magic hex (#54453A, #6E5B49) plus an rgba(...,0.32) border, guarded only by
+    a "do not raise --surface*" comment. They now use the dedicated --card /
+    --card-strong / --card-line tokens. Guard: those literals never return to
+    listener.css, or the next editor re-opens the drift.
+    """
+    text = _strip_comments(LISTENER_CSS.read_text(encoding="utf-8")).upper()
+    offenders = [hex_ for hex_ in ("#54453A", "#6E5B49") if hex_ in text]
+    assert not offenders, (
+        f"listener.css reintroduces magic card-surface hex {offenders}; "
+        "use var(--card) / var(--card-strong) (defined in tokens.css) instead."
+    )
+    compact = re.sub(r"\s+", "", text)
+    assert "RGBA(245,237,216,0.32)" not in compact, (
+        "listener.css reintroduces the magic card-border rgba literal; use var(--card-line) instead."
+    )
+    assert {"--card", "--card-strong", "--card-line"} <= set(_primitives_in(TOKENS_CSS)), (
+        "tokens.css must define --card / --card-strong / --card-line."
+    )
+    expected_declarations = {
+        ".mmr-stage": {"border": "1px solid var(--card-line)"},
+        ".mmr-np-bar": {"background": "var(--card-strong)"},
+        ".btn-ghost": {"border": "1px solid var(--card-line)"},
+        ".mmr-schedule": {"background": "var(--card)", "border": "1px solid var(--card-line)"},
+        ".mmr-dedica": {"background": "var(--card-strong)", "border": "1px solid var(--card-line)"},
+        ".mmr-about-card": {"background": "var(--card-strong)", "border": "1px solid var(--card-line)"},
+    }
+    listener_css = LISTENER_CSS.read_text(encoding="utf-8")
+    for selector, declarations in expected_declarations.items():
+        actual = _css_declarations(_css_block(listener_css, selector))
+        for property_name, expected_value in declarations.items():
+            assert actual.get(property_name) == expected_value, (
+                f"{selector} {property_name} must use {expected_value}, got {actual.get(property_name)!r}"
+            )
+
+
+def _system_md_root_primitives() -> list[str]:
+    """Token names declared in the first system.md :root code block (the mirror)."""
+    text = _strip_comments(SYSTEM_MD.read_text(encoding="utf-8"))
+    match = _ROOT_BLOCK_RE.search(text)
+    assert match, "system.md must document a :root { ... } block."
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in _PRIMITIVE_DECL_RE.findall(match.group(1)):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def test_system_md_root_tokens_exist_in_tokens_css() -> None:
+    """Every token documented in system.md's :root must exist in tokens.css.
+
+    system.md mirrors tokens.css; the file is the source of truth. This catches
+    the drift where a token is deleted or renamed in tokens.css but left
+    documented in the design spec, so the doc quietly describes a token the
+    browser never sees. Name parity only (values may carry doc-side annotation).
+    """
+    defined = set(_primitives_in(TOKENS_CSS))
+    missing = [
+        name for name in _system_md_root_primitives() if name not in defined and not _BRAND_NAMESPACE_RE.match(name)
+    ]
+    assert not missing, (
+        "system.md :root documents tokens absent from tokens.css: "
+        f"{missing}. Update docs/design/system.md or tokens.css — the file wins."
+    )
+
+
+def test_system_md_root_tokens_match_tokens_css_values() -> None:
+    """Documented root-token values must mirror tokens.css for tokens listed there."""
+    defined = _css_root_declarations(TOKENS_CSS.read_text(encoding="utf-8"))
+    documented = _css_root_declarations(SYSTEM_MD.read_text(encoding="utf-8"))
+    mismatched = {
+        name: {"system.md": documented[name], "tokens.css": defined[name]}
+        for name in documented
+        if name in defined
+        and not _BRAND_NAMESPACE_RE.match(name)
+        and _normalized_css_value(documented[name]) != _normalized_css_value(defined[name])
+    }
+    assert not mismatched, (
+        f"system.md :root token values drifted from tokens.css (tokens.css is authoritative): {mismatched}"
+    )
+
+
+def test_tricolor_stripes_use_flag_tokens() -> None:
+    """Brand tricolor stripes must use --flag-* tokens instead of hard-coded flag colors."""
+    tokenized_gradients = [
+        ("base.css .tricolor-stripe", BASE_CSS.read_text(encoding="utf-8"), ".tricolor-stripe"),
+        ("admin.html .tricolor-stripe", _ADMIN_HTML_TEXT, ".tricolor-stripe"),
+    ]
+    for label, text, selector in tokenized_gradients:
+        background = _css_declarations(_css_block(text, selector)).get("background", "")
+        for token in ("--flag-green", "--flag-white", "--flag-red"):
+            assert f"var({token})" in background, f"{label} must use var({token}), got {background!r}"
+
+    exact_backgrounds = [
+        (BASE_CSS, ".tricolor-band > div:nth-child(1)", "var(--flag-green)"),
+        (BASE_CSS, ".tricolor-band > div:nth-child(2)", "var(--flag-white)"),
+        (BASE_CSS, ".tricolor-band > div:nth-child(3)", "var(--flag-red)"),
+        (LISTENER_CSS, ".mmr-tricolor .g", "var(--flag-green)"),
+        (LISTENER_CSS, ".mmr-tricolor .w", "var(--flag-white)"),
+        (LISTENER_CSS, ".mmr-tricolor .r", "var(--flag-red)"),
+        (CLIP_HTML, ".tricolor-stripe > div:nth-child(1)", "var(--flag-green)"),
+        (CLIP_HTML, ".tricolor-stripe > div:nth-child(2)", "var(--flag-white)"),
+        (CLIP_HTML, ".tricolor-stripe > div:nth-child(3)", "var(--flag-red)"),
+    ]
+    for path, selector, expected in exact_backgrounds:
+        block = _css_block(path.read_text(encoding="utf-8"), selector)
+        actual = _css_declarations(block).get("background")
+        assert actual == expected, f"{path.name} {selector} background must be {expected}, got {actual!r}"
