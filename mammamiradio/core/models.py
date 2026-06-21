@@ -91,6 +91,7 @@ class Track:
     popularity: int = 0
     year: int = 0
     source: Literal["youtube", "jamendo", "local", "demo", "classic"] = "youtube"
+    heading_id: str = ""
 
     @staticmethod
     def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:
@@ -168,6 +169,18 @@ class PlaylistSource:
     label: str = ""
     track_count: int = 0
     selected_at: float = 0.0
+
+
+@dataclass
+class Heading:
+    """Active operator course overlay for the rotation pool."""
+
+    id: str
+    seed: str
+    label: str
+    set_at: float
+    set_by: str
+    announced: bool = False
 
 
 @dataclass
@@ -450,6 +463,9 @@ class StationState:
     last_enqueued_type: SegmentType | None = None
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
+    heading: Heading | None = None
+    heading_pending_announcement: str = ""
+    heading_announced_id: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
@@ -734,6 +750,21 @@ class StationState:
         self.pinned_track = None
         self.force_next = None
         self.operator_force_pending = None
+        self.heading = None
+        self.heading_pending_announcement = ""
+        self.heading_announced_id = ""
+
+    def _arm_heading_announcement_if_needed(self, track: Track) -> None:
+        heading = self.heading
+        if (
+            heading is None
+            or not heading.id
+            or self.heading_announced_id == heading.id
+            or self.heading_pending_announcement
+        ):
+            return
+        if track.heading_id == heading.id:
+            self.heading_pending_announcement = heading.label
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""
@@ -959,7 +990,8 @@ class StationState:
 
             weights.append(max(w, 0.01))  # Floor to avoid zero weights
 
-        return random.choices(candidates, weights=weights, k=1)[0]
+        selected = random.choices(candidates, weights=weights, k=1)[0]
+        return selected
 
     def after_music(self, track: Track) -> None:
         """Advance state after successfully queuing a music segment."""

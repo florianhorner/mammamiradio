@@ -42,6 +42,42 @@ Charts / Jamendo / classic eras / local files / demo tracks
    - `run_playback_loop()` to stream queued audio
 8. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
 
+### Heading overlay
+
+The admin Rotazione tab can steer the next stretch of music without replacing the
+base playlist:
+
+- `POST /api/heading {"seed": "classic://italian/80s"}` loads one of the existing
+  classic Italian era sources, filters the operator blocklist, dedupes against the
+  live pool, tags newly blended tracks with the active `Heading.id`, and bumps
+  `playlist_revision` once. A zero-result import returns warm operator copy and
+  does not arm narration.
+- `POST /api/heading/clear` is manual Back to auto. It clears `StationState.heading`
+  and deletes `cache/heading.json`; already blended tracks remain in rotation and
+  age out naturally. There is no purge and no audio interruption.
+- `/api/playlist/load` is a true source replacement and clears the active heading
+  plus `heading.json`, so a restart cannot reapply an old course over a freshly
+  loaded base.
+
+`cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
+corrupt/missing tolerant and return no heading rather than failing boot. After the
+startup base playlist is fetched and blocklisted, startup re-fetches the persisted
+heading seed, re-tags matching tracks, and blends any new heading tracks into the
+pool. If that boot fetch fails, returns no playable tracks, or adds no new tracks
+after dedupe, startup deletes `heading.json` and continues in auto mode.
+
+Narration is selection-driven, not button-driven. `StationState.select_next_track()`
+arms `heading_pending_announcement` only when the producer accepts a track tagged
+with the active heading id for airing. The next host break consumes that dedicated
+slot at prompt-build into a mood-noticing block; it does not reuse or overwrite
+`ha_pending_directive`. The host observes that someone asked for, or is in the mood
+for, the selected era rather than claiming the station is currently playing it or
+returning there. Because the line asserts a request, not present playlist state, it
+is intentionally allowed to air even if Back to auto or another heading lands while
+the banter is rendering. Consuming the notice marks `heading.announced` and persists
+that flag best-effort so restarts do not redundantly re-notice. The music turn
+always remains best-effort and never blocks or delays audio.
+
 ## Segment production
 
 `scheduler.py` is the single source of truth for pacing:

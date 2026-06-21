@@ -29,6 +29,7 @@ from mammamiradio.core.config import StationConfig, resolve_model
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
+    Heading,
     HostPersonality,
     PersonalityAxes,
     SegmentType,
@@ -58,10 +59,12 @@ from mammamiradio.hosts.prompt_world import (
     _STYLE_INSTRUCTIONS,
     CHAOS_MODE_BLOCK,
     CHAOS_SUBTYPE_BLOCKS,
+    COURSE_CHANGE_MOOD_NOTICE_TEMPLATE,
     FESTIVAL_MODE_BLOCK,
 )
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
+from mammamiradio.playlist.playlist import write_persisted_heading
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +108,8 @@ class ListenerRequestCommit:
     mark_song_error: bool = False
     consume: bool = False
 
-    def apply(self, state: StationState) -> None:
+    def apply(self, state: StationState, config: StationConfig | None = None) -> None:
+        del config
         if self.request not in state.pending_requests:
             return
         if self.banter_cycles_missed is not None:
@@ -130,6 +134,45 @@ class ListenerRequestCommit:
                 r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
             ]
             state.pending_requests.remove(self.request)
+
+
+@dataclass
+class HeadingAnnouncementCommit:
+    """Deferred heading notice update, applied only after banter queues."""
+
+    heading: Heading
+
+    def apply(self, state: StationState, config: StationConfig) -> None:
+        state.heading_announced_id = self.heading.id
+        if state.heading is not None and state.heading.id == self.heading.id:
+            state.heading.announced = True
+            try:
+                write_persisted_heading(config.cache_dir, state.heading)
+            except Exception:
+                logger.warning("Failed to persist consumed heading mood notice", exc_info=True)
+
+
+@dataclass
+class BanterCommit:
+    """Deferred banter state updates, applied only after banter queues."""
+
+    listener_request: ListenerRequestCommit | None = None
+    heading_announcement: HeadingAnnouncementCommit | None = None
+
+    def apply(self, state: StationState, config: StationConfig) -> None:
+        if self.listener_request is not None:
+            self.listener_request.apply(state)
+        if self.heading_announcement is not None:
+            self.heading_announcement.apply(state, config)
+
+
+def _banter_commit(
+    listener_request: ListenerRequestCommit | None,
+    heading_announcement: HeadingAnnouncementCommit | None,
+) -> BanterCommit | ListenerRequestCommit | None:
+    if heading_announcement is None:
+        return listener_request
+    return BanterCommit(listener_request=listener_request, heading_announcement=heading_announcement)
 
 
 def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequestCommit | None]:
@@ -496,7 +539,7 @@ async def _generate_json_response(
                         # generic exception name. Behaviour is unchanged — we still fall
                         # back to OpenAI; only the telemetry/log reason differs.
                         _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
-                            exc, (json.JSONDecodeError, IndexError)
+                            exc, json.JSONDecodeError | IndexError
                         )
                         _emit_llm_call(
                             state=state,
@@ -1289,7 +1332,7 @@ async def write_banter(
     is_new_listener: bool = False,
     is_first_listener: bool = False,
     chaos_subtype: ChaosSubtype | None = None,
-) -> tuple[list[tuple[HostPersonality, str]], ListenerRequestCommit | None]:
+) -> tuple[list[tuple[HostPersonality, str]], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
     Always returns ``(lines, commit)`` where ``commit`` is a deferred state
@@ -1512,6 +1555,36 @@ Make this the focus of this banter break. It happened just now — react natural
             state.ha_pending_directive = ""
             consumed_pending_directive = True
 
+    # Operator course changes have their own one-shot slot so a music-heading
+    # notice never clobbers a real Home Assistant impossible moment.
+    course_change_block = ""
+    heading_announcement_commit: HeadingAnnouncementCommit | None = None
+    raw_heading_announcement = state.heading_pending_announcement
+    raw_heading = state.heading
+    raw_heading_announcement_id = raw_heading.id if raw_heading is not None else ""
+    heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
+    if heading_announcement and raw_heading is not None and raw_heading_announcement_id:
+        language_line = (
+            "Super Italian Mode is active: lead in Italian and keep the whole notice Italian-first."
+            if config.super_italian_mode
+            else "Use English narrative with a little Italian flavor where it sounds natural."
+        )
+        course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
+            heading_label=heading_announcement,
+            language_line=language_line,
+        )
+        state.heading_pending_announcement = ""
+        heading_announcement_commit = HeadingAnnouncementCommit(
+            Heading(
+                id=raw_heading.id,
+                seed=raw_heading.seed,
+                label=raw_heading.label,
+                set_at=raw_heading.set_at,
+                set_by=raw_heading.set_by,
+                announced=True,
+            )
+        )
+
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
 
@@ -1545,7 +1618,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{listener_request_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){persona_update_schema}}}"""
 
@@ -1654,7 +1727,7 @@ Return JSON:
                     logger.warning("Failed to persist LLM song cues", exc_info=True)
 
         logger.info("Generated banter: %d lines", len(result))
-        return result, listener_request_commit
+        return result, _banter_commit(listener_request_commit, heading_announcement_commit)
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)

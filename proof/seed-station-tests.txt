@@ -1,0 +1,28 @@
+Seed Station (Phase 2) — local verification
+Branch: florianhorner/feat/seed-station
+Captured: 2026-06-21
+
+## Full test suite — python -m pytest -q
+3196 passed, 2 skipped, 19 deselected, 1 warning in 59.05s
+EXITCODE=0
+
+## Heading-specific suite
+pytest -q tests/web/test_heading.py tests/scheduling/test_producer_heading.py tests/playlist/test_persisted_heading.py
+21 passed
+
+## Static gates
+ruff check mammamiradio/ tests/        -> All checks passed
+ruff format --check mammamiradio/ tests/ -> 198 files already formatted
+mypy mammamiradio/                     -> Success: no issues found in 63 source files
+
+## Adversarial review summary (independent passes)
+- Claude code-review: 1 P1 + 3 P2 found and fixed; re-review clean
+- Independent 2nd-opinion pass 1: 1 P1 + 2 P2 + 1 P3 found and fixed
+- Independent 2nd-opinion pass 2: 3rd P1 in the same narration-honesty class -> stopped iterating
+- Design reframed: host narration now notices a request/mood (atemporal, stays true
+  even after Back-to-auto) instead of asserting present playlist state -> the
+  illusion-break class is removed, not guarded; the fragile concurrency machinery
+  was deleted (net-smaller diff)
+- Final review of reframed design: no P0/P1; 1 benign P2 (notice could be missed
+  on rapid re-aim, never a false claim, never dead air) fixed by marking the notice
+  spent only when the banter actually queues

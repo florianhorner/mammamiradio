@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -28,6 +29,7 @@ from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
     ChaosSubtype,
+    Heading,
     PartyMode,
     PersonalityAxes,
     PlaylistSource,
@@ -44,10 +46,12 @@ from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
 from mammamiradio.playlist.playlist import (
+    PERSISTED_HEADING_FILENAME,
     ExplicitSourceError,
     filter_blocklisted,
     load_explicit_source,
     normalized_track_key,
+    write_persisted_heading,
     write_persisted_source,
 )
 from mammamiradio.scheduling.scheduler import preview_upcoming
@@ -225,6 +229,12 @@ def _purge_queue_and_shadow(q, state: StationState) -> int:
 # message rather than silently starving the station (leadership #1 + #5). A single
 # per-row removal is never rejected — the operator asked for that one song gone.
 MIN_ROTATION_AFTER_BAN = 5
+HEADING_FRONT_INSERT_LIMIT = 5
+HEADING_SEEDS = {
+    "classic://italian/70s": "Anni '70",
+    "classic://italian/80s": "Anni '80",
+    "classic://italian/90s": "Anni '90",
+}
 
 
 def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple[str, str]]) -> int:
@@ -928,6 +938,7 @@ def _apply_loaded_source(
     tracks = filter_blocklisted(tracks, state.blocklist)
 
     state.switch_playlist(tracks, resolved_source)
+    _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover: purge queued segments and skip current playback
     purged = _purge_queue_and_shadow(request.app.state.queue, state)
@@ -952,6 +963,16 @@ def _apply_loaded_source(
     }
 
 
+def _delete_persisted_heading(cache_dir: Path) -> bool:
+    """Remove the heading overlay from cache; return whether it is gone."""
+    try:
+        (cache_dir / PERSISTED_HEADING_FILENAME).unlink(missing_ok=True)
+        return True
+    except OSError:
+        logger.warning("Failed to clear persisted heading", exc_info=True)
+        return False
+
+
 def _serialize_source(source: PlaylistSource | None) -> dict | None:
     if not source:
         return None
@@ -962,6 +983,19 @@ def _serialize_source(source: PlaylistSource | None) -> dict | None:
         "label": source.label,
         "track_count": source.track_count,
         "selected_at": source.selected_at,
+    }
+
+
+def _serialize_heading(heading: Heading | None) -> dict:
+    if heading is None:
+        return {"active": False, "id": "", "seed": "", "label": ""}
+    return {
+        "active": True,
+        "id": heading.id,
+        "seed": heading.seed,
+        "label": heading.label,
+        "set_at": heading.set_at,
+        "set_by": heading.set_by,
     }
 
 
@@ -1030,16 +1064,16 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     if not payload:
         return None
     duration = payload.get("duration_sec")
-    if isinstance(duration, (int, float)) and duration > 0:
+    if isinstance(duration, int | float) and duration > 0:
         return float(duration)
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
     duration_ms = metadata.get("duration_ms")
-    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+    if isinstance(duration_ms, int | float) and duration_ms > 0:
         return float(duration_ms) / 1000.0
     duration_s = metadata.get("duration_s")
-    if isinstance(duration_s, (int, float)) and duration_s > 0:
+    if isinstance(duration_s, int | float) and duration_s > 0:
         return float(duration_s)
     return None
 
@@ -1053,7 +1087,7 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
             "current_duration_sec": None,
         }
     started = now_streaming.get("started")
-    progress_sec = max(0.0, now_ts - started) if isinstance(started, (int, float)) and started > 0 else None
+    progress_sec = max(0.0, now_ts - started) if isinstance(started, int | float) and started > 0 else None
     return {
         "now_streaming": now_streaming,
         "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
@@ -1550,6 +1584,40 @@ def _record_operator_action(request, action: str, old_value, new_value) -> None:
         )
     except Exception as exc:  # pragma: no cover - provenance must never break a toggle
         logger.debug("Provenance operator_action emit failed: %s", exc)
+
+
+def _record_heading_ledger(
+    request,
+    *,
+    requested_seed: str,
+    added_count: int,
+    zero_result: bool,
+    persisted: bool,
+    source: str,
+) -> None:
+    """Best-effort audit row for operator course changes."""
+    led = getattr(request.app.state, "ledger", None)
+    if led is None or not led.enabled:
+        return
+    try:
+        import time as _time
+
+        from mammamiradio.core.ledger import SCHEMA_VERSION
+
+        led.record(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "ts": _time.time(),
+                "record": "heading",
+                "requested_seed": requested_seed,
+                "added_count": added_count,
+                "zero_result": zero_result,
+                "persisted": persisted,
+                "source": source,
+            }
+        )
+    except Exception as exc:  # pragma: no cover - provenance must never affect audio
+        logger.debug("Provenance heading emit failed: %s", exc)
 
 
 def _track_from_music_metadata(metadata: dict) -> Track | None:
@@ -2931,7 +2999,7 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
             if 0 <= idx < len(state.playlist):
                 tracks.append(state.playlist[idx])
     for raw_key in body.get("keys", []) or []:
-        if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+        if isinstance(raw_key, list | tuple) and len(raw_key) == 2:
             tracks.append(Track(title=str(raw_key[1]), artist=str(raw_key[0]), duration_ms=0))
 
     if not tracks:
@@ -2966,7 +3034,7 @@ async def unban_tracks(request: Request, _: None = Depends(require_admin_access)
     config = request.app.state.config
     keys: list[tuple[str, str]] = []
     for raw_key in body.get("keys", []) or []:
-        if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+        if isinstance(raw_key, list | tuple) and len(raw_key) == 2:
             keys.append((str(raw_key[0]).strip().lower(), str(raw_key[1]).strip().lower()))
     if not keys:
         return {"ok": False, "error": "Pick at least one song to unban."}
@@ -3328,6 +3396,245 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "added": track.display, "position": position}
 
 
+@router.post("/api/heading")
+async def set_heading(request: Request, _: None = Depends(require_admin_access)):
+    """Blend an operator-selected era heading into the live rotation."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    seed = str(body.get("seed", "")).strip()
+    label = HEADING_SEEDS.get(seed)
+    if label is None:
+        return JSONResponse(
+            {"ok": False, "error": "Choose one of the era buttons and try again."},
+            status_code=422,
+        )
+
+    config = request.app.state.config
+    state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
+    async with source_switch_lock:
+        if state.heading is not None and state.heading.seed == seed:
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=False,
+                persisted=True,
+                source="heading_set",
+            )
+            return {
+                "ok": True,
+                "added": 0,
+                "skipped_existing": 0,
+                "idempotent": True,
+                "message": "Already steering there.",
+                "heading": _serialize_heading(state.heading),
+            }
+
+        try:
+            tracks, resolved_source = await asyncio.to_thread(
+                load_explicit_source,
+                config,
+                PlaylistSource(kind="url", url=seed),
+            )
+        except ExplicitSourceError:
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=True,
+                persisted=False,
+                source="heading_set",
+            )
+            return {
+                "ok": False,
+                "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+            }
+        except Exception:
+            logger.warning("Heading load failed for %s", seed, exc_info=True)
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=True,
+                persisted=False,
+                source="heading_set",
+            )
+            return {
+                "ok": False,
+                "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+            }
+
+        tracks = filter_blocklisted(tracks, state.blocklist)
+        if not tracks:
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=True,
+                persisted=False,
+                source="heading_set",
+            )
+            return {
+                "ok": False,
+                "added": 0,
+                "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+            }
+
+        existing_by_key = {normalized_track_key(track): track for track in state.playlist}
+        seen = set(existing_by_key)
+        new_tracks: list[Track] = []
+        for track in tracks:
+            key = normalized_track_key(track)
+            if key in seen:
+                continue
+            seen.add(key)
+            new_tracks.append(track)
+
+        if not new_tracks:
+            heading = Heading(
+                id=uuid4().hex,
+                seed=seed,
+                label=label,
+                set_at=time.time(),
+                set_by="operator",
+            )
+            retagged = 0
+            retagged_keys: set[tuple[str, str]] = set()
+            for track in tracks:
+                key = normalized_track_key(track)
+                if key in retagged_keys:
+                    continue
+                existing_track = existing_by_key.get(key)
+                if existing_track is None:
+                    continue
+                existing_track.heading_id = heading.id
+                retagged += 1
+                retagged_keys.add(key)
+
+            if not retagged:
+                _record_heading_ledger(
+                    request,
+                    requested_seed=seed,
+                    added_count=0,
+                    zero_result=True,
+                    persisted=False,
+                    source="heading_set",
+                )
+                return {
+                    "ok": False,
+                    "added": 0,
+                    "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+                }
+
+            state.playlist_revision += 1
+            state.heading = heading
+            state.heading_pending_announcement = ""
+            state.heading_announced_id = ""
+
+            persisted = True
+            try:
+                await asyncio.to_thread(write_persisted_heading, config.cache_dir, heading)
+            except Exception:
+                logger.warning("Failed to persist heading; live heading remains active", exc_info=True)
+                persisted = False
+
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=False,
+                persisted=persisted,
+                source="heading_set",
+            )
+            logger.info(
+                "Heading set from %s: retagged %d existing track(s)",
+                resolved_source.label or resolved_source.kind,
+                retagged,
+            )
+            return {
+                "ok": True,
+                "added": 0,
+                "skipped_existing": len(tracks),
+                "retagged_existing": retagged,
+                "persisted": persisted,
+                "heading": _serialize_heading(heading),
+                "tracks": [],
+            }
+
+        heading = Heading(
+            id=uuid4().hex,
+            seed=seed,
+            label=label,
+            set_at=time.time(),
+            set_by="operator",
+        )
+        for track in new_tracks:
+            track.heading_id = heading.id
+        front = new_tracks[:HEADING_FRONT_INSERT_LIMIT]
+        rest = new_tracks[HEADING_FRONT_INSERT_LIMIT:]
+        state.playlist[0:0] = front
+        state.playlist.extend(rest)
+        state.playlist_revision += 1
+        state.heading = heading
+        state.heading_pending_announcement = ""
+        state.heading_announced_id = ""
+
+        persisted = True
+        try:
+            await asyncio.to_thread(write_persisted_heading, config.cache_dir, heading)
+        except Exception:
+            logger.warning("Failed to persist heading; live heading remains active", exc_info=True)
+            persisted = False
+
+        _record_heading_ledger(
+            request,
+            requested_seed=seed,
+            added_count=len(new_tracks),
+            zero_result=False,
+            persisted=persisted,
+            source="heading_set",
+        )
+        logger.info(
+            "Heading set from %s: added %d, skipped %d existing",
+            resolved_source.label or resolved_source.kind,
+            len(new_tracks),
+            len(tracks) - len(new_tracks),
+        )
+        return {
+            "ok": True,
+            "added": len(new_tracks),
+            "skipped_existing": len(tracks) - len(new_tracks),
+            "persisted": persisted,
+            "heading": _serialize_heading(heading),
+            "tracks": [_serialize_track(track) for track in new_tracks[:20]],
+        }
+
+
+@router.post("/api/heading/clear")
+async def clear_heading(request: Request, _: None = Depends(require_admin_access)):
+    """Return to automatic rotation without purging blended tracks."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    source_switch_lock = request.app.state.source_switch_lock
+    async with source_switch_lock:
+        previous_seed = state.heading.seed if state.heading is not None else ""
+        state.heading = None
+        state.heading_pending_announcement = ""
+        state.heading_announced_id = ""
+        persisted = _delete_persisted_heading(config.cache_dir)
+    _record_heading_ledger(
+        request,
+        requested_seed=previous_seed,
+        added_count=0,
+        zero_result=False,
+        persisted=persisted,
+        source="back_to_auto",
+    )
+    return {"ok": True, "heading": _serialize_heading(None), "persisted": persisted, "message": "Back to auto."}
+
+
 @router.post("/api/playlist/enrich")
 async def enrich_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Add tracks from a source without replacing programme or purging playback."""
@@ -3565,6 +3872,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),
+        "heading": _serialize_heading(state.heading),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
         "session_stopped": state.session_stopped,
