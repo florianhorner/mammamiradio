@@ -439,6 +439,24 @@ def _adjacency_type_for(segment: Segment) -> SegmentType | None:
     return segment.type
 
 
+def _seed_adjacency_type(
+    queue: asyncio.Queue[Segment], state: StationState, inferred: SegmentType | None
+) -> SegmentType | None:
+    """Startup value for ``last_enqueued_type``, applying the same continuity-break rule as the
+    funnel on BOTH inference paths: a queued tail (inspect the segment) and the
+    now-streaming/current-track inference (inspect ``now_streaming.metadata``). A tone/errored
+    now-playing is not an adjacent song, so it must not seed MUSIC and let a stale
+    ``last_music_file`` bleed under the first speech segment after a restart (#641).
+    """
+    queued = list(getattr(queue, "_queue", ()))
+    if queued:
+        return _adjacency_type_for(queued[-1])
+    now_meta = state.now_streaming.get("metadata") or {}
+    if "error" in now_meta or now_meta.get("audio_source") == "emergency_tone":
+        return None
+    return inferred
+
+
 def _remember_enqueued(state: StationState, segment: Segment, source_path: Path) -> None:
     """Record the program-order tail predecessor for speech-bed adjacency.
 
@@ -1259,11 +1277,7 @@ async def run_producer(
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     prev_seg_type = _initial_previous_segment_type(queue, state)
-    # Seed tail adjacency with the same continuity-break rule the funnel uses: if the queue
-    # tail at start is an emergency tone / errored MUSIC fill, it must not be seeded as an
-    # adjacent song. Fall back to the inferred type when there's no queued segment to inspect.
-    _seed_queue = list(getattr(queue, "_queue", ()))
-    state.last_enqueued_type = _adjacency_type_for(_seed_queue[-1]) if _seed_queue else prev_seg_type
+    state.last_enqueued_type = _seed_adjacency_type(queue, state, prev_seg_type)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     async def _queue_segment(segment: Segment) -> bool:

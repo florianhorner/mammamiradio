@@ -318,6 +318,9 @@ async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_
     with (
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        # Force the empty-fallback path (no canned clip on disk) so the generated talk-bed
+        # logic under test actually runs, per the audio-delivery coverage rule.
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
         patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),

@@ -357,8 +357,8 @@ async def test_enqueue_with_egress_puts_coloured_segment(tmp_path):
     # ephemeral pre-egress render was consumed by the colour pass, so last_music_file is
     # left unset rather than pointed at the coloured file (the cache-hit test below
     # asserts the positive clean-source case).
-    assert state.last_music_file != queued.path
-    assert producer._last_music_file != queued.path
+    assert state.last_music_file is None
+    assert producer._last_music_file is None
 
 
 async def test_enqueue_with_egress_front_insert_colours_before_critical_section(tmp_path):
@@ -503,6 +503,32 @@ async def test_enqueue_with_egress_front_insert_does_not_skew_tail_adjacency(tmp
     assert _adjacent_music_source(state) == song.path
 
 
+def test_seed_adjacency_type_applies_continuity_break_on_both_paths(tmp_path):
+    """Producer-start seed must honour the continuity-break rule for the queued tail AND the
+    now-streaming inference — a tone/errored now-playing on an empty-queue restart must not seed
+    MUSIC and let a stale last_music_file bleed under the first speech segment (#641)."""
+    from mammamiradio.scheduling.producer import _seed_adjacency_type
+
+    # Empty queue + emergency-tone now-playing → cleared.
+    state = StationState()
+    state.now_streaming = {"type": "music", "metadata": {"audio_source": "emergency_tone"}}
+    empty: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    assert _seed_adjacency_type(empty, state, SegmentType.MUSIC) is None
+
+    # Empty queue + errored now-playing → cleared.
+    state.now_streaming = {"type": "music", "metadata": {"error": "boom"}}
+    assert _seed_adjacency_type(empty, state, SegmentType.MUSIC) is None
+
+    # Empty queue + a real song now-playing (resume mid-song) → MUSIC preserved.
+    state.now_streaming = {"type": "music", "metadata": {"title": "Real Song"}}
+    assert _seed_adjacency_type(empty, state, SegmentType.MUSIC) == SegmentType.MUSIC
+
+    # Queued tone tail → cleared regardless of the inference argument.
+    q: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    q.put_nowait(_seg(tmp_path, metadata={"audio_source": "emergency_tone", "rescue": True}, name="t.mp3"))
+    assert _seed_adjacency_type(q, state, SegmentType.MUSIC) is None
+
+
 def test_adjacency_type_for_treats_continuity_breaks_as_non_song():
     """The single shared rule: errored silence and the emergency tone are NOT adjacent songs."""
     from mammamiradio.scheduling.producer import _adjacency_type_for
@@ -543,7 +569,7 @@ def test_front_insert_tone_tail_not_reclassified_as_music(tmp_path):
 
     assert _front_insert_queue_and_shadow(queue, state, front_banter, {"id": "front", "type": "banter"}) is True
 
-    assert state.last_enqueued_type != SegmentType.MUSIC  # tone tail not mistaken for a song
+    assert state.last_enqueued_type is None  # tone tail is a continuity break, not a song
     assert _adjacent_music_source(state) is None
 
 
@@ -574,7 +600,7 @@ def test_front_insert_full_queue_drop_clears_stale_music_adjacency(tmp_path):
     # as the actual new tail.
     assert _front_insert_queue_and_shadow(queue, state, front_banter, {"id": "front", "type": "banter"}) is True
 
-    assert state.last_enqueued_type != SegmentType.MUSIC  # stale music basis cleared
+    assert state.last_enqueued_type == SegmentType.BANTER  # inserted banter is the new tail
     # No stale song bleeds under the next generated speech even though tail_song persists on disk.
     assert _adjacent_music_source(state) is None
 
