@@ -41,3 +41,6 @@ configuration:
   broadcast_chain:
     name: On-Air Sound
     description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect on the next few tracks as the buffered queue cycles through, not the one playing now."
+  ha_media_player_push:
+    name: On-air media player push
+    description: "On (default): the station shows up in Home Assistant as a media player automatically. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."

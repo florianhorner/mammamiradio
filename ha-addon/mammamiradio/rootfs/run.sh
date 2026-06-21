@@ -56,6 +56,9 @@ print('export MAMMAMIRADIO_FESTIVAL_MODE=' + festival_val)
 broadcast_chain = opts.get('broadcast_chain', False)
 bc_val = 'true' if broadcast_chain else 'false'
 print('export MAMMAMIRADIO_BROADCAST_CHAIN=' + bc_val)
+media_player_push = opts.get('ha_media_player_push', True)
+mpp_val = 'true' if media_player_push else 'false'
+print('export MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH=' + mpp_val)
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
