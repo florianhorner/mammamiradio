@@ -9,6 +9,7 @@ every rebuild. These are source-level guards against reverting to DOM-only state
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ADMIN_HTML = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
@@ -71,11 +72,11 @@ def test_pl_key_mirrors_server_normalized_track_key() -> None:
 
 
 def test_console_and_tabbar_share_one_sticky_deck() -> None:
-    """Console + tab bar must pin as a single sticky unit, not two competing
-    stickies (which buried the tabs behind the console on scroll)."""
+    """Desktop pins one deck; mobile lets the upper deck scroll away."""
     html = _html()
     assert 'class="mmr-deck"' in html
     assert ".mmr-deck{position:sticky" in html
+    assert re.search(r"@media \(max-width:768px\)\{\s*\.mmr-deck\{position:static;top:auto;z-index:auto\}", html)
     # the individual elements must NOT each declare their own sticky/top
     assert ".mmr-console{position:sticky" not in html
     tabbar_rule_start = html.index(".mmr-tabbar{")

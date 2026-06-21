@@ -215,25 +215,27 @@ def test_producer_desk_console_is_responsive() -> None:
     assert re.search(r"\.mmr-tabbar\{[^}]*overflow-x:auto", css)
 
 
-def test_on_air_sticky_strip_survives_scrolling() -> None:
-    """The compact On Air strip appears only after the full On Air zone scrolls away."""
+def test_mobile_upper_deck_scrolls_away() -> None:
+    """On phones the full producer console and tabs must scroll away.
+
+    The desktop deck is sticky, but on a narrow viewport that stacked console can
+    consume most of the screen. Keep the old compact strip hidden and make the
+    full upper deck part of normal page scroll instead.
+    """
     text = _read_admin_html()
-    css = _admin_css()
+    phone_css = _phone_css()
     strip = text[text.index('class="a-topbar producer-sticky-strip"') : text.index("<!-- Scaletta zone -->")]
 
     assert 'class="a-topbar producer-sticky-strip"' in text
+    assert "hidden" in strip
+    assert 'style="display:none"' in strip
     assert 'id="topBarCost"' in strip
     assert "a-topbar-tools" not in strip
-    assert "function initOnAirSticky()" in text
-    assert "IntersectionObserver" in text
-    assert "data-sticky-onair" in text
-    assert re.search(r"\.producer-sticky-strip\s*\{[^}]*position\s*:\s*sticky", css, re.DOTALL)
-    assert re.search(r"\.producer-sticky-strip\s*\{[^}]*display\s*:\s*none", css, re.DOTALL)
-    assert re.search(
-        r'body\[data-sticky-onair="true"\]\s+\.producer-sticky-strip\s*\{[^}]*display\s*:\s*flex',
-        css,
-        re.DOTALL,
-    )
+
+    mobile_deck = _declarations_for_selector(phone_css, ".mmr-deck")
+    assert mobile_deck.get("position") == "static"
+    assert mobile_deck.get("top") == "auto"
+    assert mobile_deck.get("z-index") == "auto"
 
 
 def test_on_air_zone_renders_ai_cost_counter() -> None:
