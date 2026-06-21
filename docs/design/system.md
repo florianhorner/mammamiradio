@@ -94,7 +94,7 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
   --line-strong:   rgba(245,237,216,0.16);  /* admin emphasized borders — espresso Pi-baseline (PROTECTED). Listener cards use the brighter --card-line token — never raise this. */
-  --shadow:        rgba(0,0,0,0.35);
+  --shadow:        #0E0C0A;   /* deepest dark — FM dial interior, heavy shadows */
 }
 ```
 
@@ -583,7 +583,7 @@ The listener surface (served at `/` and `/listen`) is a radio station website, n
 **Ordering is normative. Each band can be edited independently, but the order and presence of all five cannot.**
 
 ### 1. Tricolor + Nav
-- 3px tricolor band flush to page top (green `#009246` / cream `rgba(255,255,255,0.9)` / red `#CE2B37`, equal thirds).
+- 3px tricolor band flush to page top (`--flag-green` `#009246` / `--flag-white` `#F5EFE6` / `--flag-red` `#CE2B37`, equal thirds).
 - Sticky nav below: `backdrop-filter: blur(12px)` on `rgba(20,17,15,0.85)` background, 1px bottom border in `--line`.
 - Layout: `[logo + station name] [center nav links] [primary CTA pill]`.
 - Logo: 38px gold gradient circle with italic "M" + Lancia-red "i", paired with `<h1>Mamma <span class="mi">Mi</span> Radio</h1>` in Playfair italic 24pt.

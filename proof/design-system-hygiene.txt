@@ -3,15 +3,17 @@ Branch: florianhorner/chore/design-system-hygiene
 
 === TESTS + LINT + TYPECHECK (make check) ===
 $ make check
-3173 passed, 2 skipped, 19 deselected in 90.08s
-Required test coverage of 92.0% reached. Total coverage: 93.87%
+3175 passed, 2 skipped, 19 deselected, 1 warning in 76.91s
+Required test coverage of 92.0% reached. Total coverage: 93.84%
 All coverage floors held. Total: 94% (floor: 92%)
 All checks passed        (ruff lint + ruff format + mypy + coverage)
 
 === DESIGN-TOKEN GUARDS (tests/web/test_design_tokens.py) ===
-18 passed — includes the 2 new guards added by this change:
-  - test_listener_card_surfaces_use_card_tokens_not_magic_hex
+20 passed — includes the 4 new/tightened guards added by this change:
+  - test_listener_card_surfaces_use_card_tokens_not_magic_literals
   - test_system_md_root_tokens_exist_in_tokens_css
+  - test_system_md_root_tokens_match_tokens_css_values
+  - test_tricolor_stripes_use_flag_tokens
 tests/web/test_ui_control_contracts.py: 79 passed
   (the body[data-stopped] .waveform pause-rule guard still holds; .waveform was NOT deleted)
 

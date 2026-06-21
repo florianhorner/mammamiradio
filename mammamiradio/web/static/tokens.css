@@ -62,8 +62,8 @@
 
   /* ── Structural lines ──
    * --line / --line-strong are calm by design for admin's dense control-room
-   * surface. Listener cards need a brighter border (~32%) for visibility on
-   * the warm-dark page bg — that is inlined in listener.css, not raised here. */
+   * surface. Listener cards use --card-line for a brighter border (~32%) on
+   * the warm-dark page bg without raising these admin-facing tokens. */
   --line:            rgba(245, 237, 216, 0.10);
   --line-strong:     rgba(245, 237, 216, 0.16);
 

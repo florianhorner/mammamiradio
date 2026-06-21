@@ -182,10 +182,10 @@ body[data-stopped="true"] .waveform {
   border-radius: 1px;
   background: linear-gradient(
     90deg,
-    #009246 33%,
-    rgba(255, 255, 255, 0.85) 33%,
-    rgba(255, 255, 255, 0.85) 66%,
-    #CE2B37 66%
+    var(--flag-green) 33%,
+    var(--flag-white) 33%,
+    var(--flag-white) 66%,
+    var(--flag-red) 66%
   );
   opacity: 0.6;
 }
