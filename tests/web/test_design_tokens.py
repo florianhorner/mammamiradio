@@ -23,6 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
+LISTENER_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.css"
+SYSTEM_MD = REPO_ROOT / "docs" / "design" / "system.md"
 _HTML_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "templates").rglob("*.html"))
 _CSS_FILES = sorted((REPO_ROOT / "mammamiradio" / "web" / "static").glob("*.css"))
 GUARDED_FILES = [path for path in (_HTML_FILES + _CSS_FILES) if path != TOKENS_CSS]
@@ -313,3 +315,55 @@ def test_admin_inline_style_has_no_sub_floor_font_size() -> None:
 # test_rotation_sort_is_mono_typeface removed: the "order: current rotation"
 # readout it guarded was a dead, non-interactive label (no sort control behind it)
 # and was removed in the Concept B producer-desk redesign.
+
+
+def test_listener_card_surfaces_use_card_tokens_not_magic_hex() -> None:
+    """Listener card surfaces must flow through --card* tokens, not inline hex.
+
+    The schedule / dedica / about-card / now-playing surfaces were inlined as
+    magic hex (#54453A, #6E5B49) plus an rgba(...,0.32) border, guarded only by
+    a "do not raise --surface*" comment. They now use the dedicated --card /
+    --card-strong / --card-line tokens. Guard: those literals never return to
+    listener.css, or the next editor re-opens the drift.
+    """
+    text = _strip_comments(LISTENER_CSS.read_text(encoding="utf-8")).upper()
+    offenders = [hex_ for hex_ in ("#54453A", "#6E5B49") if hex_ in text]
+    assert not offenders, (
+        f"listener.css reintroduces magic card-surface hex {offenders}; "
+        "use var(--card) / var(--card-strong) (defined in tokens.css) instead."
+    )
+    assert {"--card", "--card-strong", "--card-line"} <= set(_primitives_in(TOKENS_CSS)), (
+        "tokens.css must define --card / --card-strong / --card-line."
+    )
+
+
+def _system_md_root_primitives() -> list[str]:
+    """Token names declared in the first system.md :root code block (the mirror)."""
+    text = _strip_comments(SYSTEM_MD.read_text(encoding="utf-8"))
+    match = _ROOT_BLOCK_RE.search(text)
+    assert match, "system.md must document a :root { ... } block."
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in _PRIMITIVE_DECL_RE.findall(match.group(1)):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def test_system_md_root_tokens_exist_in_tokens_css() -> None:
+    """Every token documented in system.md's :root must exist in tokens.css.
+
+    system.md mirrors tokens.css; the file is the source of truth. This catches
+    the drift where a token is deleted or renamed in tokens.css but left
+    documented in the design spec, so the doc quietly describes a token the
+    browser never sees. Name parity only (values may carry doc-side annotation).
+    """
+    defined = set(_primitives_in(TOKENS_CSS))
+    missing = [
+        name for name in _system_md_root_primitives() if name not in defined and not _BRAND_NAMESPACE_RE.match(name)
+    ]
+    assert not missing, (
+        "system.md :root documents tokens absent from tokens.css: "
+        f"{missing}. Update docs/design/system.md or tokens.css — the file wins."
+    )

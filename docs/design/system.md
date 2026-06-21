@@ -46,6 +46,12 @@
 Restrained — golden accent + warm neutrals. Color is rare and meaningful. The espresso-dark foundation makes every accent pop.
 
 ### CSS custom properties (`:root`)
+
+> Core-palette mirror of `mammamiradio/web/static/tokens.css`, the source of
+> truth (flag and illustration tokens live in their own sections below). If they
+> differ, the file wins. `tests/web/test_design_tokens.py` fails if a token
+> documented here is absent from `tokens.css`.
+
 ```css
 :root {
   /* Espresso foundation — warm dark, not cold charcoal */
@@ -53,11 +59,13 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --bg-elevated:   #1C1714;   /* raised surfaces, ticker bg */
   --surface:       #251E19;   /* card backgrounds — espresso Pi-baseline (PROTECTED, see CLAUDE.md) */
   --surface-hover: #2E2520;   /* interactive hover */
-  --surface-strong:#362B25;   /* emphasized — about-card, dedica, ghost button (PROTECTED) */
-  /* Listener cards inline a lighter surface (#54453A / hover #5E4D40 / strong #6E5B49,
-   * ~2.07:1 and ~2.96:1 vs --bg) for visibility on the warm-dark listener page — those
-   * live inline on .mmr-* in listener.css, never on these shared tokens. See CLAUDE.md
-   * "Protected UI elements" and the listener-visibility rule. */
+  --surface-strong:#362B25;   /* admin emphasized surface — espresso Pi-baseline (PROTECTED) */
+
+  /* Listener card surfaces — brighter than --surface* for visibility on the warm-dark
+   * listener page (~2.07:1 / ~2.96:1 vs --bg). Listener-only; admin keeps --surface*. */
+  --card:          #54453A;   /* schedule list */
+  --card-strong:   #6E5B49;   /* dedica, about-card, now-playing bar */
+  --card-line:     rgba(245,237,216,0.32);  /* card borders */
 
   /* Text hierarchy */
   --cream:         #F5EDD8;   /* primary text */
@@ -85,7 +93,7 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
-  --line-strong:   rgba(245,237,216,0.16);  /* admin emphasized borders — espresso Pi-baseline (PROTECTED). Listener cards inline a brighter rgba(...,0.32) for visibility, in listener.css — never here. */
+  --line-strong:   rgba(245,237,216,0.16);  /* admin emphasized borders — espresso Pi-baseline (PROTECTED). Listener cards use the brighter --card-line token — never raise this. */
   --shadow:        rgba(0,0,0,0.35);
 }
 ```
@@ -276,7 +284,7 @@ Organic momentum-based drift with overshoot-and-settle locking. Keep the wobble.
 ## Components
 
 ### Cards
-Every card surface is **opaque** `--surface` (#251E19 espresso baseline; listener cards inline a lighter #54453A for visibility). Never semi-transparent.
+Every card surface is **opaque** `--surface` (#251E19 espresso baseline; listener cards use the brighter `--card` token for visibility). Never semi-transparent.
 ```css
 .card {
   background: var(--surface);

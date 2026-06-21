@@ -197,9 +197,9 @@ body[data-stopped="true"] .waveform {
   display: flex;
   height: 3px;
 }
-.tricolor-band > div:nth-child(1) { flex: 1; background: #009246; }
-.tricolor-band > div:nth-child(2) { flex: 1; background: rgba(255, 255, 255, 0.9); }
-.tricolor-band > div:nth-child(3) { flex: 1; background: #CE2B37; }
+.tricolor-band > div:nth-child(1) { flex: 1; background: var(--flag-green); }
+.tricolor-band > div:nth-child(2) { flex: 1; background: var(--flag-white); }
+.tricolor-band > div:nth-child(3) { flex: 1; background: var(--flag-red); }
 
 /* ── Play button canonical (golden default, blue playing) ── */
 .play-btn {
