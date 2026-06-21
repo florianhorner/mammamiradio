@@ -20,9 +20,22 @@ import pytest
 
 from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.scheduling import producer
-from mammamiradio.scheduling.producer import _apply_egress, _enqueue_with_egress, _is_rescue_fill
+from mammamiradio.scheduling.producer import (
+    _adjacent_music_source,
+    _apply_egress,
+    _enqueue_with_egress,
+    _front_insert_queue_and_shadow,
+    _is_rescue_fill,
+)
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
+
+
+@pytest.fixture(autouse=True)
+def _reset_producer_music_cache():
+    producer._last_music_file = None
+    yield
+    producer._last_music_file = None
 
 
 class _Cfg:
@@ -339,6 +352,13 @@ async def test_enqueue_with_egress_puts_coloured_segment(tmp_path):
         assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), seg) is True
     queued = queue.get_nowait()
     assert queued.path.name.startswith("egress_")  # the COLOURED segment was queued
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    # The bed source is the CLEAN pre-egress render, never the coloured output. Here the
+    # ephemeral pre-egress render was consumed by the colour pass, so last_music_file is
+    # left unset rather than pointed at the coloured file (the cache-hit test below
+    # asserts the positive clean-source case).
+    assert state.last_music_file != queued.path
+    assert producer._last_music_file != queued.path
 
 
 async def test_enqueue_with_egress_front_insert_colours_before_critical_section(tmp_path):
@@ -357,6 +377,8 @@ async def test_enqueue_with_egress_front_insert_colours_before_critical_section(
     m_chain.assert_called_once()
     inserted_segment = m_front.call_args[0][2]  # (queue, state, segment, shadow_entry)
     assert inserted_segment.path.name.startswith("egress_")  # coloured before insert
+    assert state.last_enqueued_type is None
+    assert state.last_music_file is None
 
 
 async def test_enqueue_with_egress_front_insert_requires_shadow_entry(tmp_path):
@@ -382,6 +404,255 @@ async def test_enqueue_with_egress_rescue_skips_chain(tmp_path):
         await _enqueue_with_egress(queue, state, _Cfg(tmp_path), seg)
     m_chain.assert_not_called()
     assert queue.get_nowait() is seg  # the original bridge audio, undelayed
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    assert state.last_music_file == seg.path
+
+
+async def test_enqueue_with_egress_emergency_tone_clears_music_adjacency(tmp_path):
+    """The synthetic continuity tone is MUSIC-shaped audio but a continuity BREAK: it
+    must never let a song the beep gapped out bleed under the next speech."""
+    previous_song = tmp_path / "previous_song.mp3"
+    previous_song.write_bytes(b"MUSIC")
+    tone = _seg(
+        tmp_path,
+        metadata={"audio_source": "emergency_tone", "queue_drain_recovery": True, "rescue": True},
+        name="tone.mp3",
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    # Seed a real song as the prior tail — the tone must sever it, not inherit it.
+    state = StationState(last_music_file=previous_song, last_enqueued_type=SegmentType.MUSIC)
+
+    with patch(f"{PRODUCER_MODULE}.apply_broadcast_chain") as m_chain:
+        assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), tone) is True
+
+    m_chain.assert_not_called()
+    assert queue.get_nowait() is tone
+    assert state.last_enqueued_type is None
+    # The next speech beds nothing — no stale song bleeds across the beep gap.
+    assert _adjacent_music_source(state) is None
+
+
+async def test_enqueue_with_egress_recycled_music_preserves_music_adjacency(tmp_path):
+    """Recycled last-known-good music is still a real queued song for the next speech bed."""
+    recycled = _seg(tmp_path, metadata={"recycled": True, "silence_fallback": True, "rescue": True})
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState(last_music_file=recycled.path, last_enqueued_type=SegmentType.AD)
+
+    assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), recycled) is True
+
+    assert queue.get_nowait() is recycled
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    assert state.last_music_file == recycled.path
+    assert _adjacent_music_source(state) == recycled.path
+
+
+async def test_enqueue_with_egress_error_segment_clears_music_adjacency(tmp_path):
+    """A failed render aired as brief silence is a continuity break: it must sever song
+    adjacency so the pre-error song never bleeds under the next speech segment."""
+    previous_song = tmp_path / "previous_song.mp3"
+    previous_song.write_bytes(b"MUSIC")
+    errored = _seg(tmp_path, metadata={"error": "boom", "rescue": True}, name="error.mp3")
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    # Seed a real song as the prior tail — the errored silence must sever it.
+    state = StationState(last_music_file=previous_song, last_enqueued_type=SegmentType.MUSIC)
+
+    assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), errored) is True
+
+    assert queue.get_nowait() is errored
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+async def test_enqueue_with_egress_front_insert_does_not_skew_tail_adjacency(tmp_path):
+    """Air-next inserts at the head; the later tail-generated speech still sees the tail song.
+    Use a rescue fill as the tail so the funnel records its clean bed source (rendered music's
+    bed source is owned by _remember_rendered_music, not exercised in this funnel-only test)."""
+    song = _seg(
+        tmp_path,
+        metadata={"title": "Tail Song", "rescue": True, "audio_source": "norm_cache"},
+        ephemeral=False,
+        name="tail_song.mp3",
+    )
+    front_banter = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "front_banter.mp3",
+        metadata={"title": "Operator banter"},
+        ephemeral=False,
+    )
+    front_banter.path.write_bytes(b"VOICE")
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState()
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=song):
+        assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), song) is True
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", return_value=front_banter),
+        patch(f"{PRODUCER_MODULE}._front_insert_queue_and_shadow", return_value=True),
+    ):
+        assert await _enqueue_with_egress(
+            queue,
+            state,
+            _Cfg(tmp_path),
+            front_banter,
+            front_insert=True,
+            shadow_entry={"id": "front"},
+        )
+
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    assert state.last_music_file == song.path
+    assert _adjacent_music_source(state) == song.path
+
+
+def test_adjacency_type_for_treats_continuity_breaks_as_non_song():
+    """The single shared rule: errored silence and the emergency tone are NOT adjacent songs."""
+    from mammamiradio.scheduling.producer import _adjacency_type_for
+
+    music = Segment(type=SegmentType.MUSIC, path=Path("x.mp3"), metadata={"title": "Song"})
+    tone = Segment(
+        type=SegmentType.MUSIC, path=Path("t.mp3"), metadata={"audio_source": "emergency_tone", "rescue": True}
+    )
+    errored = Segment(type=SegmentType.MUSIC, path=Path("e.mp3"), metadata={"error": "boom"})
+    banter = Segment(type=SegmentType.BANTER, path=Path("b.mp3"), metadata={})
+
+    assert _adjacency_type_for(music) == SegmentType.MUSIC
+    assert _adjacency_type_for(tone) is None
+    assert _adjacency_type_for(errored) is None
+    assert _adjacency_type_for(banter) == SegmentType.BANTER
+
+
+def test_front_insert_tone_tail_not_reclassified_as_music(tmp_path):
+    """Air-next behind a buffered emergency-tone tail must not reclassify the tone as an
+    adjacent song — the funnel already cleared adjacency when the tone was enqueued, and the
+    tail recompute must honour the same continuity-break rule (#641)."""
+    tone = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "tone.mp3",
+        metadata={"audio_source": "emergency_tone", "rescue": True},
+        ephemeral=True,
+    )
+    tone.path.write_bytes(b"BEEP")
+    prior_song = tmp_path / "prior_song.mp3"
+    prior_song.write_bytes(b"MUSIC")
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(tone)  # buffered tail is the tone
+    state = StationState(last_music_file=prior_song, last_enqueued_type=None)
+    state.queued_segments = [{"id": "tone", "type": "music"}]
+
+    front_banter = Segment(type=SegmentType.BANTER, path=tmp_path / "fb.mp3", metadata={"title": "Op"}, ephemeral=False)
+    front_banter.path.write_bytes(b"VOICE")
+
+    assert _front_insert_queue_and_shadow(queue, state, front_banter, {"id": "front", "type": "banter"}) is True
+
+    assert state.last_enqueued_type != SegmentType.MUSIC  # tone tail not mistaken for a song
+    assert _adjacent_music_source(state) is None
+
+
+def test_front_insert_full_queue_drop_clears_stale_music_adjacency(tmp_path):
+    """Air-next on a FULL queue drops the furthest-future tail. That dropped segment is
+    exactly what last_enqueued_type describes, so its adjacency basis must be cleared —
+    otherwise a later generated speech segment would bed a dropped (never-aired) song.
+    A cache-backed dropped song stays on disk, so the existence check alone won't save us."""
+    # Cache-backed tail song (ephemeral=False) — survives the drop on disk.
+    tail_song = tmp_path / "tail_song.mp3"
+    tail_song.write_bytes(b"MUSIC")
+    queued_song = Segment(type=SegmentType.MUSIC, path=tail_song, metadata={"title": "Tail"}, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
+    queue.put_nowait(queued_song)
+    # Adjacency currently points at the song that is the queue tail.
+    state = StationState(last_music_file=tail_song, last_enqueued_type=SegmentType.MUSIC)
+    state.queued_segments = [{"id": "tail", "type": "music"}]
+
+    front_banter = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "front_banter.mp3",
+        metadata={"title": "Operator banter"},
+        ephemeral=False,
+    )
+    front_banter.path.write_bytes(b"VOICE")
+
+    # maxsize=1: inserting the banter forces the tail song to be dropped, leaving the banter
+    # as the actual new tail.
+    assert _front_insert_queue_and_shadow(queue, state, front_banter, {"id": "front", "type": "banter"}) is True
+
+    assert state.last_enqueued_type != SegmentType.MUSIC  # stale music basis cleared
+    # No stale song bleeds under the next generated speech even though tail_song persists on disk.
+    assert _adjacent_music_source(state) is None
+
+
+def test_front_insert_into_empty_queue_clears_stale_music_adjacency(tmp_path):
+    """Air-next into an EMPTY queue makes the inserted (speech) segment the real tail. A prior
+    last_enqueued_type=MUSIC must not survive, or the next generated speech would bed a song the
+    operator's banter aired in front of (#641). Recompute adjacency from the actual new tail."""
+    prior_song = tmp_path / "prior_song.mp3"
+    prior_song.write_bytes(b"MUSIC")
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)  # empty
+    state = StationState(last_music_file=prior_song, last_enqueued_type=SegmentType.MUSIC)
+    state.queued_segments = []
+
+    front_banter = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "front_banter.mp3",
+        metadata={"title": "Operator banter"},
+        ephemeral=False,
+    )
+    front_banter.path.write_bytes(b"VOICE")
+
+    assert _front_insert_queue_and_shadow(queue, state, front_banter, {"id": "front", "type": "banter"}) is True
+
+    assert state.last_enqueued_type == SegmentType.BANTER  # the inserted segment is the new tail
+    assert _adjacent_music_source(state) is None  # no stale song bleeds behind the operator banter
+
+
+async def test_enqueue_with_egress_rescue_records_clean_pre_egress_source(tmp_path):
+    """For a RESCUE fill (the only music the funnel records as the bed source), the
+    bed/crossfade source must be the CLEAN pre-egress render, never the egress output.
+    With broadcast_chain on, egress returns an FM-baked path; recording that would make a
+    later speech crossfade embed already-coloured audio that egress colours a second time.
+    The funnel captures the clean source before egress, so last_music_file stays clean."""
+    clean = _seg(
+        tmp_path,
+        metadata={"title": "Rescue Song", "rescue": True, "audio_source": "norm_cache"},
+        ephemeral=False,
+        name="norm_song.mp3",
+    )
+    baked = tmp_path / "fm_song.mp3"
+    baked.write_bytes(b"FM-COLOURED")
+    baked_segment = Segment(type=SegmentType.MUSIC, path=baked, metadata=clean.metadata, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState(last_enqueued_type=SegmentType.AD)
+
+    # Egress swaps the path to the baked render (what airs), but the funnel captured
+    # the clean source beforehand.
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=baked_segment):
+        assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), clean) is True
+
+    assert queue.get_nowait() is baked_segment  # the coloured render is what airs
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    assert state.last_music_file == clean.path  # …but the bed source stays clean
+    assert _adjacent_music_source(state) == clean.path
+
+
+async def test_enqueue_with_egress_rendered_music_does_not_overwrite_clean_bed_source(tmp_path):
+    """Normally-rendered music (no rescue/recycled flag) already had its CLEAN source
+    recorded by _remember_rendered_music BEFORE the transition-sting prepend and egress.
+    The funnel must NOT overwrite last_music_file for it — by enqueue time segment.path may
+    be a sting-merged or FM-baked render, and bedding that under a later announcer would
+    smear a stinger/colour into the bed. last_enqueued_type still flips to MUSIC."""
+    prior_clean = tmp_path / "prior_clean_song.mp3"
+    prior_clean.write_bytes(b"CLEAN")
+    # A rendered segment whose path is a sting-merged temp render (what the main loop builds).
+    sting_merged = tmp_path / "segment_with_sting_abc.mp3"
+    sting_merged.write_bytes(b"STING+MUSIC")
+    rendered = Segment(type=SegmentType.MUSIC, path=sting_merged, metadata={"title": "Rendered"}, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState(last_music_file=prior_clean, last_enqueued_type=SegmentType.AD)
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=rendered):
+        assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), rendered) is True
+
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    # The clean source recorded earlier by _remember_rendered_music is preserved.
+    assert state.last_music_file == prior_clean
 
 
 def test_norm_cache_bridge_payload_stamps_rescue_flag():

@@ -423,6 +423,55 @@ def _remember_rendered_music(rendered: RenderedMusicTrack, state: StationState) 
     state.last_music_file = path
 
 
+def _adjacency_type_for(segment: Segment) -> SegmentType | None:
+    """The tail-adjacency classification of a queued segment — the SINGLE rule shared by the
+    enqueue funnel, the air-next tail recompute, and the producer-start seed.
+
+    Returns ``None`` for a continuity BREAK — a failed render that aired as brief silence, or
+    the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
+    treated as an adjacent song a later speech bed could bleed (#641). Otherwise returns the
+    segment's real type.
+    """
+    if "error" in segment.metadata:
+        return None
+    if segment.type == SegmentType.MUSIC and segment.metadata.get("audio_source") == "emergency_tone":
+        return None
+    return segment.type
+
+
+def _remember_enqueued(state: StationState, segment: Segment, source_path: Path) -> None:
+    """Record the program-order tail predecessor for speech-bed adjacency.
+
+    Two pieces of state are maintained here at the single enqueue chokepoint:
+
+    * ``last_enqueued_type`` — the type of the segment now at the queue tail, the basis
+      for speech-bed eligibility (``_adjacent_music_source``).
+    * ``last_music_file`` — the CLEAN song used as a crossfade tail / talk bed — but ONLY
+      for rescue & recycled fills. Normally-rendered music already had ``last_music_file``
+      recorded by ``_remember_rendered_music`` BEFORE the transition-sting prepend and the
+      egress colour pass, so the funnel must not overwrite it here with the sting-merged /
+      FM-baked aired path (either would bleed a processed render under a later announcer).
+      Rescue & recycled fills never run ``_remember_rendered_music`` and are queued before
+      the sting stage, so the funnel is the only place that records their clean bed source —
+      ``source_path`` is their pre-egress (clean) path. This is what closes #641.
+
+    Front-insert is intentionally excluded by the caller: air-next changes head order, while
+    speech-bed adjacency follows normal tail appends. A continuity-break fill (errored silence
+    or the emergency tone) resolves to ``None`` via ``_adjacency_type_for``, so the next speech
+    never beds a song the break severed. ``prev_seg_type`` — which drives transition stings —
+    keeps its own value by design.
+    """
+    adj = _adjacency_type_for(segment)
+    state.last_enqueued_type = adj
+    if (
+        adj == SegmentType.MUSIC
+        and (segment.metadata.get("rescue") or segment.metadata.get("recycled"))
+        and source_path.exists()
+    ):
+        state.last_music_file = source_path
+        _set_last_music_file(source_path)
+
+
 def _latest_music_file(tmp_dir: Path) -> Path | None:
     """Return the most recently written music_*.mp3, using cached path when available."""
     if _last_music_file and _last_music_file.exists():
@@ -464,7 +513,7 @@ def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentTyp
     )
 
 
-def _adjacent_music_source(prev_seg_type: SegmentType | None, state: StationState) -> Path | None:
+def _adjacent_music_source(state: StationState) -> Path | None:
     """Last-played song, but only when it was the segment that *just* aired.
 
     A speech segment may reuse real song audio (crossfade tail or talk bed) only
@@ -476,7 +525,7 @@ def _adjacent_music_source(prev_seg_type: SegmentType | None, state: StationStat
     This is the single place the eligibility rule lives; tightening it to a
     song-identity/freshness check later is a one-function change.
     """
-    if prev_seg_type not in _MUSIC_TYPES:
+    if state.last_enqueued_type not in _MUSIC_TYPES:
         return None
     return _get_last_music_file(state)
 
@@ -549,6 +598,24 @@ def _front_insert_queue_and_shadow(
     if dropped and len(state.queued_segments) > 1:
         drop_n = min(len(dropped), len(state.queued_segments) - 1)
         del state.queued_segments[len(state.queued_segments) - drop_n :]
+    # Recompute the tail-adjacency basis from the ACTUAL new queue tail. Air-next puts the
+    # segment at the HEAD, but it only leaves tail adjacency unchanged when buffered music
+    # still sits behind it. When the queue was empty (the inserted speech segment becomes the
+    # real tail) or a full-queue overflow dropped the buffered music tail, leaving a stale
+    # last_enqueued_type=MUSIC would bed a song that no longer airs adjacent to the next
+    # generated segment (#641). A cache-backed dropped/removed song stays on disk, so the
+    # existence check alone would not catch it.
+    new_tail = items[-1] if items else None
+    if new_tail is None:
+        state.last_enqueued_type = None
+    elif dropped and _adjacency_type_for(new_tail) == SegmentType.MUSIC:
+        # An overflow drop removed buffered music; the remaining music tail's bed source is
+        # uncertain (the dropped song may have been its basis) → no adjacent song.
+        state.last_enqueued_type = None
+    else:
+        # Unchanged buffered tail (no drop), or a non-music remaining tail. Use the shared
+        # continuity-break rule so a tone/errored MUSIC tail is not mistaken for a song.
+        state.last_enqueued_type = _adjacency_type_for(new_tail)
     # The operator's pick is now queued — the trigger is fulfilled. Clearing the
     # in-flight guard HERE (not at render-start) is what makes "one at a time" hold
     # through a slow render: a second tap stays rejected until this pick airs, so it
@@ -733,11 +800,13 @@ async def _enqueue_with_egress(
     # never leaves a coloured egress tmp render orphaned on disk.
     if front_insert and shadow_entry is None:  # operator air-next must always supply a shadow entry
         raise ValueError("front_insert enqueue requires a shadow_entry")
+    pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
     segment = await _apply_egress(segment, config)
     if front_insert:
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
     await queue.put(segment)
+    _remember_enqueued(state, segment, pre_egress_path)
     return True
 
 
@@ -1068,6 +1137,10 @@ async def _fire_interrupt(
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
+    # An urgent interrupt is a hard continuity break: the buffered tail is gone and the
+    # current segment is cut below. Clear music adjacency so the urgent banter doesn't bed
+    # a purged/cut song (the same stale-bleed class as the front-insert tail drop, #641).
+    state.last_enqueued_type = None
 
     # Inject directive + pissed tone, then cut the current segment FIRST so the
     # interrupt feels immediate. Bridge-tone generation (below) can take seconds
@@ -1186,6 +1259,11 @@ async def run_producer(
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     prev_seg_type = _initial_previous_segment_type(queue, state)
+    # Seed tail adjacency with the same continuity-break rule the funnel uses: if the queue
+    # tail at start is an emergency tone / errored MUSIC fill, it must not be seeded as an
+    # adjacent song. Fall back to the inferred type when there's no queued segment to inspect.
+    _seed_queue = list(getattr(queue, "_queue", ()))
+    state.last_enqueued_type = _adjacency_type_for(_seed_queue[-1]) if _seed_queue else prev_seg_type
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
     async def _queue_segment(segment: Segment) -> bool:
@@ -1919,7 +1997,7 @@ async def run_producer(
                         logger.info("Impossible moment (new listener): %s", line[:60])
                         try:
                             audio_path = await _synthesize_impossible_moment(
-                                line, config, state, _adjacent_music_source(prev_seg_type, state)
+                                line, config, state, _adjacent_music_source(state)
                             )
                             impossible_tts = True
                         except Exception as exc:
@@ -1937,7 +2015,7 @@ async def run_producer(
                             logger.info("Impossible moment (no LLM): %s", line[:60])
                             try:
                                 audio_path = await _synthesize_impossible_moment(
-                                    line, config, state, _adjacent_music_source(prev_seg_type, state)
+                                    line, config, state, _adjacent_music_source(state)
                                 )
                                 impossible_tts = True
                             except Exception as exc:
@@ -2042,7 +2120,7 @@ async def run_producer(
                                 _host=trans_host,
                                 _path=trans_voice_path,
                                 _prosody=prosody,
-                                _music_src=_adjacent_music_source(prev_seg_type, state),
+                                _music_src=_adjacent_music_source(state),
                             ):
                                 await synthesize(
                                     _text,
@@ -2210,7 +2288,7 @@ async def run_producer(
                             config,
                             state,
                             prefix="banter",
-                            source_track=_adjacent_music_source(prev_seg_type, state),
+                            source_track=_adjacent_music_source(state),
                         )
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry banter: %s", exc)
@@ -2344,7 +2422,7 @@ async def run_producer(
 
                     # Overlay on the tail of the last music segment — but only when a
                     # song aired immediately before this flash (else it bleeds stale).
-                    flash_music = _adjacent_music_source(prev_seg_type, state)
+                    flash_music = _adjacent_music_source(state)
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
                     audio_path = await _try_crossfade(flash_path, config, crossfade_out, flash_music, tail_seconds=6.0)
                     has_music_tail = audio_path == crossfade_out
@@ -2578,7 +2656,7 @@ async def run_producer(
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
 
-                async def _build_intro(_music_src=_adjacent_music_source(prev_seg_type, state)):
+                async def _build_intro(_music_src=_adjacent_music_source(state)):
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
@@ -2948,6 +3026,7 @@ async def run_producer(
                 ):
                     continue
                 if "error" not in segment.metadata:
+                    # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
                     prev_seg_type = segment.type
             else:
                 if not await _queue_segment(segment):

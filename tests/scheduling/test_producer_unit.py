@@ -1475,17 +1475,17 @@ async def test_try_crossfade_failure_returns_voice(tmp_path):
 
 
 def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
-    from mammamiradio.core.models import SegmentType
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _adjacent_music_source
 
     song = tmp_path / "song.mp3"
     song.write_bytes(b"music")
-    state = MagicMock()
+    state = StationState()
     state.last_music_file = song
+    state.last_enqueued_type = SegmentType.MUSIC
     producer._last_music_file = None
     try:
-        assert _adjacent_music_source(SegmentType.MUSIC, state) == song
+        assert _adjacent_music_source(state) == song
     finally:
         producer._last_music_file = None
 
@@ -1497,18 +1497,17 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
 def test_adjacent_music_source_none_when_prev_not_music(tmp_path, prev):
     """A song is stale the moment any non-music segment intervenes (or prev is
     unknown). It must never be offered as a bed/crossfade source."""
-    from mammamiradio.core.models import SegmentType
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _adjacent_music_source
 
     song = tmp_path / "song.mp3"
     song.write_bytes(b"music")
-    state = MagicMock()
+    state = StationState()
     state.last_music_file = song  # song still on disk, but stale
+    state.last_enqueued_type = getattr(SegmentType, prev) if prev else None
     producer._last_music_file = song
     try:
-        prev_type = getattr(SegmentType, prev) if prev else None
-        assert _adjacent_music_source(prev_type, state) is None
+        assert _adjacent_music_source(state) is None
     finally:
         producer._last_music_file = None
 
@@ -2726,14 +2725,47 @@ async def test_enqueue_funnel_drops_a_banned_music_segment(tmp_path):
     assert await _enqueue_with_egress(queue, state, config, banned_seg) is False
     assert queue.empty()
     assert not banned_path.exists()
+    assert state.last_enqueued_type is None
+    assert state.last_music_file is None
 
     # Control: a non-banned song passes the gate and is queued (egress stubbed out).
+    ok_path = tmp_path / "norm_ok.mp3"
+    ok_path.write_bytes(b"x")  # a real queued song exists on disk (bed source must persist)
     ok_seg = Segment(
         type=SegmentType.MUSIC,
-        path=tmp_path / "norm_ok.mp3",
+        path=ok_path,
         ephemeral=False,
         metadata={"artist": "Artista", "title_only": "Canzone Due"},
     )
     with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=ok_seg):
         assert await _enqueue_with_egress(queue, state, config, ok_seg) is True
     assert queue.qsize() == 1
+    # The non-banned song reaches the queue and flips the timeline-tail type. (last_music_file
+    # for normally-rendered music is owned by _remember_rendered_music, not the funnel.)
+    assert state.last_enqueued_type == SegmentType.MUSIC
+
+
+async def test_fire_interrupt_clears_music_adjacency(tmp_path):
+    """An urgent interrupt purges the buffered tail and cuts the current segment — a hard
+    continuity break. The urgent banter that follows must not bed a purged/cut song, so
+    music adjacency is cleared (same stale-bleed class as the front-insert tail drop, #641)."""
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling.producer import _adjacent_music_source, _fire_interrupt
+
+    song = tmp_path / "buffered_song.mp3"
+    song.write_bytes(b"MUSIC")  # cache-backed: survives the purge on disk
+    state = _make_state()
+    state.last_music_file = song
+    state.last_enqueued_type = SegmentType.MUSIC
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=song, metadata={"title": "Buffered"}, ephemeral=False))
+    state.queued_segments = [{"id": "buffered", "type": "music"}]
+
+    spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+    with patch(f"{PRODUCER_MODULE}.generate_tone"):
+        assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
+
+    assert queue.empty()  # buffered tail purged
+    assert state.last_enqueued_type is None
+    # The song file still exists, but nothing bleeds under the urgent banter.
+    assert _adjacent_music_source(state) is None

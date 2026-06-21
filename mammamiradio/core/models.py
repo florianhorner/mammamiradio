@@ -444,6 +444,7 @@ class StationState:
     resume_event: asyncio.Event = field(default_factory=asyncio.Event)
     # Last successful music norm, recycled when every chart candidate is silent.
     last_music_file: Path | None = None
+    last_enqueued_type: SegmentType | None = None
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
