@@ -464,6 +464,23 @@ def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentTyp
     )
 
 
+def _adjacent_music_source(prev_seg_type: SegmentType | None, state: StationState) -> Path | None:
+    """Last-played song, but only when it was the segment that *just* aired.
+
+    A speech segment may reuse real song audio (crossfade tail or talk bed) only
+    when the immediately-previous queued segment is MUSIC. After an ad/news/ID/
+    banter intervenes the song is stale, so reusing it bleeds a 3-minutes-ago
+    track under a later announcer (illusion break). Returns None when no song is
+    adjacent, in which case callers fall back to dry voice / synthetic bed.
+
+    This is the single place the eligibility rule lives; tightening it to a
+    song-identity/freshness check later is a one-function change.
+    """
+    if prev_seg_type not in _MUSIC_TYPES:
+        return None
+    return _get_last_music_file(state)
+
+
 def _segment_type_from_value(value: object) -> SegmentType | None:
     if isinstance(value, SegmentType):
         return value
@@ -730,10 +747,17 @@ async def _apply_talk_bed(
     state: StationState,
     *,
     prefix: str,
+    source_track: Path | None = None,
 ) -> Path:
-    """Mix a quiet music bed under a generated spoken segment."""
+    """Mix a quiet music bed under a generated spoken segment.
+
+    ``source_track`` is the only place real song audio can enter the bed; callers
+    pass it via :func:`_adjacent_music_source` so a stale (non-adjacent) song is
+    never reused. When None, ``pick_talk_bed`` falls back to a bundled bed or a
+    synthetic drone — never silence, never a stale track.
+    """
     loop = asyncio.get_running_loop()
-    last_track = _get_last_music_file(state) if config.imaging.use_music_queue_for_beds else None
+    last_track = source_track if config.imaging.use_music_queue_for_beds else None
     bed_path = config.tmp_dir / f"{prefix}_bed_{uuid4().hex[:8]}.mp3"
     duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
     imaging_lib = _make_imaging_lib(config)
@@ -762,11 +786,18 @@ async def _try_crossfade(
     voice_path: Path,
     config: StationConfig,
     output_path: Path,
+    music_path: Path | None,
     tail_seconds: float = 8.0,
     music_fade_volume: float = 0.5,
 ) -> Path:
-    """Attempt to crossfade voice over the last music file. Returns voice_path on failure."""
-    last_music = _latest_music_file(config.tmp_dir)
+    """Crossfade voice over an explicit music tail. Returns voice_path (dry) when
+    no eligible music is given or the crossfade fails.
+
+    ``music_path`` is supplied by the caller via :func:`_adjacent_music_source`
+    so a stale (non-adjacent) song never bleeds under a later announcer. This
+    function no longer reaches for the last-rendered file itself.
+    """
+    last_music = music_path
     if not last_music or not last_music.exists():
         return voice_path
     try:
@@ -794,8 +825,13 @@ async def _synthesize_impossible_moment(
     line: str,
     config: StationConfig,
     state: StationState,
+    music_path: Path | None = None,
 ) -> Path:
-    """Synthesize an impossible-moment line via TTS with crossfade. Raises on failure."""
+    """Synthesize an impossible-moment line via TTS with crossfade. Raises on failure.
+
+    ``music_path`` (from :func:`_adjacent_music_source`) is the only song the
+    crossfade may use; None gives a clean dry line.
+    """
     host = random.choice(_sw._regular_hosts(config))
     imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
     await synthesize(
@@ -807,7 +843,7 @@ async def _synthesize_impossible_moment(
         state=state,
     )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
-    audio_path = await _try_crossfade(imp_path, config, xfade_out)
+    audio_path = await _try_crossfade(imp_path, config, xfade_out, music_path)
     state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
     return audio_path
 
@@ -1882,7 +1918,9 @@ async def run_producer(
                         )
                         logger.info("Impossible moment (new listener): %s", line[:60])
                         try:
-                            audio_path = await _synthesize_impossible_moment(line, config, state)
+                            audio_path = await _synthesize_impossible_moment(
+                                line, config, state, _adjacent_music_source(prev_seg_type, state)
+                            )
                             impossible_tts = True
                         except Exception as exc:
                             logger.warning("Impossible moment TTS failed: %s", exc)
@@ -1898,7 +1936,9 @@ async def run_producer(
                             )
                             logger.info("Impossible moment (no LLM): %s", line[:60])
                             try:
-                                audio_path = await _synthesize_impossible_moment(line, config, state)
+                                audio_path = await _synthesize_impossible_moment(
+                                    line, config, state, _adjacent_music_source(prev_seg_type, state)
+                                )
                                 impossible_tts = True
                             except Exception as exc:
                                 logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
@@ -2002,6 +2042,7 @@ async def run_producer(
                                 _host=trans_host,
                                 _path=trans_voice_path,
                                 _prosody=prosody,
+                                _music_src=_adjacent_music_source(prev_seg_type, state),
                             ):
                                 await synthesize(
                                     _text,
@@ -2013,7 +2054,7 @@ async def run_producer(
                                     state=state,
                                 )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
-                                result = await _try_crossfade(_path, config, xfade_out)
+                                result = await _try_crossfade(_path, config, xfade_out, _music_src)
                                 return result, result == xfade_out
 
                             banter_path: Path
@@ -2164,7 +2205,13 @@ async def run_producer(
 
                 if canned is None:
                     try:
-                        audio_path = await _apply_talk_bed(audio_path, config, state, prefix="banter")
+                        audio_path = await _apply_talk_bed(
+                            audio_path,
+                            config,
+                            state,
+                            prefix="banter",
+                            source_track=_adjacent_music_source(prev_seg_type, state),
+                        )
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry banter: %s", exc)
 
@@ -2295,14 +2342,19 @@ async def run_producer(
                         state=state,
                     )
 
-                    # Try to overlay on the tail of the last music segment
+                    # Overlay on the tail of the last music segment — but only when a
+                    # song aired immediately before this flash (else it bleeds stale).
+                    flash_music = _adjacent_music_source(prev_seg_type, state)
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
-                    audio_path = await _try_crossfade(flash_path, config, crossfade_out, tail_seconds=6.0)
+                    audio_path = await _try_crossfade(flash_path, config, crossfade_out, flash_music, tail_seconds=6.0)
                     has_music_tail = audio_path == crossfade_out
                     if audio_path is flash_path:
-                        # Crossfade failed — add a static bed instead
+                        # No adjacent song / crossfade failed — bundled or synthetic bed,
+                        # never the stale track.
                         try:
-                            audio_path = await _apply_talk_bed(audio_path, config, state, prefix="news")
+                            audio_path = await _apply_talk_bed(
+                                audio_path, config, state, prefix="news", source_track=flash_music
+                            )
                         except Exception as exc:
                             logger.warning("Talk bed generation failed, using dry news flash: %s", exc)
 
@@ -2526,7 +2578,7 @@ async def run_producer(
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
 
-                async def _build_intro():
+                async def _build_intro(_music_src=_adjacent_music_source(prev_seg_type, state)):
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
@@ -2544,7 +2596,7 @@ async def run_producer(
                         state=state,
                     )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
-                    ipath = await _try_crossfade(ipath, config, xout)
+                    ipath = await _try_crossfade(ipath, config, xout, _music_src)
                     has_music_tail = ipath == xout
                     parts.append(ipath)
                     # Promo compliance tag

@@ -1413,7 +1413,7 @@ async def test_try_crossfade_no_music_file():
     voice.write_bytes(b"voice")
     output = config.tmp_dir / "output.mp3"
 
-    result = await _try_crossfade(voice, config, output)
+    result = await _try_crossfade(voice, config, output, None)
     assert result == voice
 
     # Cleanup
@@ -1440,7 +1440,7 @@ async def test_try_crossfade_success(tmp_path):
         output.write_bytes(b"crossfaded")
 
     with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=fake_crossfade):
-        result = await _try_crossfade(voice, config, output)
+        result = await _try_crossfade(voice, config, output, music)
 
     assert result == output
     producer._last_music_file = None
@@ -1463,10 +1463,54 @@ async def test_try_crossfade_failure_returns_voice(tmp_path):
     config.tmp_dir = tmp_path
 
     with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=RuntimeError("ffmpeg failed")):
-        result = await _try_crossfade(voice, config, output)
+        result = await _try_crossfade(voice, config, output, music)
 
     assert result == voice
     producer._last_music_file = None
+
+
+# ---------------------------------------------------------------------------
+# _adjacent_music_source — the stale-bleed eligibility rule
+# ---------------------------------------------------------------------------
+
+
+def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
+    from mammamiradio.core.models import SegmentType
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _adjacent_music_source
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"music")
+    state = MagicMock()
+    state.last_music_file = song
+    producer._last_music_file = None
+    try:
+        assert _adjacent_music_source(SegmentType.MUSIC, state) == song
+    finally:
+        producer._last_music_file = None
+
+
+@pytest.mark.parametrize(
+    "prev",
+    ["AD", "NEWS_FLASH", "BANTER", "STATION_ID", "SWEEPER", "TIME_CHECK", None],
+)
+def test_adjacent_music_source_none_when_prev_not_music(tmp_path, prev):
+    """A song is stale the moment any non-music segment intervenes (or prev is
+    unknown). It must never be offered as a bed/crossfade source."""
+    from mammamiradio.core.models import SegmentType
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _adjacent_music_source
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"music")
+    state = MagicMock()
+    state.last_music_file = song  # song still on disk, but stale
+    producer._last_music_file = song
+    try:
+        prev_type = getattr(SegmentType, prev) if prev else None
+        assert _adjacent_music_source(prev_type, state) is None
+    finally:
+        producer._last_music_file = None
 
 
 # ---------------------------------------------------------------------------
@@ -1492,6 +1536,46 @@ async def test_synthesize_impossible_moment(tmp_path):
     assert result == _fake_path()
     assert len(state.last_banter_script) == 1
     assert state.last_banter_script[0]["type"] == "impossible"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_impossible_moment_forwards_music_path(tmp_path):
+    """The eligible (adjacent-only) song the caller computes must reach the
+    crossfade — so an impossible moment never beds over a stale track."""
+    from mammamiradio.scheduling.producer import _synthesize_impossible_moment
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    state = _make_state()
+    song = tmp_path / "adjacent_song.mp3"
+    song.write_bytes(b"music")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda *a, **kw: _fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()) as mock_xf,
+    ):
+        await _synthesize_impossible_moment("Che succede!", config, state, song)
+
+    # 4th positional arg to _try_crossfade is the music source.
+    assert mock_xf.call_args.args[3] == song
+
+
+@pytest.mark.asyncio
+async def test_synthesize_impossible_moment_defaults_to_no_music(tmp_path):
+    """With no music passed, the crossfade gets None (dry line, no stale bleed)."""
+    from mammamiradio.scheduling.producer import _synthesize_impossible_moment
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    state = _make_state()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda *a, **kw: _fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()) as mock_xf,
+    ):
+        await _synthesize_impossible_moment("Che succede!", config, state)
+
+    assert mock_xf.call_args.args[3] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1633,7 +1717,7 @@ async def test_try_crossfade_success_with_music_file(tmp_path):
     with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as mock_xf:
         mock_xf.return_value = output
         output.write_bytes(b"\x00" * 800)  # simulate ffmpeg output
-        result = await _try_crossfade(voice, config, output)
+        result = await _try_crossfade(voice, config, output, music)
     assert result == output
     mock_xf.assert_called_once()
 

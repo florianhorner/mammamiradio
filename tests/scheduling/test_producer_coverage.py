@@ -359,9 +359,8 @@ async def test_try_crossfade_no_music(tmp_path):
     config = MagicMock()
     config.tmp_dir = tmp_path
 
-    with patch("mammamiradio.scheduling.producer._latest_music_file", return_value=None):
-        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3")
-        assert result == voice_path
+    result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", None)
+    assert result == voice_path
 
 
 @pytest.mark.asyncio
@@ -375,14 +374,11 @@ async def test_try_crossfade_failure(tmp_path):
     config = MagicMock()
     config.tmp_dir = tmp_path
 
-    with (
-        patch("mammamiradio.scheduling.producer._latest_music_file", return_value=music_path),
-        patch(
-            "mammamiradio.scheduling.producer.crossfade_voice_over_music",
-            side_effect=Exception("ffmpeg failed"),
-        ),
+    with patch(
+        "mammamiradio.scheduling.producer.crossfade_voice_over_music",
+        side_effect=Exception("ffmpeg failed"),
     ):
-        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3")
+        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", music_path)
         assert result == voice_path
 
 
