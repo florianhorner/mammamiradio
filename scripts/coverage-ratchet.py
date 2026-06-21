@@ -28,6 +28,19 @@ COVERAGE_SNAPSHOT = (
     Path(os.environ["COVERAGE_RATCHET_SNAPSHOT"]) if os.environ.get("COVERAGE_RATCHET_SNAPSHOT") else None
 )
 COVERAGE_INPUT = Path(os.environ["COVERAGE_RATCHET_INPUT"]) if os.environ.get("COVERAGE_RATCHET_INPUT") else None
+# Repo root for mapping a module key back to its source file. scripts/ -> repo root.
+SOURCE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _module_source_exists(module: str) -> bool:
+    """True if the source .py for a dotted module key still exists on disk.
+
+    Module keys are dotted source paths (the inverse of the parse in
+    run_coverage): ``mammamiradio.web.streamer`` <-> ``mammamiradio/web/streamer.py``.
+    A floor is only deleted when the module is both absent from coverage AND its
+    file is gone — a zero-coverage/excluded module that still exists keeps its floor.
+    """
+    return (SOURCE_ROOT / (module.replace(".", "/") + ".py")).exists()
 
 
 def run_coverage() -> tuple[dict[str, int], int]:
@@ -260,11 +273,13 @@ def cmd_update() -> int:
             else:
                 updated.append(f"  {module}: new at {pct}%")
 
-    # Remove floors for deleted modules
-    removed = [m for m in floors if m not in current]
+    # Remove floors only for modules whose source file is actually gone. A
+    # module absent from coverage but still on disk (excluded, fully-skipped,
+    # 0%) keeps its floor — dropping it would silently retire a guard (#636).
+    removed = [m for m in floors if m not in current and not _module_source_exists(m)]
     for m in removed:
         del floors[m]
-        updated.append(f"  {m}: removed (module deleted)")
+        updated.append(f"  {m}: removed (source file deleted)")
 
     # Update aggregate floor
     if total_pct > aggregate_floor:

@@ -22,7 +22,7 @@ from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
-from mammamiradio.playlist.downloader import evict_cache_lru, purge_suspect_cache_files
+from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
     fetch_startup_playlist,
@@ -125,6 +125,13 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Prune stale temp render scratch left by a prior run (crash/restart debris)
+    # so the HA add-on's /data/tmp doesn't grow unbounded across restarts.
+    pruned_tmp = prune_stale_tmp_files(config.tmp_dir)
+    if pruned_tmp:
+        logger.info("Temp cleanup: pruned %d stale render file(s)", pruned_tmp)
+
     if config.homeassistant.enabled and config.ha_token and config.anthropic_api_key:
         logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
 

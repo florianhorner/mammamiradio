@@ -3496,6 +3496,30 @@ def _clear_clip_rate():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
+async def test_release_clip_stamp_only_pops_own_stamp():
+    """A failed request's rollback must not clobber a concurrent request's stamp.
+
+    Models the #519 race: request A wrote stamp tA and is failing slowly; request
+    B (same IP, after the window) wrote its own successful stamp tB. A's rollback
+    must leave tB intact, then a rollback owning tB removes it."""
+    from mammamiradio.web.streamer import _clip_rate, _release_clip_stamp
+
+    ip = "192.168.1.50"
+    t_a = 1000.0
+    t_b = 1000.5  # a newer stamp written by a concurrent successful request
+    _clip_rate[ip] = t_b
+
+    # A's late rollback owns the older t_a — it must NOT remove B's t_b.
+    await _release_clip_stamp(ip, t_a)
+    assert _clip_rate.get(ip) == t_b
+
+    # A rollback that genuinely owns the current stamp removes it.
+    await _release_clip_stamp(ip, t_b)
+    assert ip not in _clip_rate
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_empty_ring_buffer():
     """POST /api/clip returns error when ring buffer is empty."""
     app = _make_test_app()
@@ -3575,6 +3599,36 @@ async def test_clip_create_returns_no_audio_when_extract_returns_empty_bytes(tmp
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": False, "reason": "no_audio"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_extract_failure_does_not_lock_out_retry(tmp_path):
+    """When extraction yields empty bytes (the second rollback site, with a
+    non-empty ring buffer so the cold-start site is bypassed), the rate-limit
+    stamp must be rolled back so an immediate retry succeeds rather than 429."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.config.audio.bitrate = 192
+    from collections import deque
+
+    ring = deque(maxlen=240)
+    ring.append(b"\xff" * 4096)  # non-empty → skips the empty-ring-buffer rollback site
+    app.state.clip_ring_buffer = ring
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b""):
+            first = await client.post("/api/clip")
+        # Immediate retry: the failed attempt must NOT have left a stamp behind.
+        with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"\xff" * 4096):
+            second = await client.post("/api/clip")
+
+    assert first.status_code == 200
+    assert first.json() == {"ok": False, "reason": "no_audio"}
+    assert second.status_code == 200
+    assert second.json()["ok"] is True
 
 
 @pytest.mark.asyncio

@@ -150,3 +150,67 @@ def test_main_reports_corrupt_snapshot_cleanly(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(module.sys, "argv", ["coverage-ratchet.py", "update"])
 
     assert module.main() == 1
+
+
+# ---------------------------------------------------------------------------
+# cmd_update must only delete a floor when the source file is actually gone —
+# a module absent from coverage but still on disk keeps its floor (#636).
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_update_keeps_floor_when_source_file_still_exists(tmp_path, monkeypatch) -> None:
+    """A module missing from coverage (excluded / 0% / fully skipped) but whose
+    .py still exists must NOT have its floor deleted — that would retire a guard."""
+    floors_file = tmp_path / ".coverage-floors.json"
+    floors_file.write_text(json.dumps({"mammamiradio.audio.normalizer": 88}) + "\n")
+
+    # The source file still exists under SOURCE_ROOT.
+    src = tmp_path / "mammamiradio" / "audio" / "normalizer.py"
+    src.parent.mkdir(parents=True)
+    src.write_text("# still here\n")
+
+    module = _load_coverage_ratcheter()
+    monkeypatch.setattr(module, "FLOORS_FILE", floors_file)
+    monkeypatch.setattr(module, "SOURCE_ROOT", tmp_path)
+    # Coverage run produced a real total but no row for this module.
+    monkeypatch.setattr(module, "current_coverage", lambda: ({"mammamiradio.core.config": 91}, 82))
+
+    rc = module.cmd_update()
+
+    assert rc == 0
+    assert json.loads(floors_file.read_text())["mammamiradio.audio.normalizer"] == 88
+
+
+def test_cmd_update_removes_floor_when_source_file_deleted(tmp_path, monkeypatch) -> None:
+    """When a module is absent from coverage AND its .py is gone, the floor is dropped."""
+    floors_file = tmp_path / ".coverage-floors.json"
+    floors_file.write_text(json.dumps({"mammamiradio.audio.gone_module": 88}) + "\n")
+    # Deliberately do NOT create the source file under SOURCE_ROOT (tmp_path).
+
+    module = _load_coverage_ratcheter()
+    monkeypatch.setattr(module, "FLOORS_FILE", floors_file)
+    monkeypatch.setattr(module, "SOURCE_ROOT", tmp_path)
+    monkeypatch.setattr(module, "current_coverage", lambda: ({"mammamiradio.core.config": 91}, 82))
+
+    rc = module.cmd_update()
+
+    assert rc == 0
+    assert "mammamiradio.audio.gone_module" not in json.loads(floors_file.read_text())
+
+
+def test_cmd_update_ratchets_floor_up_for_present_module(tmp_path, monkeypatch) -> None:
+    """The core ratchet-up invariant: a module present in coverage with higher
+    coverage than its floor raises the floor (never lowers it). Guards against the
+    deletion-predicate change accidentally skipping the normal ratchet path."""
+    floors_file = tmp_path / ".coverage-floors.json"
+    floors_file.write_text(json.dumps({"mammamiradio.core.config": 80}) + "\n")
+
+    module = _load_coverage_ratcheter()
+    monkeypatch.setattr(module, "FLOORS_FILE", floors_file)
+    monkeypatch.setattr(module, "SOURCE_ROOT", tmp_path)
+    monkeypatch.setattr(module, "current_coverage", lambda: ({"mammamiradio.core.config": 91}, 82))
+
+    rc = module.cmd_update()
+
+    assert rc == 0
+    assert json.loads(floors_file.read_text())["mammamiradio.core.config"] == 91
