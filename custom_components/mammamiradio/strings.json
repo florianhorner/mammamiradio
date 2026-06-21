@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Mamma Mi Radio",
+        "description": "Point Home Assistant at your Mamma Mi Radio add-on.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "admin_token": "Admin token (optional)"
+        },
+        "data_description": {
+          "host": "The add-on's address. On Home Assistant OS keep the default; on Docker use the container name (for example mammamiradio).",
+          "admin_token": "Needed only when Home Assistant reaches the add-on from outside its trusted network (a remote or Docker install). On Home Assistant OS the controls work without it."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the station. Check the host and port, give the add-on a few seconds to finish starting, then try again.",
+      "unknown": "Something unexpected happened. Make sure the add-on is running, then try again."
+    },
+    "abort": {
+      "already_configured": "This station is already set up."
+    }
+  }
+}

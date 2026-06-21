@@ -1,0 +1,54 @@
+name: HA Integration
+
+# Validates and tests the custom_components/mammamiradio HACS integration.
+# Separate from the app's quality.yml: the integration targets HA's Python
+# (3.13) and runs under the pytest-homeassistant-custom-component harness.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/**"
+      - "tests_integration/**"
+      - "hacs.json"
+      - ".github/workflows/ha-integration.yml"
+  pull_request:
+    paths:
+      - "custom_components/**"
+      - "tests_integration/**"
+      - "hacs.json"
+      - ".github/workflows/ha-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hassfest:
+    name: Hassfest (manifest validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  tests:
+    name: Integration tests (HA harness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the HA test harness
+        run: pip install pytest-homeassistant-custom-component aioresponses
+      - name: Run the integration test gate
+        run: pytest tests_integration/ -o asyncio_mode=auto -p no:cacheprovider -v

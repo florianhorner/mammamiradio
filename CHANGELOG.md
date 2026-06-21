@@ -4,6 +4,12 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Mamma Mi Radio is now a real Home Assistant media player.** A new HACS integration registers the station as a proper `media_player` entity, so it shows up first-class in the Home Assistant dashboard card picker with no YAML, and your automations and voice assistant can control it: play, stop, and skip to the next segment (controls need the station's admin token; without it you still get live now-playing). It shows what is on air — title, artist, and artwork, with the station logo during host breaks and ads. Install it from HACS as a custom repository, then turn off the add-on's new **On-air media player push** option so the two do not collide. See `docs/integrations/ha-integration.md`.
+
 ## [2.14.1] - 2026-06-21
 
 ### Added

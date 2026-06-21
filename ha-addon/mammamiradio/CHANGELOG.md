@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A new On-air media player push option, and a real media player to go with it.** Mamma Mi Radio now has a Home Assistant integration you can install from HACS that registers the station as a proper, controllable media player (play, stop, next). If you install it, turn this new option off so the add-on stops pushing its own basic media player and lets the integration take over — your sensors keep working either way.
+
 ## 2.14.1 - 2026-06-21
 
 ### Changed

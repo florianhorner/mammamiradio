@@ -1567,6 +1567,48 @@ def _get_ha_push_lock() -> asyncio.Lock:
     return _ha_push_lock
 
 
+_GHOST_MEDIA_PLAYER_EID = "media_player.mammamiradio"
+_media_player_ghost_purged = False
+
+
+def _media_player_push_enabled() -> bool:
+    """Whether to push ``media_player.mammamiradio`` (default on).
+
+    Operators who install the HACS ``mammamiradio`` integration set the add-on's
+    ``ha_media_player_push`` option to false (-> ``MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH``).
+    The registered ``MediaPlayerEntity`` then owns the id; a 30s REST push to the
+    same id would clobber it (the HA state machine is last-writer-wins) and flap
+    the card between real and ghost state. The three sensor/binary_sensor pushes
+    have no registered backing and keep flowing regardless.
+    """
+    val = os.getenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
+async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.AsyncClient) -> None:
+    """Delete the stale ghost ``media_player.mammamiradio`` once.
+
+    REST ``/api/states`` entries never expire, so when the push is turned off the
+    last-pushed ghost would linger forever. Deleting it once frees the id so the
+    registered integration entity claims it cleanly (no ``_2`` suffix) and no dead
+    ghost is left on the prime id. Idempotent (a 404 = already gone is success);
+    best-effort — a failed delete is retried on the next push.
+    """
+    global _media_player_ghost_purged
+    if _media_player_ghost_purged:
+        return
+    _media_player_ghost_purged = True
+    try:
+        await client.delete(
+            f"{base_url}/api/states/{_GHOST_MEDIA_PLAYER_EID}",
+            headers=headers,
+            timeout=5.0,
+        )
+    except Exception as e:
+        _media_player_ghost_purged = False  # allow a retry on the next push
+        logger.warning("HA ghost media_player purge failed: %s: %r", type(e).__name__, e)
+
+
 async def push_state_to_ha(
     ha_url: str,
     ha_token: str,
@@ -1700,6 +1742,14 @@ async def push_state_to_ha(
                 },
             ),
         ]
+
+        # When the HACS integration owns media_player.mammamiradio, stop pushing
+        # it (last-writer-wins would clobber the real entity) and purge the stale
+        # ghost once. The sensors/binary_sensor keep flowing — no registered
+        # backing, no collision, and the integration doesn't provide them.
+        if not _media_player_push_enabled():
+            entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
+            await _purge_ghost_media_player(base_url, headers, client)
 
         async def _push_one(eid: str, p: dict) -> None:
             # Always log the exception TYPE + repr. A bare str() on a timeout or
