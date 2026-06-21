@@ -146,6 +146,7 @@ body[data-stopped="true"] .btn-util {
   border-radius: 20px; min-height: 36px;
 }
 .btn-chip:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); background: rgba(245,237,216,0.06); }
+.btn-chip.heading-active { color: #14110F; background: var(--sun2); border-color: var(--sun2); }
 .btn .key {
   font-size: 9px; font-weight: 400; opacity: 0.5;
   background: rgba(0,0,0,0.2); padding: 1px 5px; border-radius: 3px;
@@ -161,6 +162,15 @@ body[data-stopped="true"] .btn-util {
 
 /* ── QUICK ACTIONS ── */
 .quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.course-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; margin-top: 8px; padding: 9px 11px;
+  border: 1px solid rgba(244,208,72,0.18); border-radius: 8px;
+  background: rgba(20,17,15,0.34); color: rgba(245,237,216,0.78);
+  font-size: 12px;
+}
+.course-banner b { color: var(--sun2); font-weight: 700; }
+.course-banner[data-active="false"] b { color: rgba(245,237,216,0.58); }
 
 /* ── SCRIPT BOX ── */
 .script-box {
@@ -1586,6 +1596,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
         </div>
+        <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
+          <span class="quick-add-label">Steer:</span>
+          <button type="button" class="btn btn-chip" data-heading-kind="classic_70s" onclick="setHeading('classic_70s',this)">Anni '70</button>
+          <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
+          <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
+          <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
+        </div>
+        <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
+          <span>Course: <b>Auto rotation</b></span>
+        </div>
       </div>
       <div class="rotation-select" id="plSelectBar" style="display:none">
         <span id="plSelCount">0 selected</span>
@@ -1894,6 +1914,11 @@ const _SOURCE_DISPATCH={
   classic_70s:{url:'classic://italian/70s',toast:"70s added to rotation"},
   classic_80s:{url:'classic://italian/80s',toast:"80s added to rotation"},
   classic_90s:{url:'classic://italian/90s',toast:"90s added to rotation"},
+};
+const _HEADING_DISPATCH={
+  classic_70s:{seed:'classic://italian/70s',label:"Anni '70"},
+  classic_80s:{seed:'classic://italian/80s',label:"Anni '80"},
+  classic_90s:{seed:'classic://italian/90s',label:"Anni '90"},
 };
 const SOURCE_CHIPS={
   classic:{label:'classici',cls:'classic'},
@@ -2883,6 +2908,39 @@ async function enrichPlaylistSource(kind,el){
   await refreshFast();
   updateSourceControls(_st,_caps);
 }
+async function setHeading(kind,el){
+  flash(el);
+  const dispatch=_HEADING_DISPATCH[kind]||_HEADING_DISPATCH.classic_80s;
+  const r=await api('POST','/api/heading',{seed:dispatch.seed});
+  if(!r.ok){
+    toast(r.message||"Couldn't pull that vibe right now - give it a moment and try again.");
+    return;
+  }
+  toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
+  await refreshFast();
+}
+async function clearHeading(el){
+  flash(el);
+  const r=await api('POST','/api/heading/clear',{});
+  if(!r.ok){toast(wayOut('return to auto'));return;}
+  toast('Back to auto.');
+  await refreshFast();
+}
+function updateHeadingBanner(st){
+  const heading=st?.heading||{};
+  const banner=document.getElementById('courseBanner');
+  if(banner){
+    const active=!!heading.active;
+    banner.dataset.active=active?'true':'false';
+    banner.innerHTML=active
+      ? `<span>Course: <b>${esc(heading.label||'On course')}</b></span>`
+      : '<span>Course: <b>Auto rotation</b></span>';
+  }
+  document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
+    const d=_HEADING_DISPATCH[btn.dataset.headingKind];
+    btn.classList.toggle('heading-active',!!(d&&heading.active&&heading.seed===d.seed));
+  });
+}
 function trackThumb(t){
   if(!t?.album_art)return '<span class="pl-art-empty" aria-hidden="true"></span>';
   return `<img class="pl-art" src="${esc(t.album_art)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
@@ -3800,6 +3858,7 @@ async function refreshFast(){
     updateFaderDownState(_st);
     updateNow(_st.now_streaming);
     renderProduction(_st);
+    updateHeadingBanner(_st);
     renderActiveTab();
     updateBufferedReady(_st);
     updateRecent(_st);

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
-from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.core.models import Heading, PlaylistSource, Track
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
@@ -48,6 +48,7 @@ DEMO_TRACKS = [
 ]
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"
+PERSISTED_HEADING_FILENAME = "heading.json"
 _APPLE_MUSIC_IT_CHARTS_URL = "https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json"
 
 
@@ -590,6 +591,54 @@ def write_persisted_source(cache_dir: Path, source: PlaylistSource) -> None:
         "label": source.label,
         "track_count": source.track_count,
         "selected_at": source.selected_at,
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
+def read_persisted_heading(cache_dir: Path) -> Heading | None:
+    """Read the active heading overlay from cache, if present."""
+    path = cache_dir / PERSISTED_HEADING_FILENAME
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Persisted heading is unreadable: %s", path)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    try:
+        heading_id = str(payload.get("id", "")).strip()
+        seed = str(payload.get("seed", "")).strip()
+        label = str(payload.get("label", "")).strip()
+        if not heading_id or not seed or not label:
+            return None
+        return Heading(
+            id=heading_id,
+            seed=seed,
+            label=label,
+            set_at=float(payload.get("set_at", 0.0) or 0.0),
+            set_by=str(payload.get("set_by", "")),
+            announced=bool(payload.get("announced", False)),
+        )
+    except (TypeError, ValueError):
+        logger.warning("Persisted heading has invalid fields: %s", path)
+        return None
+
+
+def write_persisted_heading(cache_dir: Path, heading: Heading) -> None:
+    """Persist the active heading overlay to cache (atomic write)."""
+    path = cache_dir / PERSISTED_HEADING_FILENAME
+    payload = {
+        "id": heading.id,
+        "seed": heading.seed,
+        "label": heading.label,
+        "set_at": heading.set_at,
+        "set_by": heading.set_by,
+        "announced": heading.announced,
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))

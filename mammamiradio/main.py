@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
-from mammamiradio.core.models import StationState
+from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
@@ -25,8 +25,12 @@ from mammamiradio.playlist.blocklist import load_blocklist
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
+    PERSISTED_HEADING_FILENAME,
     fetch_startup_playlist,
     filter_blocklisted,
+    load_explicit_source,
+    normalized_track_key,
+    read_persisted_heading,
     read_persisted_source,
 )
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -79,6 +83,13 @@ def _read_persisted_chaos_mode(config) -> bool:
         if isinstance(options.get("chaos_mode_active"), bool):
             return bool(options["chaos_mode_active"])
     return False
+
+
+def _clear_persisted_heading(config) -> None:
+    try:
+        (config.cache_dir / PERSISTED_HEADING_FILENAME).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Failed to clear persisted heading during startup", exc_info=True)
 
 
 @asynccontextmanager
@@ -197,7 +208,6 @@ async def startup():
     except Exception as e:
         logger.error("Playlist fetch crashed: %s — using demo playlist", e)
         tracks = list(DEMO_TRACKS)
-        from mammamiradio.core.models import PlaylistSource
 
         playlist_source = PlaylistSource(
             kind="demo",
@@ -220,12 +230,56 @@ async def startup():
             "Blocklist: filtered %d banned track(s) from the startup pool",
             pre_blocklist_count - len(tracks),
         )
+
+    persisted_heading = read_persisted_heading(config.cache_dir)
+    if persisted_heading is not None:
+        try:
+            heading_tracks, _heading_source = load_explicit_source(
+                config,
+                PlaylistSource(kind="url", url=persisted_heading.seed),
+            )
+            heading_tracks = filter_blocklisted(heading_tracks, blocklist)
+        except Exception as exc:
+            logger.warning("Persisted heading restore failed; returning to auto: %s", exc)
+            _clear_persisted_heading(config)
+            persisted_heading = None
+        else:
+            if not heading_tracks:
+                logger.warning("Persisted heading restored no playable tracks; returning to auto")
+                _clear_persisted_heading(config)
+                persisted_heading = None
+            else:
+                existing = {normalized_track_key(track) for track in tracks}
+                blended_heading_tracks = []
+                for track in heading_tracks:
+                    key = normalized_track_key(track)
+                    if key in existing:
+                        continue
+                    track.heading_id = persisted_heading.id
+                    existing.add(key)
+                    blended_heading_tracks.append(track)
+                if not blended_heading_tracks:
+                    logger.warning("Persisted heading restored no new tracks; returning to auto")
+                    _clear_persisted_heading(config)
+                    persisted_heading = None
+                else:
+                    tracks = blended_heading_tracks[:5] + tracks + blended_heading_tracks[5:]
+                    logger.info(
+                        "Restored heading %s with %d fetched track(s), %d blended",
+                        persisted_heading.label,
+                        len(heading_tracks),
+                        len(blended_heading_tracks),
+                    )
     logger.info("Loaded %d tracks", len(tracks))
 
     state = StationState(
         playlist=tracks,
         playlist_source=playlist_source,
         startup_source_error=startup_source_error,
+        heading=persisted_heading,
+        heading_announced_id=persisted_heading.id
+        if persisted_heading is not None and persisted_heading.announced
+        else "",
         blocklist=blocklist,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
