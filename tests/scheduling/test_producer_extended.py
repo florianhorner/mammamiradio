@@ -224,6 +224,43 @@ async def test_ad_break_segment_queued(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
+    """The ad-break intro must not crossfade its host opener over a stale song
+    when the previous segment wasn't music (prev_seg_type is None on a cold run)."""
+    state = _make_state()
+    stale = tmp_path / "stale_song.mp3"
+    stale.write_bytes(b"music")
+    state.last_music_file = stale
+    config = _make_config(tmp_path)
+    config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
+    config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    fake_script = AdScript(
+        brand="TestBrand",
+        summary="Test ad",
+        parts=[AdPart(type="voice", text="Buy TestBrand today!")],
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{MODULE}.crossfade_voice_over_music") as mock_xfade,
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.AD
+    mock_xfade.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ad_break_skipped_without_brands(tmp_path):
     """When no brands configured, ad segment is skipped and producer continues."""
     state = _make_state()

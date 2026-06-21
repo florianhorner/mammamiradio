@@ -16,6 +16,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **A song no longer drifts back under the hosts minutes after it ended.** When the DJs talk over a track or run a quiet bed under their chatter, the station used to reach for the last song it had rendered — even when an ad break or a news flash had aired in between. The result was a track from a few minutes ago suddenly murmuring back under the announcers, which broke the spell of a live station. The hosts now only carry a song under their voice when that song is the thing that *just* played; the moment an ad, news flash, station ID, or any other break comes between, they come through clean. Nothing ever goes quiet — when there is no fresh song to lean on, a gentle house bed fills in instead.
+
 - **Leftover working audio no longer piles up on the home server.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The station now sweeps away any stale leftovers when it starts, so the add-on's storage stays tidy on its own.
 
 - **Sharing a clip can't briefly switch off its own slow-down guard.** The "share this moment" button limits how often it can be tapped. If one tap failed to find audio at the same instant another succeeded, cleaning up after the failed one could wipe the successful tap's record and let the next tap skip the wait. The cleanup now only ever clears its own tap, so the gentle pacing always holds.
