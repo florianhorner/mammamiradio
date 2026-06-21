@@ -29,13 +29,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Scope to our integration: the app ships a PWA web manifest.json elsewhere
-      # in the tree that a whole-workspace hassfest scan misreads as an integration.
+      # The app ships a PWA web manifest.json (mammamiradio/web/static/) that a
+      # whole-workspace hassfest scan discovers and misreads as an integration
+      # (KeyError: codeowners). Run hassfest against an isolated workspace that
+      # contains only our integration so the stray manifest is invisible to it.
+      - name: Isolate the integration
+        run: |
+          mkdir -p "${{ runner.temp }}/hf/custom_components"
+          cp -r custom_components/mammamiradio "${{ runner.temp }}/hf/custom_components/"
       - name: Hassfest
         run: |
-          docker run --rm -v "${{ github.workspace }}:/github/workspace" \
-            ghcr.io/home-assistant/hassfest:latest \
-            --integration-path /github/workspace/custom_components/mammamiradio
+          docker run --rm -v "${{ runner.temp }}/hf:/github/workspace" \
+            ghcr.io/home-assistant/hassfest:latest
 
   hacs:
     name: HACS validation
