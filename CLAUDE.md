@@ -188,7 +188,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 - **Logo SVG**: `mammamiradio/assets/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
 - **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `docs/design/system.md` for the full design system.
   - Background: espresso dark (`#14110F`) with subtle warm gradient at top
-  - Cards: warm brown surfaces (`#251E19`) — unified across listener and admin
+  - Cards: admin warm-brown `--surface` (`#251E19`); listener cards use brighter `--card` / `--card-strong` tokens for visibility on the dark page
   - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
   - Interactive: Lancia red (`#B82C20`) — FM dial needle
   - Text: cream (`#F5EDD8`)
@@ -265,7 +265,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
-- **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener-card visibility fixes belong inline on `.mmr-*` classes in `listener.css` (schedule / dedica / about-card / hero-stage), never on shared tokens. Regressed once in PR #298.
+- **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener cards use the dedicated, brighter `--card` / `--card-strong` / `--card-line` tokens for visibility on the dark page; never raise the admin `--surface*` tokens for listener contrast (that washed admin to taupe in PR #298).
 
 When editing any HTML file, grep for these elements before committing.
 

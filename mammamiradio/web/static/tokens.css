@@ -15,24 +15,24 @@
   /* ── Espresso foundation ── */
   --bg:              #14110F;
   --bg-elevated:     #1C1714;
-  --bg2:             #1C1714;  /* legacy alias for --bg-elevated — used by listener.html pre-migration */
-  /* Espresso warm-brown surfaces for admin (the dominant consumer). Listener
-   * cards need brighter values for visibility against the dark page bg —
-   * those are inlined directly in listener.css (.mmr-schedule / .mmr-dedica /
-   * .mmr-about-card). Do NOT raise these tokens to fix listener contrast;
-   * that washes admin out to taupe (regressed once in PR #298). */
+  /* Espresso warm-brown surfaces for admin (the dominant consumer). Do NOT
+   * raise these tokens to fix listener contrast; that washes admin out to
+   * taupe (regressed once in PR #298). Listener cards use the dedicated
+   * --card* tokens below instead. */
   --surface:         #251E19;
   --surface-hover:   #2E2520;
   --surface-strong:  #362B25;
 
+  /* ── Listener card surfaces ──
+   * Brighter than --surface* for visibility on the warm-dark listener page
+   * (~2.07:1 / ~2.96:1 vs --bg). Listener-only — admin keeps --surface*. */
+  --card:            #54453A;   /* schedule list */
+  --card-strong:     #6E5B49;   /* dedica, about-card, now-playing bar */
+  --card-line:       rgba(245, 237, 216, 0.32);  /* card borders — brighter than --line-strong */
+
   /* ── Sun — golden highlight (brand anchor) ── */
   --sun:             #F4D048;
   --sun2:            #ECCC30;
-
-  /* ── Legacy card aliases (keep for backward-compat during migration) ── */
-  --sienna:          #251E19;
-  --sienna2:         #251E19;
-  --sienna3:         #2E2520;
 
   /* ── Cream — primary text ── */
   --cream:           #F5EDD8;
@@ -62,8 +62,8 @@
 
   /* ── Structural lines ──
    * --line / --line-strong are calm by design for admin's dense control-room
-   * surface. Listener cards need a brighter border (~32%) for visibility on
-   * the warm-dark page bg — that is inlined in listener.css, not raised here. */
+   * surface. Listener cards use --card-line for a brighter border (~32%) on
+   * the warm-dark page bg without raising these admin-facing tokens. */
   --line:            rgba(245, 237, 216, 0.10);
   --line-strong:     rgba(245, 237, 216, 0.16);
 
@@ -94,11 +94,6 @@
    * never an alias of the accent golds, so banter and accent borders/buttons
    * stay decoupled. */
   --seg-banter:      #F4D048;
-
-  /* ── AI content marker — purple reserved exclusively for AI-generated
-       segments so operators can distinguish AI from human/music content
-       at a glance. Added for Regia Screen 1 ON AIR prototype. ── */
-  --ai-purple:       #A855F7;
 
   /* ── Typography ── */
   --font-display:    'Playfair Display', georgia, serif;
