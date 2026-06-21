@@ -1,0 +1,16 @@
+# Proof — fix(producer): derive speech-bed adjacency from queued timeline (#641)
+# Generated locally on branch florianhorner/fix/stale-song-bleed-residual (includes CodeRabbit review-feedback round)
+
+## ruff check (lint)
+All checks passed!
+
+## mypy (typecheck)
+Success: no issues found in 2 source files
+
+## pytest (full suite)
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3184 passed, 2 skipped, 19 deselected, 1 warning in 70.10s (0:01:10)
+
+## coverage ratchet (per-module floors)
+  mammamiradio.playlist.playlist: 95% (floor: 91%)
+  mammamiradio.scheduling.producer: 87% (floor: 83%)

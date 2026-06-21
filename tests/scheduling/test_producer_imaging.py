@@ -11,7 +11,12 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import HostPersonality, Segment, SegmentType, StationState, Track
-from mammamiradio.scheduling.producer import RenderedMusicTrack, _crosses_music_speech_boundary, run_producer
+from mammamiradio.scheduling.producer import (
+    RenderedMusicTrack,
+    _crosses_music_speech_boundary,
+    _enqueue_with_egress,
+    run_producer,
+)
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -275,6 +280,69 @@ async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
     # the legitimate "host over the outro" direction still works.
     assert imaging.pick_talk_bed.call_args.args[2] == song
     assert xfade_sources == [song]
+
+
+@pytest.mark.asyncio
+async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_path):
+    """Residual #641: a rescue song queued through the funnel becomes the bed source."""
+    prior_render = tmp_path / "prior_render_a.mp3"
+    prior_render.write_bytes(b"old music")
+    rescue_song = tmp_path / "norm_rescue_b_192k.mp3"
+    rescue_song.write_bytes(b"rescue music")
+    state = _make_state()
+    state.last_music_file = prior_render
+    config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rescue = Segment(
+        type=SegmentType.MUSIC,
+        path=rescue_song,
+        metadata={"title": "Rescue B", "queue_drain_recovery": True, "rescue": True},
+        ephemeral=False,
+    )
+    with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=rescue):
+        assert await _enqueue_with_egress(queue, state, config, rescue) is True
+
+    assert state.last_enqueued_type == SegmentType.MUSIC
+    assert state.last_music_file == rescue_song
+
+    host = config.hosts[0]
+    banter_lines = [(host, "Rientriamo sul pezzo giusto.")]
+    xfade_sources: list[Path] = []
+
+    def _xfade_writes_output(_music, _voice, output_path, *_a, **_k):
+        xfade_sources.append(_music)
+        Path(output_path).write_bytes(b"crossfaded")
+        return output_path
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        # Force the empty-fallback path (no canned clip on disk) so the generated talk-bed
+        # logic under test actually runs, per the audio-delivery coverage rule.
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=_xfade_writes_output),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = lambda _duration, output_path, _source_track=None: output_path
+        imaging.pick_stinger.side_effect = lambda _from_seg, _to_seg, output_path: output_path
+
+        await _run_until_queued(queue, state, config, target_qsize=2)
+
+    queue.get_nowait()  # the rescue MUSIC
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert imaging.pick_talk_bed.call_args.args[2] == rescue_song
+    assert xfade_sources == [rescue_song]
 
 
 @pytest.mark.asyncio

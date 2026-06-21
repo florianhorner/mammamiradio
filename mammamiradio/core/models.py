@@ -444,6 +444,10 @@ class StationState:
     resume_event: asyncio.Event = field(default_factory=asyncio.Event)
     # Last successful music norm, recycled when every chart candidate is silent.
     last_music_file: Path | None = None
+    # Type of the most recently enqueued (queue-tail) segment; drives speech-bed adjacency.
+    # None means adjacency is CLEARED — a continuity break (emergency tone, errored fill,
+    # urgent interrupt, or front-insert overflow drop), not merely "unset".
+    last_enqueued_type: SegmentType | None = None
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     # What the listener is hearing RIGHT NOW
