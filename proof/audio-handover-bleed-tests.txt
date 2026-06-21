@@ -1,0 +1,18 @@
+# Proof — fix(producer): stop stale-song bleed under speech handoffs
+# branch: florianhorner/fix/audio-handover-bleed | commit: cbab424b
+# generated: 2026-06-21T09:46:00Z
+
+## lint (ruff check)
+All checks passed!
+
+## format (ruff format --check, changed files)
+5 files already formatted
+
+## typecheck (mypy producer)
+mammamiradio/audio/tts.py:493: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 1 source file
+
+## tests (full suite)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3171 passed, 2 skipped, 19 deselected, 1 warning in 60.59s (0:01:00)
