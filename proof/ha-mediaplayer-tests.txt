@@ -1,0 +1,21 @@
+HA media_player integration + suppressible ghost push — verification proof
+commit: 43e8b8d993ee0e56b4ff89d3b643d90d4b3dfed9
+date: 2026-06-21T22:49:06Z
+
+INTEGRATION (pytest-homeassistant-custom-component, HA 2026.2.3, Python 3.13):
+  pytest tests_integration/ -> 32 passed
+  - entity registers on media_player.mammamiradio (canonical id)
+  - state mapping live/stopped/empty_queue -> playing/idle/buffering
+  - supported_features: controls advertised when reachable; NEXT only on air; no dead features
+  - controls POST /api/resume|stop|skip with X-Radio-Admin-Token; hard failure raises HomeAssistantError
+  - artwork falls back to station logo; config_flow success/cannot_connect/unknown/duplicate
+  - coordinator UpdateFailed on HTTP/non-dict/network; RadioStatus defensive parse
+
+BACKEND (app venv, Python 3.11):
+  pytest tests/home/test_ha_media_player_push_flag.py -> 15 passed
+  - flag on = media_player pushed, no delete; flag off = skipped + ghost deleted once (+ stop path)
+
+REGRESSION + STATIC:
+  full app suite -> 3202 passed (1 pre-existing env-flaky Azure test deselected)
+  ruff check -> clean; mypy mammamiradio/ tests/ -> clean (196 files)
+  scripts/validate-addon.sh -> all checks passed (stable+edge option parity)
