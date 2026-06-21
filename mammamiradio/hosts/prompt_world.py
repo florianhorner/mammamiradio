@@ -155,6 +155,15 @@ _STYLE_INSTRUCTIONS: dict[str, str] = {
     "react": _REACT_STYLE_INSTRUCTION,
 }
 
+COURSE_CHANGE_MOOD_NOTICE_TEMPLATE = """
+COURSE CHANGE:
+Someone asked for, or is clearly in the mood for, {heading_label}. Notice that request as a mood in the room.
+Do not claim current playlist state, a live turn in direction, a return to that era, or a promise to stay there.
+Do not say "heading", "seed", "button", "operator", or describe the control surface.
+Frame it as a remembered request or desire that remains true even if the playlist has already moved on.
+{language_line}
+"""
+
 CHAOS_MODE_BLOCK = """
 CHAOS MODE IS LIVE:
 - The hosts may break the shape of normal radio while still sounding like they are truly on air.

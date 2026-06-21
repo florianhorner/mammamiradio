@@ -1171,3 +1171,90 @@ def test_fastapi_title_uses_canonical_station_name():
 
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"
     assert app.title == DEFAULT_STATION_NAME
+
+
+def _heading_startup_config(tmp_path: Path) -> MagicMock:
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.homeassistant.enabled = False
+    mock_config.allow_ytdlp = False
+    mock_config.audio.bitrate = 192
+    return mock_config
+
+
+@pytest.mark.asyncio
+async def test_startup_clears_heading_when_restore_fetch_raises(tmp_path: Path):
+    """A persisted heading whose source re-fetch raises on boot is cleared, not aired:
+    startup() returns to auto so the course banner never lies (Scenario 3)."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h1", "classic://italian/80s", "Anni '80", 1.0, "operator")
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.load_explicit_source", side_effect=RuntimeError("yt-dlp down")),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_called_once()
+    assert app.state.station_state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_startup_clears_heading_when_restore_yields_no_tracks(tmp_path: Path):
+    """A persisted heading whose source re-fetch returns nothing playable is cleared."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h2", "classic://italian/90s", "Anni '90", 1.0, "operator")
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.load_explicit_source", return_value=([], None)),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_called_once()
+    assert app.state.station_state.heading is None
+
+
+def test_clear_persisted_heading_swallows_oserror():
+    """_clear_persisted_heading never raises into startup when the unlink fails."""
+    from mammamiradio.main import _clear_persisted_heading
+
+    config = MagicMock()
+    bad_path = MagicMock()
+    bad_path.unlink.side_effect = OSError("read-only filesystem")
+    config.cache_dir.__truediv__.return_value = bad_path
+
+    _clear_persisted_heading(config)  # must not raise
+
+    bad_path.unlink.assert_called_once()

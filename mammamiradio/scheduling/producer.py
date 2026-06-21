@@ -102,6 +102,25 @@ class RenderedMusicTrack:
     cache_hit: bool
 
 
+def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
+    for _ in range(MUSIC_SELECTION_RETRIES):
+        candidate = state.select_next_track(
+            repeat_cooldown=config.playlist.repeat_cooldown,
+            artist_cooldown=config.playlist.artist_cooldown,
+        )
+        if not is_rejected_cache_key(candidate.cache_key):
+            return candidate
+        logger.debug(
+            "Skipping denylisted track (already rejected this session): %s",
+            candidate.display,
+        )
+    return None
+
+
+def _arm_accepted_heading_announcement(state: StationState, track: Track) -> None:
+    state._arm_heading_announcement_if_needed(track)
+
+
 def _probe_segment_duration(path: Path) -> float:
     """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
     return probe_duration_sec(path) or 0.0
@@ -1091,11 +1110,14 @@ async def prewarm_first_segment(
                 "rationale": rationale,
                 "crate": crate,
                 "audio_source": "prewarm",
+                "heading_id": track.heading_id,
             },
             ephemeral=not rendered.cache_hit,
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
-        await _enqueue_with_egress(queue, state, config, segment)
+        if not await _enqueue_with_egress(queue, state, config, segment):
+            return False
+        _arm_accepted_heading_announcement(state, track)
         state.after_music(track)
         _remember_rendered_music(rendered, state)
         logger.info("Pre-warmed first segment: %s (ready for instant playback)", track.display)
@@ -1776,20 +1798,8 @@ async def run_producer(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = None
+                track = _select_accepted_music_track(state, config)
                 playlist_idx: int = -1
-                for _ in range(MUSIC_SELECTION_RETRIES):
-                    candidate = state.select_next_track(
-                        repeat_cooldown=config.playlist.repeat_cooldown,
-                        artist_cooldown=config.playlist.artist_cooldown,
-                    )
-                    if not is_rejected_cache_key(candidate.cache_key):
-                        track = candidate
-                        break
-                    logger.debug(
-                        "Skipping denylisted track (already rejected this session): %s",
-                        candidate.display,
-                    )
                 if track is None:
                     # All recent candidates denylisted — yield to event loop and retry.
                     await asyncio.sleep(0.1)
@@ -1965,6 +1975,7 @@ async def run_producer(
                         "audio_source": audio_source,
                         "playlist_index": playlist_idx,
                         "source_kind": getattr(track, "source", ""),
+                        "heading_id": track.heading_id,
                     },
                     ephemeral=not norm_is_cached,
                 )
@@ -1972,6 +1983,7 @@ async def run_producer(
                 _remember_rendered_music(rendered, state)
 
                 def _music_callback(_t=_bound_track) -> None:
+                    _arm_accepted_heading_announcement(state, _t)
                     state.after_music(_t)
 
                 success_callback = _music_callback
@@ -2366,7 +2378,7 @@ async def run_producer(
                     if _is_new_listener:
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
-                        _listener_request_commit.apply(state)
+                        _listener_request_commit.apply(state, config)
                     if (
                         _used_generated_banter
                         and _first_home_context_moment_pending
