@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## 2.14.1 - 2026-06-21
 
 ### Changed
 
 - **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared on row hover, so on a phone or tablet it was unreachable and on a computer it was easy to miss. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, a short note explains how it works until your first ban, and an "Undo" prompt appears right after a single ban so an accidental tap is one tap away from being lifted.
 
 ### Fixed
+
+- **The admin producer desk no longer traps the phone screen under its header.** On mobile, the live console and tab bar now scroll away with the page instead of staying pinned over the work area. Desktop keeps the pinned producer deck, but phones get the vertical room they need to use Scaletta, Rotazione, and Motore without the upper controls covering the view.
 
 - **Leftover working audio no longer piles up in `/data`.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The add-on now sweeps away any stale leftovers when it starts, so its storage stays tidy on its own.
 
