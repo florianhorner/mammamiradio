@@ -15,6 +15,10 @@ The current version source of truth is `pyproject.toml`.
 
 - **Host chatter beds over the right song now.** When the hosts talk over the tail of a track, the music underneath is the song that actually just played — even right after the station recovers from a quiet stretch by reaching for a backup track. Before, that recovery could leave the previous song bleeding under the next host break.
 
+### Security
+
+- **The handler that serves the app's icons and manifest is locked down tighter.** It now refuses any request that tries to reach outside the app's own static-asset folder — including links inside that folder that point elsewhere — so it can only ever return the bundled web files.
+
 ## [2.14.1] - 2026-06-21
 
 ### Added
