@@ -802,6 +802,7 @@ async def _enqueue_with_egress(
     *,
     front_insert: bool = False,
     shadow_entry: dict | None = None,
+    stale_check: Callable[[], bool] | None = None,
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
@@ -839,6 +840,17 @@ async def _enqueue_with_egress(
         raise ValueError("front_insert enqueue requires a shadow_entry")
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
     segment = await _apply_egress(segment, config)
+    # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
+    # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
+    # would purge the queue before this put. A caller that captured a generation up front
+    # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
+    # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
+    # keep their documented pre-egress-only behavior.
+    if stale_check is not None and stale_check():
+        logger.info("Discarding %s: source changed during egress (post-egress stale gate)", segment.type.value)
+        if segment.ephemeral:
+            segment.path.unlink(missing_ok=True)
+        return False
     if front_insert:
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
@@ -1132,7 +1144,19 @@ async def prewarm_first_segment(
             ephemeral=not rendered.cache_hit,
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
-        if not await _enqueue_with_egress(queue, state, config, segment):
+        # Pass a post-egress stale check so a source switch / chaos cutover landing during
+        # the (possibly slow) egress encode discards the prewarm at the last moment rather
+        # than putting it into the queue the switch route just purged (#665).
+        if not await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            stale_check=lambda: (
+                state.source_revision != generation_source_revision
+                or state.chaos_cutover_epoch != generation_chaos_epoch
+            ),
+        ):
             return False
         _arm_accepted_heading_announcement(state, track)
         state.after_music(track)

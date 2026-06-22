@@ -360,6 +360,36 @@ async def test_prewarm_survives_benign_playlist_edit(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_discards_on_source_switch_during_egress(tmp_path):
+    """The egress encode runs inside the funnel after the pre-egress gate, and the FM
+    broadcast chain can make it slow. A source switch landing DURING that encode is caught
+    by the funnel's opt-in post-egress stale check, so a stale prewarm is never put into
+    the queue the switch route just purged (#665). Simulates the switch from inside the
+    patched ``_apply_egress`` (the post-egress check runs right after it)."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _switch_during_egress(seg, _config):
+        state.source_revision += 1  # operator switched sources while egress was encoding
+        return seg
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_switch_during_egress),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False  # caught by the post-egress stale check, not queued
+    assert queue.empty()
+    assert len(state.played_tracks) == 0
+
+
+@pytest.mark.asyncio
 async def test_blocklist_drop_leaves_no_shadow_row(tmp_path):
     """A banned song that slips past the ingest doorways and reaches the main-loop commit
     is dropped by the funnel AND leaves no up-next shadow row or counter advance:

@@ -191,15 +191,17 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes | **skipped (rescue)** | append | **no — airs invisibly** |
 | Prewarm (startup pre-roll) | yes | **yes** — discards a stale-source render mid-warm | yes | yes | append | **no** |
 
-- The stale gate compares `generation_revision` (captured once per loop iteration)
-  against `state.playlist_revision` (and `chaos_cutover_epoch` against
-  `generation_chaos_epoch`), and it runs **pre-egress only** — no path re-checks
-  staleness after the awaited egress pass. This is current behavior, not a
-  guarantee: a slow/enabled egress colour pass widens the window. Prewarm captures
-  the generation up front and discards after its render rather than queueing a song
-  from the source the operator just switched away from — but it keys on
-  `source_revision` (bumped only by a true source switch), not `playlist_revision`,
-  so a benign in-place edit (shuffle/add/move/enrich) keeps the on-source pre-roll.
+- The **main-loop** stale gate compares `generation_revision` (captured once per loop
+  iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
+  `generation_chaos_epoch`), and it runs **pre-egress only** — those paths do not
+  re-check after the awaited egress pass, so a slow/enabled egress colour pass widens
+  their window (current behavior, not a guarantee).
+- **Prewarm** keys on `source_revision` (bumped only by a true source switch), not the
+  broad `playlist_revision`, so a benign in-place edit (shuffle/add/move/enrich) keeps
+  the on-source pre-roll. It also passes a **post-egress** stale check to the funnel
+  (`_enqueue_with_egress(..., stale_check=...)`), so a source switch landing during the
+  egress encode discards the pre-roll at the last moment instead of putting it into the
+  queue the switch route just purged.
 - Inner bridge / drain-recovery rescue and prewarm air with **no shadow row**, so
   they don't appear in the "Up Next" projection until they reach the head (outer
   error-recovery rescue, built in the loop body, *does* get a row). The streamer
