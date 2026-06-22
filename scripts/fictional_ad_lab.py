@@ -796,7 +796,8 @@ def write_artifacts(
         )
     recommendation_doc.append("")
     recommendation_doc.append(
-        "Next step: run the searches in `brand_collision_checks.md`, listen to any spec reads, then ask an agent to add only approved brands to `radio.toml`."
+        "Next step: run the searches in `brand_collision_checks.md`, listen to any spec reads, "
+        "then ask an agent to add only approved brands to `radio.toml`."
     )
     recommendation_path.write_text("\n".join(recommendation_doc).rstrip() + "\n")
 
