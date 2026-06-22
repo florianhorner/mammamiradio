@@ -16,19 +16,23 @@ what these own:
 What is pinned here:
 
 1. the stale playlist/chaos gate is a SHARED ``run_producer`` epilogue — it
-   discards generated SPEECH, not just music (``producer.py:3019``);
+   discards generated SPEECH and operator AIR-NEXT, not just music
+   (``producer.py:3019`` / ``:3025``);
 2. an operator AIR-NEXT discarded by that gate releases ``operator_force_pending``
    so the operator is not locked out (``producer.py:3022-3023``);
 3. direct-enqueue paths (prewarm + bridges, via ``_enqueue_with_egress`` with no
    front-insert) air with NO up-next shadow row, while outer error-recovery
    rescue — which flows through the epilogue — DOES get a row (``producer.py:3060``);
-4. prewarm has NO stale gate (a known latent bug, pinned as a strict xfail).
+4. prewarm discards a stale-source render instead of queueing it (#659);
+5. the blocklist funnel drop is propagated by ``_queue_segment`` — a banned song
+   dropped mid-commit leaves no shadow row or counter advance (#660).
 
 Mechanism note: the stale gate keys on a closure-local ``generation_revision``
-that a unit test cannot poke, so these drive ``run_producer`` and bump
-``state.playlist_revision`` from inside the patched ``_probe_segment_duration``
-(called at ``producer.py:3018`` right before the gate, and at ``:1117`` in
-prewarm) to model "a source switch landed during this segment's build."
+that a unit test cannot poke, so these drive ``run_producer`` (or
+``prewarm_first_segment``) and bump ``state.playlist_revision`` /
+``chaos_cutover_epoch`` from inside a patched render step — the duration probe
+for the epilogue paths, the mocked download for prewarm — to model "a source
+switch landed during this segment's build."
 """
 
 from __future__ import annotations
@@ -291,32 +295,27 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. KNOWN GAP (latent bug): prewarm has no stale gate. Pinned as strict xfail.
+# 4. Prewarm stale-source gate (#659) and blocklist drop propagation (#660).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="prewarm_first_segment captures no playlist_revision: a source switch during its "
-    "~75s render queues a stale-source song and advances played-history. Tracked in #659; "
-    "when prewarm gains a revision gate this flips to xpass and strict-xfail forces removing the marker.",
-)
+@pytest.mark.parametrize("stale_field", ["source_revision", "chaos_cutover_epoch"])
 @pytest.mark.asyncio
-async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
-    """DESIRED behavior (fails today): a ``/api/playlist/load`` or ``/api/shuffle``
-    landing mid-render causes prewarm to discard the now-stale segment instead of
-    queueing it and advancing ``played_tracks``."""
+async def test_prewarm_discards_stale_song_on_source_change(tmp_path, stale_field):
+    """A true source switch (``source_revision``, bumped only by ``switch_playlist``) or a
+    chaos cutover (``chaos_cutover_epoch``) landing mid-render makes prewarm discard the
+    now-stale segment instead of queueing it and advancing played-history (#659). The
+    normal producer loop then airs the first real segment from the new source, so a
+    discarded prewarm never starves instant audio. (A benign in-place edit that bumps only
+    ``playlist_revision`` deliberately does NOT discard — the song is still on-source.)"""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _staling_download(*_args, **_kwargs):
-        # The source switch lands DURING the render (the download step), before any
-        # plausible gate location. A fix that captures playlist_revision up front and
-        # discards right after the render/quality check (the natural gate, before the
-        # duration probe) therefore still sees the bump and flips this xfail to xpass —
-        # bumping at the probe instead would land after such a gate and mask the fix.
-        state.playlist_revision += 1
+        # The switch / cutover lands DURING the render (the download step), before the
+        # post-render stale gate — so the gate sees it and discards.
+        setattr(state, stale_field, getattr(state, stale_field) + 1)
         return tmp_path / "fake.mp3"
 
     with (
@@ -326,7 +325,82 @@ async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
     ):
-        await prewarm_first_segment(queue, state, config)
+        result = await prewarm_first_segment(queue, state, config)
 
-    assert queue.empty()  # the stale prewarm should be dropped
-    assert len(state.played_tracks) == 0  # and must not advance played-history
+    assert result is False  # the stale prewarm was discarded, not queued
+    assert queue.empty()
+    assert len(state.played_tracks) == 0  # played-history not advanced
+
+
+@pytest.mark.asyncio
+async def test_prewarm_survives_benign_playlist_edit(tmp_path):
+    """A benign in-place edit (shuffle/add/move/enrich) bumps ``playlist_revision`` but NOT
+    ``source_revision``, so the prewarm gate must KEEP its on-source render rather than
+    throw away the instant-audio pre-roll. Guards against regressing the gate back to the
+    broad ``playlist_revision`` signal."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _benign_edit_download(*_args, **_kwargs):
+        state.playlist_revision += 1  # a shuffle/add during the render — same source
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_benign_edit_download),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is True  # kept — a benign edit did not change the source
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_blocklist_drop_leaves_no_shadow_row(tmp_path):
+    """A banned song that slips past the ingest doorways and reaches the main-loop commit
+    is dropped by the funnel AND leaves no up-next shadow row or counter advance:
+    ``_queue_segment`` now propagates the funnel's drop instead of swallowing it (#660)."""
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    # Ban both pool tracks so the producer's selection necessarily lands on a banned song
+    # (models the ban-mid-render race the funnel gate backstops).
+    state.blocklist = {
+        ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
+        ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
+    }
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    download_calls = 0
+
+    async def _count_download(*_args, **_kwargs):
+        nonlocal download_calls
+        download_calls += 1
+        src = tmp_path / "src.mp3"
+        src.write_bytes(b"audio")
+        return src
+
+    def _norm(_src, dst, *_a, **_k):
+        Path(dst).write_bytes(b"audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_count_download),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_norm),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            # Two build attempts prove at least one banned song was built and dropped at
+            # the funnel (the producer keeps retrying because the whole pool is banned).
+            await _wait_for(lambda: download_calls >= 2)
+            assert queue.empty()  # banned audio never reaches the queue
+            assert state.queued_segments == []  # nor a phantom up-next shadow row
+            assert state.segments_produced == 0  # nor a counter advance
+        finally:
+            await _cancel(task)

@@ -1073,6 +1073,14 @@ async def prewarm_first_segment(
     if state.session_stopped:
         logger.info("Skipping prewarm: session is stopped")
         return False
+    # Capture the source generation up front so a true source switch / chaos cutover
+    # landing during the long render discards this now-stale prewarm instead of queueing a
+    # song from the source the operator just switched away from (#659). Gate on
+    # source_revision (bumped only by switch_playlist), NOT playlist_revision — a benign
+    # in-place edit (shuffle/add/move/enrich) leaves the prewarmed song on the current
+    # source, so it must not throw away the instant-audio pre-roll.
+    generation_source_revision = state.source_revision
+    generation_chaos_epoch = state.chaos_cutover_epoch
     try:
         track = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1094,6 +1102,15 @@ async def prewarm_first_segment(
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
+        # Stale-source gate: if the source switched or chaos cut over during the render,
+        # discard rather than queue a stale song (and don't advance played-history). The
+        # normal producer loop then airs the first real segment from the new source — a
+        # discarded prewarm never starves instant audio (#659).
+        if generation_source_revision != state.source_revision or generation_chaos_epoch != state.chaos_cutover_epoch:
+            logger.info("Discarding stale prewarm after source switch / chaos cutover")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
@@ -1310,7 +1327,12 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        await _enqueue_with_egress(queue, state, config, segment)
+        if not await _enqueue_with_egress(queue, state, config, segment):
+            # The funnel dropped the segment (blocklist gate) — propagate the drop so
+            # the epilogue skips the shadow row + counter advance (#660). Swallowing the
+            # bool let a banned song dropped mid-commit still leave a phantom up-next row
+            # and advance played-history.
+            return False
         if "error" not in segment.metadata:
             prev_seg_type = segment.type
         return True

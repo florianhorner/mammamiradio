@@ -1,0 +1,27 @@
+Queue-commit gate gaps (#659 prewarm stale, #660 blocklist drop) — verification proof
+branch: florianhorner/fix/queue-commit-gate-gaps
+base (origin/main): f93df728d6bf4ab0c5f9f290241695903bb1ad48
+date: 2026-06-22T15:36:12Z
+
+== CONTRACT TESTS (10: stale speech x2, air-next, shadow x3, prewarm source-change x2,
+   prewarm benign-edit keep, blocklist drop) ==
+..........                                                               [100%]
+10 passed in 0.55s
+
+== requires_ffmpeg (audio path unaffected) ==
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+19 passed, 3239 deselected, 1 warning in 4.08s
+
+== RELEASE INVARIANTS ==
+=======================================
+
+All invariants passed.
+
+== LINT + TYPECHECK ==
+All checks passed!
+ruff: clean
+Success: no issues found in 1 source file
+
+== prewarm gate keys on source_revision (true switch), not playlist_revision ==
+benign edits (shuffle/add/move/enrich bump playlist_revision only) keep the pre-roll;
+test_prewarm_survives_benign_playlist_edit guards this.
