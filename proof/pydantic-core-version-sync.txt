@@ -1,0 +1,25 @@
+pydantic-core version-sync — verification proof
+branch: florianhorner/fix/pydantic-core-version-sync
+base (origin/main): f93df728d6bf4ab0c5f9f290241695903bb1ad48
+date: 2026-06-22T15:13:09Z
+
+== PROBLEM ==
+requirements.txt (pip-compile, hash-locked) had pydantic-core==2.47.0 (Dependabot #657)
+but pydantic==2.13.4 pins pydantic-core==2.46.4 exactly -> lock unsatisfiable.
+
+== FIX: consistent pydantic stack ==
+984:pydantic==2.13.4 \
+993:pydantic-core==2.46.4 \
+1115:pydantic-settings==2.14.1 \
+
+== dependabot.yml valid YAML ==
+valid
+
+== submit-pypi validate step replicated (pip-compile --dry-run on requirements.txt) ==
+pip-compile resolves cleanly -> submit-pypi passes
+
+== installed env already runs the consistent pair (app is tested on 2.46.4) ==
+pydantic 2.13.4 + pydantic-core 2.46.4
+== PYDANTIC-MODEL SMOKE (tests/core, exercises pydantic config/models) ==
+........................................................................ [100%]
+288 passed in 2.95s
