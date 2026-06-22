@@ -1073,6 +1073,7 @@ async def prewarm_first_segment(
     if state.session_stopped:
         logger.info("Skipping prewarm: session is stopped")
         return False
+    generation_revision = state.playlist_revision
     try:
         track = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1094,6 +1095,11 @@ async def prewarm_first_segment(
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
+        if generation_revision != state.playlist_revision:
+            logger.info("Discarding stale prewarm segment after playlist source switch")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
@@ -1310,7 +1316,8 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        await _enqueue_with_egress(queue, state, config, segment)
+        if not await _enqueue_with_egress(queue, state, config, segment):
+            return False
         if "error" not in segment.metadata:
             prev_seg_type = segment.type
         return True
