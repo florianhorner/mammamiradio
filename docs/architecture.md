@@ -208,7 +208,11 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   mid-render ban race slipped past the ingest doorways (music only). It always drops
   the **audio** — a banned song never airs on any path — and every commit path
   propagates the funnel's drop-return so no shadow row or counter advance follows
-  a mid-commit ban.
+  a mid-commit ban. The drop also must NOT overwrite the prior valid music bed:
+  `state.last_music_file`, `producer._last_music_file`, and `_adjacent_music_source()`
+  must all continue to reference the last successfully committed music track, not the
+  dropped render (pinned by
+  `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
 
 ### Dynamic LLM routing (which model voices each task)
 
