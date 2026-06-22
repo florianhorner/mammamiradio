@@ -22,7 +22,7 @@ What is pinned here:
 3. direct-enqueue paths (prewarm + bridges, via ``_enqueue_with_egress`` with no
    front-insert) air with NO up-next shadow row, while outer error-recovery
    rescue — which flows through the epilogue — DOES get a row (``producer.py:3060``);
-4. prewarm has NO stale gate (a known latent bug, pinned as a strict xfail).
+4. prewarm discards stale segments when ``playlist_revision`` bumps mid-render (#659).
 
 Mechanism note: the stale gate keys on a closure-local ``generation_revision``
 that a unit test cannot poke, so these drive ``run_producer`` and bump
@@ -41,8 +41,10 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
     _enqueue_with_egress,
+    _normalized_cache_path,
     prewarm_first_segment,
     run_producer,
 )
@@ -291,21 +293,14 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. KNOWN GAP (latent bug): prewarm has no stale gate. Pinned as strict xfail.
+# 4. Prewarm stale gate (#659).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="prewarm_first_segment captures no playlist_revision: a source switch during its "
-    "~75s render queues a stale-source song and advances played-history. Tracked in #659; "
-    "when prewarm gains a revision gate this flips to xpass and strict-xfail forces removing the marker.",
-)
 @pytest.mark.asyncio
 async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
-    """DESIRED behavior (fails today): a ``/api/playlist/load`` or ``/api/shuffle``
-    landing mid-render causes prewarm to discard the now-stale segment instead of
-    queueing it and advancing ``played_tracks``."""
+    """A ``/api/playlist/load`` or ``/api/shuffle`` landing mid-render causes prewarm to
+    discard the now-stale segment instead of queueing it and advancing ``played_tracks``."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue = asyncio.Queue()
@@ -330,3 +325,102 @@ async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
 
     assert queue.empty()  # the stale prewarm should be dropped
     assert len(state.played_tracks) == 0  # and must not advance played-history
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_stale_song_on_chaos_epoch_bump(tmp_path):
+    """A chaos cutover landing mid-render causes prewarm to discard instead of queueing."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _staling_download(*_args, **_kwargs):
+        state.chaos_cutover_epoch += 1
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_staling_download),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert len(state.played_tracks) == 0
+
+
+@pytest.mark.asyncio
+async def test_prewarm_blocklist_drop_does_not_set_last_music_file(tmp_path):
+    """A banned song dropped at the prewarm enqueue funnel must not seed last_music_file."""
+    state = _make_state()
+    state.playlist = state.playlist[:1]  # deterministic: only the banned track is eligible
+    state.blocklist = {("artista", "canzone uno"): {"display": "Artista - Canzone Uno"}}
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    cache_path = _normalized_cache_path(state.playlist[0], config)
+
+    def _fake_copy2(_src, dst):
+        Path(dst).write_bytes(b"cached")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_fake_copy2),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert state.last_music_file is None
+    assert producer._last_music_file is None
+    assert cache_path.exists()  # cache copy may succeed; it must not become the bed source
+
+
+# ---------------------------------------------------------------------------
+# 5. Blocklist drop on main-loop commit must not append a shadow row (#660).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
+    """A banned song dropped at the enqueue funnel must not leave a ghost up-next row."""
+    state = _make_state()
+    state.blocklist = {
+        ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
+        ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
+    }
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    cache_path = _normalized_cache_path(state.playlist[0], config)
+
+    probe_calls = 0
+
+    def _probe(_path):
+        nonlocal probe_calls
+        probe_calls += 1
+        return 1.0
+
+    def _fake_copy2(_src, dst):
+        Path(dst).write_bytes(b"cached")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_fake_copy2),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_probe),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(lambda: probe_calls >= 2)
+            assert queue.empty()
+            assert state.queued_segments == []
+            assert state.last_music_file is None
+            assert producer._last_music_file is None
+            assert cache_path.exists()
+        finally:
+            await _cancel(task)
