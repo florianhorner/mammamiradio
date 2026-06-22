@@ -65,9 +65,16 @@ def _mock_download_validation():
 
 @pytest.fixture(autouse=True)
 def _clean_producer_globals():
-    """Reset module globals that leak between tests."""
+    """Reset module globals that leak between tests, on setup AND teardown.
+
+    Resetting on setup too matters under ``pytest-randomly``: a prior module may
+    leave these dirty, which would make the first test here order-dependent.
+    """
     from mammamiradio.scheduling import producer
 
+    producer._last_music_file = None
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
     yield
     producer._last_music_file = None
     producer._canned_clip_cache.clear()
@@ -75,6 +82,7 @@ def _clean_producer_globals():
 
 
 def _make_state() -> StationState:
+    """A station with a 2-track pool and one live listener (passes the production gate)."""
     return StationState(
         playlist=[
             Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1"),
@@ -85,6 +93,7 @@ def _make_state() -> StationState:
 
 
 def _make_config(tmp_path: Path):
+    """Load the real radio.toml, then scope tmp/cache to ``tmp_path`` and lookahead to 1."""
     config = load_config(TOML_PATH)
     config.pacing.lookahead_segments = 1
     config.homeassistant.enabled = False
@@ -99,6 +108,7 @@ def _write_concat(paths, out, *_args, **_kwargs):
 
 
 async def _cancel(task: asyncio.Task) -> None:
+    """Cancel a producer task and swallow the expected CancelledError."""
     task.cancel()
     try:
         await task
@@ -107,6 +117,7 @@ async def _cancel(task: asyncio.Task) -> None:
 
 
 async def _wait_for(predicate, timeout: float = 5.0) -> None:
+    """Poll ``predicate`` until it is true, or raise TimeoutError after ``timeout`` s."""
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
     while not predicate():
@@ -241,7 +252,7 @@ async def test_prewarm_airs_without_shadow_row(tmp_path):
     queue: asyncio.Queue[Segment] = asyncio.Queue()
 
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
         patch(f"{PRODUCER_MODULE}.normalize"),
         patch(f"{PRODUCER_MODULE}.shutil.copy2"),
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
@@ -299,16 +310,21 @@ async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue = asyncio.Queue()
 
-    def _staling_probe(_path):
-        state.playlist_revision += 1  # a source switch landed during the long render
-        return 1.0
+    async def _staling_download(*_args, **_kwargs):
+        # The source switch lands DURING the render (the download step), before any
+        # plausible gate location. A fix that captures playlist_revision up front and
+        # discards right after the render/quality check (the natural gate, before the
+        # duration probe) therefore still sees the bump and flips this xfail to xpass —
+        # bumping at the probe instead would land after such a gate and mask the fix.
+        state.playlist_revision += 1
+        return tmp_path / "fake.mp3"
 
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_staling_download),
         patch(f"{PRODUCER_MODULE}.normalize"),
         patch(f"{PRODUCER_MODULE}.shutil.copy2"),
         patch(f"{PRODUCER_MODULE}._set_last_music_file"),
-        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_staling_probe),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
     ):
         await prewarm_first_segment(queue, state, config)
 
