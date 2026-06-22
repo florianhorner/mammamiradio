@@ -759,9 +759,9 @@ multidict==6.7.1 \
     # via
     #   aiohttp
     #   yarl
-openai==2.41.1 \
-    --hash=sha256:23d617a0432457ad844973bee8f540be9da90894f7c5686852d2d365da058f57 \
-    --hash=sha256:a939565f350cb7443cb843b801b88c716ac8024b492fb94ca269d5f6b1bbefd6
+openai==2.43.0 \
+    --hash=sha256:65a670b54fadf2268c9e1330133373c963eb779ee969e5cbad419ec2c21dce97 \
+    --hash=sha256:e74d238200a26868977002190fb6631613480a93dfe0c9c982e77021ed60a017
     # via mammamiradio (pyproject.toml)
 pillow==12.2.0 \
     --hash=sha256:00a2865911330191c0b818c59103b58a5e697cae67042366970a6b6f1b20b7f9 \
