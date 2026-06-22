@@ -1847,6 +1847,25 @@ async def test_static_path_traversal_blocked():
 
 
 @pytest.mark.asyncio
+async def test_static_symlink_escape_blocked(tmp_path, monkeypatch):
+    """GET /static/escape-link should return 404 when the symlink points outside static dir."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "escape-link").symlink_to("../outside.txt")
+
+    monkeypatch.setattr("mammamiradio.web.streamer._STATIC_DIR", static_dir)
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/static/escape-link")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_regia_route_removed():
     """GET /regia must return 404 — the obsolete prototype was removed; admin lives at /admin."""
     app = _make_test_app()
