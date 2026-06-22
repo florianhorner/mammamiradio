@@ -10,6 +10,8 @@ updates:
         patterns: ["ruff", "mypy", "pytest*"]
       core:
         patterns: ["fastapi", "uvicorn", "anthropic", "spotipy"]
+      pydantic:
+        patterns: ["pydantic", "pydantic-core", "pydantic-settings"]
     labels:
       - dependencies
     commit-message:
