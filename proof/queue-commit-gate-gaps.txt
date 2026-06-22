@@ -1,16 +1,15 @@
-Queue-commit gate gaps (#659 prewarm stale, #660 blocklist drop) — verification proof
+Queue-commit gate refinements on top of #668 (source_revision + post-egress stale_check) — proof
 branch: florianhorner/fix/queue-commit-gate-gaps
-base (origin/main): df47f46bc4030e79986e15486d987c19055f8762
-date: 2026-06-22T16:08:31Z
+base (origin/main, incl. #668): 4f2f5caac6edf63bd3a43dd7a7daebc4172ec102
+date: 2026-06-22T18:40:45Z
 
-== CONTRACT TESTS (11: stale speech x2, air-next, shadow x3, prewarm source-change x2,
-   prewarm benign-edit keep, prewarm post-egress switch, blocklist drop) ==
-...........                                                              [100%]
-11 passed in 1.40s
+== CONTRACT TESTS (12) ==
+............                                                             [100%]
+12 passed in 0.44s
 
 == requires_ffmpeg (audio path) ==
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-19 passed, 3240 deselected, 1 warning in 7.66s
+19 passed, 3243 deselected, 1 warning in 4.31s
 
 == RELEASE INVARIANTS ==
 =======================================
@@ -22,6 +21,6 @@ All checks passed!
 ruff: clean
 Success: no issues found in 1 source file
 
-== prewarm stale gate: source_revision (true switch) + post-egress funnel stale_check ==
-benign edits (playlist_revision-only) keep the pre-roll; a switch during the egress
-encode is caught post-egress before queue.put. Full suite + coverage floors green.
+== REFINEMENTS over merged #668 ==
+1. prewarm gates on source_revision (true switch) not playlist_revision -> benign edits keep the pre-roll
+2. opt-in post-egress stale_check on _enqueue_with_egress -> a switch during the egress encode discards the pre-roll
