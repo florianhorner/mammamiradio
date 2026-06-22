@@ -1,0 +1,27 @@
+Queue-commit contract characterization tests — verification proof
+branch: florianhorner/chore/improve-codebase-architecture
+base (origin/main): 941593b1d655e1d0835ce796070636084ccc0d84
+date: 2026-06-22T14:11:17Z
+
+== NEW CONTRACT TESTS (app venv, Python 3.11) ==
+.x.....                                                                  [100%]
+6 passed, 1 xfailed in 0.43s
+
+== SCHEDULING SUITE (regression) ==
+........................................................................ [ 96%]
+.............                                                            [100%]
+372 passed, 1 xfailed in 37.03s
+
+== LINT + FORMAT + TYPECHECK (new test file) ==
+All checks passed!
+ruff check: clean
+1 file already formatted
+Success: no issues found in 1 source file
+
+== RELEASE INVARIANTS ==
+=======================================
+
+All invariants passed.
+
+== COVERAGE (full suite; tests-only change cannot lower floors) ==
+scheduling.producer: 87% (floor 83%); total 94% (floor 92%) — see 'make coverage-check'
