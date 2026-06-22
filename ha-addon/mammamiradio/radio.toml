@@ -495,6 +495,90 @@ tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
 category = "services"
 recurring = false
 
+[[ads.brands]]
+name = "Notaio Espresso"
+tagline = "Contratti caldi in trenta secondi."
+category = "services"
+recurring = true
+[ads.brands.campaign]
+premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."
+sonic_signature = "espresso_hiss+ding"
+format_pool = ["institutional_psa", "classic_pitch", "duo_scene"]
+spokesperson = "bureaucrat"
+escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una tazzina più piccola."
+
+[[ads.brands]]
+name = "Sveglia Vendicativa"
+tagline = "Non ti sveglia. Ti raggiunge."
+category = "tech"
+recurring = true
+[ads.brands.campaign]
+premise = "Una sveglia che non si limita a suonare: passa dalla suoneria alla vendetta personale, con metodi di risveglio sempre più mirati."
+sonic_signature = "alarm_beep+startup_synth"
+format_pool = ["classic_pitch", "duo_scene", "institutional_psa"]
+spokesperson = "maniac"
+escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e implacabile."
+
+[[ads.brands]]
+name = "Ascensore Sentimentale"
+tagline = "Sale, scende, ti giudica."
+category = "home"
+recurring = true
+[ads.brands.campaign]
+premise = "Un ascensore condominiale che fa il terapeuta, il cronista di gossip e il testimone municipale, con la memoria di ogni silenzio imbarazzante."
+sonic_signature = "ding+cheap_synth_romance"
+format_pool = ["duo_scene", "testimonial", "institutional_psa"]
+spokesperson = "bureaucrat"
+escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso le parti di qualcuno."
+
+[[ads.brands]]
+name = "Tappeto Testimone"
+tagline = "Ha visto tutto. Non parla gratis."
+category = "home"
+recurring = true
+[ads.brands.campaign]
+premise = "Un tappeto del soggiorno che ricorda feste, macchie e bugie, e vende il proprio silenzio con il tono di un testimone in tribunale."
+sonic_signature = "dust_hit+suspicious_jazz"
+format_pool = ["testimonial", "duo_scene", "late_night_whisper"]
+spokesperson = "witness"
+escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più per tacere."
+
+[[ads.brands]]
+name = "Gelateria Meteo"
+tagline = "Il gusto cambia con la pressione."
+category = "food"
+recurring = true
+[ads.brands.campaign]
+premise = "Una gelateria che sceglie i gusti in base alla pressione barometrica e al pettegolezzo locale, trattando la meteorologia come scienza del gelato."
+sonic_signature = "ice_clink+mandolin_sting"
+format_pool = ["live_remote", "testimonial", "classic_pitch"]
+spokesperson = "hammer"
+escalation_rule = "Ad ogni spot inventa un gusto-meteo più specifico e una previsione meno convincente."
+
+[[ads.brands]]
+name = "Frigo Onesto"
+tagline = "Conserva il cibo, distrugge le illusioni."
+category = "home"
+recurring = true
+[ads.brands.campaign]
+premise = "Il frigorifero smart del Gruppo Brivido che dice la verità brutale su avanzi, spuntini e scelte notturne. Stesso hardware del Frigo YOLO, stessa catena di montaggio: solo un firmware più severo."
+sonic_signature = "startup_synth+ice_clink"
+format_pool = ["late_night_whisper"]
+spokesperson = "seductress"
+escalation_rule = "Ad ogni spot il frigo ha un'opinione più invasiva sulla tua vita di famiglia."
+
+[[ads.brands]]
+name = "Frigo YOLO"
+tagline = "Te lo meriti. Anche il secondo."
+category = "home"
+recurring = true
+[ads.brands.campaign]
+premise = "Lo stesso frigorifero del Frigo Onesto, sempre Gruppo Brivido, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
+sonic_signature = "startup_synth+tarantella_pop"
+format_pool = ["duo_scene"]
+spokesperson = "maniac"
+escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."
+
 # Ad-voice pool. Several roles carry more than one voice (an ElevenLabs
 # character plus the original OpenAI/Azure voice); the caster picks one at
 # random per spot, so ad breaks vary instead of always using the same timbre.
