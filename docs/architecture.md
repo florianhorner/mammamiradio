@@ -185,31 +185,26 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 
 | Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
-| Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes (music only) | yes | append | **yes** |
+| Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
 | Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
-| Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes | **skipped (rescue)** | append | **yes** |
-| Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes | **skipped (rescue)** | append | **no — airs invisibly** |
-| Prewarm (startup pre-roll) | yes | **yes** — discards a stale-source render mid-warm | yes | yes | append | **no** |
+| Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
+| Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
+| Prewarm (startup pre-roll) | yes | **yes — revision + chaos epoch captured at entry, checked after render** | yes | yes | append | **no** |
 
-- The **main-loop** stale gate compares `generation_revision` (captured once per loop
-  iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
-  `generation_chaos_epoch`), and it runs **pre-egress only** — those paths do not
-  re-check after the awaited egress pass, so a slow/enabled egress colour pass widens
-  their window (current behavior, not a guarantee).
-- **Prewarm** keys on `source_revision` (bumped only by a true source switch), not the
-  broad `playlist_revision`, so a benign in-place edit (shuffle/add/move/enrich) keeps
-  the on-source pre-roll. It also passes a **post-egress** stale check to the funnel
-  (`_enqueue_with_egress(..., stale_check=...)`), so a source switch landing during the
-  egress encode discards the pre-roll at the last moment instead of putting it into the
-  queue the switch route just purged.
+- The stale gate compares `generation_revision` (captured once per loop iteration)
+  against `state.playlist_revision` (and `chaos_cutover_epoch` against
+  `generation_chaos_epoch`), and it runs **pre-egress only** — no path re-checks
+  staleness after the awaited egress pass. This is current behavior, not a
+  guarantee: a slow/enabled egress colour pass widens the window.
 - Inner bridge / drain-recovery rescue and prewarm air with **no shadow row**, so
   they don't appear in the "Up Next" projection until they reach the head (outer
   error-recovery rescue, built in the loop body, *does* get a row). The streamer
   reconciles the shadow list as it consumes the queue.
-- The blocklist gate is the funnel's last-resort drop for a banned song that a
-  mid-render ban race slipped past the ingest doorways (music only). It drops the
-  audio on every path, and the commit path propagates that drop — a banned song
-  dropped mid-commit leaves no up-next shadow row and advances no counters.
+- \* The blocklist gate is the funnel's last-resort drop for a banned song that a
+  mid-render ban race slipped past the ingest doorways (music only). It always drops
+  the **audio** — a banned song never airs on any path — and every commit path
+  propagates the funnel's drop-return so no shadow row or counter advance follows
+  a mid-commit ban.
 
 ### Dynamic LLM routing (which model voices each task)
 

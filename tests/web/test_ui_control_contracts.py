@@ -572,6 +572,53 @@ class TestQueueRemoveEndpoint:
         assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
         assert self._queue_titles(app) == ["Alpha", "Gamma"]
 
+    @staticmethod
+    def _make_ephemeral_queue_app(tmp_path: Path, labels: list[str]) -> FastAPI:
+        shadow = [{"type": "music", "label": label, "metadata": {"title": label}} for label in labels]
+        app = _make_app(shadow=shadow, queue_items=0)
+        for label in labels:
+            path = tmp_path / f"{label}.mp3"
+            path.write_bytes(b"audio")
+            seg = Segment(
+                type=SegmentType.MUSIC,
+                path=path,
+                ephemeral=True,
+                metadata={"title": label},
+            )
+            app.state.queue.put_nowait(seg)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_remove_unlinks_ephemeral_segment_file(self, tmp_path: Path):
+        """Removing an ephemeral pre-produced segment must unlink its temp MP3 (#412)."""
+        app = self._make_ephemeral_queue_app(tmp_path, ["Alpha", "Beta", "Gamma"])
+        beta_path = tmp_path / "Beta.mp3"
+        assert beta_path.exists()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"index": 1}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Beta"}
+        assert not beta_path.exists()
+        assert (tmp_path / "Alpha.mp3").exists()
+        assert (tmp_path / "Gamma.mp3").exists()
+
+    @pytest.mark.asyncio
+    async def test_repeated_removes_do_not_inflate_unfinished_task_count(self, tmp_path: Path):
+        """Each remove must balance asyncio.Queue unfinished_tasks via task_done (#412)."""
+        app = self._make_ephemeral_queue_app(tmp_path, ["One", "Two", "Three"])
+        q = app.state.queue
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            for index in (2, 1, 0):
+                resp = await c.post("/api/queue/remove", json={"index": index}, headers=AUTH)
+                assert resp.status_code == 200
+
+        assert q.empty()
+        assert q._unfinished_tasks == 0
+        assert app.state.station_state.queued_segments == []
+
 
 # ---------------------------------------------------------------------------
 # Capabilities — static key presence, not runtime health
