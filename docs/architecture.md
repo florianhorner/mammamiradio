@@ -189,7 +189,7 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
-| Prewarm (startup pre-roll) | yes | **yes — revision captured at entry, checked after render** | yes | yes | append | **no** |
+| Prewarm (startup pre-roll) | yes | **yes — revision + chaos epoch captured at entry, checked after render** | yes | yes | append | **no** |
 
 - The stale gate compares `generation_revision` (captured once per loop iteration)
   against `state.playlist_revision` (and `chaos_cutover_epoch` against

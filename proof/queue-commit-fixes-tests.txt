@@ -1,20 +1,5 @@
-Queue-commit correctness fixes (#659, #660, #412) — verification proof
-branch: florianhorner/chore/bundle-gh-issues
-base (origin/main): f93df728d6bf4ab0c5f9f290241695903bb1ad48
-date: 2026-06-22T15:48:47Z
+Queue-commit review fixes — verification proof
+date: 2026-06-22T15:54:51Z
 
-== CONTRACT + REGRESSION TESTS ==
 ..........                                                               [100%]
-10 passed in 0.73s
-
-== SCHEDULING + SHADOW QUEUE SUITE ==
-........................................................................ [ 95%]
-...................                                                      [100%]
-451 passed in 37.25s
-
-== RELEASE INVARIANTS ==
-=======================================
-  Passed: 6  Failed: 0
-=======================================
-
-All invariants passed.
+10 passed in 1.15s
