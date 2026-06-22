@@ -189,7 +189,7 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
-| Prewarm (startup pre-roll) | yes | **no — known gap** (no `playlist_revision` capture; a source switch mid-render queues a stale song) | yes | yes | append | **no** |
+| Prewarm (startup pre-roll) | yes | **yes — revision + chaos epoch captured at entry, checked after render** | yes | yes | append | **no** |
 
 - The stale gate compares `generation_revision` (captured once per loop iteration)
   against `state.playlist_revision` (and `chaos_cutover_epoch` against
@@ -202,14 +202,9 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   reconciles the shadow list as it consumes the queue.
 - \* The blocklist gate is the funnel's last-resort drop for a banned song that a
   mid-render ban race slipped past the ingest doorways (music only). It always drops
-  the **audio** — a banned song never airs on any path — but the `_queue_segment`
-  commit path (main-loop, outer rescue, inner bridge) swallows the funnel's
-  drop-return (`producer.py:1313`), so a song dropped there still leaves an up-next
-  shadow row and advances counters. Air-next and prewarm check the return and are
-  unaffected. Tracked in #660.
-- The prewarm stale gap is a tracked known bug (#659) — `test_prewarm_discards_stale_song_on_revision_bump`
-  pins the desired (discard) behavior as a strict `xfail`, so the day prewarm gains
-  a revision gate the test flips to a hard failure and the marker must be removed.
+  the **audio** — a banned song never airs on any path — and every commit path
+  propagates the funnel's drop-return so no shadow row or counter advance follows
+  a mid-commit ban.
 
 ### Dynamic LLM routing (which model voices each task)
 

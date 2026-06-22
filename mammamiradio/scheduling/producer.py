@@ -484,10 +484,11 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
     * ``last_enqueued_type`` — the type of the segment now at the queue tail, the basis
       for speech-bed eligibility (``_adjacent_music_source``).
     * ``last_music_file`` — the CLEAN song used as a crossfade tail / talk bed — but ONLY
-      for rescue & recycled fills. Normally-rendered music already had ``last_music_file``
-      recorded by ``_remember_rendered_music`` BEFORE the transition-sting prepend and the
-      egress colour pass, so the funnel must not overwrite it here with the sting-merged /
+      for rescue & recycled fills. Normally-rendered music records ``last_music_file`` in
+      the music ``success_callback`` (after a successful queue commit), via
+      ``_remember_rendered_music``, using the clean render path — never the sting-merged /
       FM-baked aired path (either would bleed a processed render under a later announcer).
+      The funnel must not overwrite that value at enqueue time with ``segment.path``.
       Rescue & recycled fills never run ``_remember_rendered_music`` and are queued before
       the sting stage, so the funnel is the only place that records their clean bed source —
       ``source_path`` is their pre-egress (clean) path. This is what closes #641.
@@ -1073,6 +1074,8 @@ async def prewarm_first_segment(
     if state.session_stopped:
         logger.info("Skipping prewarm: session is stopped")
         return False
+    generation_revision = state.playlist_revision
+    generation_chaos_epoch = state.chaos_cutover_epoch
     try:
         track = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1094,6 +1097,16 @@ async def prewarm_first_segment(
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
+        if generation_revision != state.playlist_revision:
+            logger.info("Discarding stale prewarm segment after playlist source switch")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
+        if generation_chaos_epoch != state.chaos_cutover_epoch:
+            logger.info("Discarding stale prewarm segment after chaos cutover")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
@@ -1310,7 +1323,8 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        await _enqueue_with_egress(queue, state, config, segment)
+        if not await _enqueue_with_egress(queue, state, config, segment):
+            return False
         if "error" not in segment.metadata:
             prev_seg_type = segment.type
         return True
@@ -1980,11 +1994,12 @@ async def run_producer(
                     ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
-                _remember_rendered_music(rendered, state)
+                _bound_rendered = rendered
 
-                def _music_callback(_t=_bound_track) -> None:
+                def _music_callback(_t=_bound_track, _r=_bound_rendered) -> None:
                     _arm_accepted_heading_announcement(state, _t)
                     state.after_music(_t)
+                    _remember_rendered_music(_r, state)
 
                 success_callback = _music_callback
 

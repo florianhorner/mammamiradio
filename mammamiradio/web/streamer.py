@@ -2256,14 +2256,18 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     # Remove the matching Segment from the real queue. Match by queue_id when
     # available (position-independent); fall back to index alignment otherwise.
     real_removed = False
+    removed_segment = None
     if target_id:
         for i, seg in enumerate(items):
             if getattr(seg, "metadata", {}).get("queue_id") == target_id:
-                items.pop(i)
+                removed_segment = items.pop(i)
                 real_removed = True
                 break
     if not real_removed and index < len(items):
-        items.pop(index)
+        removed_segment = items.pop(index)
+
+    if removed_segment is not None and getattr(removed_segment, "ephemeral", False):
+        removed_segment.path.unlink(missing_ok=True)
 
     for item in items:
         q.put_nowait(item)
