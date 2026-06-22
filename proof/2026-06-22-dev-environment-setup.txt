@@ -1,0 +1,42 @@
+Dev environment setup — verification proof
+date: 2026-06-22T21:18Z
+branch: cursor/setup-dev-environment-60f0 (merged up to date with main)
+
+This PR adds a root AGENTS.md (Cursor Cloud environment notes) and resolves a
+dependabot.yml merge against main's pydantic-core ignore rule. No application
+code changed; the diff is docs + CI config only. Evidence below is from running
+the full dev setup end-to-end on the merged state.
+
+$ .venv/bin/python -m pip check
+No broken requirements found.
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+218 files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 200 source files
+
+$ pytest -p no:randomly -q
+3244 passed, 2 skipped, 19 deselected, 1 warning in 69.73s
+
+$ pytest -p no:randomly -q -m requires_ffmpeg
+19 passed, 3229 deselected
+
+runtime — ./start.sh (uvicorn, bare fallback; caddy absent by design):
+  Station: Mamma Mi Radio (it)
+  Using live Italian charts (75 tracks total)
+  deps: ffmpeg=found  ytdlp=found (allowed=yes)
+  Application startup complete.
+  GET /healthz -> {"status":"ok",...}
+  GET / -> 200 (listener)   GET /admin -> 200   GET /listen -> 200
+  GET /stream -> 413696 bytes captured: MPEG ADTS, layer III, v1, 192 kbps, 48 kHz
+  POST /api/trigger {"type":"banter"} -> Producing BANTER -> Edge TTS
+    synthesized it-IT-IsabellaNeural (AI host path works)
+
+note: yt-dlp YouTube track downloads are bot-blocked from the datacenter IP
+("Sign in to confirm you're not a bot"), so chart tracks fall back to silence
+placeholders. The stream stays alive and serves valid MP3 throughout — graceful
+degradation, not a setup failure. See AGENTS.md for the full caveat.
