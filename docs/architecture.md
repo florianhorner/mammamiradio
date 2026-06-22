@@ -174,6 +174,42 @@ footprint (a `norm_` original plus its `fm_` bake). One-shot ephemeral renders (
 voice/banter) have no stable identity to key on, so they are still coloured to a
 per-play tmp.
 
+### Queue commit (the per-path gate matrix)
+
+Every produced segment reaches the playback queue through a small set of commit
+paths, and they DELIBERATELY differ in which gates they run — the differences are
+the contract, not an oversight. Most segments commit in the `run_producer`
+main-loop epilogue (the `if segment:` block); bridges and the startup prewarm
+enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
+`tests/scheduling/test_queue_commit_contract.py`.
+
+| Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
+|---|---|---|---|---|---|---|
+| Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
+| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
+| Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
+| Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
+| Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **no** |
+
+- The **main-loop** stale gate compares `generation_revision` (captured once per loop
+  iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
+  `generation_chaos_epoch`), and runs **pre-egress only** — those paths do not re-check
+  after the awaited egress pass, so a slow/enabled egress colour pass widens their window.
+- **Prewarm** keys on `source_revision` (bumped only by a true source switch via
+  `switch_playlist`), not the broad `playlist_revision`, so a benign in-place edit
+  (shuffle/add/move/enrich) keeps the on-source pre-roll. It also passes a **post-egress**
+  `stale_check` to the funnel, so a switch landing during the egress encode discards the
+  pre-roll at the last moment instead of putting it into the just-purged queue.
+- Inner bridge / drain-recovery rescue and prewarm air with **no shadow row**, so
+  they don't appear in the "Up Next" projection until they reach the head (outer
+  error-recovery rescue, built in the loop body, *does* get a row). The streamer
+  reconciles the shadow list as it consumes the queue.
+- \* The blocklist gate is the funnel's last-resort drop for a banned song that a
+  mid-render ban race slipped past the ingest doorways (music only). It always drops
+  the **audio** — a banned song never airs on any path — and every commit path
+  propagates the funnel's drop-return so no shadow row or counter advance follows
+  a mid-commit ban.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by

@@ -1,0 +1,26 @@
+Queue-commit gate refinements (source_revision + post-egress stale_check) on top of #668 — proof
+branch: florianhorner/fix/queue-commit-gate-gaps
+base (origin/main, incl. #668 + #672): af9cf5b8745d709c161d98d259c5630c88b88246
+date: 2026-06-22T20:17:33Z
+
+== CONTRACT TESTS (14: + prewarm post-restart & empty-render scenarios for the audio-delivery rule) ==
+..............                                                           [100%]
+14 passed in 0.56s
+
+== requires_ffmpeg (audio path) ==
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+19 passed, 3246 deselected, 1 warning in 4.25s
+
+== RELEASE INVARIANTS ==
+=======================================
+
+All invariants passed.
+
+== LINT + TYPECHECK ==
+All checks passed!
+ruff: clean
+Success: no issues found in 1 source file
+
+== 3-scenario coverage for prewarm (audio-delivery rule) ==
+Normal: benign-edit keep + source-change discard. Empty-fallback: render-None -> False, no queue.
+Post-restart: session_stopped -> False, no queue.

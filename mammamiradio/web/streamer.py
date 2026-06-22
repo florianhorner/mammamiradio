@@ -1836,11 +1836,32 @@ async def service_worker():
     )
 
 
+def _resolve_static_file(filename: str) -> Path | None:
+    """Resolve a user-requested static asset path safely.
+
+    Rejects absolute paths and ``..`` components before filesystem lookup, then
+    confirms the resolved target stays under the static directory and is a file.
+    """
+    if filename.startswith("/") or ".." in Path(filename).parts:
+        return None
+
+    static_root = _STATIC_DIR.resolve()
+    try:
+        candidate = (static_root / filename).resolve()
+    except OSError:
+        return None
+
+    if not candidate.is_relative_to(static_root) or not candidate.is_file():
+        return None
+
+    return candidate
+
+
 @router.get("/static/{filename:path}")
 async def static_files(filename: str):
     """Serve PWA static assets (manifest, icons)."""
-    filepath = (_STATIC_DIR / filename).resolve()
-    if not filepath.is_relative_to(_STATIC_DIR) or not filepath.is_file():
+    filepath = _resolve_static_file(filename)
+    if filepath is None:
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(filepath)
 
@@ -2256,14 +2277,18 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     # Remove the matching Segment from the real queue. Match by queue_id when
     # available (position-independent); fall back to index alignment otherwise.
     real_removed = False
+    removed_segment = None
     if target_id:
         for i, seg in enumerate(items):
             if getattr(seg, "metadata", {}).get("queue_id") == target_id:
-                items.pop(i)
+                removed_segment = items.pop(i)
                 real_removed = True
                 break
     if not real_removed and index < len(items):
-        items.pop(index)
+        removed_segment = items.pop(index)
+
+    if removed_segment is not None and getattr(removed_segment, "ephemeral", False):
+        removed_segment.path.unlink(missing_ok=True)
 
     for item in items:
         q.put_nowait(item)

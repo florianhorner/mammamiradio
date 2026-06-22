@@ -484,10 +484,11 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
     * ``last_enqueued_type`` — the type of the segment now at the queue tail, the basis
       for speech-bed eligibility (``_adjacent_music_source``).
     * ``last_music_file`` — the CLEAN song used as a crossfade tail / talk bed — but ONLY
-      for rescue & recycled fills. Normally-rendered music already had ``last_music_file``
-      recorded by ``_remember_rendered_music`` BEFORE the transition-sting prepend and the
-      egress colour pass, so the funnel must not overwrite it here with the sting-merged /
+      for rescue & recycled fills. Normally-rendered music records ``last_music_file`` in
+      the music ``success_callback`` (after a successful queue commit), via
+      ``_remember_rendered_music``, using the clean render path — never the sting-merged /
       FM-baked aired path (either would bleed a processed render under a later announcer).
+      The funnel must not overwrite that value at enqueue time with ``segment.path``.
       Rescue & recycled fills never run ``_remember_rendered_music`` and are queued before
       the sting stage, so the funnel is the only place that records their clean bed source —
       ``source_path`` is their pre-egress (clean) path. This is what closes #641.
@@ -802,6 +803,7 @@ async def _enqueue_with_egress(
     *,
     front_insert: bool = False,
     shadow_entry: dict | None = None,
+    stale_check: Callable[[], bool] | None = None,
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
@@ -839,6 +841,17 @@ async def _enqueue_with_egress(
         raise ValueError("front_insert enqueue requires a shadow_entry")
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
     segment = await _apply_egress(segment, config)
+    # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
+    # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
+    # would purge the queue before this put. A caller that captured a generation up front
+    # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
+    # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
+    # keep their documented pre-egress-only behavior.
+    if stale_check is not None and stale_check():
+        logger.info("Discarding %s: source changed during egress (post-egress stale gate)", segment.type.value)
+        if segment.ephemeral:
+            segment.path.unlink(missing_ok=True)
+        return False
     if front_insert:
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
@@ -1073,6 +1086,12 @@ async def prewarm_first_segment(
     if state.session_stopped:
         logger.info("Skipping prewarm: session is stopped")
         return False
+    # Gate on source_revision (a true source switch via switch_playlist), NOT the broad
+    # playlist_revision: a benign in-place edit (shuffle/add/move/enrich) bumps
+    # playlist_revision but leaves the prewarmed song on the current source, so it must
+    # keep the instant-audio pre-roll rather than throw it away.
+    generation_source_revision = state.source_revision
+    generation_chaos_epoch = state.chaos_cutover_epoch
     try:
         track = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1094,6 +1113,16 @@ async def prewarm_first_segment(
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
+        if generation_source_revision != state.source_revision:
+            logger.info("Discarding stale prewarm segment after source switch")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
+        if generation_chaos_epoch != state.chaos_cutover_epoch:
+            logger.info("Discarding stale prewarm segment after chaos cutover")
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
@@ -1115,7 +1144,20 @@ async def prewarm_first_segment(
             ephemeral=not rendered.cache_hit,
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
-        if not await _enqueue_with_egress(queue, state, config, segment):
+        # Post-egress stale check: the egress encode (FM broadcast chain) runs inside the
+        # funnel before queue.put, and a source switch / chaos cutover landing during it
+        # would purge the queue first — then this put would land a stale pre-roll. Re-check
+        # at the last moment so a switch during egress discards the pre-roll instead (#665).
+        if not await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            stale_check=lambda: (
+                state.source_revision != generation_source_revision
+                or state.chaos_cutover_epoch != generation_chaos_epoch
+            ),
+        ):
             return False
         _arm_accepted_heading_announcement(state, track)
         state.after_music(track)
@@ -1310,7 +1352,8 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        await _enqueue_with_egress(queue, state, config, segment)
+        if not await _enqueue_with_egress(queue, state, config, segment):
+            return False
         if "error" not in segment.metadata:
             prev_seg_type = segment.type
         return True
@@ -1980,11 +2023,12 @@ async def run_producer(
                     ephemeral=not norm_is_cached,
                 )
                 _bound_track = track
-                _remember_rendered_music(rendered, state)
+                _bound_rendered = rendered
 
-                def _music_callback(_t=_bound_track) -> None:
+                def _music_callback(_t=_bound_track, _r=_bound_rendered) -> None:
                     _arm_accepted_heading_announcement(state, _t)
                     state.after_music(_t)
+                    _remember_rendered_music(_r, state)
 
                 success_callback = _music_callback
 
