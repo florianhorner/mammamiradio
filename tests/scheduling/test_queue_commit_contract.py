@@ -410,6 +410,35 @@ async def test_prewarm_discards_stale_song_on_chaos_epoch_bump(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_skipped_when_session_stopped(tmp_path):
+    """Post-restart scenario (audio-delivery rule): a session left stopped — a watchdog/HA
+    restart that persisted ``session_stopped`` — short-circuits prewarm at entry, BEFORE the
+    source gate, so it queues nothing and the resume path stays in control."""
+    state = _make_state()
+    state.session_stopped = True
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_returns_false_when_render_unavailable(tmp_path):
+    """Empty-fallback scenario (audio-delivery rule): prewarm has no canned/norm-cache
+    fallback of its own — when nothing can be rendered (``_render_music_track`` returns
+    None), it returns False and queues nothing rather than airing silence. The normal
+    producer loop then supplies first audio, so instant audio is preserved."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=None):
+        result = await prewarm_first_segment(queue, state, config)
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_prewarm_blocklist_drop_does_not_set_last_music_file(tmp_path):
     """A banned song dropped at the prewarm enqueue funnel must not seed last_music_file."""
     state = _make_state()
