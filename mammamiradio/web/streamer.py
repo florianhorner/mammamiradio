@@ -115,17 +115,16 @@ router = APIRouter()
 # _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
 # CSRF, trusted networks) now lives in web/auth.py — both imported above.
 #
-# Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
+# Jinja2 templates for brand-engine listener page (PR-C). Admin still uses
 # string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
-# Admin/live pages still loaded as raw strings + post-render prefix injection.
+# Admin page still loaded as a raw string + post-render prefix injection.
 # Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
 _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text())  # kept for tests + fallback
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
-_LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
 
 
 def _as_int_index(value, default: int = -1) -> int:
@@ -1763,16 +1762,6 @@ async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
     return _render_admin_response(request, prefix)
-
-
-@router.get("/live", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
-async def live_panel(request: Request):
-    """Serve the mobile live control room — phone-optimised operator surface."""
-    prefix = request.headers.get("X-Ingress-Path", "")
-    html = _get_injected_html("live", _LIVE_HTML, prefix)
-    html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @router.get("/listen", response_class=HTMLResponse)

@@ -35,7 +35,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Admin auth (credentials, CSRF, trusted networks)   | `mammamiradio/web/auth.py`                   |
 | Listener-request endpoints (dedica, song wish)     | `mammamiradio/web/listener_requests.py`      |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
-| Listener / admin / live HTML                       | `mammamiradio/web/templates/`                |
+| Listener / admin / clip HTML                       | `mammamiradio/web/templates/`                |
 | CSS / JS / icons / service worker                  | `mammamiradio/web/static/`                   |
 | `radio.toml` parsing + `.env`                      | `mammamiradio/core/config.py`                |
 | Shared data models (Track, Segment, etc.)          | `mammamiradio/core/models.py`                |
