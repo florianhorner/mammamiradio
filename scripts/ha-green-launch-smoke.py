@@ -23,6 +23,7 @@ Env overrides:
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import socket
@@ -39,9 +40,12 @@ _PERF_SMOKE = _REPO_ROOT / "scripts" / "ha-green-perf-smoke.py"
 def _env_float(name: str, default: str) -> float:
     raw = os.environ.get(name, default)
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be a float in seconds, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"{name} must be a finite positive float in seconds, got {raw!r}")
+    return value
 
 
 FIRST_BYTE_S = _env_float("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "2.0")

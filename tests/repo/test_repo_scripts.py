@@ -231,19 +231,26 @@ def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
 
 
 @pytest.mark.parametrize(
-    "env_name",
-    ["MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "MAMMAMIRADIO_LAUNCH_STARTUP_S"],
+    ("env_name", "env_value", "message"),
+    [
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+    ],
 )
-def test_ha_green_launch_smoke_validates_timeout_env_vars(monkeypatch: pytest.MonkeyPatch, env_name: str) -> None:
-    monkeypatch.setenv(env_name, "soon")
+def test_ha_green_launch_smoke_validates_timeout_env_vars(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, env_value: str, message: str
+) -> None:
+    monkeypatch.setenv(env_name, env_value)
 
-    with pytest.raises(RuntimeError, match=f"{env_name} must be a float in seconds"):
+    with pytest.raises(RuntimeError, match=f"{env_name} {message}"):
         _load_ha_green_launch_smoke()
 
 
-def test_ha_green_launch_smoke_reports_missing_ffmpeg(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     smoke = _load_ha_green_launch_smoke()
 
     def missing_ffmpeg(*_args, **_kwargs) -> None:
