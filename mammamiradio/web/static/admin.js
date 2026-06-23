@@ -45,6 +45,12 @@
     return _stackEl;
   }
 
+  function _syncToastBodyClass() {
+    document.body.classList.toggle('undo-toast-active', _live.length > 0);
+    const space = Math.min(220, 72 + _live.length * 56);
+    document.documentElement.style.setProperty('--undo-toast-space', space + 'px');
+  }
+
   function _dismiss(entry, { runCommit }) {
     if (entry.committed) return;
     entry.committed = true;
@@ -53,8 +59,12 @@
     if (idx !== -1) _live.splice(idx, 1);
     entry.el.classList.remove('show');
     // Remove after the CSS fade; reduced-motion shortens the transition.
-    setTimeout(() => entry.el.remove(), 220);
+    setTimeout(() => {
+      entry.el.remove();
+      _syncToastBodyClass();
+    }, 220);
     if (runCommit && typeof entry.onCommit === 'function') entry.onCommit();
+    _syncToastBodyClass();
   }
 
   /**
@@ -107,6 +117,7 @@
     });
 
     _live.push(entry);
+    _syncToastBodyClass();
     // rAF so the CSS transition runs from the hidden state.
     requestAnimationFrame(() => el.classList.add('show'));
     entry.timer = setTimeout(() => _dismiss(entry, { runCommit: true }), ttl);
@@ -120,15 +131,19 @@
    */
   function errorToast(message) {
     const stack = _ensureStack();
+    while (_live.length >= MAX_TOASTS) {
+      _dismiss(_live[0], { runCommit: true });
+    }
+
     const el = document.createElement('div');
     el.className = 'undo-toast undo-toast-error';
     el.textContent = message;
     stack.appendChild(el);
+    const entry = { el, timer: null, committed: false, onCommit: null };
+    _live.push(entry);
+    _syncToastBodyClass();
     requestAnimationFrame(() => el.classList.add('show'));
-    setTimeout(() => {
-      el.classList.remove('show');
-      setTimeout(() => el.remove(), 220);
-    }, DEFAULT_TTL);
+    entry.timer = setTimeout(() => _dismiss(entry, { runCommit: false }), DEFAULT_TTL);
   }
 
   // ── Archivio filter persistence (sessionStorage) ─────────────────

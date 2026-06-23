@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="{{ page_lang }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -36,9 +36,11 @@
 <script src="{{ ingress_prefix }}/static/waveform.js?v={{ asset_version }}" defer></script>
 <script src="{{ ingress_prefix }}/static/listener.js?v={{ asset_version }}" defer></script>
 </head>
-<body data-state="warming">
+<body data-state="warming"{% if session_stopped %} data-stopped="true"{% endif %}>
 
 <!-- Protected: tricolor-band — kept in DOM for invariant (see CLAUDE.md) -->
+<a class="skip-link" href="#content">{{ copy.get('skip_to_content', 'Skip to content') }}</a>
+
 <div class="tricolor-band" aria-hidden="true"><div></div><div></div><div></div></div>
 
 <!-- NAV -->
@@ -58,18 +60,20 @@
       <a href="#dediche">Dediche</a>
       <a href="#about">About</a>
     </nav>
-    <button class="mmr-live-pill" id="nav-cta" type="button" aria-label="{{ copy.get('listen_now_aria', 'Listen now') }}">
-      <span class="dot"></span> In Onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
+    <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-label="{{ copy.get('listen_now_aria', 'Listen now') }}">
+      <span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}In Onda{% endif %}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>
   </div>
 </header>
 
+<main id="content" tabindex="-1">
+
 <!-- HERO STAGE -->
 <section class="mmr-stage" id="stasera">
   <div class="mmr-stage-header">
-    <span class="mmr-live"><span class="dot"></span> In Onda</span>
+    <span class="mmr-live{% if session_stopped %} is-stopped{% endif %}"><span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}In Onda{% endif %}</span>
     <div class="mmr-np-meta">
-      <div class="eyebrow">Ora in onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
+      <div class="eyebrow" id="np-eyebrow">Ora in onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
       <div class="title" id="np-track">{{ copy.get('tuning_in', 'Tuning in…') }}</div>
       <div class="artist" id="np-artist"></div>
     </div>
@@ -80,7 +84,7 @@
         <span id="np-time-tot">—</span>
       </div>
     </div>
-    <div class="mmr-wave" id="mmr-wave-bars">
+    <div class="mmr-wave" id="mmr-wave-bars" aria-hidden="true">
       <span></span><span></span><span></span><span></span><span></span>
       <span></span><span></span><span></span><span></span><span></span>
       <span></span><span></span><span></span><span></span><span></span>
@@ -235,6 +239,8 @@
     <div class="mmr-about-card"><div class="eyebrow">Codice</div><p>Open source su GitHub. <span data-cap="pwa" hidden>PWA installabile.</span> <span data-cap="ha" hidden>Home Assistant integrato.</span> <span data-cap="llm" hidden>AI scriptwriter.</span> Stream MP3 · 320 kbps. Made with espresso.</p></div>
   </div>
 </section>
+
+</main>
 
 <!-- TICKER -->
 <div class="mmr-ticker" aria-hidden="true">

@@ -86,8 +86,58 @@
       case 'news_flash': return _t('seg_news', 'News');
       case 'jingle': return _t('seg_jingle', 'Jingle');
       case 'welcome': return _t('seg_welcome', 'Welcome');
+      case 'idle': return _t('seg_idle', 'Idle');
       default: return (type || _t('seg_default', 'On Air')).toUpperCase();
     }
+  }
+
+  function segmentPillClass(type) {
+    switch ((type || '').toLowerCase()) {
+      case 'music': return 'pill-music';
+      case 'banter': return 'pill-banter';
+      case 'ad': return 'pill-ad';
+      case 'news':
+      case 'news_flash': return 'pill-news';
+      case 'idle': return 'pill-idle';
+      default: return 'pill-idle';
+    }
+  }
+
+  function _liveChipSuffix(el) {
+    if (!el || el.dataset.freqSuffix !== undefined) return el ? el.dataset.freqSuffix : '';
+    const raw = (el.textContent || '').trim();
+    const idx = raw.indexOf('·');
+    const suffix = idx >= 0 ? ' · ' + raw.slice(idx + 1).trim() : '';
+    el.dataset.freqSuffix = suffix;
+    return suffix;
+  }
+
+  function _setLiveChip(el, stopped) {
+    if (!el) return;
+    const suffix = _liveChipSuffix(el);
+    const label = stopped ? _t('np_paused', 'Fermo') : _t('np_live', 'In Onda');
+    el.classList.toggle('is-stopped', stopped);
+    el.replaceChildren();
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    el.appendChild(dot);
+    el.appendChild(document.createTextNode(' ' + label + suffix));
+    const stoppedLabel =
+      el.id === 'nav-cta'
+        ? _t('listen_resume_aria', 'Resume station')
+        : _t('listen_paused_aria', 'Station paused');
+    el.setAttribute(
+      'aria-label',
+      stopped ? stoppedLabel : _t('listen_now_aria', 'Listen now'),
+    );
+  }
+
+  function _setNowPlayingEyebrow(stopped) {
+    const el = $('np-eyebrow');
+    if (!el) return;
+    const suffix = _liveChipSuffix(el);
+    const label = stopped ? _t('np_paused', 'Fermo') : _t('np_on_air', 'Ora in onda');
+    el.textContent = label + suffix;
   }
 
   /* ── Playback ── */
@@ -183,8 +233,12 @@
     const label = np.label || '';
     const trackEl = $('np-track');
     const artistEl = $('np-artist');
+    const stopped = np.type === 'stopped' || (state.status && state.status.session_stopped === true);
 
-    if (np.type === 'music') {
+    if (stopped) {
+      trackEl.textContent = _t('np_paused', 'Fermo');
+      artistEl.textContent = '';
+    } else if (np.type === 'music') {
       const parts = label.split(' \u2014 ');
       if (parts.length === 2) {
         trackEl.textContent = parts[1];
@@ -203,13 +257,15 @@
       trackEl.textContent = _t('np_welcome', 'Welcome aboard');
       artistEl.textContent = 'Mamma Mi Radio';
     } else if (np.type === 'stopped') {
-      // Idle state — never leak internal stopped-segment labels to the listener.
-      trackEl.textContent = _t('np_paused', 'Paused');
+      trackEl.textContent = _t('np_paused', 'Fermo');
       artistEl.textContent = '';
     } else {
       trackEl.textContent = label || _t('np_on_air', 'On Air');
       artistEl.textContent = segmentKindLabel(np.type);
     }
+    const fullText = [trackEl.textContent, artistEl.textContent].filter(Boolean).join(' — ');
+    trackEl.title = fullText;
+    trackEl.setAttribute('aria-label', fullText);
     updateMediaSession(np);
   }
 
@@ -250,19 +306,28 @@
   function renderPalinsesto(status) {
     const container = $('slots');
     if (!container) return;
+    const stopped = status && status.session_stopped === true;
     const upcoming = (status && status.upcoming) || [];
-    const now = status && status.now_streaming;
+    const now = !stopped && status && status.now_streaming;
     const cards = [];
 
     if (now) {
       const p = splitMusicLabel(now);
-      cards.push({ when: _t('np_now', 'On now'), live: true, type: now.type, label: p.title, host: p.host });
+      cards.push({ when: _t('np_now', 'On now'), current: true, type: now.type, label: p.title, host: p.host });
+    } else if (stopped) {
+      cards.push({
+        when: _t('np_stopped', 'Stopped'),
+        current: true,
+        type: 'idle',
+        label: _t('np_paused', 'Fermo'),
+        host: '',
+      });
     }
     upcoming.slice(0, cards.length ? 3 : 4).forEach((seg, i) => {
       const p = splitMusicLabel(seg);
       cards.push({
         when: _t('np_next', 'Next') + ' \u00b7 ' + (i + 1),
-        live: false,
+        current: false,
         type: seg.type,
         label: p.title || segmentKindLabel(seg.type),
         host: p.host,
@@ -270,14 +335,21 @@
     });
 
     while (cards.length < 4) {
-      cards.push({ when: '—', live: false, type: 'idle', label: _t('np_building', 'Building schedule…'), host: '' });
+      cards.push({
+        when: '—',
+        current: false,
+        type: 'idle',
+        label: _t('np_building', 'Building schedule…'),
+        host: '',
+      });
     }
 
     container.innerHTML = cards.slice(0, 4).map((c, i) => {
-      const liClass = i === 0 && c.live ? 'now' : i > 0 ? 'next' : '';
-      const pillClass = i === 0 && c.live ? 'pill-on' : i > 0 ? 'pill-next' : '';
+      const liClass = c.current ? 'now' : i > 0 || (i === 0 && !c.current) ? 'next' : '';
+      const timingClass = c.current ? 'pill-current' : 'pill-next';
+      const typeClass = segmentPillClass(c.type);
       const subHtml = c.host ? `<div class="sub">${c.host}</div>` : '';
-      const pillHtml = pillClass ? `<span class="pill ${pillClass}">${escHtml(segmentKindLabel(c.type))}</span>` : '';
+      const pillHtml = `<span class="pill ${timingClass} ${typeClass}">${escHtml(segmentKindLabel(c.type))}</span>`;
       return `<li class="${liClass}"><span class="t">${escHtml(c.when)}</span><div class="m"><div class="title">${escHtml(c.label || _t('np_on_air', 'On Air'))}</div>${subHtml}</div>${pillHtml}</li>`;
     }).join('');
   }
@@ -372,11 +444,22 @@
   function renderStoppedState(status) {
     const stopped = status && status.session_stopped === true;
     document.body.setAttribute('data-stopped', stopped ? 'true' : 'false');
+    _setLiveChip($('nav-cta'), stopped);
+    _setLiveChip(document.querySelector('.mmr-stage-header .mmr-live'), stopped);
+    _setNowPlayingEyebrow(stopped);
+    const wave = $('mmr-wave-bars');
+    if (wave) wave.classList.toggle('paused', stopped);
+    const radio = $('mmr-radio');
+    if (radio) radio.classList.toggle('is-stopped', stopped);
     if (stopped && state.wantsPlay) {
       state.wantsPlay = false;
       audio && audio.pause();
     }
     state.wasStopped = stopped;
+    if (stopped) {
+      const nowStreaming = (status && status.now_streaming) || {};
+      renderNowPlayingStrip({ ...nowStreaming, type: 'stopped' });
+    }
     // Share button visibility: hidden when session stopped, visible otherwise.
     // The button has 4 states: hidden / enabled / loading / shared (handled in doShare).
     const shareBtn = document.getElementById('share-clip-btn');
@@ -406,7 +489,7 @@
       el.setAttribute('aria-live', 'polite');
       el.style.cssText = (
         'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
-        'background:rgba(20,17,15,0.96);color:var(--cream,#F5EDD8);' +
+        'background:color-mix(in srgb, var(--bg) 96%, transparent);color:var(--cream,#F5EDD8);' +
         'padding:10px 18px;border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;' +
         'z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);' +
         'border:1px solid rgba(244,208,72,0.2);opacity:0;transition:opacity 0.18s ease;'

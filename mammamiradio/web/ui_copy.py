@@ -17,6 +17,8 @@ COPY: dict[str, dict[str, str]] = {
         # Listener page — buttons, CTAs, aria labels
         "listen_now": "Listen Now",
         "listen_now_aria": "Listen now",
+        "listen_paused_aria": "Station paused",
+        "listen_resume_aria": "Resume station",
         "schedule_button": "Schedule",
         "install_app": "Install app",
         "footer_listen": "Listen",
@@ -67,6 +69,8 @@ COPY: dict[str, dict[str, str]] = {
     "it": {
         "listen_now": "Ascolta Ora",
         "listen_now_aria": "Ascolta ora",
+        "listen_paused_aria": "Radio in pausa",
+        "listen_resume_aria": "Riprendi la radio",
         "schedule_button": "Il Palinsesto",
         "install_app": "Installa app",
         "footer_listen": "Ascolta",
