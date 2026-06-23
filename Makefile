@@ -1,4 +1,4 @@
-.PHONY: help dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke pre-release edge-release
+.PHONY: help dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke pre-release edge-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -51,6 +51,9 @@ coverage-ratchet: ## Preview what coverage floors CI would commit on main
 
 perf-smoke: ## Run HA Green perf smoke against a live station
 	$(PYTHON) scripts/ha-green-perf-smoke.py
+
+launch-smoke: ## Cold-launch a station on temp dirs and assert first byte <= 2s
+	$(PYTHON) scripts/ha-green-launch-smoke.py
 
 pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head + merge-gate settings)
 	./scripts/pre-release-check.sh
