@@ -10,6 +10,8 @@ updates:
         patterns: ["ruff", "mypy", "pytest*"]
       core:
         patterns: ["fastapi", "uvicorn", "anthropic", "spotipy"]
+      pydantic:
+        patterns: ["pydantic", "pydantic-core", "pydantic-settings"]
     ignore:
       # pydantic pins an exact pydantic-core; bumping pydantic-core on its own makes
       # the hash-locked requirements.txt unsatisfiable (the 2.47.0 vs 2.13.4 incident).

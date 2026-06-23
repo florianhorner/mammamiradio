@@ -19,7 +19,7 @@ def test_pages_facade_reexport_identity():
     """Every ingress symbol the streamer facade re-exports must resolve to the SAME
     object as its new home in web/pages.
 
-    Routes (_listener_context, live_panel, _render_admin_response) still call these by
+    Routes (_listener_context, _render_admin_response) still call these by
     bare name through the streamer namespace, so the re-export must point at the moved
     implementation, not a forked copy. The streamer import is local so the pure-pages
     tests below don't load the god-module.

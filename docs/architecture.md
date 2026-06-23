@@ -208,7 +208,11 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   mid-render ban race slipped past the ingest doorways (music only). It always drops
   the **audio** — a banned song never airs on any path — and every commit path
   propagates the funnel's drop-return so no shadow row or counter advance follows
-  a mid-commit ban.
+  a mid-commit ban. The drop also must NOT overwrite the prior valid music bed:
+  `state.last_music_file`, `producer._last_music_file`, and `_adjacent_music_source()`
+  must all continue to reference the last successfully committed music track, not the
+  dropped render (pinned by
+  `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
 
 ### Dynamic LLM routing (which model voices each task)
 
@@ -574,7 +578,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
-| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |
+| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `clip.html` |
 | `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |
 | `mammamiradio/assets/` | `logo.svg`, `demo/` (bundled MP3s + SFX) |
 | `start.sh` | local dev entry point with uvicorn and reload |
