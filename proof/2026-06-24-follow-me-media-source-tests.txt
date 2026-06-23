@@ -1,0 +1,12 @@
+# Follow Me Music media-source proxy — test/lint/type gates
+# branch: codex/stitch-together-follow-me-musik-code  commit: 86415b4bba3c52343e5e9f7f3bd97d379ad7bbc2
+# captured: 2026-06-23T22:27:55Z
+
+== ruff check (changed files) ==
+All checks passed!
+== ruff format --check (changed files) ==
+2 files already formatted
+== mypy mammamiradio/ tests/ (CI gate) ==
+Success: no issues found in 201 source files
+== full pytest suite ==
+3248 passed, 2 skipped, 19 deselected, 1 warning in 58.01s
