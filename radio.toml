@@ -556,24 +556,24 @@ spokesperson = "hammer"
 escalation_rule = "Ad ogni spot inventa un gusto-meteo più specifico e una previsione meno convincente."
 
 [[ads.brands]]
-name = "Frigo Onesto"
+name = "Frigo Severo"
 tagline = "Conserva il cibo, distrugge le illusioni."
 category = "home"
 recurring = true
 [ads.brands.campaign]
-premise = "Il frigorifero smart del Gruppo Brivido che dice la verità brutale su avanzi, spuntini e scelte notturne. Stesso hardware del Frigo YOLO, stessa catena di montaggio: solo un firmware più severo."
+premise = "Il frigorifero smart di Tuttoegal AG che dice la verità brutale su avanzi, spuntini e scelte notturne. Stesso hardware del Frigo Generoso, stessa catena di montaggio: solo un firmware più severo."
 sonic_signature = "startup_synth+ice_clink"
 format_pool = ["late_night_whisper"]
 spokesperson = "seductress"
 escalation_rule = "Ad ogni spot il frigo ha un'opinione più invasiva sulla tua vita di famiglia."
 
 [[ads.brands]]
-name = "Frigo YOLO"
+name = "Frigo Generoso"
 tagline = "Te lo meriti. Anche il secondo."
 category = "home"
 recurring = true
 [ads.brands.campaign]
-premise = "Lo stesso frigorifero del Frigo Onesto, sempre Gruppo Brivido, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
+premise = "Lo stesso frigorifero del Frigo Severo, sempre Tuttoegal AG, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
 sonic_signature = "startup_synth+tarantella_pop"
 format_pool = ["duo_scene"]
 spokesperson = "maniac"
