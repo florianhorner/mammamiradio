@@ -1,7 +1,7 @@
 """HTML page-render helpers: HA Ingress prefix injection.
 
 Extracted verbatim from ``web/streamer.py`` (god-module split). Behind Home
-Assistant Ingress, admin/live pages are served under a per-session path prefix
+Assistant Ingress, the admin page is served under a per-session path prefix
 (the ``X-Ingress-Path`` header); these helpers sanitize that prefix and rewrite
 static HTML attribute URLs (``href=``/``src=``) so assets resolve through the
 Supervisor proxy. JS API calls use the client-side ``_base`` variable, so JS
@@ -9,9 +9,9 @@ string literals are deliberately NOT rewritten here (that would double-prefix).
 
 This is the designated home for page-render helpers. The CSRF primitives
 (``_get_csrf_token``/``_inject_csrf_token``) now live in ``web/auth.py``; the
-admin/live render closure (``_render_admin_response``) stays in ``streamer``
-until the routes cut and calls them through the streamer facade. Pure
-string/regex logic here — no CSRF, no template/asset-dir deps.
+admin render closure (``_render_admin_response``) stays in ``streamer`` until
+the routes cut and calls them through the streamer facade. Pure string/regex
+logic here — no CSRF, no template/asset-dir deps.
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     html = html.replace('href="/listen"', f'href="{prefix}/listen"')
     html = html.replace('href="/dashboard"', f'href="{prefix}/dashboard"')
     html = html.replace('href="/admin"', f'href="{prefix}/admin"')
-    html = html.replace('href="/live"', f'href="{prefix}/live"')
     html = html.replace('src="/stream"', f'src="{prefix}/stream"')
     # Service worker registration is standalone (no _base), needs rewriting
     html = html.replace("'/sw.js'", f"'{prefix}/sw.js'")

@@ -578,7 +578,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
-| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `live.html` |
+| `mammamiradio/web/templates/` | `admin.html`, `listener.html`, `clip.html` |
 | `mammamiradio/web/static/` | CSS, JS, icons, manifest, service worker |
 | `mammamiradio/assets/` | `logo.svg`, `demo/` (bundled MP3s + SFX) |
 | `start.sh` | local dev entry point with uvicorn and reload |

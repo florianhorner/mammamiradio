@@ -1974,41 +1974,14 @@ async def test_admin_public_ip_rejected_in_addon_mode_no_creds():
     assert resp.status_code == 403
 
 
-# ---------------------------------------------------------------------------
-# /live mobile host control room — same auth contract as /admin
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_live_panel_loopback_no_password_returns_html():
-    """GET /live on loopback with no credentials configured should return 200 HTML."""
+async def test_live_route_removed():
+    """GET /live must return 404 — the orphaned mobile operator surface was removed."""
     app = _make_test_app()
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/live")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-
-
-@pytest.mark.asyncio
-async def test_live_panel_public_ip_without_auth_rejected():
-    """GET /live from public IP without credentials should return 401."""
-    app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/live")
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_live_panel_with_basic_auth_returns_html():
-    """GET /live with valid basic auth should return 200 HTML."""
-    app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/live", auth=("admin", "secret"))
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

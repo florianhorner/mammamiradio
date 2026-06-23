@@ -11,6 +11,10 @@
 
 - **Host chatter beds over the right song now.** When the hosts talk over the tail of a track, the music underneath is the song that actually just played — even right after the station recovers from a quiet stretch by reaching for a backup track.
 
+### Removed
+
+- **The orphaned `/live` operator page is gone.** The old phone-only control room had no entry point from the listener page, admin panel, or add-on, so the hidden route and standalone template have been removed. The admin panel remains the supported operator surface.
+
 ### Security
 
 - **The handler that serves the app's icons and manifest is locked down tighter.** It now refuses any request that tries to reach outside the app's own static-asset folder — including links inside that folder that point elsewhere — so it can only ever return the bundled web files.
