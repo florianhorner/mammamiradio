@@ -884,6 +884,57 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace_does_not_rescue(tmp_path):
+    """Scenario 1 (normal): a fresh segment landing inside the first-byte grace
+    must air from the queue, not get pre-empted by the rescue ladder."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 64
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.queued_segments = [{"type": "music", "label": "Normal Grace"}]
+
+    audio_path = tmp_path / "normal-grace.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=audio_path,
+        metadata={"title": "Normal Grace", "title_only": "Normal Grace", "artist": "Test Artist"},
+    )
+
+    with (
+        patch("mammamiradio.web.streamer.FIRST_BYTE_GRACE_SECONDS", 0.2),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip") as pick_canned_clip,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while state.queue_empty_since is None:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not enter the first-byte grace window")
+                await asyncio.sleep(0.01)
+
+            app.state.queue.put_nowait(segment)
+
+            while state.now_streaming.get("metadata", {}).get("title") != "Normal Grace":
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream queued segment inside the grace window")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = state.now_streaming.get("metadata", {})
+    assert now_meta.get("title") == "Normal Grace"
+    assert now_meta.get("fallback") is not True
+    assert now_meta.get("audio_source") not in {"fallback_norm_cache", "fallback_demo_asset"}
+    assert state.queue_empty_since is None
+    assert state.queued_segments == []
+    pick_canned_clip.assert_not_called()
+    select_norm_cache_rescue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_path, caplog):
     """Scenario 3 (post-restart): session_stopped was set (HA watchdog restart),
     then resume fires. A listener connecting after resume must get rescue audio

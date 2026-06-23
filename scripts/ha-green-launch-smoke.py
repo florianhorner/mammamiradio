@@ -32,10 +32,20 @@ import tempfile
 import time
 from pathlib import Path
 
-FIRST_BYTE_S = os.environ.get("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "2.0")
-STARTUP_S = os.environ.get("MAMMAMIRADIO_LAUNCH_STARTUP_S", "60")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PERF_SMOKE = _REPO_ROOT / "scripts" / "ha-green-perf-smoke.py"
+
+
+def _env_float(name: str, default: str) -> float:
+    raw = os.environ.get(name, default)
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a float in seconds, got {raw!r}") from exc
+
+
+FIRST_BYTE_S = _env_float("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "2.0")
+STARTUP_S = _env_float("MAMMAMIRADIO_LAUNCH_STARTUP_S", "60")
 
 
 def _free_port() -> int:
@@ -77,24 +87,29 @@ def _seed_warm_norm_cache(cache_dir: str) -> None:
     the companion ``<name>.mp3.json`` sidecar (see normalizer._norm_sidecar_path).
     """
     norm_path = Path(cache_dir) / "norm_launch_smoke_192k.mp3"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=220:duration=8",
-            "-c:a",
-            "libmp3lame",
-            "-b:a",
-            "192k",
-            str(norm_path),
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=220:duration=8",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(norm_path),
+            ],
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg is required for scripts/ha-green-launch-smoke.py; install ffmpeg and rerun make launch-smoke"
+        ) from exc
     (Path(cache_dir) / f"{norm_path.name}.json").write_text(
         json.dumps({"title": "Launch Smoke Bed", "artist": "Test Bench"})
     )
@@ -145,7 +160,7 @@ def main() -> int:
             start_new_session=True,  # own process group so teardown kills children
         )
         try:
-            if not _wait_until_accepting(port, time.monotonic() + float(STARTUP_S), proc):
+            if not _wait_until_accepting(port, time.monotonic() + STARTUP_S, proc):
                 print(
                     f"[FAIL] station did not accept connections within {STARTUP_S}s (exit={proc.poll()})",
                     file=sys.stderr,
@@ -157,8 +172,8 @@ def main() -> int:
                     "MAMMAMIRADIO_PERF_BASE_URL": base_url,
                     # Strict: a freshly-launched process must serve first byte
                     # inside the INSTANT AUDIO promise, not the 8s running budget.
-                    "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S": FIRST_BYTE_S,
-                    "MAMMAMIRADIO_PERF_STARTUP_TIMEOUT_S": STARTUP_S,
+                    "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S": str(FIRST_BYTE_S),
+                    "MAMMAMIRADIO_PERF_STARTUP_TIMEOUT_S": str(STARTUP_S),
                 }
             )
             result = subprocess.run(
