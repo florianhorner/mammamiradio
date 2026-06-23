@@ -21,6 +21,10 @@ now-playing contract; this integration is the HA-native face of it.
   Supervisor network); a remote or Docker install needs the admin token. Next is
   shown only while on air. A control that can't reach the station surfaces a
   clear error instead of doing nothing.
+- **Media Source:** `media-source://mammamiradio/live` resolves to the live
+  `/stream` MP3 endpoint, so Home Assistant automations, Music Assistant, and
+  Follow Me Music-style speaker handoffs can play the station on real media
+  players while `media_player.mammamiradio` remains the station control surface.
 
 ## Install (HACS custom repository)
 
@@ -59,12 +63,13 @@ flowing as before.
 The integration polls the add-on's read contract
 (`GET /api/integrations/v1/now-playing`) every 5 seconds and maps it to the
 entity. Controls POST to `/api/resume`, `/api/stop`, `/api/skip` with the
-`X-Radio-Admin-Token` header. See `docs/integrations/now-playing.md` for the
+`X-Radio-Admin-Token` header. The media-source entry resolves to the same
+configured host/port plus `/stream` and can be used as a `media_content_id` for
+`media_player.play_media`. See `docs/integrations/now-playing.md` for the
 contract.
 
 ## Deferred to a later version
 
 - A branded Lovelace card (`getEntitySuggestion`) — the built-in media-control
   card the picker already auto-suggests covers the common case.
-- `media_source.py` (casting the stream to other HA speakers).
 - A Music Assistant provider (a separate PR into `music-assistant/server`).
