@@ -81,6 +81,12 @@ else
     fail "Missing executable scripts/ha-green-perf-smoke.py or Makefile perf-smoke target"
 fi
 
+if [ -x scripts/ha-green-launch-smoke.py ] && grep -q '^launch-smoke:' Makefile; then
+    ok "HA Green cold-launch smoke script and Make target are present"
+else
+    fail "Missing executable scripts/ha-green-launch-smoke.py or Makefile launch-smoke target"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "======================================="

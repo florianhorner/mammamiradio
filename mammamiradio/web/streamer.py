@@ -171,7 +171,27 @@ BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
 BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
+# Legacy no-content ceiling, kept as the documented upper bound a connected
+# listener may wait before the station has put *something* on air (invariant:
+# check-release-invariants.sh asserts <= 5s). The actual first-byte reaction is
+# FIRST_BYTE_GRACE_SECONDS below; this stays as the ceiling the grace must not
+# exceed.
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
+# How long a connected listener waits for the producer to deliver a real segment
+# before the playback loop reaches for rescue audio — AND the elapsed gate the
+# rescue ladder (canned -> norm cache -> demo asset) opens at. This is the
+# *first-byte* reaction time: on a cold start or addon restart (queue not yet
+# filled, listener already connected) the loop used to block the full
+# QUEUE_FALLBACK_WAIT_SECONDS on segment_queue.get() *and* gate the norm-cache
+# rescue behind that same 5s, so first byte landed at ~5.9s even with a warm
+# cache — past the 1-2s INSTANT AUDIO promise. With the producer's lookahead
+# buffer, a timed-out get() only happens under genuine starvation (cold start /
+# sustained producer failure), never a normal inter-segment gap, so opening the
+# whole ladder at this short grace does not make the loop rescue-happy: it just
+# puts cached/bridge audio on air fast instead of holding the listener in
+# silence while hoping the producer catches up. Must stay <=
+# QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
+FIRST_BYTE_GRACE_SECONDS = 1.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
@@ -1233,11 +1253,12 @@ async def run_playback_loop(app) -> None:
             segment = _bridge_segment
         else:
             if segment_queue.empty() and state.queue_empty_since is None:
-                # Mark the exact moment playback ran out of audio. The 30s wait_for()
-                # below is part of the listener-visible silence window.
+                # Mark the exact moment playback ran out of audio. The
+                # FIRST_BYTE_GRACE_SECONDS wait_for() below is part of the
+                # listener-visible silence window.
                 state.queue_empty_since = _runtime_monotonic()
             try:
-                segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
+                segment = await asyncio.wait_for(segment_queue.get(), timeout=FIRST_BYTE_GRACE_SECONDS)
                 pulled_from_queue = True
                 state.queue_empty_since = None
             except TimeoutError:
@@ -1268,7 +1289,7 @@ async def run_playback_loop(app) -> None:
                     )
                 else:
                     rescued_from_norm = False
-                    if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
+                    if elapsed >= FIRST_BYTE_GRACE_SECONDS:
                         rescue = _select_norm_cache_rescue(config.cache_dir, state)
                         if rescue:
                             logger.warning(

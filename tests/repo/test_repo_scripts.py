@@ -16,6 +16,7 @@ PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
 HA_GREEN_PERF_SMOKE = ROOT / "scripts" / "ha-green-perf-smoke.py"
+HA_GREEN_LAUNCH_SMOKE = ROOT / "scripts" / "ha-green-launch-smoke.py"
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -172,9 +173,15 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Pa
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
-    _write(tmp_path / "Makefile", "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n")
+    _write(
+        tmp_path / "Makefile",
+        "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n"
+        "launch-smoke:\n\tpython scripts/ha-green-launch-smoke.py\n",
+    )
     _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
     os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
+    _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
 
@@ -192,6 +199,28 @@ def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     assert "silence_with_listeners" in body
     assert "queue_empty_elapsed_s" in body
     assert "/stream" in body
+
+
+def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
+    body = HA_GREEN_LAUNCH_SMOKE.read_text()
+
+    # Launches a real process (the perf smoke does not) ...
+    assert "uvicorn" in body
+    assert "mammamiradio.main:app" in body
+    # ... on throwaway temp cache/tmp so no warm state leaks in ...
+    assert "TemporaryDirectory" in body
+    assert "MAMMAMIRADIO_CACHE_DIR" in body
+    # ... and asserts a STRICT first-byte bound (default 2s, not the perf
+    # smoke's 8s already-running budget).
+    assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
+    assert '"2.0"' in body
+    assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+
+
+def test_makefile_has_launch_smoke_target() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    assert "launch-smoke:" in makefile
+    assert "ha-green-launch-smoke.py" in makefile
 
 
 def test_ha_green_perf_smoke_allows_readyz_starting_response() -> None:
@@ -229,6 +258,8 @@ def test_release_invariants_guard_ha_green_perf_budget() -> None:
         assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
         assert "norm_files\\[0\\]" in body
         assert "ha-green-perf-smoke.py" in body
+        assert "ha-green-launch-smoke.py" in body
+        assert "launch-smoke:" in body
 
 
 def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:
