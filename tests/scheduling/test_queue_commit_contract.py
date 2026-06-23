@@ -25,7 +25,11 @@ What is pinned here:
 4. prewarm discards a stale segment when the SOURCE switches mid-render — it keys on
    ``source_revision`` (true switches only), not the broad ``playlist_revision``, so a
    benign in-place edit keeps the pre-roll; and a switch landing during the egress encode
-   is caught by an opt-in post-egress ``stale_check`` on the funnel (#659/#665).
+   is caught by an opt-in post-egress ``stale_check`` on the funnel (#659/#665);
+5. a mid-loop blocklist drop (music only) must NOT overwrite the prior speech-bed
+   source — ``state.last_music_file``, ``producer._last_music_file``, and
+   ``_adjacent_music_source()`` must all still reference the last successfully committed
+   music track, not the banned render (#660/#664).
 
 Mechanism note: the gates key on closure-local generation values a unit test cannot poke,
 so these drive ``run_producer`` / ``prewarm_first_segment`` and bump
@@ -46,6 +50,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
+    _adjacent_music_source,
     _enqueue_with_egress,
     _normalized_cache_path,
     prewarm_first_segment,
@@ -473,8 +478,15 @@ async def test_prewarm_blocklist_drop_does_not_set_last_music_file(tmp_path):
 
 @pytest.mark.asyncio
 async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
-    """A banned song dropped at the enqueue funnel must not leave a ghost up-next row."""
+    """A banned song dropped at the enqueue funnel must not leave a ghost up-next row
+    or overwrite the prior valid music bed used by speech-bed adjacency (#660, #664)."""
     state = _make_state()
+    previous_song = tmp_path / "previous_song.mp3"
+    previous_song.write_bytes(b"prior-music")
+    state.last_music_file = previous_song
+    state.last_enqueued_type = SegmentType.MUSIC
+    state.current_track = Track(title="Previous Song", artist="Prior Artist", duration_ms=180_000, spotify_id="prev")
+    producer._last_music_file = previous_song
     state.blocklist = {
         ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
         ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
@@ -505,8 +517,10 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
             await _wait_for(lambda: probe_calls >= 2)
             assert queue.empty()
             assert state.queued_segments == []
-            assert state.last_music_file is None
-            assert producer._last_music_file is None
+            assert state.last_music_file == previous_song
+            assert producer._last_music_file == previous_song
+            assert producer._last_music_file != cache_path
+            assert _adjacent_music_source(state) == previous_song
             assert cache_path.exists()
         finally:
             await _cancel(task)
