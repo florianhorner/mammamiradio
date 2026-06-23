@@ -167,6 +167,37 @@ async def test_has_listener_false_for_unknown():
 
 
 @pytest.mark.asyncio
+async def test_subscribe_sets_listener_arrived_event():
+    # The playback loop parks on this event when the room is empty; subscribe()
+    # must set it so the loop resumes the instant a listener connects.
+    hub = LiveStreamHub()
+    hub._listener_arrived.clear()
+    assert not hub._listener_arrived.is_set()
+    hub.subscribe()
+    assert hub._listener_arrived.is_set()
+
+
+@pytest.mark.asyncio
+async def test_listener_arrived_wakes_empty_room_waiter_before_poll_timeout():
+    # Mirrors the loop's empty-room wait: a connect resumes playback well under
+    # the 1s backstop poll instead of sleeping it out (the first-byte win).
+    hub = LiveStreamHub()
+    hub._listener_arrived.clear()
+
+    async def _connect_soon():
+        await asyncio.sleep(0.02)
+        hub.subscribe()
+
+    connector = asyncio.create_task(_connect_soon())
+    start = asyncio.get_running_loop().time()
+    await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
+    elapsed = asyncio.get_running_loop().time() - start
+    await connector
+    assert hub.has_listener(0)
+    assert elapsed < 0.5  # woke on the event, not the 1s poll backstop
+
+
+@pytest.mark.asyncio
 async def test_broadcast_pushes_to_all():
     hub = LiveStreamHub()
     _, q1 = hub.subscribe()
