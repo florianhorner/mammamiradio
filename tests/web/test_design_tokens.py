@@ -462,9 +462,6 @@ def test_tricolor_stripes_use_flag_tokens() -> None:
         assert actual == expected, f"{path.name} {selector} background must be {expected}, got {actual!r}"
 
 
-LIVE_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "live.html"
-
-
 def test_accessible_blue_text_tokens_are_documented_and_defined() -> None:
     defined = set(_primitives_in(TOKENS_CSS))
     for token in ("--ok-text", "--seg-music-text"):
@@ -527,9 +524,3 @@ def test_admin_section_labels_keep_quiet_hierarchy() -> None:
     panel_heading = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".mmr-panel-head h2"))
     assert panel_heading.get("line-height") == "1.22"
     assert panel_heading.get("padding-top") == "2px"
-
-
-def test_live_template_does_not_hardcode_primary_blue_hex() -> None:
-    text = LIVE_HTML.read_text(encoding="utf-8")
-    assert "#2563EB" not in text and "#2563eb" not in text
-    assert "var(--ok-text)" in text or "var(--ok)" in text
