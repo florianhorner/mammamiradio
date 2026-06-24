@@ -225,7 +225,7 @@ Stable add-on images are published by `addon-release.yml`, triggered by a `v*` t
 
 | | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
 |--|--|--|
-| `version:` | hand-bumped `X.Y.Z` on deliberate releases | the `main` short commit SHA, cut manually with `make edge-release` |
+| `version:` | hand-bumped `X.Y.Z` on deliberate releases | the short SHA of the newest `main` commit with a built image (may trail HEAD), cut with `make edge-release` |
 | Updates when | you push a matching `v*` tag after merging the version-bump commit | you cut an edge release (the version string changes, so HA shows an Update) |
 | Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:<short-sha>` (published by `addon-build.yml` on every `main` build) |
 | Audience | everyone | the maintainer's soak Pi |
@@ -234,8 +234,9 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 **Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
 
-1. Make sure `Build HA Addon` is green on the `main` commit you want to release — it pushes the `:<short-sha>` image the edge channel will point at.
-2. Run `make edge-release` (`scripts/cut-edge-release.sh`): it sets the edge `version:` to the current `origin/main` short SHA, verifies the `:<short-sha>` image exists, and opens a normal PR you merge via `/ship`.
+1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
+
+The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image paths (`ha-addon/**`, `mammamiradio/**`, `pyproject.toml`, `radio.toml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). It uses `gh run list` (needs only `actions:read`); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
