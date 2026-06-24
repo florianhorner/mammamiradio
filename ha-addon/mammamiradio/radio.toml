@@ -192,6 +192,7 @@ enabled = false
 url = ""
 poll_interval = 60           # seconds between full home-state refreshes
 timer_poll_interval = 5      # seconds between lightweight timer-entity checks
+context_refresh_timeout = 2.0  # seconds a refresh may take before the producer airs on last-known home context (audio > HA freshness)
 
 # Timer interrupt: when a HA timer fires, hosts immediately interrupt and deliver
 # a pissed/urgent message. Add one [[homeassistant.timer_interrupt]] block per timer.

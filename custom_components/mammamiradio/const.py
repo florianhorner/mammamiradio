@@ -24,6 +24,7 @@ HTTP_TIMEOUT = 8.0
 
 # Read contract (unauthenticated) the coordinator polls.
 NOW_PLAYING_PATH = "/api/integrations/v1/now-playing"
+STREAM_PATH = "/stream"
 
 # Control endpoints (admin-authenticated via the X-Radio-Admin-Token header).
 ENDPOINT_PLAY = "/api/resume"

@@ -12,6 +12,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 import ipaddress
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -378,6 +379,12 @@ class HomeAssistantSection:
     url: str = ""
     poll_interval: int = 60  # seconds between state refreshes
     timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
+    # Wall-clock budget (seconds) the producer gives a single HA context refresh
+    # before it airs on last-known context instead of blocking segment production.
+    # Audio continuity wins over HA freshness (INSTANT AUDIO). Steady-state value;
+    # the one-time cold registry/weather warm-up gets a longer budget in the
+    # producer (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
+    context_refresh_timeout: float = 2.0
     timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
@@ -1110,6 +1117,14 @@ def _validate(config: StationConfig) -> None:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
         errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
+    _ctx_timeout = config.homeassistant.context_refresh_timeout
+    if (
+        isinstance(_ctx_timeout, bool)
+        or not isinstance(_ctx_timeout, int | float)
+        or not math.isfinite(_ctx_timeout)
+        or _ctx_timeout <= 0
+    ):
+        errors.append(_err("homeassistant.context_refresh_timeout", "must be a positive number"))
     _allowed_urgencies = {"pissed", "urgent", "gentle"}
     for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
         if timer_cfg.cooldown < 1:
@@ -1280,6 +1295,25 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
+    # Env override for the HA context refresh budget. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable the deadline.
+    _ha_timeout_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "").strip()
+    if _ha_timeout_env:
+        import logging as _ha_logging
+
+        _ha_log = _ha_logging.getLogger(__name__)
+        try:
+            _ha_timeout_val = float(_ha_timeout_env)
+        except ValueError:
+            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (not a number)", _ha_timeout_env)
+        else:
+            if math.isfinite(_ha_timeout_val) and _ha_timeout_val > 0:
+                ha_raw["context_refresh_timeout"] = _ha_timeout_val
+            else:
+                _ha_log.warning(
+                    "Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (must be a finite number > 0)",
+                    _ha_timeout_env,
+                )
     # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
     timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
     timer_interrupts = [
