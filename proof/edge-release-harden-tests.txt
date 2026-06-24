@@ -1,0 +1,22 @@
+# PR1 proof — harden cut-edge-release.sh
+# branch florianhorner/cut-dev-release
+
+## shellcheck scripts/cut-edge-release.sh tests/workflows/test_cut_edge_release.sh
+shellcheck: clean (exit 0)
+
+## bash tests/workflows/test_cut_edge_release.sh
+PASS: happy path pins HEAD and opens PR
+PASS: tests-only HEAD pins the older built SHA (blind-HEAD-pin guard)
+PASS: green run for an off-main SHA is skipped (topology-correct selection)
+PASS: image-affecting drift since built commit hard-fails (no stale-image pin)
+PASS: no successful build run hard-fails
+PASS: all green runs off main hard-fails
+PASS: gh query failure hard-fails, never soft-passes (soft-pass guard)
+PASS: missing gh CLI hard-fails at the first guard
+PASS: unclean working tree hard-fails
+PASS: edge already at target SHA (read from origin/main) is a clean no-op
+PASS: existing open edge PR is a clean no-op
+PASS: unverifiable drift check hard-fails, never soft-passes
+PASS: real repo / branch / edge config untouched
+
+All 12 cut-edge-release cases passed.

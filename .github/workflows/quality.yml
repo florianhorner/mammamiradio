@@ -39,6 +39,9 @@ jobs:
       - name: Release cooldown gate self-test
         run: bash tests/workflows/test_cooldown_gate.sh
 
+      - name: Cut-edge-release self-test
+        run: bash tests/workflows/test_cut_edge_release.sh
+
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh
 
