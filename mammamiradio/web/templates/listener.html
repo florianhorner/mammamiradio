@@ -60,7 +60,7 @@
       <a href="#dediche">Dediche</a>
       <a href="#about">About</a>
     </nav>
-    <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-label="{{ copy.get('listen_now_aria', 'Listen now') }}">
+    <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-label="{% if session_stopped %}{{ copy.get('listen_resume_aria', 'Resume station') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}">
       <span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}In Onda{% endif %}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>
   </div>

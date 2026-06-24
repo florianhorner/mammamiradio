@@ -1310,6 +1310,7 @@ async def test_get_root_bakes_stopped_state_into_first_paint():
     """A stopped station bakes data-stopped + is-stopped into the first paint so it
     never flashes the live label before the JS poll hydrates (illusion/honesty)."""
     app = _make_test_app()
+    app.state.config.super_italian_mode = False
     app.state.station_state.session_stopped = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1317,6 +1318,8 @@ async def test_get_root_bakes_stopped_state_into_first_paint():
     assert resp.status_code == 200
     assert 'data-stopped="true"' in resp.text
     assert "is-stopped" in resp.text
+    assert re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Resume station")', resp.text)
+    assert not re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Listen now")', resp.text)
     assert "In Onda" not in resp.text  # live label must not flash on a stopped station
 
 

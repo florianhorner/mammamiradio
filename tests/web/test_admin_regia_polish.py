@@ -371,11 +371,24 @@ def test_undo_toast_reserves_mobile_safe_space() -> None:
     assert "_syncToastBodyClass" in js
 
 
+def test_undo_toast_cap_only_commits_older_undo_toasts() -> None:
+    js = _js()
+    block = js[js.index("function undoableToast") : js.index("/**\n   * Show a plain error toast")]
+    assert "_countToastsOfKind('undo') >= MAX_TOASTS" in block
+    assert "const oldestUndo = _oldestToastOfKind('undo')" in block
+    assert "_dismiss(oldestUndo, { runCommit: true })" in block
+    assert "kind: 'undo'" in block
+
+
 def test_error_toast_uses_same_safe_space_accounting_as_undo_toast() -> None:
     js = _js()
     block = js[js.index("function errorToast") : js.index("// ── Archivio")]
-    assert "while (_live.length >= MAX_TOASTS)" in block
-    assert "_dismiss(_live[0], { runCommit: true })" in block
+    assert "const MAX_ERROR_TOASTS = 2" in js
+    assert "_countToastsOfKind('error') >= MAX_ERROR_TOASTS" in block
+    assert "const oldestError = _oldestToastOfKind('error')" in block
+    assert "_dismiss(oldestError, { runCommit: false })" in block
+    assert "runCommit: true" not in block
+    assert "kind: 'error'" in block
     assert "const entry" in block
     assert "_live.push(entry)" in block
     assert "_syncToastBodyClass()" in block

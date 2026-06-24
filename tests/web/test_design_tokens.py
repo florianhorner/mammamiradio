@@ -503,6 +503,17 @@ def test_design_system_status_ready_docs_match_runtime_text_tokens() -> None:
     assert ".status-dot.ready          { color: var(--ok); }" in ready_block
 
 
+def test_runtime_status_ready_css_matches_text_token_split() -> None:
+    """Runtime ready CSS must keep readable label color separate from dot fill."""
+    text = BASE_CSS.read_text(encoding="utf-8")
+    ready_block = text[text.index("/* State: ready") : text.index("/* State: working")]
+    assert re.search(
+        r"\.status-chip\.ready,\s*\.status-inline\.ready\s*\{\s*color:\s*var\(--ok-text\);\s*\}",
+        ready_block,
+    )
+    assert re.search(r"\.status-dot\.ready\s*\{\s*color:\s*var\(--ok\);\s*\}", ready_block)
+
+
 def test_admin_section_labels_keep_quiet_hierarchy() -> None:
     """Nested admin labels must not all use the same loud gold eyebrow treatment."""
     global_eyebrow = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".eyebrow"))

@@ -124,8 +124,8 @@ body[data-stopped="true"] .waveform {
 
 /* State: ready (blue ✓) — active and healthy */
 .status-chip.ready,
-.status-dot.ready,
 .status-inline.ready       { color: var(--ok-text); }
+.status-dot.ready          { color: var(--ok); }
 .status-chip.ready::before,
 .status-inline.ready::before { content: "\2713"; }
 

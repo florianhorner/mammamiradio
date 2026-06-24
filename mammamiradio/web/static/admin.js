@@ -16,19 +16,23 @@
  *   │      (restore row)   (no-op)     row re-renders next poll     │
  *   └─────────────────────────────────────────────────────────────┘
  *
- * Stack is capped at MAX_TOASTS (5, eng review E8); the oldest commits to make
- * room. Slide animation is a CSS transition, so the global
- * `prefers-reduced-motion: reduce` rule in admin.html neutralizes it for free.
+ * Undo toasts are capped at MAX_TOASTS (5, eng review E8); the oldest undo
+ * commits to make room for another undo. Error toasts have their own smaller
+ * cap and only evict older errors, so a backend failure notice can never force
+ * a pending undo action to commit. Slide animation is a CSS transition, so the
+ * global `prefers-reduced-motion: reduce` rule in admin.html neutralizes it for
+ * free.
  */
 (function () {
   'use strict';
 
   // ── Undo toast stack ─────────────────────────────────────────────
   const MAX_TOASTS = 5; // eng review E8 — cap visible undo toasts
+  const MAX_ERROR_TOASTS = 2; // errors share safe-space, but never evict undo
   const DEFAULT_TTL = 5000; // eng review D4 — 5s window, auto-dismiss = commit
 
   let _stackEl = null;
-  const _live = []; // {el, timer, committed}
+  const _live = []; // {el, timer, committed, kind}
 
   function _ensureStack() {
     if (_stackEl) return _stackEl;
@@ -67,6 +71,14 @@
     _syncToastBodyClass();
   }
 
+  function _countToastsOfKind(kind) {
+    return _live.filter((entry) => entry.kind === kind).length;
+  }
+
+  function _oldestToastOfKind(kind) {
+    return _live.find((entry) => entry.kind === kind) || null;
+  }
+
   /**
    * Show an undoable toast. The destructive action has ALREADY been applied
    * optimistically by the caller. `onUndo` reverts it; it only fires if the
@@ -81,9 +93,11 @@
     const stack = _ensureStack();
     ttl = typeof ttl === 'number' ? ttl : DEFAULT_TTL;
 
-    // Cap the stack: commit the oldest to make room (E8).
-    while (_live.length >= MAX_TOASTS) {
-      _dismiss(_live[0], { runCommit: true });
+    // Cap undo toasts only: commit the oldest undo to make room (E8).
+    while (_countToastsOfKind('undo') >= MAX_TOASTS) {
+      const oldestUndo = _oldestToastOfKind('undo');
+      if (!oldestUndo) break;
+      _dismiss(oldestUndo, { runCommit: true });
     }
 
     const el = document.createElement('div');
@@ -99,7 +113,7 @@
     el.appendChild(btn);
     stack.appendChild(el);
 
-    const entry = { el, timer: null, committed: false, onCommit: onCommit || null };
+    const entry = { el, timer: null, committed: false, kind: 'undo', onCommit: onCommit || null };
 
     btn.addEventListener('click', () => {
       if (entry.committed) return;
@@ -131,15 +145,17 @@
    */
   function errorToast(message) {
     const stack = _ensureStack();
-    while (_live.length >= MAX_TOASTS) {
-      _dismiss(_live[0], { runCommit: true });
+    while (_countToastsOfKind('error') >= MAX_ERROR_TOASTS) {
+      const oldestError = _oldestToastOfKind('error');
+      if (!oldestError) break;
+      _dismiss(oldestError, { runCommit: false });
     }
 
     const el = document.createElement('div');
     el.className = 'undo-toast undo-toast-error';
     el.textContent = message;
     stack.appendChild(el);
-    const entry = { el, timer: null, committed: false, onCommit: null };
+    const entry = { el, timer: null, committed: false, kind: 'error', onCommit: null };
     _live.push(entry);
     _syncToastBodyClass();
     requestAnimationFrame(() => el.classList.add('show'));
