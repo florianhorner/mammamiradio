@@ -1,0 +1,13 @@
+Static-file handler hardening — verification proof
+date: 2026-06-22T18:36:51Z
+commit: 1d29fdc4
+
+$ pytest tests/web/test_streamer_routes.py -k static -v
+tests/web/test_streamer_routes.py::test_static_manifest_returns_json PASSED [ 25%]
+tests/web/test_streamer_routes.py::test_static_symlink_escape_blocked PASSED [ 50%]
+tests/web/test_streamer_routes.py::test_static_nonexistent_returns_404 PASSED [ 75%]
+tests/web/test_streamer_routes.py::test_static_path_traversal_blocked PASSED [100%]
+====================== 4 passed, 128 deselected in 0.35s =======================
+
+Full suite: 3240 passed, 2 skipped (pytest tests/ -q)
+ruff check + ruff format --check + mypy: clean on changed files

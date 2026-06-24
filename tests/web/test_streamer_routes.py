@@ -31,6 +31,7 @@ from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
+    FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
@@ -101,6 +102,15 @@ def test_ha_green_queue_fallback_budget_is_shorter_than_health_failure():
     assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
 
 
+def test_first_byte_grace_serves_rescue_before_producer_stall_threshold():
+    # The connect/first-byte reaction must be well under the 1-2s INSTANT AUDIO
+    # promise and never later than the producer-stall (norm-cache) threshold,
+    # so a cold listener hears audio fast while a brief stall still prefers a
+    # fresh produced segment over an early cached repeat.
+    assert FIRST_BYTE_GRACE_SECONDS <= 2.0
+    assert FIRST_BYTE_GRACE_SECONDS <= QUEUE_FALLBACK_WAIT_SECONDS
+
+
 def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tmp_path):
     state = StationState()
     state.now_streaming = {
@@ -154,6 +164,37 @@ async def test_unsubscribe_removes_listener():
 async def test_has_listener_false_for_unknown():
     hub = LiveStreamHub()
     assert not hub.has_listener(999)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_sets_listener_arrived_event():
+    # The playback loop parks on this event when the room is empty; subscribe()
+    # must set it so the loop resumes the instant a listener connects.
+    hub = LiveStreamHub()
+    hub._listener_arrived.clear()
+    assert not hub._listener_arrived.is_set()
+    hub.subscribe()
+    assert hub._listener_arrived.is_set()
+
+
+@pytest.mark.asyncio
+async def test_listener_arrived_wakes_empty_room_waiter_before_poll_timeout():
+    # Mirrors the loop's empty-room wait: a connect resumes playback well under
+    # the 1s backstop poll instead of sleeping it out (the first-byte win).
+    hub = LiveStreamHub()
+    hub._listener_arrived.clear()
+
+    async def _connect_soon():
+        await asyncio.sleep(0.02)
+        hub.subscribe()
+
+    connector = asyncio.create_task(_connect_soon())
+    start = asyncio.get_running_loop().time()
+    await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
+    elapsed = asyncio.get_running_loop().time() - start
+    await connector
+    assert hub.has_listener(0)
+    assert elapsed < 0.5  # woke on the event, not the 1s poll backstop
 
 
 @pytest.mark.asyncio
@@ -499,7 +540,12 @@ async def test_run_playback_loop_stop_during_queue_wait_skips_fallback(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_uses_norm_cache_after_short_fallback_wait(tmp_path, caplog):
+async def test_run_playback_loop_timeout_uses_norm_cache_at_first_byte_grace(tmp_path, caplog):
+    # Gate guard: norm-cache rescue must open at the short FIRST_BYTE_GRACE_SECONDS,
+    # NOT at the 5s QUEUE_FALLBACK_WAIT_SECONDS ceiling. elapsed here is ~1.1s
+    # (just over the grace, well under 5s) and a warm cache is the only rescue
+    # rung — the realistic add-on-restart path. If someone re-gates norm cache
+    # behind the 5s ceiling, norm cache won't fire at 1.1s and this test fails.
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
@@ -520,7 +566,7 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_short_fallback_wa
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 100.0 + QUEUE_FALLBACK_WAIT_SECONDS + 0.1, 105.2, 105.3, 105.4, 105.5],
+            side_effect=[100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5, 101.6, 101.7],
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -538,7 +584,7 @@ async def test_run_playback_loop_timeout_uses_norm_cache_after_short_fallback_wa
 
     assert app.state.station_state.queue_empty_since is None
     wait_for.assert_called()
-    assert wait_for.call_args.kwargs["timeout"] == QUEUE_FALLBACK_WAIT_SECONDS
+    assert wait_for.call_args.kwargs["timeout"] == FIRST_BYTE_GRACE_SECONDS
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
     # Item 20: title must NEVER be the raw filename ("Recovered: norm_rescue.mp3").
     # Without a sidecar, humanize_norm_filename turns "norm_rescue.mp3" → "Rescue".
@@ -806,6 +852,108 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     assert now_meta.get("artist") == "Pino Daniele", (
         f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(tmp_path, caplog):
+    """First-byte immediacy: a cold/empty queue must serve rescue audio at the
+    short FIRST_BYTE_GRACE_SECONDS, not after the full QUEUE_FALLBACK_WAIT_SECONDS.
+
+    Regression guard for the 1-2s INSTANT AUDIO promise: the loop used to block
+    the full 5s queue-fallback wait before reaching for any rescue audio (first
+    byte at ~5.9s). Here elapsed is ~1s (< the 5s producer-stall threshold), yet
+    the demo-asset rescue must already fire — proving rescue is not re-gated
+    behind the 5s wait. This is the cold-start path the launch smoke exercises.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+
+    demo_dir = tmp_path / "demo" / "music"
+    demo_dir.mkdir(parents=True)
+    (demo_dir / "Pino Daniele - Napule E.mp3").write_bytes(b"x" * 4096)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    wait_for = AsyncMock(side_effect=_forced_timeout)
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=wait_for),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        # elapsed = 101.0 - 100.0 = 1.0s, well under QUEUE_FALLBACK_WAIT_SECONDS.
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 101.0, 101.1, 101.2, 101.3, 101.4],
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue at the first-byte grace")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    # The producer was given only the short grace, not the 5s stall threshold.
+    # Literal <= 2.0 bound (not just == the symbolic constant) so a code revert
+    # to wait_for(timeout=QUEUE_FALLBACK_WAIT_SECONDS) is caught even if the
+    # FIRST_BYTE_GRACE_SECONDS constant is left at 1.0.
+    assert wait_for.call_args.kwargs["timeout"] <= 2.0
+    assert wait_for.call_args.kwargs["timeout"] == FIRST_BYTE_GRACE_SECONDS
+    assert FIRST_BYTE_GRACE_SECONDS < QUEUE_FALLBACK_WAIT_SECONDS
+    assert any("rescuing with demo asset" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_path, caplog):
+    """Scenario 3 (post-restart): session_stopped was set (HA watchdog restart),
+    then resume fires. A listener connecting after resume must get rescue audio
+    at the first-byte grace — not silence, not a 5s wait. Exercises the real
+    stopped -> resume_event -> rescue-ladder path through run_playback_loop with
+    a warm norm cache as the only rescue rung (the realistic restart shape)."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.WARNING)
+    state = app.state.station_state
+    state.session_stopped = True
+
+    rescue_path = tmp_path / "norm_rescue.mp3"
+    rescue_path.write_bytes(b"x" * 4096)
+
+    # Tiny real grace keeps the test fast while exercising the real wait_for /
+    # resume_event timing (no wait_for mock, so the resume path is genuine).
+    with (
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.web.streamer.FIRST_BYTE_GRACE_SECONDS", 0.05),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.sleep(0.05)  # loop parks on the stopped/resume wait
+            state.session_stopped = False  # the "restart" clears
+            state.resume_event.set()  # and resume wakes the loop
+            deadline = time.monotonic() + 3.0
+            while state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache":
+                if time.monotonic() > deadline:
+                    raise AssertionError("post-restart resume did not serve rescue audio at the grace")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.session_stopped is False
+    assert any("rescuing with norm cache" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1847,6 +1995,25 @@ async def test_static_path_traversal_blocked():
 
 
 @pytest.mark.asyncio
+async def test_static_symlink_escape_blocked(tmp_path, monkeypatch):
+    """GET /static/escape-link should return 404 when the symlink points outside static dir."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "escape-link").symlink_to("../outside.txt")
+
+    monkeypatch.setattr("mammamiradio.web.streamer._STATIC_DIR", static_dir)
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/static/escape-link")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_regia_route_removed():
     """GET /regia must return 404 — the obsolete prototype was removed; admin lives at /admin."""
     app = _make_test_app()
@@ -1955,41 +2122,14 @@ async def test_admin_public_ip_rejected_in_addon_mode_no_creds():
     assert resp.status_code == 403
 
 
-# ---------------------------------------------------------------------------
-# /live mobile host control room — same auth contract as /admin
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_live_panel_loopback_no_password_returns_html():
-    """GET /live on loopback with no credentials configured should return 200 HTML."""
+async def test_live_route_removed():
+    """GET /live must return 404 — the orphaned mobile operator surface was removed."""
     app = _make_test_app()
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/live")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-
-
-@pytest.mark.asyncio
-async def test_live_panel_public_ip_without_auth_rejected():
-    """GET /live from public IP without credentials should return 401."""
-    app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/live")
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_live_panel_with_basic_auth_returns_html():
-    """GET /live with valid basic auth should return 200 HTML."""
-    app = _make_test_app(admin_password="secret")
-    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/live", auth=("admin", "secret"))
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

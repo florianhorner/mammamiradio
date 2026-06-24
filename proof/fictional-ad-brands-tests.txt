@@ -1,0 +1,12 @@
+Proof: fictional ad brands PR — local test evidence
+Branch: florianhorner/feat/fictional-ad-brands
+Date: 2026-06-23
+Brands: Notaio Espresso, Sveglia Vendicativa, Ascensore Sentimentale, Tappeto Testimone, Gelateria Meteo, Frigo Severo + Frigo Generoso (Tuttoegal AG twins)
+
+=== voice-routing invariant + addon radio.toml sync ===
+.......                                                                  [100%]
+7 passed in 0.12s
+
+=== full suite ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3244 passed, 2 skipped, 19 deselected, 1 warning in 58.79s

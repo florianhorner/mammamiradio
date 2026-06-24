@@ -1,0 +1,35 @@
+Proof — first-byte immediacy + cold-launch smoke (PR 1, HA Green latency)
+=========================================================================
+
+Reproduce from repo root in the venv:
+  source .venv/bin/activate
+
+1. Full test suite
+   $ python -m pytest tests/ -q
+   => 3246 passed, 2 skipped, 19 deselected
+
+2. Cold-launch first-byte smoke (boots a real station on temp dirs, asserts <=2s)
+   $ python scripts/ha-green-launch-smoke.py     # or: make launch-smoke
+   => [PASS] /healthz ok within 60s
+      [PASS] /readyz still starting without silence failure
+      [PASS] /public-status runtime health within queue-empty budget
+      [PASS] /stream first byte in 0.72s
+      Cold-launch smoke passed (first byte under 2.0s).
+
+3. Release invariants
+   $ bash scripts/check-release-invariants.sh
+   => Passed: 7  Failed: 0  (incl. queue fallback wait <=5s + launch-smoke present)
+
+4. Lint / format / type
+   $ ruff check . && ruff format --check . && mypy mammamiradio/web/streamer.py
+   => clean
+
+5. Changelog editorial lint
+   $ bash scripts/check-changelog-lint.sh
+   => Changelog lint clean.
+
+Behavioral guards (tests that fail if the fix regresses):
+  - tests/web/test_streamer_routes.py::test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s
+  - tests/web/test_streamer_routes.py::test_run_playback_loop_timeout_uses_norm_cache_at_first_byte_grace
+  - tests/web/test_streamer_routes.py::test_run_playback_loop_post_restart_resume_serves_rescue_at_grace
+  - tests/web/test_streamer_routes.py::test_first_byte_grace_serves_rescue_before_producer_stall_threshold

@@ -115,17 +115,16 @@ router = APIRouter()
 # _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
 # CSRF, trusted networks) now lives in web/auth.py — both imported above.
 #
-# Jinja2 templates for brand-engine listener page (PR-C). Admin/live still use
+# Jinja2 templates for brand-engine listener page (PR-C). Admin still uses
 # string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
-# Admin/live pages still loaded as raw strings + post-render prefix injection.
+# Admin page still loaded as a raw string + post-render prefix injection.
 # Listener no longer needs _LISTENER_HTML — it's rendered from template per-request.
 _LISTENER_HTML = _bust_static_cache((_TEMPLATES_DIR / "listener.html").read_text())  # kept for tests + fallback
 
 _ADMIN_HTML = _bust_static_cache((_TEMPLATES_DIR / "admin.html").read_text())
-_LIVE_HTML = _bust_static_cache((_TEMPLATES_DIR / "live.html").read_text())
 
 
 def _as_int_index(value, default: int = -1) -> int:
@@ -172,7 +171,27 @@ BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
 BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
+# Legacy no-content ceiling, kept as the documented upper bound a connected
+# listener may wait before the station has put *something* on air (invariant:
+# check-release-invariants.sh asserts <= 5s). The actual first-byte reaction is
+# FIRST_BYTE_GRACE_SECONDS below; this stays as the ceiling the grace must not
+# exceed.
 QUEUE_FALLBACK_WAIT_SECONDS = 5.0
+# How long a connected listener waits for the producer to deliver a real segment
+# before the playback loop reaches for rescue audio — AND the elapsed gate the
+# rescue ladder (canned -> norm cache -> demo asset) opens at. This is the
+# *first-byte* reaction time: on a cold start or addon restart (queue not yet
+# filled, listener already connected) the loop used to block the full
+# QUEUE_FALLBACK_WAIT_SECONDS on segment_queue.get() *and* gate the norm-cache
+# rescue behind that same 5s, so first byte landed at ~5.9s even with a warm
+# cache — past the 1-2s INSTANT AUDIO promise. With the producer's lookahead
+# buffer, a timed-out get() only happens under genuine starvation (cold start /
+# sustained producer failure), never a normal inter-segment gap, so opening the
+# whole ladder at this short grace does not make the loop rescue-happy: it just
+# puts cached/bridge audio on air fast instead of holding the listener in
+# silence while hoping the producer catches up. Must stay <=
+# QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
+FIRST_BYTE_GRACE_SECONDS = 1.0
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
@@ -1123,6 +1142,10 @@ class LiveStreamHub:
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
         self._state: StationState | None = None
+        # Set by subscribe() so the playback loop wakes the instant a listener
+        # connects to an empty room, instead of sleeping out a fixed poll. Bound
+        # to the loop lazily on first await/set (asyncio.Event, 3.10+).
+        self._listener_arrived = asyncio.Event()
 
     def bind_state(self, state: StationState) -> None:
         """Attach station state for listener tracking. Call once at startup."""
@@ -1141,6 +1164,10 @@ class LiveStreamHub:
             self._state.listeners_total += 1
             self._state.listeners_peak = max(self._state.listeners_peak, active)
             self._state.new_listeners_pending += 1
+        # Wake a playback loop parked on the empty-room wait. The dict insert
+        # above happens-before this set(), so the loop's check-clear-recheck
+        # sees the new listener and never misses the wakeup.
+        self._listener_arrived.set()
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
@@ -1207,7 +1234,17 @@ async def run_playback_loop(app) -> None:
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
             state.queue_empty_since = None
-            await asyncio.sleep(1.0)
+            # Wait on the listener-arrived event instead of a fixed 1s poll, so a
+            # connect to an empty room resumes playback immediately. Clear then
+            # re-check (no await between) to avoid a lost wakeup if a listener
+            # subscribed between the emptiness check and the clear; the 1s timeout
+            # preserves the old periodic re-check as a backstop.
+            hub._listener_arrived.clear()
+            if not hub._listeners:
+                try:
+                    await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
+                except TimeoutError:
+                    pass
             continue
 
         # Priority slot: interrupt bridge audio plays before anything in the queue.
@@ -1234,11 +1271,12 @@ async def run_playback_loop(app) -> None:
             segment = _bridge_segment
         else:
             if segment_queue.empty() and state.queue_empty_since is None:
-                # Mark the exact moment playback ran out of audio. The 30s wait_for()
-                # below is part of the listener-visible silence window.
+                # Mark the exact moment playback ran out of audio. The
+                # FIRST_BYTE_GRACE_SECONDS wait_for() below is part of the
+                # listener-visible silence window.
                 state.queue_empty_since = _runtime_monotonic()
             try:
-                segment = await asyncio.wait_for(segment_queue.get(), timeout=QUEUE_FALLBACK_WAIT_SECONDS)
+                segment = await asyncio.wait_for(segment_queue.get(), timeout=FIRST_BYTE_GRACE_SECONDS)
                 pulled_from_queue = True
                 state.queue_empty_since = None
             except TimeoutError:
@@ -1269,7 +1307,7 @@ async def run_playback_loop(app) -> None:
                     )
                 else:
                     rescued_from_norm = False
-                    if elapsed >= QUEUE_FALLBACK_WAIT_SECONDS:
+                    if elapsed >= FIRST_BYTE_GRACE_SECONDS:
                         rescue = _select_norm_cache_rescue(config.cache_dir, state)
                         if rescue:
                             logger.warning(
@@ -1765,16 +1803,6 @@ async def admin_panel(request: Request):
     return _render_admin_response(request, prefix)
 
 
-@router.get("/live", response_class=HTMLResponse, dependencies=[Depends(require_admin_access)])
-async def live_panel(request: Request):
-    """Serve the mobile live control room — phone-optimised operator surface."""
-    prefix = request.headers.get("X-Ingress-Path", "")
-    html = _get_injected_html("live", _LIVE_HTML, prefix)
-    html = _inject_csrf_token(html, _get_csrf_token(request.app))
-    csp = "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
-
-
 @router.get("/listen", response_class=HTMLResponse)
 async def listener(request: Request):
     """Backwards-compatible alias for the listener UI."""
@@ -1836,11 +1864,32 @@ async def service_worker():
     )
 
 
+def _resolve_static_file(filename: str) -> Path | None:
+    """Resolve a user-requested static asset path safely.
+
+    Rejects absolute paths and ``..`` components before filesystem lookup, then
+    confirms the resolved target stays under the static directory and is a file.
+    """
+    if filename.startswith("/") or ".." in Path(filename).parts:
+        return None
+
+    static_root = _STATIC_DIR.resolve()
+    try:
+        candidate = (static_root / filename).resolve()
+    except OSError:
+        return None
+
+    if not candidate.is_relative_to(static_root) or not candidate.is_file():
+        return None
+
+    return candidate
+
+
 @router.get("/static/{filename:path}")
 async def static_files(filename: str):
     """Serve PWA static assets (manifest, icons)."""
-    filepath = (_STATIC_DIR / filename).resolve()
-    if not filepath.is_relative_to(_STATIC_DIR) or not filepath.is_file():
+    filepath = _resolve_static_file(filename)
+    if filepath is None:
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(filepath)
 
