@@ -224,3 +224,28 @@ async def test_playlist_load_clears_active_heading(tmp_path):
     assert app.state.station_state.heading is None
     assert app.state.station_state.heading_pending_announcement == ""
     assert read_persisted_heading(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_heading_malformed_body_returns_422_not_500(tmp_path):
+    """An empty or non-JSON POST body degrades to a warm 422, never a raw 500.
+
+    The admin UI always sends ``{seed: ...}``, but a malformed request must still
+    get a human, way-out message (leadership principle #5) rather than a 500.
+    """
+    app = _make_app(tmp_path)
+    async with _client(app) as client:
+        empty = await client.post("/api/heading")  # no body at all
+        garbage = await client.post(
+            "/api/heading",
+            content=b"not json",
+            headers={"content-type": "application/json"},
+        )
+
+    for resp in (empty, garbage):
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"]  # a human message with a way out
+    # a malformed request must not arm a heading
+    assert app.state.station_state.heading is None
