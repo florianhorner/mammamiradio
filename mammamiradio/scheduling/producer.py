@@ -63,6 +63,7 @@ from mammamiradio.home.ha_context import (
     HomeContext,
     check_reactive_triggers,
     fetch_home_context,
+    get_cached_home_context,
     push_state_to_ha,
 )
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
@@ -92,6 +93,14 @@ FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
     "Do not list sensors. Make it feel like a host casually noticing the home."
 )
 FIRST_HOME_CONTEXT_MIN_ENTITIES = 3
+# The one-time cold HA warm-up (states + registry websocket snapshot + weather,
+# all on a cache miss) legitimately takes far longer than a steady-state refresh.
+# Budgeting that first load at the tight context_refresh_timeout would cancel the
+# registry websocket every time on a sluggish HA, so the device-label catalog
+# would never populate. Give the first load (no usable cache yet) this longer
+# budget — still bounded so a fully-hung HA can't block production forever — and
+# apply the tight steady-state budget to every refresh after.
+_HA_CONTEXT_COLD_LOAD_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
@@ -1310,6 +1319,52 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     )
 
 
+def _has_real_home_context(ctx: HomeContext | None) -> bool:
+    """True only for a genuinely populated context — not the empty timeout fallback.
+
+    A successful fetch stamps ``timestamp`` (and usually fills ``scored``/``summary``);
+    the empty ``HomeContext()`` we air on after a timeout has none of these. Gating
+    the cold-vs-warm budget on this prevents the empty fallback from poisoning the
+    cache state: without it, one cold timeout would store an empty context, and the
+    next refresh would see "a cache" and drop to the tight budget — so a healthy-but-
+    slow registry/weather warm-up could time out forever until restart.
+    """
+    return ctx is not None and (ctx.timestamp > 0 or bool(ctx.scored) or bool((ctx.summary or "").strip()))
+
+
+async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
+    """Refresh HA context within a wall-clock budget; never block production.
+
+    Returns the freshest HomeContext available: a completed refresh, else the
+    last-known context (the passed cache, then the module cache), else an empty
+    ``HomeContext()``. Audio continuity wins over HA freshness (INSTANT AUDIO),
+    so a slow or hung HA degrades to stale/empty context instead of stalling the
+    producer loop. The cold first load (no *real* context anywhere yet) gets the
+    longer warm-up budget so the registry/weather snapshot can populate; every
+    steady-state refresh gets the tight ``context_refresh_timeout``.
+    """
+    have_context = _has_real_home_context(ha_cache) or _has_real_home_context(get_cached_home_context())
+    budget = (
+        config.homeassistant.context_refresh_timeout
+        if have_context
+        else max(config.homeassistant.context_refresh_timeout, _HA_CONTEXT_COLD_LOAD_TIMEOUT)
+    )
+    try:
+        return await asyncio.wait_for(
+            fetch_home_context(
+                ha_url=config.homeassistant.url,
+                ha_token=config.ha_token,
+                poll_interval=float(config.homeassistant.poll_interval),
+                _cache=ha_cache,
+                cache_dir=config.cache_dir,
+            ),
+            timeout=budget,
+        )
+    except TimeoutError:
+        logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
+        return ha_cache or get_cached_home_context() or HomeContext()
+
+
 def _maybe_arm_first_home_context_moment(
     state: StationState,
     ha_cache: HomeContext,
@@ -1722,13 +1777,10 @@ async def run_producer(
                 SegmentType.NEWS_FLASH,
             )
         ):
-            ha_cache = await fetch_home_context(
-                ha_url=config.homeassistant.url,
-                ha_token=config.ha_token,
-                poll_interval=float(config.homeassistant.poll_interval),
-                _cache=ha_cache,
-                cache_dir=config.cache_dir,
-            )
+            # Refresh within a wall-clock budget so a slow/hung HA never blocks
+            # segment production (INSTANT AUDIO). The state-copy below then runs on
+            # whatever HomeContext we end up with — fresh, stale, or empty.
+            ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = ha_cache.mood

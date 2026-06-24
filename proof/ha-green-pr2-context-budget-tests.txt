@@ -1,0 +1,37 @@
+Proof — PR2 (HA Green): budget the HA context refresh so a slow HA never stalls audio
+Branch: florianhorner/fix/ha-green-pr2-context-budget
+Commit: bd68459c (+ this proof commit)
+Captured: 2026-06-24
+
+== Full test suite (pytest tests/) ==
+3263 passed, 2 skipped, 19 deselected, 1 warning in 60.12s
+
+== New / touched tests ==
+tests/scheduling/test_ha_context_budget.py (new) — 8 tests:
+  success returns fresh; timeout -> stale cache; timeout+no-cache -> empty;
+  cold load gets longer budget than steady state; module-cache fallback;
+  _has_real_home_context; empty fallback does not poison the cold budget.
+tests/core/test_config_env_overrides.py — default, env override, non-float/<=0/inf ignored.
+tests/core/test_config.py — rejects non-positive / bool / nan context_refresh_timeout.
+
+== Type check (mypy) ==
+Success: no issues found (producer.py, config.py)
+
+== Lint / format (ruff) ==
+ruff check mammamiradio/ tests/: All checks passed!
+ruff format --check: already formatted
+
+== Release invariants (bash scripts/check-release-invariants.sh) ==
+Passed: 7  Failed: 0 — All invariants passed.
+
+== Adversarial review (codex exec, read-only, diff-scoped) ==
+Found 2 issues, BOTH FIXED in this commit:
+  - [Medium] Cold-load retry poisoning: the empty timeout fallback was stored as
+    ha_cache and then read as "warm", dropping a healthy-but-slow registry warm-up
+    to the tight budget forever. Fixed with _has_real_home_context() gating the
+    cold-vs-warm budget on a genuinely populated context (timestamp/scored/summary).
+  - [Low/Med] Validation accepted bool / inf / nan timeouts. Fixed: reject bool and
+    require math.isfinite in both env parse and _validate; tests added for each.
+Confirmed safe by review: asyncio.wait_for cancellation does NOT corrupt the
+module-global _ha_cache (written once after the full context build); cache-hit fast
+path unchanged for sane budgets.
