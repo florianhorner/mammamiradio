@@ -16,6 +16,7 @@ The current version source of truth is `pyproject.toml`.
 
 - **Audio starts faster when the station is waking up.** A listener who connects to a just-started or just-restarted station now hears sound within a second or two instead of waiting up to five. On a cold start the station reaches for backup audio right away rather than holding out for the next freshly made segment, while a brief mid-show gap still prefers a fresh segment over replaying a recent track. A new start-up check boots a real station and proves first audio lands in time, so the promise can't quietly slip again.
 - **Host chatter beds over the right song now.** When the hosts talk over the tail of a track, the music underneath is the song that actually just played — even right after the station recovers from a quiet stretch by reaching for a backup track. Before, that recovery could leave the previous song bleeding under the next host break.
+- **The listener and admin pages read better with a screen reader, a keyboard, and on touch.** The listener page now offers a skip-to-content link and a labelled main region, its page language matches the words actually on screen (so a screen reader stops reading English with an Italian accent), and a stopped station no longer flashes "on air" for a beat before it settles. In the admin panel the section tabs are a proper tab strip you can move through with the arrow keys, the page has a real top-level heading, and faint blue status labels were brightened so they stay readable on the dark control room.
 
 ### Removed
 

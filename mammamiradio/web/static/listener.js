@@ -489,7 +489,7 @@
       el.setAttribute('aria-live', 'polite');
       el.style.cssText = (
         'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
-        'background:color-mix(in srgb, var(--bg) 96%, transparent);color:var(--cream,#F5EDD8);' +
+        'background:rgba(20,17,15,0.96);color:var(--cream,#F5EDD8);' +
         'padding:10px 18px;border-radius:8px;font-size:14px;font-family:Outfit,sans-serif;' +
         'z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);' +
         'border:1px solid rgba(244,208,72,0.2);opacity:0;transition:opacity 0.18s ease;'

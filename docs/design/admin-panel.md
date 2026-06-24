@@ -108,7 +108,7 @@ Italian headlines and station-feel words).
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change
 - Admin controls must show feedback within 300ms of user action (toast, state change, or loading indicator)
-- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and `<html lang>` follows the active copy register (it/en). A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Chips and pills stay at the documented 36px minimum; only control buttons require 44px.
+- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en) — admin stays `lang="it"`. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Chips and pills stay at the documented 36px minimum; only control buttons require 44px.
 
 ## QA requirement
 

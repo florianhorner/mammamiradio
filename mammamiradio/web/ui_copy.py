@@ -49,6 +49,8 @@ COPY: dict[str, dict[str, str]] = {
         "seg_default": "On Air",
         # Now-playing strip + palinsesto inline strings rendered by listener.js
         "np_paused": "Paused",
+        "np_stopped": "Stopped",
+        "skip_to_content": "Skip to content",
         "np_welcome": "Welcome aboard",
         "np_ad_message": "Sponsored message",
         "np_banter_strip": "in conversation",
@@ -96,6 +98,8 @@ COPY: dict[str, dict[str, str]] = {
         "seg_welcome": "Benvenuto",
         "seg_default": "In onda",
         "np_paused": "In pausa",
+        "np_stopped": "Fermo",
+        "skip_to_content": "Salta al contenuto",
         "np_welcome": "Ben arrivato",
         "np_ad_message": "Messaggio pubblicitario",
         "np_banter_strip": "in diretta",

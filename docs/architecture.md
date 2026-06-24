@@ -460,6 +460,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/dashboard` | GET | Admin | 301 redirect to `/admin` (legacy) |
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
+| `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
