@@ -1,0 +1,14 @@
+# proof — fix(web): graceful 422 on malformed /api/heading body
+# branch fix/heading-json-body
+
+## ruff check + format
+All checks passed!
+2 files already formatted
+ruff: clean
+
+## pytest tests/web/test_heading.py
+.........                                                                [100%]
+9 passed in 0.60s
+
+## full suite (coverage gate)
+3289 passed, 2 skipped; total coverage 93.75% (floor 92%); all module floors held
