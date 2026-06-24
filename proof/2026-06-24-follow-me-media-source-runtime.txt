@@ -1,0 +1,14 @@
+# Stream-proxy runtime behavior — MammaRadioStreamView.get()
+# Audio-delivery rule scenarios: normal / add-on unreachable / upstream 5xx / mid-stream drop
+# commit: 86415b4bba3c52343e5e9f7f3bd97d379ad7bbc2  captured: 2026-06-23T22:28:54Z
+
+tests/home/test_ha_media_source.py::test_stream_proxy_fetches_configured_entry_or_defaults PASSED [ 11%]
+tests/home/test_ha_media_source.py::test_stream_proxy_get_streams_chunks_and_releases PASSED [ 22%]
+tests/home/test_ha_media_source.py::test_ha_docs_no_longer_defer_media_source PASSED [ 33%]
+tests/home/test_ha_media_source.py::test_async_get_media_source_registers_stream_proxy_once PASSED [ 44%]
+tests/home/test_ha_media_source.py::test_invalid_media_identifiers_raise_home_assistant_contract_errors PASSED [ 55%]
+tests/home/test_ha_media_source.py::test_stream_proxy_get_bad_gateway_when_addon_unreachable PASSED [ 66%]
+tests/home/test_ha_media_source.py::test_stream_proxy_get_bad_gateway_on_upstream_error_status_and_releases PASSED [ 77%]
+tests/home/test_ha_media_source.py::test_stream_proxy_get_swallows_midstream_drop_and_releases PASSED [ 88%]
+tests/home/test_ha_media_source.py::test_browse_and_resolve_live_stream_use_audio_mpeg_proxy PASSED [100%]
+============================== 9 passed in 0.10s ===============================
