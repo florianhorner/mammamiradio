@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from mammamiradio.audio.normalizer import _FFMPEG_TIMEOUT_SEC, ffmpeg_slot
 from mammamiradio.core.models import SegmentType
 
 
@@ -130,21 +131,28 @@ def validate_segment_audio(
 
 
 def _probe_duration_sec(path: Path) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Bounded by the same timeout convention as normalizer probes: this now holds an
+    # ffmpeg_slot, so a hung ffprobe must not pin one of the 2 Pi slots indefinitely.
+    try:
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_FFMPEG_TIMEOUT_SEC,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioToolError(f"ffprobe timed out probing duration after {_FFMPEG_TIMEOUT_SEC:.0f}s") from exc
     if result.returncode != 0:
         raise AudioToolError(f"ffprobe failed for duration: {result.stderr.strip() or result.stdout.strip()}")
     raw = result.stdout.strip()
@@ -155,25 +163,30 @@ def _probe_duration_sec(path: Path) -> float:
 
 
 def _probe_silence(path: Path) -> tuple[float, float]:
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostats",
-            "-i",
-            str(path),
-            "-af",
-            # NOTE: The -38dB noise floor here is independent of QualityThresholds.min_mean_volume_db.
-            # Both happen to be -38 now but will diverge as thresholds are tuned. Do not conflate.
-            "silencedetect=n=-38dB:d=0.8",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-nostats",
+                    "-i",
+                    str(path),
+                    "-af",
+                    # NOTE: The -38dB noise floor here is independent of QualityThresholds.min_mean_volume_db.
+                    # Both happen to be -38 now but will diverge as thresholds are tuned. Do not conflate.
+                    "silencedetect=n=-38dB:d=0.8",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_FFMPEG_TIMEOUT_SEC,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioToolError(f"ffmpeg silencedetect timed out after {_FFMPEG_TIMEOUT_SEC:.0f}s") from exc
     if result.returncode != 0:
         raise AudioToolError(f"ffmpeg silencedetect failed: {result.stderr.strip()[-240:]}")
     matches = re.findall(r"silence_duration:\s*([0-9.]+)", result.stderr)
@@ -184,23 +197,28 @@ def _probe_silence(path: Path) -> tuple[float, float]:
 
 
 def _probe_volume(path: Path) -> tuple[float | None, float | None]:
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostats",
-            "-i",
-            str(path),
-            "-af",
-            "volumedetect",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-nostats",
+                    "-i",
+                    str(path),
+                    "-af",
+                    "volumedetect",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_FFMPEG_TIMEOUT_SEC,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise AudioToolError(f"ffmpeg volumedetect timed out after {_FFMPEG_TIMEOUT_SEC:.0f}s") from exc
     if result.returncode != 0:
         raise AudioToolError(f"ffmpeg volumedetect failed: {result.stderr.strip()[-240:]}")
     mean_match = re.search(r"mean_volume:\s*(-?[0-9.]+)\s*dB", result.stderr)

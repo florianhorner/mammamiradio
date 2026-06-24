@@ -31,7 +31,7 @@ def _mk_audio(path: Path) -> Path:
 def test_validate_segment_audio_passes(tmp_path):
     audio = _mk_audio(tmp_path / "ok.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="12.0\n")
@@ -48,7 +48,7 @@ def test_validate_segment_audio_passes(tmp_path):
 def test_validate_segment_audio_rejects_short_duration(tmp_path):
     audio = _mk_audio(tmp_path / "short.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="2.5\n")
@@ -68,7 +68,7 @@ def test_validate_segment_audio_rejects_short_duration(tmp_path):
 def test_validate_segment_audio_rejects_implausibly_short_multiline_banter(tmp_path):
     audio = _mk_audio(tmp_path / "short_exchange.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="8.0\n")
@@ -88,7 +88,7 @@ def test_validate_segment_audio_rejects_implausibly_short_multiline_banter(tmp_p
 def test_validate_segment_audio_rejects_explicit_expected_duration(tmp_path):
     audio = _mk_audio(tmp_path / "short_expected.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="10.0\n")
@@ -108,7 +108,7 @@ def test_validate_segment_audio_rejects_explicit_expected_duration(tmp_path):
 def test_validate_segment_audio_without_context_preserves_banter_threshold(tmp_path):
     audio = _mk_audio(tmp_path / "short_but_legacy_valid.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="8.0\n")
@@ -125,7 +125,7 @@ def test_validate_segment_audio_without_context_preserves_banter_threshold(tmp_p
 def test_validate_segment_audio_ignores_expected_context_for_non_banter(tmp_path):
     audio = _mk_audio(tmp_path / "ad.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="12.0\n")
@@ -142,7 +142,7 @@ def test_validate_segment_audio_ignores_expected_context_for_non_banter(tmp_path
 def test_validate_segment_audio_rejects_high_silence_ratio(tmp_path):
     audio = _mk_audio(tmp_path / "silence.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="10.0\n")
@@ -162,7 +162,7 @@ def test_validate_segment_audio_rejects_high_silence_ratio(tmp_path):
 def test_validate_segment_audio_rejects_very_quiet_signal(tmp_path):
     audio = _mk_audio(tmp_path / "quiet.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="12.0\n")
@@ -227,7 +227,7 @@ def test_music_segment_rejected_if_too_short(tmp_path):
     """MUSIC files under 30s should be rejected as likely truncated/placeholder."""
     audio = _mk_audio(tmp_path / "short.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="10.0\n")
@@ -248,7 +248,7 @@ def test_music_segment_passes_at_30s(tmp_path):
     """MUSIC files at exactly 30s should pass the permissive gate."""
     audio = _mk_audio(tmp_path / "ok.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="30.0\n")
@@ -286,7 +286,7 @@ def test_validate_segment_audio_raises_on_long_silence_span(tmp_path):
     """
     audio = _mk_audio(tmp_path / "ok.mp3")
 
-    def _run(cmd, capture_output, text, check):
+    def _run(cmd, capture_output, text, check, timeout=None):
         joined = " ".join(cmd)
         if "ffprobe" in joined:
             return _cp(stdout="60.0\n")  # 60s so a 5s silence is only 8% ratio
@@ -324,3 +324,50 @@ def test_probe_silence_returns_zero_when_no_silence_detected(tmp_path):
         total, maximum = _probe_silence(tmp_path / "x.mp3")
     assert total == 0.0
     assert maximum == 0.0
+
+
+def test_probe_duration_timeout_raises_audio_tool_error(tmp_path):
+    # The probes now hold an ffmpeg_slot, so a hung ffprobe must surface as a
+    # caught AudioToolError (releasing the slot) rather than an unhandled
+    # TimeoutExpired that escapes the producer's except AudioToolError handlers.
+    audio = _mk_audio(tmp_path / "hang.mp3")
+
+    def _hang(cmd, capture_output, text, check, timeout=None):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout or 180)
+
+    with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_hang), pytest.raises(AudioToolError):
+        _probe_duration_sec(audio)
+
+
+def test_probe_silence_and_volume_timeout_raise_audio_tool_error(tmp_path):
+    audio = _mk_audio(tmp_path / "hang2.mp3")
+
+    def _hang(cmd, capture_output, text, check, timeout=None):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout or 180)
+
+    with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_hang):
+        with pytest.raises(AudioToolError):
+            _probe_silence(audio)
+        with pytest.raises(AudioToolError):
+            _probe_volume(audio)
+
+
+def test_probes_pass_timeout_to_subprocess(tmp_path):
+    # Guard: every probe must pass a timeout so it can't pin an ffmpeg_slot forever.
+    audio = _mk_audio(tmp_path / "ok2.mp3")
+    seen = []
+
+    def _run(cmd, capture_output, text, check, timeout=None):
+        seen.append(timeout)
+        joined = " ".join(cmd)
+        if "ffprobe" in joined:
+            return _cp(stdout="12.0\n")
+        if "silencedetect" in joined:
+            return _cp(stderr="silence_duration: 0.1\n")
+        return _cp(stderr="mean_volume: -20.0 dB\nmax_volume: -3.0 dB\n")
+
+    with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run):
+        _probe_duration_sec(audio)
+        _probe_silence(audio)
+        _probe_volume(audio)
+    assert seen and all(t is not None and t > 0 for t in seen)
