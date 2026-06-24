@@ -154,15 +154,16 @@ def test_broadcast_failure_is_best_effort(tmp_path):
 
 
 def test_broadcast_holds_norm_sem_during_pass():
-    """The extra pass takes a _NORM_SEM slot so it respects the Pi 2-ffmpeg ceiling
-    (the regime where the SIGABRT / EQ-count guards live)."""
+    """The leaf ffmpeg call takes a _NORM_SEM slot so the broadcast pass respects
+    the Pi 2-ffmpeg ceiling (the regime where the SIGABRT / EQ-count guards live)."""
     configure_broadcast_chain(True)
     held = {}
 
-    def _record(*_args, **_kwargs):
+    def _record(cmd, *_args, **_kwargs):
         held["value"] = normalizer._NORM_SEM._value  # 2 when free, 1 while held
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
-    with patch.object(normalizer, "_run_ffmpeg", side_effect=_record):
+    with patch("mammamiradio.audio.normalizer.subprocess.run", side_effect=_record):
         apply_broadcast_chain(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"))
     assert held["value"] == 1  # a slot was held across the ffmpeg call
 

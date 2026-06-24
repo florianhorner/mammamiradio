@@ -1,0 +1,45 @@
+Proof — PR3a (HA Green): single leaf-level ffmpeg admission gate (extend _NORM_SEM)
+Branch: florianhorner/fix/ha-green-pr3a-admission
+Commit: e978da3a (+ this proof commit)
+Captured: 2026-06-24
+Built via /autopilot (run florianhorner-fix-ha-green-pr3a-admission-1782261350); see review notes below.
+
+== Full test suite (pytest tests/) ==
+3256 passed, 2 skipped, 19 deselected, 1 warning in ~60s
+
+== New / touched tests ==
+tests/audio/test_audio_admission.py (NEW, 5 tests): ≤2 concurrent non-rescue ffmpeg
+  across all paths; no-deadlock for concat/reconcile/measure chains; rescue=True runs
+  when both slots held; _NORM_SEM stays BoundedSemaphore(2).
+tests/audio/test_audio_quality.py: +3 regression tests — probe TimeoutExpired -> AudioToolError,
+  and every probe passes a positive timeout (can't pin an ffmpeg_slot forever); mock stubs
+  updated for the new timeout= kwarg.
+tests/audio/test_normalizer_unit.py, tests/audio/test_broadcast_chain.py: _NORM_SEM assertions
+  retargeted from the removed composite wraps to the leaf gate.
+
+== Real-ffmpeg path (pytest -m requires_ffmpeg) ==
+19 passed (broadcast-chain neutrality + semaphore held-slot assertions green against the leaf gate)
+
+== Type check (mypy) ==
+Success: no issues found (normalizer.py, audio_quality.py, downloader.py)
+
+== Lint / format (ruff) ==
+All checks passed!
+
+== Release invariants (bash scripts/check-release-invariants.sh) ==
+Passed: 7  Failed: 0 — All invariants passed (double-re-encode / EQ-count / SIGABRT guards intact).
+
+== Adversarial reviews (2 P1s found + fixed, then re-verified) ==
+Claude code-reviewer: P1 — audio_quality probes held ffmpeg_slot with no timeout. FIXED
+  (timeout=_FFMPEG_TIMEOUT_SEC + TimeoutExpired->AudioToolError) + regression tests.
+codex review: P1 (sibling) — mix_ad_with_bed inline ffprobe held slot with no timeout. FIXED
+  (timeout + 30s fallback). codex RE-confirm hit a ChatGPT usage limit (resets ~04:49);
+  resolution verified instead by grepping EVERY subprocess.run-in-ffmpeg_slot site
+  (normalizer measure_lufs=30, _run_ffmpeg=_FFMPEG_TIMEOUT_SEC, probe=5, mix_ad ffprobe=now
+  bounded; audio_quality x3 bounded; downloader validate=30) + full green suite.
+
+== Design / deferred ==
+Behavior-preserving: concurrency cap stays 2 (total ffmpeg now capped at 2 vs previously-
+unbounded mixing/synthesis/probes — strictly LESS Pi load). Deferred follow-ups (NOT this PR):
+priority/fairness so background prefetch yields to foreground (review H1), wiring rescue=True
+at the producer bridge/tone/silence call sites, and the optional rename to admission.py.
