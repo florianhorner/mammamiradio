@@ -778,6 +778,38 @@ def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
         load_config(str(custom_path))
 
 
+def test_load_config_rejects_non_positive_context_refresh_timeout(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("context_refresh_timeout = 2.0", "context_refresh_timeout = 0.0")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.context_refresh_timeout must be a positive number"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_bool_context_refresh_timeout(tmp_path):
+    # `true` is an int subclass that would slip through as a 1s budget — reject it.
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("context_refresh_timeout = 2.0", "context_refresh_timeout = true")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.context_refresh_timeout must be a positive number"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_nan_context_refresh_timeout(tmp_path):
+    # nan <= 0 is False, so it would slip past a naive check and break wait_for.
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("context_refresh_timeout = 2.0", "context_refresh_timeout = nan")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.context_refresh_timeout must be a positive number"):
+        load_config(str(custom_path))
+
+
 def test_load_config_rejects_invalid_timer_interrupt_urgency_and_cooldown(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = (

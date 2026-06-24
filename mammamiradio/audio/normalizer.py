@@ -12,13 +12,25 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from threading import BoundedSemaphore
 
 logger = logging.getLogger(__name__)
 
-# Limit concurrent ffmpeg normalization runs across sync + executor call sites.
+# Limit concurrent ffmpeg/ffprobe runs across sync + executor call sites.
 _NORM_SEM = BoundedSemaphore(2)
+
+
+@contextmanager
+def ffmpeg_slot(*, rescue: bool = False) -> Iterator[None]:
+    """Reserve one global ffmpeg/ffprobe slot unless this is emergency audio."""
+    if rescue:
+        yield
+        return
+    with _NORM_SEM:
+        yield
 
 
 class ConcatDurationError(RuntimeError):
@@ -110,7 +122,8 @@ def measure_lufs(input_path: Path) -> float | None:
     ]
     _t0 = time.perf_counter()
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        with ffmpeg_slot():
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     logger.debug("ffmpeg stage measure_lufs %s: %.2fs", input_path.name, time.perf_counter() - _t0)
@@ -171,17 +184,19 @@ AVAILABLE_SFX_TYPES: list[str] = [
 ]
 
 
-def _run_ffmpeg(cmd: list[str], description: str) -> subprocess.CompletedProcess:
+def _run_ffmpeg(cmd: list[str], description: str, *, rescue: bool = False) -> subprocess.CompletedProcess:
     """Run an ffmpeg command with stderr capture and logging on failure.
 
     Per-stage wall time is logged at DEBUG (set LOG_LEVEL=DEBUG for a soak) so the
     render-latency deep-dive can attribute the seconds — every ffmpeg stage funnels
     through here labelled by ``description`` (e.g. "normalize X", "LUFS reconcile",
-    "mix voice with talk bed", "concat N files").
+    "mix voice with talk bed", "concat N files"). ``rescue=True`` is reserved for
+    emergency audio call sites that must not wait behind normal work.
     """
     _t0 = time.perf_counter()
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
+        with ffmpeg_slot(rescue=rescue):
+            result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
         logger.error("ffmpeg timed out after %.0fs (%s)", _FFMPEG_TIMEOUT_SEC, description)
         raise
@@ -290,36 +305,32 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     if cfg is None:
         return False
     target = cfg[1] if ad else cfg[0]
-    # Hold a normalization concurrency slot for the measure + corrective re-encode
-    # so reconcile honours the same 2-ffmpeg ceiling as the rest of the pipeline
-    # (the constrained-Pi regime where the SIGABRT / EQ-count guards live).
-    with _NORM_SEM:
-        lufs = measure_lufs(path)
-        if lufs is None:
-            return False  # measurement failed — leave the file as produced
-        # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
-        gain_db = max(-12.0, min(12.0, target - lufs))
-        if abs(gain_db) < 0.5:
-            return True  # already on target (within measurement noise) — confirmed
-        tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(path),
-            "-af",
-            f"volume={_fmt_num(gain_db)}dB",
-            *_reconcile_output_args,
-            str(tmp),
-        ]
-        try:
-            _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}")
-            # Rename inside the try so a failed atomic replace (disk full, vanished
-            # file) also leaves the original untouched — never raises.
-            tmp.replace(path)
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            tmp.unlink(missing_ok=True)
-            return False  # measure/encode/rename failed — keep the original, never break audio
+    lufs = measure_lufs(path)
+    if lufs is None:
+        return False  # measurement failed — leave the file as produced
+    # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
+    gain_db = max(-12.0, min(12.0, target - lufs))
+    if abs(gain_db) < 0.5:
+        return True  # already on target (within measurement noise) — confirmed
+    tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(path),
+        "-af",
+        f"volume={_fmt_num(gain_db)}dB",
+        *_reconcile_output_args,
+        str(tmp),
+    ]
+    try:
+        _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}")
+        # Rename inside the try so a failed atomic replace (disk full, vanished
+        # file) also leaves the original untouched — never raises.
+        tmp.replace(path)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        tmp.unlink(missing_ok=True)
+        return False  # measure/encode/rename failed — keep the original, never break audio
     logger.info("LUFS reconcile: %s -> %.1f LUFS (%+.1f dB)", path.name, target, gain_db)
     return True
 
@@ -432,9 +443,9 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
 
     No-op (returns False, leaving output_path unwritten) when the chain is not
     configured. Best-effort: any ffmpeg failure returns False and leaves the input
-    untouched — never raises into the audio path, never produces dead air. Holds
-    _NORM_SEM so the extra pass respects the Pi 2-ffmpeg ceiling. Returns True only
-    when output_path was successfully written.
+    untouched — never raises into the audio path, never produces dead air. The
+    leaf ffmpeg runner holds _NORM_SEM so this pass respects the Pi 2-ffmpeg
+    ceiling. Returns True only when output_path was successfully written.
     """
     args = _broadcast_output_args
     if args is None:
@@ -452,12 +463,11 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
         *args,
         str(output_path),
     ]
-    with _NORM_SEM:
-        try:
-            _run_ffmpeg(cmd, f"broadcast chain {input_path.name}")
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            output_path.unlink(missing_ok=True)
-            return False
+    try:
+        _run_ffmpeg(cmd, f"broadcast chain {input_path.name}")
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        output_path.unlink(missing_ok=True)
+        return False
     return True
 
 
@@ -561,8 +571,7 @@ def normalize(
         "mp3",
         str(output_path),
     ]
-    with _NORM_SEM:
-        _run_ffmpeg(cmd, f"normalize {input_path.name}")
+    _run_ffmpeg(cmd, f"normalize {input_path.name}")
     if is_final:
         # Final segment (incl. a fast-path-skipped one) — bring it to the configured
         # target; reconcile is a cheap no-op when already there.
@@ -578,22 +587,23 @@ def probe_duration_sec(path: Path) -> float | None:
     a probe failure to crash a concat — just skip the check.
     """
     try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
     except subprocess.TimeoutExpired:
         logger.warning("ffprobe timed out probing %s", path.name)
         return None
@@ -1712,25 +1722,29 @@ def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
     NOTE: synthesize_ad() already applies a mood-based bed via generate_station_id_bed().
     Only call this function on raw voiceovers that bypassed synthesize_ad processing.
     """
-    # Get voiceover duration so the aevalsrc bed is trimmed exactly.
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(voiceover_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Get voiceover duration so the aevalsrc bed is trimmed exactly. Bounded by a
+    # timeout: this holds an ffmpeg_slot, so a hung ffprobe must not pin one of the
+    # 2 Pi slots. A timeout falls back to the same 30s default as a probe failure.
     try:
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(voiceover_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_FFMPEG_TIMEOUT_SEC,
+            )
         duration = float(result.stdout.strip()) if result.returncode == 0 else 30.0
-    except ValueError:
+    except (subprocess.TimeoutExpired, ValueError):
         duration = 30.0
 
     # Warm sine bed: three harmonics with a slow 0.5Hz LFO breathing envelope.
