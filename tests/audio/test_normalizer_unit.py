@@ -158,17 +158,26 @@ def test_normalize_forces_single_thread(mock_subprocess):
     assert cmd[threads_idx + 1] == "1"
 
 
-def test_normalize_uses_global_ffmpeg_semaphore(mock_subprocess):
+def test_run_ffmpeg_uses_global_ffmpeg_semaphore(mock_subprocess):
     mock_run, _ = mock_subprocess
-    inp = Path("/tmp/in.mp3")
-    out = Path("/tmp/out.mp3")
-    sem = MagicMock()
+    held = {"value": False}
 
-    with patch("mammamiradio.audio.normalizer._NORM_SEM", sem):
-        normalize(inp, out, loudnorm=False)
+    class RecordingSem:
+        def __enter__(self):
+            held["value"] = True
 
-    sem.__enter__.assert_called_once()
-    sem.__exit__.assert_called_once()
+        def __exit__(self, exc_type, exc, tb):
+            held["value"] = False
+
+    def _assert_slot_held(*_args, **_kwargs):
+        assert held["value"] is True
+        return mock_subprocess[1]
+
+    mock_run.side_effect = _assert_slot_held
+    with patch("mammamiradio.audio.normalizer._NORM_SEM", RecordingSem()):
+        _run_ffmpeg(["ffmpeg", "-y"], "leaf gate")
+
+    assert held["value"] is False
     mock_run.assert_called_once()
 
 
