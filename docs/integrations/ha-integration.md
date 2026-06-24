@@ -72,6 +72,13 @@ Use `media-source://mammamiradio/live` as a `media_content_id` for
 `media_player.play_media`. See `docs/integrations/now-playing.md` for the
 contract.
 
+**Long speaker handoffs:** the proxy URL Home Assistant hands a speaker is
+signed and valid for 24 hours. A speaker streaming continuously keeps playing
+past that, but if it drops and reconnects more than a day later (or after Home
+Assistant restarts), that one speaker can go quiet. Start it again from the
+media browser or your automation and it picks up a fresh URL. The web player and
+the `media_player.mammamiradio` card are never affected.
+
 ## Deferred to a later version
 
 - A branded Lovelace card (`getEntitySuggestion`) — the built-in media-control
