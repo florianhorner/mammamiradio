@@ -32,8 +32,8 @@ def _restore_audio_admission_globals():
 
 
 def _completed(cmd: list[str], *, text: bool = False) -> subprocess.CompletedProcess:
-    stdout: str | bytes = ""
-    stderr: str | bytes = ""
+    stdout: str = ""
+    stderr: str = ""
     joined = " ".join(cmd)
 
     if cmd[0] == "ffprobe" and "-print_format" in cmd:
@@ -48,8 +48,7 @@ def _completed(cmd: list[str], *, text: bool = False) -> subprocess.CompletedPro
         stderr = ""
 
     if not text:
-        stdout = stdout.encode()
-        stderr = stderr.encode()
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout.encode(), stderr=stderr.encode())
     return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr=stderr)
 
 
