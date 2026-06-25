@@ -160,6 +160,26 @@ def test_addon_version_matches_pyproject():
     pytest.fail("version: key not found in ha-addon/mammamiradio/config.yaml")
 
 
+def test_integration_manifest_version_matches_pyproject():
+    """HACS integration manifest version must match the package version.
+
+    The integration ships from this repo and rides the release number
+    (docs/release-process.md). This always-on guard catches manifest drift on every
+    test run, not only on PRs that touch a version file.
+    """
+    import json
+    import tomllib
+
+    project_root = Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+    pkg_version = pyproject["project"]["version"]
+
+    manifest = json.loads((project_root / "custom_components" / "mammamiradio" / "manifest.json").read_text())
+    assert manifest.get("version") == pkg_version, (
+        f"integration manifest version {manifest.get('version')!r} != pyproject {pkg_version!r}"
+    )
+
+
 # ── P0-1: producer wakes on session resume (race window) ──
 
 
