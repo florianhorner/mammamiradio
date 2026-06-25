@@ -5,21 +5,6 @@ configuration:
   jamendo_client_id:
     name: Jamendo Client ID
     description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
-  anthropic_api_key:
-    name: Anthropic API Key
-    description: Unlocks Claude AI hosts for generated banter and ads. Without this, the station can use OpenAI as a script fallback when configured, then stock banter.
-  openai_api_key:
-    name: OpenAI API Key
-    description: Enables OpenAI host voices and serves as the script-generation fallback when Anthropic is unavailable. Without this, OpenAI hosts use Edge TTS and scripts fall back to stock copy.
-  azure_speech_key:
-    name: Azure Speech Key
-    description: Enables official Azure Speech voices for Italian hosts, sweepers, and ads. Requires Azure Speech Region; missing or failing Azure voices fall back to Edge TTS.
-  azure_speech_region:
-    name: Azure Speech Region
-    description: Azure Speech resource region, such as westeurope or eastus. Required with Azure Speech Key.
-  elevenlabs_api_key:
-    name: ElevenLabs API Key
-    description: Enables custom ElevenLabs character voices when radio.toml uses engine = "elevenlabs". Missing or failing voices fall back to Edge TTS.
   quality_profile:
     name: AI Quality
     description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."

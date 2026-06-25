@@ -24,6 +24,8 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
 _ADDON_OPTIONS_LOCK = threading.Lock()
+_ADDON_SECRETS_PATH = "/config/secrets.env"
+_ADDON_OPTIONS_PATH = "/data/options.json"
 
 
 def _sanitize_credential_value(value: str) -> str:
@@ -105,24 +107,67 @@ def _save_addon_option(key: str, value) -> None:
 
 
 def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /data/options.json with new credential values."""
+    """Update /config/secrets.env with provider credential values."""
     import json as _json
     import os as _os
+    import shlex as _shlex
 
     with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options = {}
+        secrets_path = Path(_ADDON_SECRETS_PATH)
+        secrets_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        existing: dict[str, str] = {}
+        passthrough: list[str] = []
+        if secrets_path.exists():
+            for raw_line in secrets_path.read_text().splitlines():
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#"):
+                    passthrough.append(raw_line)
+                    continue
+                try:
+                    parsed = _shlex.split(stripped, comments=False, posix=True)
+                except ValueError:
+                    passthrough.append(raw_line)
+                    continue
+                if len(parsed) != 1 or "=" not in parsed[0]:
+                    passthrough.append(raw_line)
+                    continue
+                key, value = parsed[0].split("=", 1)
+                if key in _CREDENTIAL_ENV_TO_FIELD:
+                    existing[key] = value
+                else:
+                    passthrough.append(raw_line)
+
+        for env_key, value in updates.items():
+            if env_key in _CREDENTIAL_ENV_TO_FIELD:
+                existing[env_key] = _sanitize_credential_value(value)
+
+        lines = passthrough
+        lines.extend(f"{key}={_shlex.quote(value)}" for key, value in existing.items() if value)
+        tmp_path = secrets_path.with_suffix(secrets_path.suffix + ".tmp")
+        # Create with 0600 from the start — a secrets file must never have a
+        # world-readable window between write and chmod.
+        fd = _os.open(tmp_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+        try:
+            with _os.fdopen(fd, "w") as handle:
+                handle.write("\n".join(lines) + "\n")
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        _os.replace(tmp_path, secrets_path)
+
+        options_path = Path(_ADDON_OPTIONS_PATH)
         if options_path.exists():
             try:
                 options = _json.loads(options_path.read_text())
             except (ValueError, OSError):
-                pass
-
-        for env_key, value in updates.items():
-            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-            if opt_key:
-                options[opt_key] = _sanitize_credential_value(value)
-
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
+                options = None
+            if isinstance(options, dict):
+                changed = False
+                for opt_key in _CREDENTIAL_FIELDS:
+                    if opt_key in options:
+                        options.pop(opt_key, None)
+                        changed = True
+                if changed:
+                    tmp_options_path = options_path.with_suffix(options_path.suffix + ".tmp")
+                    tmp_options_path.write_text(_json.dumps(options, indent=2))
+                    _os.replace(tmp_options_path, options_path)

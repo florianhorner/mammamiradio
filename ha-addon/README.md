@@ -29,10 +29,6 @@ After installing, go to the add-on's **Configuration** tab:
 
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
 - **Jamendo Client ID** (optional): Enables CC-licensed music from Jamendo. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com). Leave empty to use other available music sources.
-- **Anthropic API Key** (optional): Enables AI-generated banter and ads via Claude. Get one at [console.anthropic.com](https://console.anthropic.com). Without this, the station uses stock banter lines.
-- **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and script generation fallback through the active quality profile when Anthropic is unavailable.
-- **Azure Speech Key / Region** (optional): Enables official Azure Speech voices for Italian hosts, sweepers, and ad characters. Configure both values; missing or failing Azure voices fall back to Edge TTS.
-- **ElevenLabs API Key** (optional): Enables custom ElevenLabs character voices when `radio.toml` uses `engine = "elevenlabs"`. Missing or failing ElevenLabs voices fall back to Edge TTS.
 - **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
@@ -42,12 +38,19 @@ After installing, go to the add-on's **Configuration** tab:
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
 - **On-air media player push**: Off by default for new installs. Leave it off when using the HACS integration; turn it on only for legacy add-on-only dashboards that still depend on the REST-pushed media player.
 
+Provider keys are no longer stored in Supervisor add-on options. Start the add-on,
+open the admin setup panel, and save any of these keys there: `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION`, and
+`ELEVENLABS_API_KEY`. The add-on writes them to its private `/config/secrets.env`
+file before the next restart; upgraded installs still read old option values until
+you move them.
+
 ## Usage
 
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
 3. The dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
-4. Add an Anthropic API key to unlock live AI hosts
+4. Save an Anthropic or OpenAI key in the admin setup panel to unlock live AI hosts
 5. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 

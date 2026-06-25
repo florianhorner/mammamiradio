@@ -28,39 +28,41 @@ STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
 EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
-def _extract_python_snippet(options_file: Path) -> str:
+def _extract_python_snippet(options_file: Path, secrets_file: Path) -> str:
     """Extract the Python body from the python3 -c "..." block in run.sh,
-    substituting the real options file path."""
+    substituting the real config file paths."""
     src = RUN_SH.read_text()
     # Find the python3 -c "..." block
     m = re.search(r'python3 -c "\n(.*?)\n" 2>', src, re.DOTALL)
     assert m, "Could not find python3 -c block in run.sh"
     raw = m.group(1)
-    # The shell uses $OPTIONS_FILE inside the script — substitute it
+    # The shell uses $OPTIONS_FILE / $SECRETS_FILE inside the script — substitute them.
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
+    raw = raw.replace("$SECRETS_FILE", str(secrets_file))
     # Shell escapes single-quotes as '\'' inside double-quoted strings; undo that
     raw = raw.replace("\\'", "'")
     return textwrap.dedent(raw)
 
 
-def _run_parser(options: dict) -> tuple[int, str, str]:
+def _run_parser(options: dict | None, secrets: str | None = None) -> tuple[int, str, str]:
     """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
     import tempfile
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-        json.dump(options, tmp)
-        tmp_path = Path(tmp.name)
-
-    try:
-        snippet = _extract_python_snippet(tmp_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        options_path = tmp_path / "options.json"
+        secrets_path = tmp_path / "secrets.env"
+        if options is not None:
+            options_path.write_text(json.dumps(options))
+        if secrets is not None:
+            secrets_path.write_text(secrets)
+        snippet = _extract_python_snippet(options_path, secrets_path)
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
         )
         return result.returncode, result.stdout, result.stderr
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def _parse_exports(stdout: str) -> dict[str, str]:
@@ -100,6 +102,72 @@ def test_parser_exports_openai_api_key():
     assert rc == 0
     exports = _parse_exports(stdout)
     assert exports["OPENAI_API_KEY"] == "sk-openai-xyz"
+
+
+def test_parser_exports_provider_secrets_file_without_options_json():
+    rc, stdout, _ = _run_parser(
+        None,
+        secrets="\n".join(
+            [
+                "ANTHROPIC_API_KEY=sk-ant-file",
+                "OPENAI_API_KEY='sk openai file'",
+                "AZURE_SPEECH_KEY=az-file",
+                "AZURE_SPEECH_REGION=westeurope",
+                "ELEVENLABS_API_KEY=el-file",
+            ]
+        ),
+    )
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    assert exports["OPENAI_API_KEY"] == "sk openai file"
+    assert exports["AZURE_SPEECH_KEY"] == "az-file"
+    assert exports["AZURE_SPEECH_REGION"] == "westeurope"
+    assert exports["ELEVENLABS_API_KEY"] == "el-file"
+
+
+def test_parser_provider_secrets_file_wins_over_legacy_options():
+    rc, stdout, _ = _run_parser(
+        {"anthropic_api_key": "sk-ant-options", "openai_api_key": "sk-openai-options"},
+        secrets="ANTHROPIC_API_KEY=sk-ant-file\nOPENAI_API_KEY=sk-openai-file\n",
+    )
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    assert exports["OPENAI_API_KEY"] == "sk-openai-file"
+
+
+def test_parser_skips_malformed_secrets_file_line_keeping_good_exports():
+    """A single bad secrets.env line must not discard every other export.
+
+    config.py tolerantly skips bad lines; run.sh must match so one stray line
+    never strips station_name/toggles AND the valid provider keys, degrading the
+    whole add-on to defaults.
+    """
+    rc, stdout, stderr = _run_parser(
+        {"station_name": "Keep Me"},
+        secrets="ANTHROPIC_API_KEY\nOPENAI_API_KEY=sk-good\n",
+    )
+    assert rc == 0
+    assert "skipping invalid secrets.env line" in stderr
+    exports = _parse_exports(stdout)
+    assert "ANTHROPIC_API_KEY" not in exports
+    assert exports["OPENAI_API_KEY"] == "sk-good"
+    assert exports["STATION_NAME"] == "Keep Me"
+
+
+def test_parser_skips_unbalanced_quote_secrets_line_keeping_good_exports():
+    """An unterminated quote (shlex ValueError) is skipped, not fatal."""
+    rc, stdout, stderr = _run_parser(
+        {"station_name": "Keep Me"},
+        secrets="ANTHROPIC_API_KEY='unterminated\nOPENAI_API_KEY=sk-good\n",
+    )
+    assert rc == 0
+    assert "skipping corrupt secrets.env line" in stderr
+    exports = _parse_exports(stdout)
+    assert "ANTHROPIC_API_KEY" not in exports
+    assert exports["OPENAI_API_KEY"] == "sk-good"
+    assert exports["STATION_NAME"] == "Keep Me"
 
 
 def test_parser_skips_empty_keys():
@@ -232,7 +300,7 @@ def test_parser_fails_on_corrupt_json():
         tmp_path = Path(tmp.name)
 
     try:
-        snippet = _extract_python_snippet(tmp_path)
+        snippet = _extract_python_snippet(tmp_path, tmp_path.with_name("secrets.env"))
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,

@@ -873,23 +873,30 @@ def _is_addon() -> bool:
 
 
 def _apply_addon_options() -> None:
-    """Read /data/options.json and set env vars for addon secrets."""
+    """Read add-on config files and set env vars for add-on runtime config."""
     import json
+    import shlex
 
-    options_path = Path("/data/options.json")
-    if not options_path.exists():
-        return
-    try:
-        options = json.loads(options_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
-
-    env_map = {
+    provider_env_map = {
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
         "azure_speech_key": "AZURE_SPEECH_KEY",
         "azure_speech_region": "AZURE_SPEECH_REGION",
         "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+    }
+
+    options_path = Path("/data/options.json")
+    options = {}
+    if options_path.exists():
+        try:
+            loaded_options = json.loads(options_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            loaded_options = {}
+        if isinstance(loaded_options, dict):
+            options = loaded_options
+
+    env_map = {
+        **provider_env_map,
         "admin_password": "ADMIN_PASSWORD",
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
@@ -916,6 +923,31 @@ def _apply_addon_options() -> None:
     legacy_claude_model = options.get("claude_model") if not qp else None
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
+
+    secrets_path = Path("/config/secrets.env")
+    if not secrets_path.exists():
+        return
+    provider_env_keys = set(provider_env_map.values())
+    try:
+        lines = secrets_path.read_text().splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            parsed = shlex.split(line, comments=False, posix=True)
+        except ValueError:
+            continue
+        if len(parsed) != 1 or "=" not in parsed[0]:
+            continue
+        key, value = parsed[0].split("=", 1)
+        # secrets.env is authoritative for provider keys: it intentionally wins
+        # over a value already placed in the environment from /data/options.json
+        # earlier in this function (the documented secrets-wins precedence).
+        if key in provider_env_keys and value:
+            os.environ[key] = value
 
 
 def is_absolute_http_url(value: str) -> bool:

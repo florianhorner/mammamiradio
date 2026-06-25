@@ -95,7 +95,7 @@ If a host configured with `engine = "openai"` sounds like a different voice, Ope
 
 Check:
 
-- `OPENAI_API_KEY` is set in `.env` (or addon options)
+- `OPENAI_API_KEY` is set in `.env` (or `/config/secrets.env` in the add-on)
 - Look for `Falling back to edge-tts` in logs
 - `/status` may show TTS errors in the producer log
 

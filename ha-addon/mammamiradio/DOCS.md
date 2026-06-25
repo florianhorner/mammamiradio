@@ -9,12 +9,15 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
 Add: `https://github.com/florianhorner/mammamiradio`
 
-### 2. Configure API key
+### 2. Configure provider keys
 
-In the add-on Configuration tab, set your `anthropic_api_key` (recommended for AI banter and ads).
-`openai_api_key` is optional for script fallback and OpenAI TTS voices. `azure_speech_key` plus
-`azure_speech_region` unlock official Azure Italian voices, and `elevenlabs_api_key` unlocks custom
-ElevenLabs character voices when configured in `radio.toml`.
+Start the add-on once, open the admin setup panel, and save any provider keys
+there. The add-on writes them to its private `/config/secrets.env` file, not to
+Supervisor add-on options. Supported keys are `ANTHROPIC_API_KEY` (recommended
+for AI banter and ads), `OPENAI_API_KEY` for script fallback and OpenAI TTS,
+`AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` for official Azure Italian voices,
+and `ELEVENLABS_API_KEY` for custom ElevenLabs voices when configured in
+`radio.toml`.
 
 Before committing to a voice mix, run a local audition from the repository:
 
@@ -129,7 +132,7 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 **Cause**: API key is invalid or quota exceeded. The producer falls back to demo clips but they may be exhausted.
 
-**Fix**: Verify your `anthropic_api_key` is valid. Check the log for `AuthenticationError` or `RateLimitError`.
+**Fix**: Verify your `ANTHROPIC_API_KEY` is valid in the admin setup panel. Check the log for `AuthenticationError` or `RateLimitError`.
 
 ### Accessing the station directly
 
@@ -158,12 +161,14 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
 ```
 /data/options.json (HA UI)
   |
-  +-- run.sh reads JSON, exports as env vars
-  |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
-  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY,
+  +-- run.sh reads JSON, exports non-provider env vars
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
   |     HA_ENABLED (from enable_home_assistant)
+  |
+  +-- run.sh reads /config/secrets.env for provider keys
+  |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
+  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
   |
   +-- run.sh maps Supervisor token
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
@@ -275,5 +280,5 @@ The dashboard shows one of three tiers based on your configuration:
 | Tier | What you hear | What it needs |
 |------|--------------|---------------|
 | Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
-| Full AI Radio | Live AI banter and ads, yt-dlp charts | `anthropic_api_key` or `openai_api_key` |
+| Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
 | Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |

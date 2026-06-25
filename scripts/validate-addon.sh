@@ -481,7 +481,7 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Testing container startup..."
         # Create minimal options.json
-        echo '{"anthropic_api_key":"","openai_api_key":""}' > "$TMPCTX/options.json"
+        echo '{"station_name":"Mamma Mi Radio","quality_profile":"balanced"}' > "$TMPCTX/options.json"
 
         CID=$(docker run -d --name mmr-test \
             -v "$TMPCTX/options.json:/data/options.json:ro" \

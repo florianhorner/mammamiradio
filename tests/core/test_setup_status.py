@@ -81,8 +81,8 @@ def test_build_setup_status_returns_expected_shape_for_addon():
     assert payload["station_mode"]["id"] == "demo"
     assert payload["essentials"][0]["key"] == "llm_keys"
     assert payload["preflight_checks"][0]["key"] == "ffmpeg"
-    assert "anthropic_api_key" in payload["addon_options_snippet"]
-    assert "openai_api_key" in payload["addon_options_snippet"]
+    assert "ANTHROPIC_API_KEY" in payload["addon_options_snippet"]
+    assert "OPENAI_API_KEY" in payload["addon_options_snippet"]
     assert payload["onboarding_steps"]
     assert payload["recommended_next_action"]
     assert payload["signature"]

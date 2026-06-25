@@ -116,8 +116,6 @@ Current config options:
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` |
-| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` |
-| `openai_api_key` | `password?` | `OPENAI_API_KEY` |
 | `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
 | `admin_token` | `password?` | `ADMIN_TOKEN` (blank => add-on trusts the LAN, no token required) |
@@ -126,6 +124,13 @@ Current config options:
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 | `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
 | `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (new-install manifest default off; `run.sh` missing-key fallback true for legacy installs) |
+
+Provider credentials are not add-on options. `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
+`ELEVENLABS_API_KEY` live in `/config/secrets.env` inside the add-on. The admin
+setup panel writes that file, and `run.sh` loads it before uvicorn starts.
+Legacy `/data/options.json` provider fields are still read as a compatibility
+fallback, but the file wins when both are present.
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
@@ -143,7 +148,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator sa
 immediately; their cost line shows `estimate (unpriced model)` until a price is added
 to `MODEL_PRICES` in `web/streamer.py`.
 
-The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
+The option extraction in run.sh uses a single Python script that reads non-provider keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
 2. Add a translation entry in `translations/en.yaml`
@@ -157,13 +162,24 @@ the registered, controllable `media_player.mammamiradio`. Do not change the
 option should keep their historical REST-pushed media player until the operator
 explicitly turns it off.
 
-## Secrets: password type
+## Secrets: provider keys stay out of options
 
-API keys and secrets use `password` type in the schema (not `str`). This masks them in the HA UI:
+Provider API keys must not be added to `options:` or `schema:`. Store them in
+`/config/secrets.env` using uppercase env names:
 
-```yaml
-schema:
-  my_api_key: password?
+```dotenv
+ANTHROPIC_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
+AZURE_SPEECH_KEY=...
+AZURE_SPEECH_REGION=westeurope
+ELEVENLABS_API_KEY=...
+```
+
+For diagnostics, do not paste raw add-on options into tickets. If you need
+Supervisor metadata, redact the options object first:
+
+```bash
+ha addons info local_mammamiradio | jq 'del(.data.options)'
 ```
 
 ## Dockerfile: local source, not GitHub

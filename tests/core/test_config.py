@@ -493,6 +493,58 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+def test_apply_addon_options_reads_provider_secrets_file(monkeypatch, tmp_path):
+    options_file = tmp_path / "options.json"
+    options_file.write_text("{}")
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text(
+        "\n".join(
+            [
+                "ANTHROPIC_API_KEY=sk-ant-file",
+                "OPENAI_API_KEY='sk openai file'",
+                "AZURE_SPEECH_KEY=az-file",
+                "AZURE_SPEECH_REGION=westeurope",
+                "ELEVENLABS_API_KEY=el-file",
+            ]
+        )
+    )
+
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "AZURE_SPEECH_KEY",
+        "AZURE_SPEECH_REGION",
+        "ELEVENLABS_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    import os
+
+    with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+        _apply_addon_options()
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    assert os.environ["OPENAI_API_KEY"] == "sk openai file"
+    assert os.environ["AZURE_SPEECH_KEY"] == "az-file"
+    assert os.environ["AZURE_SPEECH_REGION"] == "westeurope"
+    assert os.environ["ELEVENLABS_API_KEY"] == "el-file"
+
+
+def test_apply_addon_options_provider_secrets_file_wins_over_legacy_options(monkeypatch, tmp_path):
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"anthropic_api_key": "sk-ant-options"}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=sk-ant-file\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    import os
+
+    with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+        _apply_addon_options()
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-file"
+
+
 def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
     """An upgraded standalone radio.toml that still has claude_model /
     claude_creative_model / openai_script_model in [audio] must still boot —

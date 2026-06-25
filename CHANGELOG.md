@@ -26,6 +26,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Security
 
+- **Home Assistant add-on provider keys no longer live in Supervisor options.** New and newly saved Anthropic, OpenAI, Azure Speech, and ElevenLabs keys are written to the add-on's private `secrets.env` file instead, so routine add-on diagnostics no longer echo those provider credentials. Existing installs still boot from old saved option values until you move them.
 - **The handler that serves the app's icons and manifest is locked down tighter.** It now refuses any request that tries to reach outside the app's own static-asset folder — including links inside that folder that point elsewhere — so it can only ever return the bundled web files.
 
 ## [2.14.1] - 2026-06-21

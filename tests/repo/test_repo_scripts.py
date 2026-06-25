@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -548,6 +549,30 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode != 0
     assert "options and schema key order differ" in result.stdout
+
+
+def test_provider_credentials_are_not_addon_options() -> None:
+    """Provider credentials must stay out of Supervisor add-on options."""
+
+    provider_fields = {
+        "anthropic_api_key",
+        "openai_api_key",
+        "azure_speech_key",
+        "azure_speech_region",
+        "elevenlabs_api_key",
+    }
+    for config_path in (
+        ROOT / "ha-addon/mammamiradio/config.yaml",
+        ROOT / "ha-addon/mammamiradio-edge/config.yaml",
+    ):
+        body = config_path.read_text()
+        option_block = re.search(r"(?ms)^options:\n(.*?)(?=^schema:)", body)
+        schema_block = re.search(r"(?ms)^schema:\n(.*?)(?=^[^ \\n])", body + "\nroot:\n")
+        assert option_block, f"{config_path} missing options block"
+        assert schema_block, f"{config_path} missing schema block"
+        combined = option_block.group(1) + schema_block.group(1)
+        for field in provider_fields:
+            assert field not in combined, f"{field} must be loaded from /config/secrets.env, not {config_path}"
 
 
 def test_validate_addon_falls_back_when_dotvenv_python_is_broken(tmp_path: Path) -> None:

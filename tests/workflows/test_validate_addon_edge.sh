@@ -77,7 +77,7 @@ mutate 's/^stage: .*/stage: stable/'
 assert_rejects "wrong stage" "edge stage must stay experimental"
 
 # Case 4: schema drift from stable
-mutate 's/anthropic_api_key: password?/anthropic_api_key: str?/'
+mutate 's/station_name: str?/station_name: password?/'
 assert_rejects "schema drift" "edge schema block drifted"
 
 # Case 5: options drift from stable (flip the edge default away from stable to force drift)

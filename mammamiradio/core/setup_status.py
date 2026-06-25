@@ -107,15 +107,15 @@ def classify_station_mode(
 
 
 def addon_options_snippet(config: StationConfig) -> str:
-    """Return a copy-friendly JSON block for the Home Assistant add-on UI."""
+    """Return a copy-friendly provider secrets block for the HA add-on config dir."""
     values = {
-        "anthropic_api_key": "*** configured ***" if config.anthropic_api_key else "<optional>",
-        "openai_api_key": "*** configured ***" if config.openai_api_key else "<optional>",
-        "azure_speech_key": "*** configured ***" if config.azure_speech_key else "<optional>",
-        "azure_speech_region": config.azure_speech_region or "<optional>",
-        "elevenlabs_api_key": "*** configured ***" if config.elevenlabs_api_key else "<optional>",
+        "ANTHROPIC_API_KEY": "*** configured ***" if config.anthropic_api_key else "<optional>",
+        "OPENAI_API_KEY": "*** configured ***" if config.openai_api_key else "<optional>",
+        "AZURE_SPEECH_KEY": "*** configured ***" if config.azure_speech_key else "<optional>",
+        "AZURE_SPEECH_REGION": config.azure_speech_region or "<optional>",
+        "ELEVENLABS_API_KEY": "*** configured ***" if config.elevenlabs_api_key else "<optional>",
     }
-    return json.dumps(values, indent=2)
+    return "\n".join(f"{key}={value}" for key, value in values.items())
 
 
 def build_setup_status(config: StationConfig, state: StationState) -> dict:

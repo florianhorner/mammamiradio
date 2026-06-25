@@ -159,7 +159,8 @@ governs how deep it prefetches.
 A key that is present but invalid is validated actively, so the operator sees it
 without waiting for a banter or TTS segment to fail. The active checks cover
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`,
-and `ELEVENLABS_API_KEY`.
+and `ELEVENLABS_API_KEY`. In the HA add-on, provider keys are loaded from the
+add-on private `/config/secrets.env` file rather than Supervisor options.
 
 - On startup (when any key is configured) and after a key-save, a single secret-safe
   provider probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
@@ -274,7 +275,7 @@ The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The cont
 
 The `ha-addon/` directory contains a complete HA add-on scaffold. Users add the repo URL in HA Settings > Add-ons > Repositories, then install "Mamma Mi Radio" from the store.
 
-The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
+The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads non-secret add-on options from `/data/options.json`, reads provider credentials from `/config/secrets.env`, and starts uvicorn. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 

@@ -6,59 +6,98 @@ set -e
 
 echo "[mammamiradio] Starting add-on..."
 
-# ---- Read add-on options from /data/options.json ----
+# ---- Read add-on options and provider secrets ----
 OPTIONS_FILE="/data/options.json"
-if [ -f "$OPTIONS_FILE" ]; then
+SECRETS_FILE="/config/secrets.env"
+if [ -f "$OPTIONS_FILE" ] || [ -f "$SECRETS_FILE" ]; then
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
 import json, shlex, sys
-try:
-    with open('$OPTIONS_FILE') as f:
-        opts = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
-    sys.exit(1)
-for key in (
-    'anthropic_api_key',
-    'openai_api_key',
-    'azure_speech_key',
-    'azure_speech_region',
-    'elevenlabs_api_key',
-    'station_name',
-    'admin_token',
-    'jamendo_client_id',
-):
+from pathlib import Path
+
+PROVIDER_OPTION_ENV = {
+    'anthropic_api_key': 'ANTHROPIC_API_KEY',
+    'openai_api_key': 'OPENAI_API_KEY',
+    'azure_speech_key': 'AZURE_SPEECH_KEY',
+    'azure_speech_region': 'AZURE_SPEECH_REGION',
+    'elevenlabs_api_key': 'ELEVENLABS_API_KEY',
+}
+PROVIDER_ENV_KEYS = set(PROVIDER_OPTION_ENV.values())
+
+options_path = Path('$OPTIONS_FILE')
+if options_path.exists():
+    try:
+        opts = json.loads(options_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
+        sys.exit(1)
+else:
+    opts = {}
+
+exports = {}
+for key, env_key in PROVIDER_OPTION_ENV.items():
     val = opts.get(key, '')
     if val:
-        env_key = key.upper()
-        print(f'export {env_key}={shlex.quote(str(val))}')
+        exports[env_key] = str(val)
+for key in ('station_name', 'admin_token', 'jamendo_client_id'):
+    val = opts.get(key, '')
+    if val:
+        exports[key.upper()] = str(val)
 # Quality dial → model profile. Missing/blank defaults to 'balanced'. Existing
 # add-ons may still have the removed claude_model option in /data/options.json;
 # keep honoring it as the legacy fast-role override until the operator saves the
 # new quality_profile option.
 quality = opts.get('quality_profile') or 'balanced'
-print('export MAMMAMIRADIO_QUALITY=' + shlex.quote(str(quality)))
+exports['MAMMAMIRADIO_QUALITY'] = str(quality)
 legacy_claude_model = opts.get('claude_model') if not opts.get('quality_profile') else ''
 if legacy_claude_model:
-    print('export CLAUDE_MODEL=' + shlex.quote(str(legacy_claude_model)))
+    exports['CLAUDE_MODEL'] = str(legacy_claude_model)
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
-print('export HA_ENABLED=' + ha_val)
+exports['HA_ENABLED'] = ha_val
 super_italian = opts.get('super_italian_mode', False)
 si_val = 'true' if super_italian else 'false'
-print('export MAMMAMIRADIO_SUPER_ITALIAN=' + si_val)
+exports['MAMMAMIRADIO_SUPER_ITALIAN'] = si_val
 chaos = opts.get('chaos_mode_active', False)
 chaos_val = 'true' if chaos else 'false'
-print('export MAMMAMIRADIO_CHAOS_MODE=' + chaos_val)
+exports['MAMMAMIRADIO_CHAOS_MODE'] = chaos_val
 festival = opts.get('festival_mode', False)
 festival_val = 'true' if festival else 'false'
-print('export MAMMAMIRADIO_FESTIVAL_MODE=' + festival_val)
+exports['MAMMAMIRADIO_FESTIVAL_MODE'] = festival_val
 broadcast_chain = opts.get('broadcast_chain', False)
 bc_val = 'true' if broadcast_chain else 'false'
-print('export MAMMAMIRADIO_BROADCAST_CHAIN=' + bc_val)
+exports['MAMMAMIRADIO_BROADCAST_CHAIN'] = bc_val
 media_player_push = opts.get('ha_media_player_push', True)
 mpp_val = 'true' if media_player_push else 'false'
-print('export MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH=' + mpp_val)
+exports['MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH'] = mpp_val
+
+secrets_path = Path('$SECRETS_FILE')
+if secrets_path.exists():
+    try:
+        for raw_line in secrets_path.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+            try:
+                parsed = shlex.split(line, comments=False, posix=True)
+            except ValueError as e:
+                # One bad line must not discard every other export (incl. the
+                # options.json-derived station_name/toggles). Skip it like
+                # config.py does, keeping the good keys and the options.
+                print(f'WARNING: skipping corrupt secrets.env line: {e}', file=sys.stderr)
+                continue
+            if len(parsed) != 1 or '=' not in parsed[0]:
+                print(f'WARNING: skipping invalid secrets.env line: {raw_line}', file=sys.stderr)
+                continue
+            key, value = parsed[0].split('=', 1)
+            key = key.strip()
+            if key in PROVIDER_ENV_KEYS and value:
+                exports[key] = value
+    except OSError as e:
+        print(f'WARNING: cannot read secrets.env, skipping: {e}', file=sys.stderr)
+
+for env_key, value in exports.items():
+    print(f'export {env_key}={shlex.quote(str(value))}')
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null

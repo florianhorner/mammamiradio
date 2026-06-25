@@ -2017,7 +2017,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
 async def save_keys(request: Request):
-    """Save API credentials to .env (or addon options.json) and update the live config."""
+    """Save API credentials to .env (or add-on secrets.env) and update the live config."""
     body = await request.json()
     updates = _credential_updates_from_env_payload(body, require_nonempty=True)
 

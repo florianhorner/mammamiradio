@@ -33,37 +33,78 @@ def test_persistence_facade_reexport_identity():
         assert getattr(streamer, name) is getattr(persistence, name), name
 
 
-def test_save_addon_options_maps_env_keys_to_fields(tmp_path):
-    """Credential env keys are written to /data/options.json under their field names,
-    preserving unrelated existing keys.
-    """
+def test_save_addon_options_writes_private_secrets_file(tmp_path):
+    """Credential env keys are written to the add-on private secrets file, not options.json."""
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("# keep this comment\nUNRELATED=value\nOPENAI_API_KEY=old\n")
     options_file = tmp_path / "options.json"
-    options_file.write_text(json.dumps({"existing": "keep"}))
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    options_file.write_text(
+        json.dumps(
+            {
+                "anthropic_api_key": "legacy-ant",
+                "openai_api_key": "legacy-openai",
+                "station_name": "keep",
+            }
+        )
+    )
+    with (
+        patch.object(persistence, "_ADDON_SECRETS_PATH", str(secrets_file)),
+        patch.object(persistence, "_ADDON_OPTIONS_PATH", str(options_file)),
+    ):
         persistence._save_addon_options(
             {
                 "ANTHROPIC_API_KEY": "sk-test",
-                "OPENAI_API_KEY": "oa-test",
+                "OPENAI_API_KEY": "oa test",
                 "AZURE_SPEECH_KEY": "az-test",
                 "AZURE_SPEECH_REGION": "westeurope",
                 "ELEVENLABS_API_KEY": "el-test",
             }
         )
-    written = json.loads(options_file.read_text())
-    assert written["anthropic_api_key"] == "sk-test"
-    assert written["openai_api_key"] == "oa-test"
-    assert written["azure_speech_key"] == "az-test"
-    assert written["azure_speech_region"] == "westeurope"
-    assert written["elevenlabs_api_key"] == "el-test"
-    assert written["existing"] == "keep"
+    written = secrets_file.read_text()
+    assert "# keep this comment" in written
+    assert "UNRELATED=value" in written
+    assert "ANTHROPIC_API_KEY=sk-test" in written
+    assert "OPENAI_API_KEY='oa test'" in written
+    assert "AZURE_SPEECH_KEY=az-test" in written
+    assert "AZURE_SPEECH_REGION=westeurope" in written
+    assert "ELEVENLABS_API_KEY=el-test" in written
+    assert (secrets_file.stat().st_mode & 0o777) == 0o600
+    assert json.loads(options_file.read_text()) == {"station_name": "keep"}
 
 
-def test_save_addon_options_treats_corrupt_file_as_empty(tmp_path):
+def test_secrets_file_writer_reader_round_trip(tmp_path, monkeypatch):
+    """A value written by _save_addon_options must parse back through config.py's reader.
+
+    The writer (shlex.quote) and the readers (shlex.split) live in different modules;
+    a quoting-style regression on either side would only surface end-to-end. Use a
+    value full of shell metacharacters to stress the round-trip.
+    """
+    import mammamiradio.core.config as config
+
+    nasty = "sk a=b #c 'd' \"e\" $f`g`"
     options_file = tmp_path / "options.json"
-    options_file.write_text("not valid json {{{")
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    options_file.write_text("{}")
+    secrets_file = tmp_path / "secrets.env"
+    with patch.object(persistence, "_ADDON_SECRETS_PATH", str(secrets_file)):
+        persistence._save_addon_options({"ANTHROPIC_API_KEY": nasty})
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # _apply_addon_options reads Path("/data/options.json") then
+    # Path("/config/secrets.env") — feed the two temp files in that order.
+    with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+        config._apply_addon_options()
+
+    assert os.environ["ANTHROPIC_API_KEY"] == nasty
+
+
+def test_save_addon_options_preserves_unparseable_secrets_lines(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("not valid env line\n")
+    with patch.object(persistence, "_ADDON_SECRETS_PATH", str(secrets_file)):
         persistence._save_addon_options({"ANTHROPIC_API_KEY": "sk-x"})
-    assert json.loads(options_file.read_text())["anthropic_api_key"] == "sk-x"
+    written = secrets_file.read_text()
+    assert "not valid env line" in written
+    assert "ANTHROPIC_API_KEY=sk-x" in written
 
 
 def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatch):
