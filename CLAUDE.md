@@ -70,6 +70,7 @@ Everything else lives under `docs/`:
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
 - `docs/agents.md` - agent-specific notes and integration points
 - `docs/listener-qs-train.md` - `Train/Listener QS` intake, merge gate, and handoff contract
+- `docs/release-trains.md` - single-trunk rolling-RC version-train model, sequential merge-order gate, and coordination roles
 - `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
 
 There is no canonical tracked TODO file. Do not create or revive
