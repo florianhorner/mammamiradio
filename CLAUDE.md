@@ -263,7 +263,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
 
-- **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
+- **Token cost counter and cost split** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` and `cost_breakdown` on every `/status` call. UI must display the session total and category split. The aggregate counter has disappeared twice in refactors.
 - **Play button blue state** (`mammamiradio/web/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
