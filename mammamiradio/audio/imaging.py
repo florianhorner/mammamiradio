@@ -14,6 +14,7 @@ from mammamiradio.audio.normalizer import (
     generate_station_id_bed,
     generate_transition_sting,
 )
+from mammamiradio.audio.synth_cache import duration_bucket_sec, materialize_synth_mp3, next_synth_variant
 from mammamiradio.core.models import SegmentType
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,13 @@ class ImagingLibrary:
         tmp_dir: Path,
         bed_volume_db: float = -18.0,
         assets_dir: Path | None = None,
+        cache_dir: Path | None = None,
     ) -> None:
         self.motif_notes = motif_notes
         self.tmp_dir = tmp_dir
         self.bed_volume_db = bed_volume_db
         self.assets_dir = assets_dir or Path(__file__).resolve().parent.parent / "assets" / "imaging"
+        self.cache_dir = cache_dir
 
     def pick_stinger(self, from_seg: SegmentType, to_seg: SegmentType, output_path: Path) -> Path:
         """Pick or synthesize a transition stinger for a segment boundary."""
@@ -41,11 +44,32 @@ class ImagingLibrary:
             shutil.copy2(asset, output_path)
             return output_path
 
-        return generate_transition_sting(from_seg.value, to_seg.value, output_path, self.motif_notes)
+        params = {
+            "from": from_seg.value,
+            "motif_notes": self.motif_notes,
+            "to": to_seg.value,
+        }
+        return materialize_synth_mp3(
+            self.cache_dir,
+            "transition_sting",
+            output_path,
+            params,
+            lambda path: generate_transition_sting(from_seg.value, to_seg.value, path, self.motif_notes),
+        )
 
     def pick_sweeper_sting(self, output_path: Path) -> Path:
         """Generate the motif underlay used below short station sweepers."""
-        return generate_station_id_bed(output_path, 2.0, self.motif_notes)
+        params = {
+            "duration_sec": duration_bucket_sec(2.0),
+            "motif_notes": self.motif_notes,
+        }
+        return materialize_synth_mp3(
+            self.cache_dir,
+            "sweeper_sting",
+            output_path,
+            params,
+            lambda path: generate_station_id_bed(path, 2.0, self.motif_notes),
+        )
 
     def pick_talk_bed(
         self,
@@ -66,7 +90,23 @@ class ImagingLibrary:
                 return self._loop_bed(source_track, duration, output_path)
             logger.warning("pick_talk_bed: source_track %s not found, using synthetic drone", source_track.name)
 
-        return self._generate_synthetic_drone(duration, output_path)
+        if self.cache_dir is None:
+            return self._generate_synthetic_drone(duration, output_path)
+
+        bucket = duration_bucket_sec(duration)
+        params = {
+            "bed_volume_db": self.bed_volume_db,
+            "duration_sec": bucket,
+        }
+        variant = next_synth_variant("talk_bed", params)
+        return materialize_synth_mp3(
+            self.cache_dir,
+            "talk_bed",
+            output_path,
+            params,
+            lambda path: self._generate_synthetic_drone(float(bucket), path, variant=variant),
+            variant=variant,
+        )
 
     def _loop_bed(self, input_path: Path, duration_sec: float, output_path: Path) -> Path:
         filter_chain = (
@@ -90,8 +130,11 @@ class ImagingLibrary:
         _run_ffmpeg(cmd, "loop talk bed")
         return output_path
 
-    def _generate_synthetic_drone(self, duration_sec: float, output_path: Path) -> Path:
-        expr = "0.18*sin(2*PI*130*t)+0.07*sin(2*PI*260*t)"
+    def _generate_synthetic_drone(self, duration_sec: float, output_path: Path, *, variant: int = 0) -> Path:
+        variant = max(0, int(variant)) % 3
+        root = 130.0 if variant == 0 else 130.0 * (1.0 + 0.025 * variant)
+        harmonic = root * 2
+        expr = f"0.18*sin(2*PI*{_fmt_num(root)}*t)+0.07*sin(2*PI*{_fmt_num(harmonic)}*t)"
         cmd = [
             "ffmpeg",
             "-y",
