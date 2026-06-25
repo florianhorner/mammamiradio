@@ -980,6 +980,19 @@ def test_generate_foley_loop_cafe(mock_subprocess):
     assert "tremolo=f=0.07" not in joined
 
 
+def test_generate_foley_loop_variant_changes_filter_parameters(mock_subprocess):
+    mock_run, _ = mock_subprocess
+    out = Path("/tmp/foley.mp3")
+    generate_foley_loop(out, "beach", 5.0, variant=0)
+    default_cmd = " ".join(mock_run.call_args[0][0])
+    generate_foley_loop(out, "beach", 5.0, variant=1)
+    variant_cmd = " ".join(mock_run.call_args[0][0])
+
+    assert default_cmd != variant_cmd
+    assert "tremolo=f=0.16" in default_cmd
+    assert "tremolo=f=0.1664" in variant_cmd
+
+
 def test_generate_foley_loop_motorway(mock_subprocess):
     mock_run, _ = mock_subprocess
     out = Path("/tmp/foley.mp3")
