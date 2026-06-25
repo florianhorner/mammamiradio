@@ -1229,7 +1229,7 @@ def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Pat
     return _run(expr, af, mood)
 
 
-def generate_foley_loop(output_path: Path, environment: str, duration_sec: float) -> Path:
+def generate_foley_loop(output_path: Path, environment: str, duration_sec: float, *, variant: int = 0) -> Path:
     """Generate a short ambient foley texture for the given ad environment.
 
     Unlike the tonal music bed, foley uses noise-based synthesis to create
@@ -1241,8 +1241,24 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
     ``output_path.exists()`` to decide whether to mix it in.
     """
     d = duration_sec
+    variant = max(0, int(variant)) % 3
     fade_out = min(1.0, d / 4)
     fades = f"afade=t=in:d=0.5,afade=t=out:st={d - fade_out}:d={fade_out}"
+
+    def _var_freq(freq: float) -> float:
+        if variant == 0:
+            return freq
+        return freq * (1.0 + 0.04 * variant)
+
+    def _var_depth(depth: float) -> float:
+        if variant == 0:
+            return depth
+        return min(0.95, depth + 0.03 * variant)
+
+    def _var_volume(volume: float) -> float:
+        if variant == 0:
+            return volume
+        return volume * (1.0 - 0.04 * variant)
 
     def _noise(color: str, af: str) -> None:
         """Run ffmpeg with an anoisesrc lavfi input."""
@@ -1282,50 +1298,60 @@ def generate_foley_loop(output_path: Path, environment: str, duration_sec: float
             # Very slow tremolo → natural energy ebb in a busy room.
             _noise(
                 "pink",
-                f"bandpass=f=1100:w=900,{_tremolo(freq=0.07, depth=0.12)},volume=0.055,{fades}",
+                f"bandpass=f=1100:w=900,{_tremolo(freq=_var_freq(0.07), depth=_var_depth(0.12))},"
+                f"volume={_fmt_num(_var_volume(0.055))},{fades}",
             )
 
         elif environment == "motorway":
             # Engine harmonics (aevalsrc) + fast piston tremolo → car in motion.
-            engine = "0.28*sin(2*PI*82*t)+0.18*sin(2*PI*164*t)+0.10*sin(2*PI*246*t)+0.06*sin(2*PI*328*t)"
+            base = _var_freq(82)
+            engine = (
+                f"0.28*sin(2*PI*{_fmt_num(base)}*t)"
+                f"+0.18*sin(2*PI*{_fmt_num(base * 2)}*t)"
+                f"+0.10*sin(2*PI*{_fmt_num(base * 3)}*t)"
+                f"+0.06*sin(2*PI*{_fmt_num(base * 4)}*t)"
+            )
             _expr(
                 engine,
-                f"{_tremolo(freq=13, depth=0.28)},lowpass=f=380,volume=0.11,{fades}",
+                f"{_tremolo(freq=_var_freq(13), depth=_var_depth(0.28))},lowpass=f=380,"
+                f"volume={_fmt_num(_var_volume(0.11))},{fades}",
             )
 
         elif environment == "beach":
             # Ocean wash: pink noise lowpass + very slow tremolo (wave rhythm ~6 s/cycle).
             _noise(
                 "pink",
-                f"lowpass=f=650,highpass=f=55,{_tremolo(freq=0.16, depth=0.62)},volume=0.08,{fades}",
+                f"lowpass=f=650,highpass=f=55,{_tremolo(freq=_var_freq(0.16), depth=_var_depth(0.62))},"
+                f"volume={_fmt_num(_var_volume(0.08))},{fades}",
             )
 
         elif environment == "stadium":
             # Crowd roar: pink noise bandpass + short aecho for stadium reverb.
             _noise(
                 "pink",
-                f"bandpass=f=750:w=650,aecho=0.7:0.35:30|65:0.07|0.03,volume=0.09,{fades}",
+                f"bandpass=f=750:w=650,aecho=0.7:0.35:30|65:0.07|0.03,volume={_fmt_num(_var_volume(0.09))},{fades}",
             )
 
         elif environment == "luxury_spa":
             # Water trickle: highpass pink noise + slow tremolo.
             _noise(
                 "pink",
-                f"highpass=f=1400,lowpass=f=6500,{_tremolo(freq=0.32, depth=0.48)},volume=0.05,{fades}",
+                f"highpass=f=1400,lowpass=f=6500,{_tremolo(freq=_var_freq(0.32), depth=_var_depth(0.48))},"
+                f"volume={_fmt_num(_var_volume(0.05))},{fades}",
             )
 
         elif environment == "showroom":
             # Subtle room tone: very quiet broadband noise, mostly sub-perceptual.
             _noise(
                 "pink",
-                f"highpass=f=180,lowpass=f=3500,volume=0.04,{fades}",
+                f"highpass=f=180,lowpass=f=3500,volume={_fmt_num(_var_volume(0.04))},{fades}",
             )
 
         elif environment == "shopping_channel":
             # Bright studio energy: white noise bandpass → phones/audience shimmer.
             _noise(
                 "white",
-                f"bandpass=f=2200:w=1600,volume=0.05,{fades}",
+                f"bandpass=f=2200:w=1600,volume={_fmt_num(_var_volume(0.05))},{fades}",
             )
 
         else:
