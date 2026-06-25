@@ -303,7 +303,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
     disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
     an update — the single-loop discipline the queue code already relies on. Returns
-    ``{"ok", "banned": [display], "removed": int, "purged": int}``.
+    ``{"ok", "banned": [display], "removed": int, "purged": int, "persisted": bool}``.
     """
     keys: dict[tuple[str, str], str] = {}
     for track in tracks:
@@ -2192,15 +2192,20 @@ async def shuffle_playlist(request: Request, _: None = Depends(require_admin_acc
     return {"ok": True, "message": "Playlist shuffled"}
 
 
-@router.post("/api/skip")
-async def skip_track(request: Request, _: None = Depends(require_admin_access)):
-    """Skip the currently streaming segment."""
-    state = request.app.state.station_state
-    if not state.now_streaming:
-        return {"ok": False, "error": "Nothing is currently streaming"}
+async def _request_skip(app_state, state: StationState, config, *, source: str) -> bool:
+    """Cut the airing segment now, bridging to forced music if the queue is empty.
 
-    # Record skip in listener profile if this was a music segment
-    now_seg = state.now_streaming
+    Shared by ``/api/skip`` and ``/api/track/ban-now-playing`` so the skip semantics
+    (listener-skip record, empty-queue bridge, ``skip_event``, ``now_streaming`` ->
+    skipping) can never drift between the two callers.
+
+    Order matters for callers that mutate state first: ``ban-now-playing`` purges the
+    queued copies of the banned song BEFORE calling this, and the bridge decision below
+    reads the queue AFTER that purge — so a queue emptied by the ban still forces the
+    next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
+    was forced.
+    """
+    now_seg = state.now_streaming or {}
     if now_seg.get("type") == "music":
         started = now_seg.get("started", time.time())
         listen_sec = time.time() - started
@@ -2209,29 +2214,34 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             listen_sec=listen_sec,
             track_display=now_seg.get("label", ""),
         )
-        await _persist_skipped_music(
-            state,
-            request.app.state.config,
-            now_seg.get("metadata") or {},
-            listen_sec=listen_sec,
-        )
+        await _persist_skipped_music(state, config, now_seg.get("metadata") or {}, listen_sec=listen_sec)
 
     bridged = False
-    if request.app.state.queue.empty() and not state.queued_segments:
+    if app_state.queue.empty() and not state.queued_segments:
         state.force_next = SegmentType.MUSIC
         bridged = True
         state.pending_actions.append(
             {
                 "type": "skip_bridge",
-                "source": "admin_skip",
+                "source": source,
                 "label": "force next music",
                 "created_at": time.time(),
             }
         )
         logger.info("Skip requested with empty queue — forcing next music before cut")
 
-    request.app.state.skip_event.set()
+    app_state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
+    return bridged
+
+
+@router.post("/api/skip")
+async def skip_track(request: Request, _: None = Depends(require_admin_access)):
+    """Skip the currently streaming segment."""
+    state = request.app.state.station_state
+    if not state.now_streaming:
+        return {"ok": False, "error": "Nothing is currently streaming"}
+    bridged = await _request_skip(request.app.state, state, request.app.state.config, source="admin_skip")
     return {"ok": True, "bridged": bridged}
 
 
@@ -3179,6 +3189,70 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
         }
 
     return _apply_ban(state, config, tracks, queue=request.app.state.queue)
+
+
+@router.post("/api/track/ban-now-playing")
+async def ban_now_playing(request: Request, _: None = Depends(require_admin_access)):
+    """Ban the song currently on air and cut to the next segment in one action.
+
+    The on-air console's "Ban" button. Durably blocklists the airing track by its
+    ``(artist, title)`` identity, then runs the exact skip path so it leaves the air
+    immediately — the ONE ban path that interrupts the current segment (every other
+    ban deliberately lets the airing song finish).
+
+    Identity comes from ``now_streaming.metadata`` (the same ``artist`` / ``title_only``
+    keys ``_purge_blocklisted_from_queue`` matches), so this also works for a song that
+    is on air from the rescue cache or a one-off download and is not in ``state.playlist``
+    at all — a win over the index-based row ban. Starvation-exempt like the per-row ✕ Ban:
+    the operator asked for THIS song gone, now. Best-effort persistence is surfaced
+    honestly via ``persisted`` (leadership #5).
+    """
+    state = request.app.state.station_state
+    config = request.app.state.config
+
+    now_seg = state.now_streaming or {}
+    if now_seg.get("type") != "music":
+        return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
+
+    meta = now_seg.get("metadata") or {}
+    artist = str(meta.get("artist") or "").strip()
+    # Prefer ``title_only`` so the blocklist key matches both the queue-purge key and
+    # the clean ``Track.title`` used at every ingest doorway; fall back to parsing the
+    # "Artist — Title" label (never the raw ``title``, which can carry the combined
+    # label and would forge a key that matches nothing).
+    title = str(meta.get("title_only") or "").strip()
+    if not (artist or title):
+        # A label is "Artist — Title"; only accept it when BOTH sides are present.
+        # A one-sided label ("Mina —") is malformed and would forge a half-key — fall
+        # through to the way-out message instead of banning on a guessed fragment.
+        label = str(now_seg.get("label") or "").strip()
+        parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            artist, title = parts[0].strip(), parts[1].strip()
+    if not (artist or title):
+        return {
+            "ok": False,
+            "error": "I can’t tell which song this is to ban it. Ban it from the rotation list instead.",
+        }
+
+    track = Track(title=title, artist=artist, duration_ms=0)
+    # Ban FIRST (this purges any queued copies of the same song), THEN skip — so the
+    # bridge decision inside _request_skip sees the post-purge queue depth.
+    result = _apply_ban(state, config, [track], queue=request.app.state.queue)
+    bridged = await _request_skip(request.app.state, state, config, source="ban_now_playing")
+    return {
+        "ok": True,
+        "banned": result.get("banned", []),
+        "removed": result.get("removed", 0),
+        "purged": result.get("purged", 0),
+        "persisted": result.get("persisted", True),
+        "skipped": True,
+        "bridged": bridged,
+        # The server-resolved identity, so the admin's Undo unbans the exact key the
+        # server banned — not whatever its last poll happened to show (the airing
+        # segment can advance in that window).
+        "key": list(normalized_track_key(track)),
+    }
 
 
 @router.post("/api/track/unban")
