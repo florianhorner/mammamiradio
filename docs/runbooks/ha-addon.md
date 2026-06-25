@@ -6,11 +6,11 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 
 ```
 Code change
-  → bump version in BOTH files (see below)
+  → bump version in all three files (see below)
   → push/merge to main
   → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
   → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
@@ -75,8 +75,8 @@ judgment that the line you have been running has felt healthy, not a stopwatch o
    # X.Y.Z must equal the STABLE config.yaml version at $EDGE
    git tag vX.Y.Z "$EDGE" && git push origin vX.Y.Z
    ```
-   `addon-release.yml` pre-flight fails loud if `config.yaml` != tag or either arch `:sha`
-   image is missing — that is your safety net.
+   `addon-release.yml` pre-flight fails loud if `config.yaml` or `manifest.json` != tag,
+   or either arch `:sha` image is missing — that is your safety net.
 2. **Wait for `addon-release.yml` green**, then verify:
    `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`.
 3. **Open the next RC immediately** so the number keeps meaning something and CI stays green:
@@ -97,7 +97,7 @@ the notes actually in that SHA — never publish notes for commits the promoted 
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - A hotfix after you've opened the next RC (e.g. `2.13.1` once `main` is on `2.14.0`) needs a
-  release branch, because pre-flight requires `config.yaml` == tag.
+  release branch, because pre-flight requires `config.yaml` and `manifest.json` == tag.
 
 ## Addon stage
 
@@ -295,7 +295,7 @@ gates" (single source of truth). The short version:
 Before merging ANY change that touches addon files:
 
 - [ ] `scripts/validate-addon.sh` passes locally
-- [ ] Version bumped in both files (if this is a release)
+- [ ] Version bumped in all three files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] If new config option: added to config.yaml + run.sh + translations

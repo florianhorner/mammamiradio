@@ -21,7 +21,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
-from mammamiradio.web.streamer import LiveStreamHub, _estimate_api_cost, router
+from mammamiradio.web.streamer import LiveStreamHub, _consumption_cost, _estimate_api_cost, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -215,6 +215,54 @@ def test_cost_counter_includes_tts_characters():
     assert cost == pytest.approx(5.25 + 20.0, abs=0.01)
 
 
+def test_cost_breakdown_prices_model_aware_categories_and_reconciles_units():
+    state = StationState(playlist=[])
+    state.record_llm_usage("script_banter", "claude-opus-4-8", 1_000_000, 1_000_000)
+    state.record_llm_usage("script_banter", "gpt-5.4-mini", 1_000_000, 1_000_000)
+    state.record_llm_usage("script_transition", "gpt-5.4-mini", 10_000, 10_000)
+    state.record_llm_usage("script_ads", "gpt-5.5", 100_000, 100_000)
+    state.record_tts_usage(50_000)
+
+    payload = _consumption_cost(state)
+    breakdown = payload["cost_breakdown"]
+    cats = breakdown["categories"]
+
+    assert breakdown["available"] is True
+    assert breakdown["total_usd"] == payload["api_cost_estimate_usd"]
+    assert cats["script_banter"]["raw_cost_usd"] == pytest.approx(95.25, abs=0.0001)
+    assert cats["tts"]["raw_cost_usd"] == pytest.approx(1.0, abs=0.0001)
+    assert sum(cat["calls"] for cat in cats.values()) == state.api_calls
+    assert sum(cat["input_tokens"] for cat in cats.values()) == state.api_input_tokens
+    assert sum(cat["output_tokens"] for cat in cats.values()) == state.api_output_tokens
+    assert sum(cat["characters"] for cat in cats.values()) == state.tts_characters
+
+
+def test_cost_breakdown_flags_unpriced_category_and_total():
+    state = StationState(playlist=[])
+    state.record_llm_usage("script_ads", "brand-new-model-x", 1000, 1000)
+
+    payload = _consumption_cost(state)
+    breakdown = payload["cost_breakdown"]
+
+    assert payload["api_cost_unpriced_model"] is True
+    assert breakdown["unpriced_model"] is True
+    assert breakdown["categories"]["script_ads"]["unpriced"] is True
+
+
+def test_cost_breakdown_marks_legacy_aggregate_only_state_unavailable():
+    state = StationState(playlist=[])
+    state.api_calls = 1
+    state.api_input_tokens = 1_000_000
+    state.api_output_tokens = 1_000_000
+
+    payload = _consumption_cost(state)
+    breakdown = payload["cost_breakdown"]
+
+    assert payload["api_cost_estimate_usd"] > 0
+    assert breakdown["available"] is False
+    assert all(cat["raw_cost_usd"] == 0 for cat in breakdown["categories"].values())
+
+
 def test_cost_counter_tts_folds_into_legacy_aggregate_branch():
     """TTS estimate is also added in the no-per-model (legacy/fresh) branch."""
     state = StationState(playlist=[])
@@ -250,3 +298,25 @@ async def test_status_surfaces_unpriced_flag():
     consumption = resp.json()["consumption"]
     assert "api_cost_estimate_usd" in consumption  # protected element preserved
     assert consumption["api_cost_unpriced_model"] is True
+    assert consumption["cost_breakdown"]["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_status_surfaces_fixed_key_cost_breakdown():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.record_llm_usage("script_banter", "gpt-5.4-mini", 1000, 500)
+    state.record_llm_usage("script_transition", "gpt-5.4-mini", 100, 50)
+    state.record_llm_usage("script_ads", "gpt-5.5", 200, 100)
+    state.record_tts_usage(300)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/status")
+
+    assert resp.status_code == 200
+    breakdown = resp.json()["consumption"]["cost_breakdown"]
+    assert breakdown["available"] is True
+    assert set(breakdown["categories"]) == {"script_banter", "script_transition", "script_ads", "tts"}
+    assert breakdown["categories"]["tts"]["characters"] == 300

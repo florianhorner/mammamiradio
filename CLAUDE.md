@@ -142,7 +142,7 @@ private durable system for strategy or relationship context.
 
 ## Runtime behavior
 
-- Startup loads `radio.toml`, validates config, prunes stale temp render scratch (`*.mp3` older than 6h in `tmp_dir` — crash/restart debris that otherwise piles up in the addon's `/data/tmp`; `prune_stale_tmp_files` in `playlist/downloader.py`, best-effort, runs before the producer so nothing is in-flight), purges suspect cache files (< 10KB), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
+- Startup loads `radio.toml`, validates config, prunes stale temp render scratch (`*.mp3` older than 6h in `tmp_dir` — crash/restart debris that otherwise piles up in the addon's `/data/tmp`; `prune_stale_tmp_files` in `playlist/downloader.py`, best-effort, runs before the producer so nothing is in-flight), purges suspect cache files (< 10KB, except generated `synth_` layers — stings and motifs are legitimately short), restores persisted source selection from `cache/playlist_source.json`, fetches the playlist, initializes the clip ring buffer, then launches producer and playback tasks. Logs a one-line boot summary at the end.
 - **Capability flags** (`anthropic`, `ha`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
 - Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from the norm cache, then bundled demo assets, then forces a banter segment after 60s of silence — silence is never the terminal state. No wizard, no gates.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
@@ -263,7 +263,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 These UI elements have regressed in past refactors. Always verify they survive after any HTML edit:
 
-- **Token cost counter** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` on every `/status` call. UI must display it. Has disappeared twice in refactors.
+- **Token cost counter and cost split** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` and `cost_breakdown` on every `/status` call. UI must display the session total and category split. The aggregate counter has disappeared twice in refactors.
 - **Play button blue state** (`mammamiradio/web/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.

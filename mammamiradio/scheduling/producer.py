@@ -573,6 +573,7 @@ def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
         config.tmp_dir,
         bed_volume_db=config.imaging.bed_volume_db,
         assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
+        cache_dir=config.cache_dir,
     )
 
 
@@ -2972,7 +2973,7 @@ async def run_producer(
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
                     *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state)
+                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state, cache_dir=config.cache_dir)
                         for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
                 )

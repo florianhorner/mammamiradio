@@ -143,6 +143,16 @@ async def test_service_worker_served_with_root_scope_header():
 
 
 @pytest.mark.asyncio
+async def test_favicon_default_path_served():
+    """GET /favicon.ico -> 200. Browsers request this path even when templates link SVG icons."""
+    app = _make_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/favicon.ico")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
+
+
+@pytest.mark.asyncio
 async def test_static_path_traversal_rejected():
     """GET /static/../etc/passwd -> 404. The handler's is_relative_to check must hold."""
     app = _make_app()

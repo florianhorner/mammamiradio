@@ -199,20 +199,34 @@ def test_admin_transport_buttons_have_44px_touch_targets() -> None:
 
 def test_producer_desk_console_is_responsive() -> None:
     """Concept B: the console is two-column on desktop, stacks to one column on
-    narrow screens, and the tab bar scrolls horizontally instead of wrapping."""
+    narrow screens, and the tab bar wraps instead of exposing a scrollbar."""
     css = _admin_css()
 
     # Desktop: two columns (air | triggers+cooking).
     assert ".mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}" in css
     # Narrow: single column.
-    assert "@media (max-width:760px)" in css
+    assert "@media (max-width:768px)" in css
     assert re.search(
-        r"@media \(max-width:760px\)\{[^}]*\.mmr-console-grid\{grid-template-columns:1fr\}",
+        r"@media \(max-width:768px\)\{[^}]*\.mmr-console-grid\{grid-template-columns:1fr\}",
         css,
         re.DOTALL,
     )
-    # The tab bar scrolls sideways rather than wrapping onto two rows.
-    assert re.search(r"\.mmr-tabbar\{[^}]*overflow-x:auto", css)
+    # The tab bar must not expose a horizontal scrollbar or clip focus rings.
+    assert "overflow-x:auto" not in _declarations_for_selector(css, ".mmr-tabbar").values()
+    assert _declarations_for_selector(css, ".mmr-tabbar").get("overflow") == "visible"
+
+    phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
+    assert phone_tabbar.get("flex-wrap") == "wrap"
+    assert phone_tabbar.get("overflow-x") == "visible"
+    assert phone_tabbar.get("overflow-y") == "visible"
+
+
+def test_admin_background_uses_no_fixed_body_overlay() -> None:
+    text = _read_admin_html()
+    assert not re.search(r"body::before\s*\{[^}]*position\s*:\s*fixed", text, re.DOTALL), (
+        "admin.html must not use a fixed body::before atmosphere overlay; it can bleed "
+        "through rounded translucent panels while scrolling."
+    )
 
 
 def test_mobile_upper_deck_scrolls_away() -> None:
@@ -250,6 +264,20 @@ def test_on_air_zone_renders_ai_cost_counter() -> None:
     zone = text[text.index('id="on-air"') : text.index('class="a-topbar producer-sticky-strip"')]
     assert 'id="sidebarCost"' in zone, 'On Air zone must contain the AI cost counter <b id="sidebarCost">.'
     assert "getElementById('sidebarCost')" in text, "updateEngineRoom() must write the cost into sidebarCost."
+
+
+def test_cost_split_rows_use_overflow_safe_columns() -> None:
+    """Long labels and estimate notes must not force horizontal overflow on mobile."""
+    css = _admin_css()
+    row = _declarations_for_selector(css, ".cost-split-row")
+    name = _declarations_for_selector(css, ".cost-split-row .name")
+    value = _declarations_for_selector(css, ".cost-split-row .value")
+
+    assert row.get("display") == "grid"
+    assert row.get("grid-template-columns") == "minmax(0, 1fr) auto"
+    assert name.get("min-width") == "0"
+    assert name.get("overflow") == "hidden"
+    assert value.get("white-space") == "nowrap"
 
 
 def test_programme_action_buttons_have_44px_touch_targets() -> None:
@@ -462,3 +490,53 @@ def test_scaletta_relative_labels_use_actual_queue_position() -> None:
 
     assert "relLabel(it._queueIndex)" in render_block
     assert "it._queueIndex===0?'next'" in render_block
+
+
+def test_filter_pills_meet_chip_touch_floor() -> None:
+    declarations = _declarations_for_selector(_admin_css(), ".filter-pill")
+    height = _effective_px(declarations, "height", "min-height")
+    assert height >= 36, f".filter-pill must be at least 36px tall; got {height}px."
+
+
+def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:
+    _assert_touch_target(".pl-grip")
+    _assert_touch_target(".pl-check-hit")
+    _assert_touch_target(".host-preset")
+    _assert_touch_target(".host-reset")
+    _assert_touch_target(".setup-inline-action")
+
+
+def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:
+    declarations = _declarations_for_selector(_admin_css(), '.ha input[type="range"]')
+    height = _effective_px(declarations, "height", "min-height")
+    assert height >= 44, f"Conduttori sliders must expose a 44px touch box; got {height}px."
+    assert declarations.get("background") == "transparent"
+
+    text = _admin_css()
+    track = re.search(
+        r'\.ha input\[type="range"\]::-webkit-slider-runnable-track\s*\{([^}]*)\}',
+        text,
+        re.DOTALL,
+    )
+    assert track and re.search(r"height\s*:\s*6px", track.group(1)), "Slider visual track should stay compact."
+
+    thumb = re.search(
+        r'\.ha input\[type="range"\]::-webkit-slider-thumb\s*\{([^}]*)\}',
+        text,
+        re.DOTALL,
+    )
+    assert thumb, "Conduttori sliders must style the draggable thumb."
+    assert re.search(r"width\s*:\s*24px", thumb.group(1))
+    assert re.search(r"height\s*:\s*24px", thumb.group(1))
+
+
+def test_rotation_checkbox_visual_stays_compact_inside_hit_target() -> None:
+    declarations = _declarations_for_selector(_admin_css(), ".pl-check")
+    assert declarations.get("width") == "18px"
+    assert declarations.get("height") == "18px"
+    assert declarations.get("min-width") == "18px"
+    assert declarations.get("min-height") == "18px"
+
+
+def test_listener_request_buttons_have_44px_touch_targets() -> None:
+    _assert_touch_target(".lr-btn")

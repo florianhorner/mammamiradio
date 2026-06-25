@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from mammamiradio.core.models import HostPersonality
+from mammamiradio.core.models import HostPersonality, StationState
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 
 
@@ -77,6 +77,7 @@ def _mock_all(monkeypatch):
         patch("mammamiradio.audio.tts.generate_music_bed", side_effect=_music_bed_side_effect) as mock_bed,
         patch("mammamiradio.audio.tts.generate_sfx", side_effect=_single_path_side_effect) as mock_sfx,
         patch("mammamiradio.audio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
+        patch("mammamiradio.audio.tts.generate_foley_loop", side_effect=_single_path_side_effect) as mock_foley,
         patch("mammamiradio.audio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
         patch("mammamiradio.audio.tts.generate_brand_motif", side_effect=_single_path_side_effect) as mock_motif,
         patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0) as mock_duration,
@@ -89,6 +90,7 @@ def _mock_all(monkeypatch):
             "generate_music_bed": mock_bed,
             "generate_sfx": mock_sfx,
             "generate_silence": mock_silence,
+            "generate_foley_loop": mock_foley,
             "mix_with_bed": mock_mix,
             "generate_brand_motif": mock_motif,
             "ffprobe_duration": mock_duration,
@@ -879,6 +881,94 @@ async def test_synthesize_ad_environment_bed(_mock_all, tmp_path):
     )
 
 
+@pytest.mark.asyncio
+async def test_synthesize_ad_cache_reuses_brand_motif_and_music_bed(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache"
+    script = AdScript(
+        brand="CacheBrand",
+        parts=[AdPart(type="voice", text="Sempre pronto.")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    first = await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+    second = await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+
+    assert first.exists()
+    assert second.exists()
+    assert _mock_all["generate_brand_motif"].call_count == 1
+    assert _mock_all["generate_music_bed"].call_count == 1
+    assert len(list(cache_dir.glob("synth_brand_motif_*.mp3"))) == 1
+    assert len(list(cache_dir.glob("synth_music_bed_*.mp3"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cache_reuses_environment_music_bed(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache"
+    script = AdScript(
+        brand="EnvCache",
+        parts=[AdPart(type="voice", text="Dal salone.")],
+        mood="lounge",
+        sonic=SonicWorld(environment="showroom"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+    await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+
+    # Main lounge bed + showroom environment bed are generated once each.
+    assert _mock_all["generate_music_bed"].call_count == 2
+    assert len(list(cache_dir.glob("synth_music_bed_*.mp3"))) == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_foley_cache_warms_bounded_variant_pool(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache"
+    script = AdScript(
+        brand="FoleyCache",
+        parts=[AdPart(type="voice", text="Senti la folla.")],
+        mood="dramatic",
+        sonic=SonicWorld(environment="stadium"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    for _ in range(4):
+        await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+
+    variants = [call.kwargs["variant"] for call in _mock_all["generate_foley_loop"].call_args_list]
+    assert len(variants) == 3
+    assert set(variants) == {0, 1, 2}
+    assert len(list(cache_dir.glob("synth_foley_*.mp3"))) == 3
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cache_setup_failure_falls_back_to_direct_generation(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache-file"
+    cache_dir.write_bytes(b"not a directory")
+    script = AdScript(
+        brand="DirectBrand",
+        parts=[AdPart(type="voice", text="Va in onda lo stesso.")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, cache_dir=cache_dir)
+
+    assert result.exists()
+    _mock_all["generate_brand_motif"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # synthesize_dialogue
 # ---------------------------------------------------------------------------
@@ -1439,6 +1529,26 @@ async def test_synthesize_bills_tts_chars_on_cloud_success(_mock_all, tmp_path, 
     with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
         await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
     assert state.tts_characters == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bills_station_state_tts_category_on_cloud_success(_mock_all, tmp_path, monkeypatch):
+    """A successful paid cloud synth updates aggregate and category TTS counters."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    state = StationState(playlist=[])
+    text = "Ciao mondo"
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
 
 
 @pytest.mark.asyncio

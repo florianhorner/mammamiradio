@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 
 PartyMode = Literal["festival"]
+CostCategory = Literal["script_banter", "script_transition", "script_ads", "tts"]
+LLM_COST_CATEGORIES: tuple[CostCategory, ...] = ("script_banter", "script_transition", "script_ads")
+TTS_COST_CATEGORY: CostCategory = "tts"
 
 
 class GenerationWasteReason:
@@ -603,6 +606,11 @@ class StationState:
     # routing means different segments run different models within one session.
     api_tokens_by_model: dict[str, dict[str, int]] = field(default_factory=dict)
     tts_characters: int = 0
+    # Same spend, split by operator-meaningful work category. LLM remains
+    # model-aware so a category can price Anthropic and OpenAI fallback correctly.
+    api_calls_by_category: dict[str, int] = field(default_factory=dict)
+    api_tokens_by_category_model: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    tts_characters_by_category: dict[str, int] = field(default_factory=dict)
     # Provider health telemetry (for /status and /api/capabilities diagnostics)
     anthropic_disabled_until: float = 0.0
     anthropic_last_error: str = ""
@@ -686,6 +694,49 @@ class StationState:
             )
         self.gen_phase = self.gen_kind = self.gen_label = ""
         self.gen_started = 0.0
+
+    def record_llm_usage(self, category: CostCategory, model: str, input_tokens: int, output_tokens: int) -> None:
+        """Record one billable LLM usage event in aggregate and category counters.
+
+        Keep the global counters and category split in one synchronous mutation so
+        /status can reconcile raw units. This must be called where provider usage
+        is reported, even if the generated JSON later fails and another provider
+        fallback also bills.
+        """
+        if category not in LLM_COST_CATEGORIES:
+            raise ValueError(f"Unknown LLM cost category: {category!r}")
+
+        input_count = max(int(input_tokens or 0), 0)
+        output_count = max(int(output_tokens or 0), 0)
+        model_id = str(model or "unknown")
+
+        self.api_calls += 1
+        self.api_input_tokens += input_count
+        self.api_output_tokens += output_count
+
+        self.api_calls_by_category[category] = self.api_calls_by_category.get(category, 0) + 1
+
+        model_bucket = self.api_tokens_by_model.setdefault(model_id, {"input": 0, "output": 0})
+        model_bucket["input"] += input_count
+        model_bucket["output"] += output_count
+
+        category_models = self.api_tokens_by_category_model.setdefault(category, {})
+        category_bucket = category_models.setdefault(model_id, {"input": 0, "output": 0})
+        category_bucket["input"] += input_count
+        category_bucket["output"] += output_count
+
+    def record_tts_usage(self, characters: int) -> None:
+        """Record paid cloud TTS characters without risking the audio path."""
+        try:
+            count = max(int(characters or 0), 0)
+            if count <= 0:
+                return
+            self.tts_characters += count
+            self.tts_characters_by_category[TTS_COST_CATEGORY] = (
+                self.tts_characters_by_category.get(TTS_COST_CATEGORY, 0) + count
+            )
+        except Exception:
+            return
 
     def record_bridge_fire(self, bridge_type: str, source: str, timestamp: float | None = None) -> None:
         """Record one producer rescue-bridge fire after a successful enqueue.

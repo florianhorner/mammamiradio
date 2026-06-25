@@ -174,6 +174,20 @@ footprint (a `norm_` original plus its `fm_` bake). One-shot ephemeral renders (
 voice/banter) have no stable identity to key on, so they are still coloured to a
 per-play tmp.
 
+**Synthetic layer cache.** Generated ad and imaging layers that do have stable
+inputs are cached separately as `synth_*.mp3` under `cache_dir`: ad music beds,
+environment beds, foley, brand motifs, transition stings, sweeper stings, and
+synthetic talk-bed fallback. The key includes the synthetic kind, generator cache
+version, normalized parameters (the rounded-up duration bucket is one such param),
+MP3 output arguments, and variant. The cache publishes atomically through a hidden
+MP3 staging file and copies hits back into the per-segment tmp file, so final ads,
+spoken voice, and broadcast-chain renders stay one-shot. Tonal music beds, brand
+motifs, and stings are deterministic; foley and synthetic talk-bed fallback rotate
+through a small variant pool so repeated breaks do not expose one identical ambient
+loop. Startup's suspect-file purge preserves `synth_` files even when they are short;
+normal LRU eviction still treats them as regular cache files, evicting them before
+`norm_`/`fm_` processed audio.
+
 ### Queue commit (the per-path gate matrix)
 
 Every produced segment reaches the playback queue through a small set of commit
@@ -242,7 +256,7 @@ task (caller)  ──routing──▶  role  ──active profile──▶  cata
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used.
+Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used, with synthetic fallback renders reused through the `synth_` cache when their inputs match.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -460,11 +474,12 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/dashboard` | GET | Admin | 301 redirect to `/admin` (legacy) |
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
+| `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -566,6 +581,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |
 | `mammamiradio/audio/imaging.py` | station imaging selector for transition stings, sweeper stings, and talk beds |
+| `mammamiradio/audio/synth_cache.py` | reusable `synth_*.mp3` cache for generated ad/imaging layers |
 | `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |
 | `mammamiradio/audio/tts.py` | TTS synthesis (Edge, OpenAI, Azure Speech, ElevenLabs) |

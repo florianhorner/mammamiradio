@@ -591,6 +591,20 @@ def test_evict_cache_lru_keeps_processed_audio_over_regular(cache_dir):
     assert fm.exists()  # fm_ bake (processed bucket) survives
 
 
+def test_evict_cache_lru_treats_synth_cache_as_regular(cache_dir):
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    norm = cache_dir / "norm_track_192k.mp3"
+    synth = cache_dir / "synth_music_bed_abc123.mp3"
+    norm.write_bytes(b"x" * 700 * 1024)
+    synth.write_bytes(b"x" * 700 * 1024)
+
+    evict_cache_lru(cache_dir, 1)
+
+    assert norm.exists()
+    assert not synth.exists()
+
+
 def test_evict_cache_lru_protects_queued_fm_bake(cache_dir):
     """A baked render currently queued/airing (passed in protected_paths) is never evicted,
     even under a zero budget — the queued-path protection covers fm_ bakes too."""
@@ -765,6 +779,25 @@ def test_purge_suspect_cache_files_removes_small_files(tmp_path):
     small.write_bytes(b"x" * 100)  # well below 10240
     assert purge_suspect_cache_files(d) == 1
     assert not small.exists()
+
+
+def test_purge_suspect_cache_files_keeps_small_synth_cache_files(tmp_path):
+    from mammamiradio.playlist.downloader import purge_suspect_cache_files
+
+    d = tmp_path / "cache"
+    d.mkdir()
+    synth = d / "synth_foley_abc123.mp3"
+    failed = d / "_failed_track.mp3"
+    silence = d / "_silence_track.mp3"
+    tiny = d / "tiny.mp3"
+    for path in (synth, failed, silence, tiny):
+        path.write_bytes(b"x" * 100)
+
+    assert purge_suspect_cache_files(d) == 3
+    assert synth.exists()
+    assert not failed.exists()
+    assert not silence.exists()
+    assert not tiny.exists()
 
 
 def test_purge_suspect_cache_files_keeps_large_files(tmp_path):

@@ -1,0 +1,22 @@
+issue #405 — cache generated ad/imaging layers by content signature
+Branch: issue-405
+Commit: b78e1434
+Generated: 2026-06-25T18:03:49Z
+
+=== synth_cache unit tests + module coverage ===
+................                                                         [100%]
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.11.15-final-0 _______________
+
+Name                                Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------------------
+mammamiradio/audio/synth_cache.py     102      4     20      3    94%   66-67, 130, 134
+-------------------------------------------------------------------------------
+TOTAL                                 102      4     20      3    94%
+Required test coverage of 92.0% reached. Total coverage: 94.26%
+16 passed in 0.32s
+
+=== new/affected audio + producer + downloader tests ===
+........................................................................ [ 92%]
+............................                                             [100%]
+388 passed in 19.82s
