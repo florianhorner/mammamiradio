@@ -466,6 +466,11 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 
 ### Route table
 
+Write routes that consume request details use `mammamiradio.web.json_body.read_json_object`.
+Empty, malformed, or top-level non-object bodies return `422` with
+`{"ok": false, "error": "<human message>"}` before endpoint-specific validation runs.
+Admin auth dependencies still run before body parsing on protected routes.
+
 | Route | Method | Access | Description |
 | --- | --- | --- | --- |
 | `/` | GET | Public | Listener page. Over trusted HA ingress the admin panel is served instead. |
@@ -474,6 +479,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/dashboard` | GET | Admin | 301 redirect to `/admin` (legacy) |
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
+| `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
@@ -497,7 +503,7 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 | `/api/hosts/{host_name}/personality` | PATCH | Admin | Patch host personality axes (energy, warmth, chaos) |
 | `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
-| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed payloads return 400, values are clamped to safe floors/ceilings |
+| `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed bodies return 422, values are clamped to safe floors/ceilings |
 | `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |
