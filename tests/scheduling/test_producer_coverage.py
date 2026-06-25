@@ -518,6 +518,9 @@ async def test_circuit_breaker_two_rejections_still_reject():
     # We get here only because the 3rd call finally passed — confirming 2 rejections do reject
     assert rejection_count == 2
     assert queue.qsize() >= 1
+    # Each below-circuit-breaker music reject is recorded as generation waste (#397).
+    assert state.discard_by_reason.get("quality_gate_reject", 0) == 2
+    assert state.discard_by_type.get("music", 0) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +579,74 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     assert seg.type == SegmentType.BANTER
     # The segment should be the canned clip (fallback was used)
     assert seg.metadata.get("canned") is True
+
+
+@pytest.mark.asyncio
+async def test_banter_quality_reject_records_generated_waste(tmp_path):
+    """A GENERATED banter (canned is None) rejected by the quality gate is
+    recorded as generation waste (#397). With no canned fallback available
+    (_pick_canned_clip -> None) this exercises the `if canned is None:`
+    recording branch that the canned-fallback test cannot reach."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"  # generate banter (canned stays None)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter_gen.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    validate_calls = 0
+
+    def _validate_side_effect(path, seg_type, **_kwargs):
+        nonlocal validate_calls
+        validate_calls += 1
+        # Reject the first generated banter; pass the regenerated one so the
+        # producer eventually queues and the test does not loop forever.
+        if validate_calls == 1:
+            raise AudioQualityError("banter too quiet")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati."),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 15.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue banter after reject")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # Exactly one rejected GENERATED banter recorded as waste; the regenerated one queued.
+    assert state.discard_by_reason.get("quality_gate_reject", 0) == 1
+    assert state.discard_by_type.get("banter", 0) == 1
 
 
 @pytest.mark.asyncio
