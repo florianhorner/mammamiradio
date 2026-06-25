@@ -2035,7 +2035,7 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
 
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
 async def save_keys(request: Request):
-    """Save API credentials to .env (or addon options.json) and update the live config."""
+    """Save API credentials to .env or add-on secrets.env and update the live config."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
@@ -3100,7 +3100,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/credentials")
 async def save_credentials(request: Request, _: None = Depends(require_admin_access)):
-    """Write credentials to .env and apply them live without a restart."""
+    """Write credentials to persistent storage and apply them live without a restart."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
@@ -3109,9 +3109,10 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
     if not updates:
         return {"ok": False, "error": "No recognised credential fields in request"}
 
-    await _persist_and_apply_credentials(request, updates, use_addon_options=False)
+    await _persist_and_apply_credentials(request, updates, use_addon_options=True)
 
-    logger.info("Credentials saved to .env: %s", ", ".join(updates.keys()))
+    target = "add-on secrets.env" if request.app.state.config.is_addon else ".env"
+    logger.info("Credentials saved to %s: %s", target, ", ".join(updates.keys()))
     return {"ok": True, "saved": list(updates.keys())}
 
 

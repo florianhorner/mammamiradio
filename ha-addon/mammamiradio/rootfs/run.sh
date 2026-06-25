@@ -6,24 +6,91 @@ set -e
 
 echo "[mammamiradio] Starting add-on..."
 
-# ---- Read add-on options from /data/options.json ----
+# ---- Read add-on options plus file-backed provider secrets ----
 OPTIONS_FILE="/data/options.json"
-if [ -f "$OPTIONS_FILE" ]; then
+SECRETS_FILE="/config/secrets.env"
+if [ -f "$OPTIONS_FILE" ] || [ -f "$SECRETS_FILE" ]; then
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
-import json, shlex, sys
-try:
-    with open('$OPTIONS_FILE') as f:
-        opts = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FATAL: corrupt options.json: {e}', file=sys.stderr)
-    sys.exit(1)
+import json, os, shlex, sys
+
+opts = {}
+if os.path.exists('$OPTIONS_FILE'):
+    try:
+        with open('$OPTIONS_FILE') as f:
+            opts = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f'WARNING: ignoring corrupt options.json: {e}', file=sys.stderr)
+        opts = {}
+
+provider_option_map = (
+    ('anthropic_api_key', 'ANTHROPIC_API_KEY'),
+    ('openai_api_key', 'OPENAI_API_KEY'),
+    ('azure_speech_key', 'AZURE_SPEECH_KEY'),
+    ('azure_speech_region', 'AZURE_SPEECH_REGION'),
+    ('elevenlabs_api_key', 'ELEVENLABS_API_KEY'),
+)
+provider_values = {}
+for key, env_key in provider_option_map:
+    val = opts.get(key, '')
+    if val:
+        provider_values[env_key] = str(val)
+
+def warning(message):
+    print('echo ' + shlex.quote('[mammamiradio] WARNING: ' + message) + ' >&2')
+
+def parse_secret_value(raw_value, line_no):
+    value = raw_value.strip()
+    if not value:
+        return ''
+    quote = value[0]
+    if quote in (chr(34), chr(39)):
+        try:
+            parts = shlex.split(value, comments=False, posix=True)
+        except ValueError:
+            warning(f'secrets.env line {line_no} ignored: invalid quoting')
+            return None
+        if len(parts) != 1:
+            warning(f'secrets.env line {line_no} ignored: invalid quoted value')
+            return None
+        return parts[0].strip()
+    return value
+
+secret_keys = tuple(env_key for _, env_key in provider_option_map)
+if os.path.exists('$SECRETS_FILE'):
+    try:
+        with open('$SECRETS_FILE', encoding='utf-8') as secret_file:
+            for line_no, raw_line in enumerate(secret_file, 1):
+                line = raw_line.rstrip('\n').rstrip('\r')
+                if line_no == 1:
+                    line = line.lstrip('\ufeff')
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                if stripped.startswith('export '):
+                    stripped = stripped[7:].lstrip()
+                if '=' not in stripped:
+                    warning(f'secrets.env line {line_no} ignored: missing KEY=VALUE')
+                    continue
+                key, raw_value = stripped.split('=', 1)
+                key = key.strip()
+                if key not in secret_keys:
+                    warning(f'secrets.env line {line_no} ignored: unsupported key')
+                    continue
+                value = parse_secret_value(raw_value, line_no)
+                if value is None:
+                    continue
+                if value:
+                    provider_values[key] = value
+    except OSError:
+        warning('could not read /config/secrets.env')
+
+for env_key in secret_keys:
+    val = provider_values.get(env_key, '')
+    if val:
+        print(f'export {env_key}={shlex.quote(str(val))}')
+
 for key in (
-    'anthropic_api_key',
-    'openai_api_key',
-    'azure_speech_key',
-    'azure_speech_region',
-    'elevenlabs_api_key',
     'station_name',
     'admin_token',
     'jamendo_client_id',
@@ -60,7 +127,7 @@ media_player_push = opts.get('ha_media_player_push', True)
 mpp_val = 'true' if media_player_push else 'false'
 print('export MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH=' + mpp_val)
 " 2>"$OPTS_LOG"); then
-        echo "[mammamiradio] WARNING: Failed to parse options.json, continuing with defaults"
+        echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
     else
         eval "$OPTS_EXPORT"

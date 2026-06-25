@@ -18,7 +18,7 @@ Code change
   → User clicks "Update" in HA
   → HA pulls image from GHCR
   → Container starts with /run.sh
-  → run.sh reads /data/options.json → sets env vars
+  → run.sh reads /data/options.json + /config/secrets.env → sets env vars
   → config.py reads env vars + radio.toml → builds StationConfig
   → main.py starts producer + streamer
 ```
@@ -121,8 +121,11 @@ Current config options:
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` |
-| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` |
-| `openai_api_key` | `password?` | `OPENAI_API_KEY` |
+| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `openai_api_key` | `password?` | `OPENAI_API_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_key` | `password?` | `AZURE_SPEECH_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_region` | `str?` | `AZURE_SPEECH_REGION` legacy fallback; prefer `/config/secrets.env` |
+| `elevenlabs_api_key` | `password?` | `ELEVENLABS_API_KEY` legacy fallback; prefer `/config/secrets.env` |
 | `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
 | `admin_token` | `password?` | `ADMIN_TOKEN` (blank => add-on trusts the LAN, no token required) |
@@ -133,6 +136,18 @@ Current config options:
 | `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+
+**Provider secrets.** The five AI/TTS provider credentials are file-first in add-on mode:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
+`ELEVENLABS_API_KEY` should live in `/config/secrets.env`. Non-empty file values win over legacy
+Configuration-tab values per key. `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN` remain Supervisor options
+in this phase. `/config/secrets.env` is plaintext in the add-on config storage, not Home Assistant
+`/config/secrets.yaml`; anyone with host/add-on config access can read it.
+
+`secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
+whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,
+and CRLF endings are accepted. Full-line comments beginning with `#` are ignored. Inline comments are
+not special for unquoted values, so `OPENAI_API_KEY=sk#abc` means the value contains `#abc`.
 
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
@@ -148,7 +163,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator sa
 immediately; their cost line shows `estimate (unpriced model)` until a price is added
 to `MODEL_PRICES` in `web/streamer.py`.
 
-The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
+The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new non-provider option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
 2. Add a translation entry in `translations/en.yaml`
@@ -166,7 +181,7 @@ the tile.
 
 ## Secrets: password type
 
-API keys and secrets use `password` type in the schema (not `str`). This masks them in the HA UI:
+Secrets that remain in the Supervisor schema use `password` type (not `str`). This masks them in the HA UI. The AI/TTS provider fields still use `password?` as legacy fallbacks, but new provider credentials should be stored in `/config/secrets.env` instead.
 
 ```yaml
 schema:
