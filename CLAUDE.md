@@ -62,6 +62,7 @@ Everything else lives under `docs/`:
 - `docs/architecture.md` - runtime flow, queue model, and audio pipeline
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
+- `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk rolling-RC mental model (the *how-to-cut* lives in the runbook below)
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
@@ -105,7 +106,7 @@ private durable system for strategy or relationship context.
   - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
   - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
   - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
-  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; version is the `main` short-SHA, cut manually with `make edge-release`). See `docs/runbooks/ha-addon.md` → "Edge channel".
+  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; version is the short SHA of the newest `main` commit with a built image, which may trail HEAD, cut with `make edge-release`). See `docs/runbooks/ha-addon.md` → "Edge channel".
 - `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment

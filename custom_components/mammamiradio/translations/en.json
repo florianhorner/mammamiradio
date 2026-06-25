@@ -13,6 +13,19 @@
           "host": "The add-on's address. On Home Assistant OS keep the default; on Docker use the container name (for example mammamiradio).",
           "admin_token": "Needed only when Home Assistant reaches the add-on from outside its trusted network (a remote or Docker install). On Home Assistant OS the controls work without it."
         }
+      },
+      "reconfigure": {
+        "title": "Update Mamma Mi Radio",
+        "description": "Update the station address or admin token. Home Assistant will reload the integration after saving.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "admin_token": "Admin token (optional)"
+        },
+        "data_description": {
+          "host": "The add-on's address. On Home Assistant OS keep the default; on Docker use the container name (for example mammamiradio).",
+          "admin_token": "Use the same value as the add-on's admin_token option. Leave blank when the add-on trusts the Supervisor network."
+        }
       }
     },
     "error": {
@@ -20,7 +33,33 @@
       "unknown": "Something unexpected happened. Make sure the add-on is running, then try again."
     },
     "abort": {
-      "already_configured": "This station is already set up."
+      "already_configured": "This station is already set up.",
+      "reconfigure_successful": "Mamma Mi Radio was updated."
+    }
+  },
+  "exceptions": {
+    "admin_token_rejected": {
+      "message": "The station did not accept that. Set the add-on's admin token in the integration reconfigure screen, then try again."
+    },
+    "control_failed": {
+      "message": "The station could not do that just now. Give it a few seconds and try again."
+    },
+    "station_unreachable_control": {
+      "message": "Could not reach the station. Check the add-on is running, then try again."
+    }
+  },
+  "issues": {
+    "admin_token_rejected": {
+      "title": "Mamma Mi Radio admin token was rejected",
+      "description": "Home Assistant can see the station, but the station rejected a play, stop, or next command. Reconfigure the Mamma Mi Radio integration and enter the same admin token used by the add-on, then try the control again."
+    },
+    "station_unreachable": {
+      "title": "Mamma Mi Radio is unreachable",
+      "description": "Home Assistant has missed several updates from the station. Check that the Mamma Mi Radio add-on is running and that the integration host and port are correct. You can reconfigure the integration without deleting the entity."
+    },
+    "legacy_media_player_push_conflict": {
+      "title": "Mamma Mi Radio has a legacy media player conflict",
+      "description": "A REST-pushed media_player.mammamiradio state already exists while the HACS integration is trying to own the same entity. In the add-on Configuration tab, turn off On-air media player push. The sensors keep working, and the integration keeps the controllable media player. After turning it off, reload the Mamma Mi Radio integration to clear this notice."
     }
   }
 }

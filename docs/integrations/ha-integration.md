@@ -27,6 +27,14 @@ now-playing contract; this integration is the HA-native face of it.
   play the station on real media players — the speaker only needs to reach Home
   Assistant, not the add-on directly — while `media_player.mammamiradio` remains
   the station control surface.
+- Repairs and diagnostics for the common recovery paths: unreachable station,
+  rejected admin token, and old REST-pushed media-player conflicts. The Repairs
+  clear themselves once resolved and are removed if you delete the integration;
+  the unreachable notice waits for a sustained outage, not a brief blip.
+- One station per install (single config entry). To change the host, port, or
+  admin token later, use **Reconfigure** (Settings → Devices & Services →
+  Mamma Mi Radio → ⋮ → **Reconfigure**) — no need to delete and re-add the
+  entity. A failed change keeps what you typed instead of reverting.
 
 ## Install (HACS custom repository)
 
@@ -42,19 +50,23 @@ now-playing contract; this integration is the HA-native face of it.
      Use the same value as the add-on's `admin_token` option. Leave blank for
      now-playing display only.
 
-## Turn off the add-on's media_player push (required)
+## Media-player ownership
 
-The add-on has always pushed a `media_player.mammamiradio` "ghost" every few
-seconds over the REST API. Once this integration owns that entity, that push
-would fight it (the HA state machine is last-writer-wins) and flap the card. So:
+New add-on installs default `On-air media player push`
+(`ha_media_player_push`) to **Off**, so this HACS integration owns
+`media_player.mammamiradio` from the start.
 
-**Add-on → Configuration → turn off `On-air media player push`
-(`ha_media_player_push`).**
+Existing add-on installs may still have the old REST-pushed
+`media_player.mammamiradio` "ghost" enabled. If Home Assistant shows a Repair
+about a legacy media-player conflict:
 
-The add-on then stops pushing `media_player.mammamiradio` (and deletes the stale
-ghost once so this integration claims the id cleanly), while the
-`sensor.mammamiradio_*` / `binary_sensor.mammamiradio_on_air` entities keep
-flowing as before.
+**Add-on → Configuration → turn off `On-air media player push`.**
+
+The add-on then stops pushing `media_player.mammamiradio` and deletes the stale
+ghost once, while the `sensor.mammamiradio_*` /
+`binary_sensor.mammamiradio_on_air` entities keep flowing as before. After
+turning the push off, reload the integration (Settings → Devices & Services →
+Mamma Mi Radio → ⋮ → **Reload**) to clear the Repair notice.
 
 > Migration note: if you have automations that read the old pushed
 > `media_player.mammamiradio` state, they keep working — the registered entity
@@ -71,6 +83,17 @@ the integration still pulls audio from the configured host/port plus `/stream`.
 Use `media-source://mammamiradio/live` as a `media_content_id` for
 `media_player.play_media`. See `docs/integrations/now-playing.md` for the
 contract.
+
+Example `media_player.play_media` usage:
+
+```yaml
+service: media_player.play_media
+target:
+  entity_id: media_player.your_speaker
+data:
+  media_content_id: media-source://mammamiradio/live
+  media_content_type: music
+```
 
 **Long speaker handoffs:** the proxy URL Home Assistant hands a speaker is
 signed and valid for 24 hours. A speaker streaming continuously keeps playing

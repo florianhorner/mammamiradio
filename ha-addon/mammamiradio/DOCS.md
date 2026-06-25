@@ -225,20 +225,28 @@ The station name is what the hosts say on air. If you call it "Radio Florian", t
 
 The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
 
-## Home Assistant pushed entities
+## Home Assistant entities
 
-The add-on automatically pushes its playback state to HA after each segment transition and every 30 seconds — no `configuration.yaml` changes required. Entities appear in **Developer Tools → States** within 30 seconds of startup.
+New installs should use the HACS integration in `custom_components/mammamiradio`
+for the registered, controllable `media_player.mammamiradio` and the native
+`media-source://mammamiradio/live` stream source.
+
+The add-on still pushes sensor state after each segment transition and every 30
+seconds. The legacy REST-pushed `media_player.mammamiradio` is compatibility
+only: turn **On-air media player push** on only for old add-on-only dashboards
+that still depend on it. New installs default it off so the HACS integration
+owns the media-player entity.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `mammamiradio_segment_type`, `mammamiradio_listeners` |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration owns this by default; legacy REST push only when `ha_media_player_push` is on |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
 
 **30-second cold-start note:** after a HA or add-on restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 
-**Lovelace media card** (copy-paste, no YAML required):
+**Lovelace media card** with the HACS integration:
 
 ```yaml
 type: media-control
@@ -258,7 +266,7 @@ action:
       brightness_pct: 30
 ```
 
-**Note:** pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist requires a HACS integration for full registry visibility.
+**Note:** REST-pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist and media-source browsing require the HACS integration for full registry visibility.
 
 ## Tiers
 

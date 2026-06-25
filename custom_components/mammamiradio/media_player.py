@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 import aiohttp
 from homeassistant.components.media_player import (
@@ -27,7 +28,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -40,9 +40,11 @@ from .const import (
     ENDPOINT_PLAY,
     ENDPOINT_STOP,
     HTTP_TIMEOUT,
+    ISSUE_ADMIN_TOKEN_REJECTED,
     STATION_LOGO_URL,
 )
 from .coordinator import MammaRadioCoordinator, RadioStatus
+from .repairs import create_issue, delete_issue
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ _STATE_MAP: dict[str, MediaPlayerState] = {
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: MammaRadioConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
+    async_add_entities: Callable[[list[MediaPlayerEntity]], None],
 ) -> None:
     """Set up the Mamma Mi Radio media player from a config entry."""
     async_add_entities([MammaRadioMediaPlayer(entry.runtime_data, entry)])
@@ -195,16 +197,26 @@ class MammaRadioMediaPlayer(CoordinatorEntity[MammaRadioCoordinator], MediaPlaye
             async with asyncio.timeout(HTTP_TIMEOUT):
                 async with session.post(f"{self._base_url}{path}", headers=headers) as resp:
                     if resp.status in (401, 403):
+                        create_issue(self.hass, ISSUE_ADMIN_TOKEN_REJECTED)
                         raise HomeAssistantError(
                             "The station did not accept that. Set the add-on's admin "
-                            "token in the integration options, then try again."
+                            "token in the integration reconfigure screen, then try again.",
+                            translation_domain=DOMAIN,
+                            translation_key=ISSUE_ADMIN_TOKEN_REJECTED,
                         )
+                    # Auth succeeded (any non-401/403 response), so clear a stale
+                    # token-rejected repair even if the body status is an error.
+                    delete_issue(self.hass, ISSUE_ADMIN_TOKEN_REJECTED)
                     if resp.status >= 400:
                         raise HomeAssistantError(
-                            "The station could not do that just now. Give it a few seconds and try again."
+                            "The station could not do that just now. Give it a few seconds and try again.",
+                            translation_domain=DOMAIN,
+                            translation_key="control_failed",
                         )
         except (aiohttp.ClientError, TimeoutError) as err:
             raise HomeAssistantError(
-                "Could not reach the station. Check the add-on is running, then try again."
+                "Could not reach the station. Check the add-on is running, then try again.",
+                translation_domain=DOMAIN,
+                translation_key="station_unreachable_control",
             ) from err
         await self.coordinator.async_request_refresh()

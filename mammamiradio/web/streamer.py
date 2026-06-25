@@ -3469,7 +3469,13 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/heading")
 async def set_heading(request: Request, _: None = Depends(require_admin_access)):
     """Blend an operator-selected era heading into the live rotation."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "Choose one of the era buttons and try again."},
+            status_code=422,
+        )
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
     seed = str(body.get("seed", "")).strip()

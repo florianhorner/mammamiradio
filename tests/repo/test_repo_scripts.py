@@ -7,6 +7,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
@@ -36,10 +38,55 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content)
 
 
+def _write_release_check_repo(
+    tmp_path: Path,
+    *,
+    version: str = "1.1.0",
+    manifest_version: str | None = "1.1.0",
+    addon_changelog: str = "# Changelog\n\n## Unreleased\n\n## 1.1.0\n",
+) -> None:
+    """Minimal repo layout that scripts/pre-release-check.sh inspects, in a state that
+    passes every check. Override one field to exercise a single gate."""
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", f"version: {version}\n")
+    _write(tmp_path / "pyproject.toml", f'[project]\nname = "mammamiradio"\nversion = "{version}"\n')
+    if manifest_version is not None:
+        _write(
+            tmp_path / "custom_components/mammamiradio/manifest.json",
+            '{\n  "domain": "mammamiradio",\n  "version": "' + manifest_version + '"\n}\n',
+        )
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", addon_changelog)
+    _write(
+        tmp_path / "mammamiradio/audio/normalizer.py",
+        'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
+    )
+    _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
+    _write(
+        tmp_path / "Makefile",
+        "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n"
+        "launch-smoke:\n\tpython scripts/ha-green-launch-smoke.py\n",
+    )
+    _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
+    _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
+
+
 def _load_ha_green_perf_smoke() -> types.ModuleType:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("ha_green_perf_smoke", HA_GREEN_PERF_SMOKE)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_ha_green_launch_smoke() -> types.ModuleType:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ha_green_launch_smoke", HA_GREEN_LAUNCH_SMOKE)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -164,24 +211,44 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
 
 
 def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Path) -> None:
-    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", "version: 1.1.0\n")
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
-    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n## 1.1.0\n")
-    _write(
-        tmp_path / "mammamiradio/audio/normalizer.py",
-        'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
+    _write_release_check_repo(tmp_path)
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+    assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) -> None:
+    # The HACS integration manifest must ride the release number (docs/release-process.md).
+    _write_release_check_repo(tmp_path, version="1.1.0", manifest_version="1.0.0")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.json version is '1.0.0' but config.yaml is 1.1.0" in result.stdout
+
+
+def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) -> None:
+    # Malformed manifest must produce a clean [FAIL], never a Python traceback that
+    # aborts the release gate.
+    _write_release_check_repo(tmp_path, manifest_version=None)
+    _write(tmp_path / "custom_components/mammamiradio/manifest.json", "{ not valid json ")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "manifest.json version is 'unreadable'" in result.stdout
+
+
+def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path) -> None:
+    # Guards the dated-header parse: "## 1.1.0 - 2026-06-21" reduces to "1.1.0".
+    _write_release_check_repo(
+        tmp_path,
+        addon_changelog="# Changelog\n\n## Unreleased\n\n## 1.1.0 - 2026-06-21\n",
     )
-    _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
-    _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
-    _write(
-        tmp_path / "Makefile",
-        "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n"
-        "launch-smoke:\n\tpython scripts/ha-green-launch-smoke.py\n",
-    )
-    _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
-    os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
-    _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
-    os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
 
@@ -215,6 +282,38 @@ def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "message"),
+    [
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+    ],
+)
+def test_ha_green_launch_smoke_validates_timeout_env_vars(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, env_value: str, message: str
+) -> None:
+    monkeypatch.setenv(env_name, env_value)
+
+    with pytest.raises(RuntimeError, match=f"{env_name} {message}"):
+        _load_ha_green_launch_smoke()
+
+
+def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    def missing_ffmpeg(*_args, **_kwargs) -> None:
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(smoke.subprocess, "run", missing_ffmpeg)
+
+    with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
+        smoke._seed_warm_norm_cache(str(tmp_path))
 
 
 def test_makefile_has_launch_smoke_target() -> None:

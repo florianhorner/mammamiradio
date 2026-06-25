@@ -24,6 +24,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SH = REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh"
+STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
+EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
 def _extract_python_snippet(options_file: Path) -> str:
@@ -195,6 +197,30 @@ def test_parser_quality_profile_wins_over_legacy_claude_model():
     exports = _parse_exports(stdout)
     assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
     assert "CLAUDE_MODEL" not in exports
+
+
+def test_parser_media_player_push_missing_key_preserves_legacy_default():
+    """Old installs with no saved key keep the REST ghost until explicitly changed."""
+    rc, stdout, _ = _run_parser({})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == "true"
+
+
+def test_parser_media_player_push_explicit_true_and_false():
+    for value, expected in ((True, "true"), (False, "false")):
+        rc, stdout, _ = _run_parser({"ha_media_player_push": value})
+        assert rc == 0
+        exports = _parse_exports(stdout)
+        assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == expected
+
+
+def test_addon_manifest_media_player_push_defaults_false_for_new_installs():
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        body = config.read_text()
+        assert re.search(r"(?m)^  ha_media_player_push: false$", body), (
+            f"{config} must default new installs to the HACS integration owning media_player.mammamiradio"
+        )
 
 
 def test_parser_fails_on_corrupt_json():

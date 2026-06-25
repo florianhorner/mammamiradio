@@ -18,11 +18,13 @@ from homeassistant.components.media_player import (
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.mammamiradio.const import (
     CONF_ADMIN_TOKEN,
     DOMAIN,
+    ISSUE_ADMIN_TOKEN_REJECTED,
     NOW_PLAYING_PATH,
     STATION_LOGO_URL,
 )
@@ -178,6 +180,49 @@ async def test_control_failure_raises_with_a_way_out(hass: HomeAssistant) -> Non
         mock.get(URL, status=200, payload=load_payload("music"), repeat=True)
         with pytest.raises(HomeAssistantError):
             await hass.services.async_call("media_player", "media_play", {"entity_id": ENTITY}, blocking=True)
+
+
+async def test_rejected_token_raises_translated_error_and_repair(hass: HomeAssistant) -> None:
+    with aioresponses() as mock:
+        await _setup(hass, mock, load_payload("music"), token="wrong")
+        mock.post(f"{BASE}/api/resume", status=403, repeat=True)
+        with pytest.raises(HomeAssistantError) as err:
+            await hass.services.async_call("media_player", "media_play", {"entity_id": ENTITY}, blocking=True)
+
+    assert err.value.translation_domain == DOMAIN
+    assert err.value.translation_key == ISSUE_ADMIN_TOKEN_REJECTED
+    registry = ir.async_get(hass)
+    assert registry.async_get_issue(DOMAIN, ISSUE_ADMIN_TOKEN_REJECTED) is not None
+
+
+async def test_successful_control_clears_rejected_token_repair(hass: HomeAssistant) -> None:
+    registry = ir.async_get(hass)
+    with aioresponses() as mock:
+        await _setup(hass, mock, load_payload("music"), token="secret")
+        from custom_components.mammamiradio.repairs import create_issue
+
+        create_issue(hass, ISSUE_ADMIN_TOKEN_REJECTED)
+        mock.post(f"{BASE}/api/resume", status=200, repeat=True)
+        mock.get(URL, status=200, payload=load_payload("music"), repeat=True)
+        await hass.services.async_call("media_player", "media_play", {"entity_id": ENTITY}, blocking=True)
+
+    assert registry.async_get_issue(DOMAIN, ISSUE_ADMIN_TOKEN_REJECTED) is None
+
+
+async def test_non_auth_failure_clears_rejected_token_repair(hass: HomeAssistant) -> None:
+    """Auth succeeding clears the stale token repair even if the command then fails."""
+    registry = ir.async_get(hass)
+    with aioresponses() as mock:
+        await _setup(hass, mock, load_payload("music"), token="secret")
+        from custom_components.mammamiradio.repairs import create_issue
+
+        create_issue(hass, ISSUE_ADMIN_TOKEN_REJECTED)
+        # Not 401/403 (token now accepted), but the command fails for another reason.
+        mock.post(f"{BASE}/api/resume", status=500, repeat=True)
+        with pytest.raises(HomeAssistantError):
+            await hass.services.async_call("media_player", "media_play", {"entity_id": ENTITY}, blocking=True)
+
+    assert registry.async_get_issue(DOMAIN, ISSUE_ADMIN_TOKEN_REJECTED) is None
 
 
 @pytest.mark.parametrize(("payload_name", "expected"), [("music", "music"), ("banter", "channel")])

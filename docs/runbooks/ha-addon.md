@@ -27,20 +27,25 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
-## Version: two files, must match
+## Version: three files, must match
 
 | File | Field | Example |
 |------|-------|---------|
 | `ha-addon/mammamiradio/config.yaml` | `version:` | `1.1.0` |
 | `pyproject.toml` | `version =` | `"1.1.0"` |
+| `custom_components/mammamiradio/manifest.json` | `"version"` | `"1.1.0"` |
 
-CI validates they match. If they don't, the build fails.
+CI validates all three match (`scripts/pre-release-check.sh`). If they don't, the build
+fails. The HACS integration ships from this same repo and HACS reads its version from the
+git release tag, so its `manifest.json` rides the release number too — see
+`../release-process.md` → "The HACS integration shares the release number".
 
 **How to bump:**
 ```bash
-# Both files, same version, same commit
+# All three files, same version, same commit
 sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
+sed -i '' 's/"version": *"[^"]*"/"version": "X.Y.Z"/' custom_components/mammamiradio/manifest.json
 ```
 
 ## Cutting a stable release (the cadence model)
@@ -125,6 +130,7 @@ Current config options:
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 | `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
+| `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (new-install manifest default off; `run.sh` missing-key fallback true for legacy installs) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
@@ -142,12 +148,19 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator sa
 immediately; their cost line shows `estimate (unpriced model)` until a price is added
 to `MODEL_PRICES` in `web/streamer.py`.
 
-The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
+The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
 2. Add a translation entry in `translations/en.yaml`
 3. Add the run.sh export, either in the tuple loop for direct UPPER_CASE keys or as an explicit mapping for app-specific env vars
 4. Read it in `config.py` via `os.getenv("MY_OPTION", "default")`
+
+**Media-player ownership migration.** Stable and Edge manifests default
+`ha_media_player_push` to `false` for new installs so the HACS integration owns
+the registered, controllable `media_player.mammamiradio`. Do not change the
+`run.sh` missing-key fallback from `true`: older installs that never saved this
+option should keep their historical REST-pushed media player until the operator
+explicitly turns it off.
 
 ## Secrets: password type
 
@@ -225,7 +238,7 @@ Stable add-on images are published by `addon-release.yml`, triggered by a `v*` t
 
 | | Stable (`mammamiradio`) | Edge (`mammamiradio-edge`) |
 |--|--|--|
-| `version:` | hand-bumped `X.Y.Z` on deliberate releases | the `main` short commit SHA, cut manually with `make edge-release` |
+| `version:` | hand-bumped `X.Y.Z` on deliberate releases | the short SHA of the newest `main` commit with a built image (may trail HEAD), cut with `make edge-release` |
 | Updates when | you push a matching `v*` tag after merging the version-bump commit | you cut an edge release (the version string changes, so HA shows an Update) |
 | Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:<short-sha>` (published by `addon-build.yml` on every `main` build) |
 | Audience | everyone | the maintainer's soak Pi |
@@ -234,8 +247,9 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 **Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
 
-1. Make sure `Build HA Addon` is green on the `main` commit you want to release — it pushes the `:<short-sha>` image the edge channel will point at.
-2. Run `make edge-release` (`scripts/cut-edge-release.sh`): it sets the edge `version:` to the current `origin/main` short SHA, verifies the `:<short-sha>` image exists, and opens a normal PR you merge via `/ship`.
+1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
+
+The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image paths (`ha-addon/**`, `mammamiradio/**`, `pyproject.toml`, `radio.toml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). It uses `gh run list` (needs only `actions:read`); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
