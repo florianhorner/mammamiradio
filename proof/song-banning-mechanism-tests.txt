@@ -1,0 +1,27 @@
+chore/song-banning-mechanism — ban the on-air song and skip it in one action
+Branch: florianhorner/chore/song-banning-mechanism
+Commit: 0e87181f
+Generated: 2026-06-25T18:27:33Z
+
+=== ban-now-playing endpoint + blocklist tests ===
+..........................                                               [100%]
+26 passed in 0.70s
+
+=== UI control contracts (skip refactor + ban button) ===
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 0.97s
+
+=== admin copy lint (no machine phrases in toasts) ===
+.........                                                                [100%]
+9 passed in 0.07s
+
+=== full suite (merged with origin/main) ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3362 passed, 2 skipped, 19 deselected, 1 warning in 60.20s (0:01:00)
+
+=== ruff + mypy + release invariants ===
+All checks passed!
+Success: no issues found in 1 source file
+  Passed: 7  Failed: 0
+All invariants passed.

@@ -160,6 +160,20 @@ class TestSkipEndpoint:
         assert not app.state.skip_event.is_set()
 
     @pytest.mark.asyncio
+    async def test_skip_bridges_when_queue_empty(self):
+        """Empty queue + no shadow -> skip forces next music before cutting (the
+        shared _request_skip bridge). Pins the bridge on the /api/skip caller, the
+        same contract ban-now-playing relies on."""
+        app = _make_app(
+            now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}},
+            queue_items=0,
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/skip", headers=AUTH)
+        assert resp.json()["bridged"] is True
+        assert app.state.station_state.force_next is SegmentType.MUSIC
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_purge_queue(self):
         """Skip only interrupts the current segment; queued segments survive."""
         shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]
@@ -206,6 +220,53 @@ class TestSkipEndpoint:
             await c.post("/api/skip", headers=AUTH)
 
         assert app.state.station_state.listener.songs_skipped == profile_before
+
+
+# ---------------------------------------------------------------------------
+# Ban-now-playing endpoint (on-air console "Ban" button = ban + immediate skip)
+# ---------------------------------------------------------------------------
+
+
+class TestBanNowPlayingEndpoint:
+    @pytest.mark.asyncio
+    async def test_ban_now_sets_skip_event_and_skipping_state(self):
+        """Mirrors the Skip contract: the airing music segment is cut synchronously —
+        skip_event set, now_streaming flips to 'skipping' — in one atomic response."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Modugno — Volare",
+                "started": time.time(),
+                "metadata": {"artist": "Modugno", "title_only": "Volare"},
+            }
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
+        body = resp.json()
+        assert body["ok"] is True and body["skipped"] is True
+        assert app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming["type"] == "skipping"
+        assert ("modugno", "volare") in app.state.station_state.blocklist
+
+    @pytest.mark.asyncio
+    async def test_ban_now_rejects_non_music_without_skipping(self):
+        """Banter/stopped on air -> reject, no spurious skip, blocklist untouched."""
+        app = _make_app(
+            now_streaming={"type": "banter", "label": "Sofia talking", "started": time.time(), "metadata": {}}
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
+        assert resp.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
+        assert app.state.station_state.blocklist == {}
+
+    def test_admin_html_has_ban_now_button_and_handler(self):
+        """The console wiring must survive HTML refactors: the button calls the
+        handler, and the handler hits the dedicated endpoint."""
+        html = ADMIN_HTML.read_text()
+        assert 'id="banNowBtn"' in html
+        assert "doBanNowPlaying(this)" in html
+        assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
 
 
 # ---------------------------------------------------------------------------
