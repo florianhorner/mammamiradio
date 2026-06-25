@@ -302,7 +302,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
     disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
     an update — the single-loop discipline the queue code already relies on. Returns
-    ``{"ok", "banned": [display], "removed": int, "purged": int}``.
+    ``{"ok", "banned": [display], "removed": int, "purged": int, "persisted": bool}``.
     """
     keys: dict[tuple[str, str], str] = {}
     for track in tracks:
@@ -3204,9 +3204,12 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     # label and would forge a key that matches nothing).
     title = str(meta.get("title_only") or "").strip()
     if not (artist or title):
+        # A label is "Artist — Title"; only accept it when BOTH sides are present.
+        # A one-sided label ("Mina —") is malformed and would forge a half-key — fall
+        # through to the way-out message instead of banning on a guessed fragment.
         label = str(now_seg.get("label") or "").strip()
         parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
-        if len(parts) == 2:
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
             artist, title = parts[0].strip(), parts[1].strip()
     if not (artist or title):
         return {
@@ -3227,6 +3230,10 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
         "persisted": result.get("persisted", True),
         "skipped": True,
         "bridged": bridged,
+        # The server-resolved identity, so the admin's Undo unbans the exact key the
+        # server banned — not whatever its last poll happened to show (the airing
+        # segment can advance in that window).
+        "key": list(normalized_track_key(track)),
     }
 
 

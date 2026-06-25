@@ -160,6 +160,20 @@ class TestSkipEndpoint:
         assert not app.state.skip_event.is_set()
 
     @pytest.mark.asyncio
+    async def test_skip_bridges_when_queue_empty(self):
+        """Empty queue + no shadow -> skip forces next music before cutting (the
+        shared _request_skip bridge). Pins the bridge on the /api/skip caller, the
+        same contract ban-now-playing relies on."""
+        app = _make_app(
+            now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}},
+            queue_items=0,
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/skip", headers=AUTH)
+        assert resp.json()["bridged"] is True
+        assert app.state.station_state.force_next is SegmentType.MUSIC
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_purge_queue(self):
         """Skip only interrupts the current segment; queued segments survive."""
         shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]

@@ -2131,6 +2131,9 @@ async function doBanNowPlaying(el){
   const r=await api('POST','/api/track/ban-now-playing');
   if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban this song');toast(m);return;}
   await refreshFast();refreshBanCount();
+  // Prefer the server-resolved key so Undo lifts exactly what was banned, even if
+  // the segment advanced between our last poll and the server read.
+  if(Array.isArray(r.key)&&r.key.length===2){artist=r.key[0];title=r.key[1];}
   // Undo only lifts the ban — the song was already skipped off the air, so the copy
   // says "can come back" rather than implying it returns to air now.
   const msg=r.persisted===false?'Banned and skipped — but I couldn’t save it, so it may come back after a restart':'Banned and skipped — won’t come back';
