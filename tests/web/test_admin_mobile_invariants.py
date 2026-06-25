@@ -266,6 +266,20 @@ def test_on_air_zone_renders_ai_cost_counter() -> None:
     assert "getElementById('sidebarCost')" in text, "updateEngineRoom() must write the cost into sidebarCost."
 
 
+def test_cost_split_rows_use_overflow_safe_columns() -> None:
+    """Long labels and estimate notes must not force horizontal overflow on mobile."""
+    css = _admin_css()
+    row = _declarations_for_selector(css, ".cost-split-row")
+    name = _declarations_for_selector(css, ".cost-split-row .name")
+    value = _declarations_for_selector(css, ".cost-split-row .value")
+
+    assert row.get("display") == "grid"
+    assert row.get("grid-template-columns") == "minmax(0, 1fr) auto"
+    assert name.get("min-width") == "0"
+    assert name.get("overflow") == "hidden"
+    assert value.get("white-space") == "nowrap"
+
+
 def test_programme_action_buttons_have_44px_touch_targets() -> None:
     """Scaletta action buttons may be visually compact, but the button box must be tappable."""
     _assert_touch_target(".a-programme .ac button")

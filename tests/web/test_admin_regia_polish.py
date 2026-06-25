@@ -181,6 +181,17 @@ def test_token_cost_counter_survives_in_costs_group() -> None:
     assert html.index('id="engineRuntime"') < html.index('id="setupGroup"')
 
 
+def test_cost_split_survives_in_costs_group_before_segment_counts() -> None:
+    html = _html()
+    assert 'id="engineCostSplit"' in html
+    assert "cost_breakdown" in html
+    assert "Cost split" in html
+    assert "Host scripts" in html
+    assert "Ad scripts" in html
+    assert "Voice synthesis" in html
+    assert html.index('id="engineCostSplit"') < html.index('id="engineSegments"') < html.index('id="setupGroup"')
+
+
 def test_session_cost_reframe_template_invariants() -> None:
     """Protected cost display: the token-cost estimate copy and render targets
     survive the Concept B console rewrite. The 'Produced · Session N' segment
