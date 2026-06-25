@@ -1,15 +1,15 @@
 {
   "domain": "mammamiradio",
   "name": "Mamma Mi Radio",
+  "after_dependencies": ["media_source"],
   "codeowners": ["@florianhorner"],
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "single_config_entry": true,
-  "after_dependencies": ["media_source"],
   "issue_tracker": "https://github.com/florianhorner/mammamiradio/issues",
   "requirements": [],
+  "single_config_entry": true,
   "version": "1.0.0"
 }
