@@ -78,6 +78,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
     require_admin_access,
     security,
 )
+from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
@@ -302,7 +303,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
     disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
     an update — the single-loop discipline the queue code already relies on. Returns
-    ``{"ok", "banned": [display], "removed": int, "purged": int}``.
+    ``{"ok", "banned": [display], "removed": int, "purged": int, "persisted": bool}``.
     """
     keys: dict[tuple[str, str], str] = {}
     for track in tracks:
@@ -2035,7 +2036,9 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
 @router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
 async def save_keys(request: Request):
     """Save API credentials to .env (or addon options.json) and update the live config."""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     updates = _credential_updates_from_env_payload(body, require_nonempty=True)
 
     if not updates:
@@ -2189,15 +2192,20 @@ async def shuffle_playlist(request: Request, _: None = Depends(require_admin_acc
     return {"ok": True, "message": "Playlist shuffled"}
 
 
-@router.post("/api/skip")
-async def skip_track(request: Request, _: None = Depends(require_admin_access)):
-    """Skip the currently streaming segment."""
-    state = request.app.state.station_state
-    if not state.now_streaming:
-        return {"ok": False, "error": "Nothing is currently streaming"}
+async def _request_skip(app_state, state: StationState, config, *, source: str) -> bool:
+    """Cut the airing segment now, bridging to forced music if the queue is empty.
 
-    # Record skip in listener profile if this was a music segment
-    now_seg = state.now_streaming
+    Shared by ``/api/skip`` and ``/api/track/ban-now-playing`` so the skip semantics
+    (listener-skip record, empty-queue bridge, ``skip_event``, ``now_streaming`` ->
+    skipping) can never drift between the two callers.
+
+    Order matters for callers that mutate state first: ``ban-now-playing`` purges the
+    queued copies of the banned song BEFORE calling this, and the bridge decision below
+    reads the queue AFTER that purge — so a queue emptied by the ban still forces the
+    next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
+    was forced.
+    """
+    now_seg = state.now_streaming or {}
     if now_seg.get("type") == "music":
         started = now_seg.get("started", time.time())
         listen_sec = time.time() - started
@@ -2206,29 +2214,34 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             listen_sec=listen_sec,
             track_display=now_seg.get("label", ""),
         )
-        await _persist_skipped_music(
-            state,
-            request.app.state.config,
-            now_seg.get("metadata") or {},
-            listen_sec=listen_sec,
-        )
+        await _persist_skipped_music(state, config, now_seg.get("metadata") or {}, listen_sec=listen_sec)
 
     bridged = False
-    if request.app.state.queue.empty() and not state.queued_segments:
+    if app_state.queue.empty() and not state.queued_segments:
         state.force_next = SegmentType.MUSIC
         bridged = True
         state.pending_actions.append(
             {
                 "type": "skip_bridge",
-                "source": "admin_skip",
+                "source": source,
                 "label": "force next music",
                 "created_at": time.time(),
             }
         )
         logger.info("Skip requested with empty queue — forcing next music before cut")
 
-    request.app.state.skip_event.set()
+    app_state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
+    return bridged
+
+
+@router.post("/api/skip")
+async def skip_track(request: Request, _: None = Depends(require_admin_access)):
+    """Skip the currently streaming segment."""
+    state = request.app.state.station_state
+    if not state.now_streaming:
+        return {"ok": False, "error": "Nothing is currently streaming"}
+    bridged = await _request_skip(request.app.state, state, request.app.state.config, source="admin_skip")
     return {"ok": True, "bridged": bridged}
 
 
@@ -2273,7 +2286,9 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     list. The producer and streamer therefore cannot interleave and leave the
     two views of the queue divergent.
     """
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     seg_id = body.get("id")
     index = body.get("index")
 
@@ -2386,7 +2401,9 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
 @router.post("/api/trigger")
 async def trigger_segment(request: Request, _: None = Depends(require_admin_access)):
     """Force the next produced segment to be banter, ad, or news flash."""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     seg_type = body.get("type", "").lower()
     valid = {"banter": SegmentType.BANTER, "ad": SegmentType.AD, "news_flash": SegmentType.NEWS_FLASH}
     if seg_type not in valid:
@@ -2418,12 +2435,9 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 
     Returns 429 if called within the cooldown window (default 60s).
     """
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid JSON body"})
-    if not isinstance(body, dict):
-        return JSONResponse(status_code=422, content={"ok": False, "error": "expected JSON object"})
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
 
     directive = (body.get("directive") or "").strip()
     if not directive:
@@ -2574,12 +2588,9 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
     """Update pacing settings in real-time."""
     config = request.app.state.config
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Pacing payload must be valid JSON") from exc
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Pacing payload must be a JSON object")
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
 
     def _parse_pacing_int(field: str) -> int | None:
         if field not in body:
@@ -2644,11 +2655,10 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
     POST enabled=true -> persist -> set active+pending -> bump epoch -> purge lookahead
     POST enabled=false -> persist -> clear pending -> bump epoch, without queue purge
     """
-    try:
-        body = await request.json()
-    except ValueError:
-        return {"ok": False, "error": "invalid JSON body"}
-    if not isinstance(body, dict) or "enabled" not in body:
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "enabled" not in body:
         return {"ok": False, "error": "expected JSON object with enabled"}
     raw_value = body["enabled"]
     if not isinstance(raw_value, bool):
@@ -2718,8 +2728,10 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     so the value survives container restarts in both modes.
     """
     config = request.app.state.config
-    body = await request.json()
-    if not isinstance(body, dict) or "super_italian_mode" not in body:
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "super_italian_mode" not in body:
         return {"ok": False, "error": "expected JSON object with super_italian_mode"}
     raw_value = body["super_italian_mode"]
     if not isinstance(raw_value, bool):
@@ -2776,11 +2788,10 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
     addons (the same key ``run.sh`` reads back), so the choice survives a restart.
     """
     config = request.app.state.config
-    try:
-        body = await request.json()
-    except ValueError:
-        return {"ok": False, "error": "invalid JSON body"}
-    if not isinstance(body, dict) or "broadcast_chain" not in body:
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "broadcast_chain" not in body:
         return {"ok": False, "error": "expected JSON object with broadcast_chain"}
     raw_value = body["broadcast_chain"]
     if not isinstance(raw_value, bool):
@@ -2845,11 +2856,10 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
     or quality_profile to /data/options.json (addon).
     """
     config = request.app.state.config
-    try:
-        body = await request.json()
-    except ValueError:
-        return {"ok": False, "error": "invalid JSON body"}
-    if not isinstance(body, dict) or "quality_profile" not in body:
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "quality_profile" not in body:
         return {"ok": False, "error": "expected JSON object with quality_profile"}
     profile = body["quality_profile"]
     if not isinstance(profile, str) or profile not in config.models.profiles:
@@ -3041,12 +3051,9 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
     """
     config = request.app.state.config
     state = request.app.state.station_state
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=422)
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "expected JSON object"}, status_code=422)
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     action = body.get("action")
     mode = body.get("mode")
 
@@ -3094,7 +3101,9 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/credentials")
 async def save_credentials(request: Request, _: None = Depends(require_admin_access)):
     """Write credentials to .env and apply them live without a restart."""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     updates = _credential_updates_from_field_payload(body)
 
     if not updates:
@@ -3116,7 +3125,9 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     queued segment of it. A single removal is never rejected for starvation. Body:
     {index: int}.
     """
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     idx = _as_int_index(body.get("index", -1))
     state = request.app.state.station_state
     config = request.app.state.config
@@ -3139,9 +3150,9 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
     """
     from mammamiradio.core.models import Track
 
-    body = await request.json()
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     state = request.app.state.station_state
     config = request.app.state.config
 
@@ -3180,12 +3191,76 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
     return _apply_ban(state, config, tracks, queue=request.app.state.queue)
 
 
+@router.post("/api/track/ban-now-playing")
+async def ban_now_playing(request: Request, _: None = Depends(require_admin_access)):
+    """Ban the song currently on air and cut to the next segment in one action.
+
+    The on-air console's "Ban" button. Durably blocklists the airing track by its
+    ``(artist, title)`` identity, then runs the exact skip path so it leaves the air
+    immediately — the ONE ban path that interrupts the current segment (every other
+    ban deliberately lets the airing song finish).
+
+    Identity comes from ``now_streaming.metadata`` (the same ``artist`` / ``title_only``
+    keys ``_purge_blocklisted_from_queue`` matches), so this also works for a song that
+    is on air from the rescue cache or a one-off download and is not in ``state.playlist``
+    at all — a win over the index-based row ban. Starvation-exempt like the per-row ✕ Ban:
+    the operator asked for THIS song gone, now. Best-effort persistence is surfaced
+    honestly via ``persisted`` (leadership #5).
+    """
+    state = request.app.state.station_state
+    config = request.app.state.config
+
+    now_seg = state.now_streaming or {}
+    if now_seg.get("type") != "music":
+        return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
+
+    meta = now_seg.get("metadata") or {}
+    artist = str(meta.get("artist") or "").strip()
+    # Prefer ``title_only`` so the blocklist key matches both the queue-purge key and
+    # the clean ``Track.title`` used at every ingest doorway; fall back to parsing the
+    # "Artist — Title" label (never the raw ``title``, which can carry the combined
+    # label and would forge a key that matches nothing).
+    title = str(meta.get("title_only") or "").strip()
+    if not (artist or title):
+        # A label is "Artist — Title"; only accept it when BOTH sides are present.
+        # A one-sided label ("Mina —") is malformed and would forge a half-key — fall
+        # through to the way-out message instead of banning on a guessed fragment.
+        label = str(now_seg.get("label") or "").strip()
+        parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            artist, title = parts[0].strip(), parts[1].strip()
+    if not (artist or title):
+        return {
+            "ok": False,
+            "error": "I can’t tell which song this is to ban it. Ban it from the rotation list instead.",
+        }
+
+    track = Track(title=title, artist=artist, duration_ms=0)
+    # Ban FIRST (this purges any queued copies of the same song), THEN skip — so the
+    # bridge decision inside _request_skip sees the post-purge queue depth.
+    result = _apply_ban(state, config, [track], queue=request.app.state.queue)
+    bridged = await _request_skip(request.app.state, state, config, source="ban_now_playing")
+    return {
+        "ok": True,
+        "banned": result.get("banned", []),
+        "removed": result.get("removed", 0),
+        "purged": result.get("purged", 0),
+        "persisted": result.get("persisted", True),
+        "skipped": True,
+        "bridged": bridged,
+        # The server-resolved identity, so the admin's Undo unbans the exact key the
+        # server banned — not whatever its last poll happened to show (the airing
+        # segment can advance in that window).
+        "key": list(normalized_track_key(track)),
+    }
+
+
 @router.post("/api/track/unban")
 async def unban_tracks(request: Request, _: None = Depends(require_admin_access)):
     """Lift a ban so the song can return on the next fetch. Body: {"keys": [[a, t], ...]}."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     state = request.app.state.station_state
     config = request.app.state.config
     keys: list[tuple[str, str]] = []
@@ -3218,7 +3293,9 @@ async def banlist(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/playlist/move")
 async def move_track(request: Request, _: None = Depends(require_admin_access)):
     """Move a track in the playlist. body: {from: N, to: N}"""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     src = _as_int_index(body.get("from", -1))
     dst = _as_int_index(body.get("to", -1))
     state = request.app.state.station_state
@@ -3345,12 +3422,9 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
     from mammamiradio.core.models import Track
     from mammamiradio.playlist.downloader import YOUTUBE_VIDEO_ID_RE
 
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     youtube_id = str(body.get("youtube_id") or "").strip()
     title = str(body.get("title") or "").strip()
     artist = str(body.get("artist") or "").strip()
@@ -3528,7 +3602,9 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     """Add a track to the playlist."""
     from mammamiradio.core.models import Track
 
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     # Preserve album_art when the caller supplies one (e.g. re-adding a track that
     # already carries a cover). Live cover resolution happens on the download paths
     # (_commit_external_download), not on this fast synchronous append.
@@ -3555,15 +3631,9 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/heading")
 async def set_heading(request: Request, _: None = Depends(require_admin_access)):
     """Blend an operator-selected era heading into the live rotation."""
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(
-            {"ok": False, "error": "Choose one of the era buttons and try again."},
-            status_code=422,
-        )
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    body, error = await read_json_object(request, error_message="Choose one of the era buttons and try again.")
+    if error is not None:
+        return error
     seed = str(body.get("seed", "")).strip()
     label = HEADING_SEEDS.get(seed)
     if label is None:
@@ -3800,9 +3870,9 @@ async def clear_heading(request: Request, _: None = Depends(require_admin_access
 @router.post("/api/playlist/enrich")
 async def enrich_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Add tracks from a source without replacing programme or purging playback."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     url = str(body.get("url", "")).strip()
     position = str(body.get("position", "end")).strip().lower()
     if not url:
@@ -3862,7 +3932,9 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
 @router.post("/api/playlist/load")
 async def load_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Load a new playlist from a URL and replace the current one."""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     url = body.get("url", "").strip()
     if not url:
         return {"ok": False, "error": "No URL provided"}
@@ -3892,7 +3964,9 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
 @router.post("/api/playlist/move_to_next")
 async def move_to_next(request: Request, _: None = Depends(require_admin_access)):
     """Move a track to play next (position 0 in upcoming)."""
-    body = await request.json()
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
     idx = _as_int_index(body.get("index", -1))
     state = request.app.state.station_state
     pl = state.playlist
@@ -3918,7 +3992,9 @@ async def add_track_rule(request: Request, _: None = Depends(require_admin_acces
     """Flag a reaction rule for the currently playing track."""
     from mammamiradio.playlist.track_rules import add_rule
 
-    payload = await request.json()
+    payload, error = await read_json_object(request)
+    if error is not None:
+        return error
     youtube_id = payload.get("youtube_id", "")
     rule_text = payload.get("rule", "")
     if not youtube_id or not rule_text:
@@ -3949,12 +4025,15 @@ async def get_hosts(request: Request, _: None = Depends(require_admin_access)):
 @router.patch("/api/hosts/{host_name}/personality")
 async def update_host_personality(host_name: str, request: Request, _: None = Depends(require_admin_access)):
     """Update one or more personality axes for a host.  Takes effect on the next generated segment."""
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+
     config = request.app.state.config
     host = next((h for h in config.hosts if h.name.lower() == host_name.lower()), None)
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_name}' not found")
 
-    body = await request.json()
     valid_axes = PersonalityAxes.AXIS_NAMES
     updates = {k: v for k, v in body.items() if k in valid_axes and isinstance(v, int | float)}
     if not updates:
