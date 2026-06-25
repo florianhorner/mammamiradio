@@ -2685,12 +2685,28 @@ function updateRuntimeStatus(st){
       const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
       rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
     }
+    // Generated waste (#397): rendered segments discarded before broadcast.
+    const gw=rs.generation_waste;
+    let wasteRow;
+    if(!gw){
+      wasteRow=statusRow('Generated waste','idle','—','No discard telemetry yet');
+    }else{
+      const wasteState=gw.degraded?'degraded':'ready';
+      const reasonHuman=(r)=>String(r||'').replace(/_/g,' ');
+      const windowMin=Math.round((gw.window_seconds||900)/60);
+      const durMin=Math.round((gw.recent_duration_sec||0)/60);
+      const topReason=gw.recent_top_reason?reasonHuman(gw.recent_top_reason):'mixed';
+      const wasteLabel=gw.degraded?'Discarding often':'Low waste';
+      const wasteDetail=`${gw.recent_segments||0} unheard segments · ~${durMin}m in ${windowMin}m · mostly ${topReason}`;
+      wasteRow=statusRow('Generated waste',wasteState,wasteLabel,wasteDetail);
+    }
     card.innerHTML=[
       statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
       rescueRow,
+      wasteRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
     ].join('');
   }catch(e){

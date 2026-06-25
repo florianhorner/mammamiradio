@@ -50,6 +50,7 @@ from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
+    GenerationWasteReason,
     InterruptSpec,
     Segment,
     SegmentType,
@@ -614,6 +615,7 @@ def _front_insert_queue_and_shadow(
     False (dropping the segment) if the session was stopped mid-build.
     """
     if state.session_stopped:
+        state.record_discard(segment, reason=GenerationWasteReason.SESSION_STOPPED)
         if segment.ephemeral:
             segment.path.unlink(missing_ok=True)
         # The forced render is abandoned — release the one-at-a-time guard so the
@@ -640,6 +642,7 @@ def _front_insert_queue_and_shadow(
     # on every air-next.
     state.queued_segments.insert(0, shadow_entry)
     for seg in dropped:
+        state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
         if getattr(seg, "ephemeral", False):
             seg.path.unlink(missing_ok=True)
     if dropped and len(state.queued_segments) > 1:
@@ -840,6 +843,7 @@ async def _enqueue_with_egress(
         )
         if _key in state.blocklist:
             logger.info("Blocklist gate: dropped a banned song at the enqueue funnel (%s - %s)", _key[0], _key[1])
+            state.record_discard(segment, reason=GenerationWasteReason.BLOCKLIST_GATE)
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             return False
@@ -858,6 +862,7 @@ async def _enqueue_with_egress(
     # keep their documented pre-egress-only behavior.
     if stale_check is not None and stale_check():
         logger.info("Discarding %s: source changed during egress (post-egress stale gate)", segment.type.value)
+        state.record_discard(segment, reason=GenerationWasteReason.EGRESS_STALE)
         if segment.ephemeral:
             segment.path.unlink(missing_ok=True)
         return False
@@ -1124,11 +1129,25 @@ async def prewarm_first_segment(
                 return False
         if generation_source_revision != state.source_revision:
             logger.info("Discarding stale prewarm segment after source switch")
+            prewarm_segment = Segment(
+                type=SegmentType.MUSIC,
+                path=norm_path,
+                duration_sec=(track.duration_ms or 0) / 1000.0,
+                ephemeral=not rendered.cache_hit,
+            )
+            state.record_discard(prewarm_segment, reason=GenerationWasteReason.STALE_SOURCE)
             if not rendered.cache_hit:
                 norm_path.unlink(missing_ok=True)
             return False
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Discarding stale prewarm segment after chaos cutover")
+            prewarm_segment = Segment(
+                type=SegmentType.MUSIC,
+                path=norm_path,
+                duration_sec=(track.duration_ms or 0) / 1000.0,
+                ephemeral=not rendered.cache_hit,
+            )
+            state.record_discard(prewarm_segment, reason=GenerationWasteReason.STALE_CHAOS)
             if not rendered.cache_hit:
                 norm_path.unlink(missing_ok=True)
             return False
@@ -1219,6 +1238,7 @@ async def _fire_interrupt(
     while not queue.empty():
         try:
             seg = queue.get_nowait()
+            state.record_discard(seg, reason=GenerationWasteReason.INTERRUPT, already_counted_in_produced=True)
             if seg.ephemeral:
                 seg.path.unlink(missing_ok=True)
             queue.task_done()
@@ -1403,6 +1423,7 @@ async def run_producer(
         """Queue a segment unless the operator stopped the session mid-generation."""
         nonlocal prev_seg_type
         if state.session_stopped:
+            state.record_discard(segment, reason=GenerationWasteReason.SESSION_STOPPED)
             if segment.ephemeral:
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
@@ -3114,12 +3135,14 @@ async def run_producer(
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
+                state.record_discard(segment, reason=GenerationWasteReason.STALE_SOURCE)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
                 continue
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
+                state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry

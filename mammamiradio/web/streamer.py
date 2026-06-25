@@ -29,6 +29,7 @@ from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.models import (
     ChaosSubtype,
+    GenerationWasteReason,
     Heading,
     PartyMode,
     PersonalityAxes,
@@ -171,6 +172,12 @@ BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
 BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
+# Generated segment waste (#397). Counts rendered audio discarded before broadcast.
+# The rolling window and thresholds flip the admin "Generated waste" row to degraded
+# so operators see frequent purges instead of a falsely-green diagnostics card.
+GENERATION_WASTE_WINDOW_SECONDS = 900.0  # 15-minute rolling window
+GENERATION_WASTE_DEGRADED_SECONDS = 120.0  # recent discarded audio duration
+GENERATION_WASTE_DEGRADED_COUNT = 5  # recent discarded segment count
 # Legacy no-content ceiling, kept as the documented upper bound a connected
 # listener may wait before the station has put *something* on air (invariant:
 # check-release-invariants.sh asserts <= 5s). The actual first-byte reaction is
@@ -207,22 +214,28 @@ CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 
 
-def _purge_segment_queue(q) -> int:
-    """Drain all pre-produced segments from the queue and unlink temp files."""
-    purged = 0
+def _drain_segment_queue(q) -> list:
+    """Drain all segments from the queue without unlinking."""
+    items: list = []
     while not q.empty():
         try:
-            seg = q.get_nowait()
-            if seg.ephemeral:
-                seg.path.unlink(missing_ok=True)
+            items.append(q.get_nowait())
             q.task_done()
-            purged += 1
         except Exception:
             break
-    return purged
+    return items
 
 
-def _purge_queue_and_shadow(q, state: StationState) -> int:
+def _purge_segment_queue(q) -> int:
+    """Drain all pre-produced segments from the queue and unlink temp files."""
+    items = _drain_segment_queue(q)
+    for seg in items:
+        if seg.ephemeral:
+            seg.path.unlink(missing_ok=True)
+    return len(items)
+
+
+def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
     Single home for "purge everything". Every operator purge (stop, panic,
@@ -237,9 +250,14 @@ def _purge_queue_and_shadow(q, state: StationState) -> int:
     them, so a caller can keep its epoch bump / ``skip_event`` in the same
     no-await stretch and no reader can observe the two views disagreeing.
     """
-    purged = _purge_segment_queue(q)
+    items = _drain_segment_queue(q)
+    for seg in items:
+        if reason is not None:
+            state.record_discard(seg, reason=reason, already_counted_in_produced=True)
+        if seg.ephemeral:
+            seg.path.unlink(missing_ok=True)
     state.queued_segments.clear()
-    return purged
+    return len(items)
 
 
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
@@ -285,6 +303,7 @@ def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple
                 qid = meta.get("queue_id")
                 if isinstance(qid, str):
                     dropped_ids.add(qid)
+                state.record_discard(seg, reason=GenerationWasteReason.OPERATOR_BAN, already_counted_in_produced=True)
                 if getattr(seg, "ephemeral", False):
                     seg.path.unlink(missing_ok=True)
                 continue
@@ -741,6 +760,7 @@ def _runtime_status_snapshot(
     station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
     bridge_health = _bridge_health_snapshot(state)
     bridge_unhealthy = bool(bridge_health.get("unhealthy"))
+    generation_waste = _generation_waste_snapshot(state)
     if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
@@ -806,6 +826,7 @@ def _runtime_status_snapshot(
         "failover_events": failover_events,
         "no_failover_message": "No failover in current session." if not failover_events else "",
         "bridge_health": bridge_health,
+        "generation_waste": generation_waste,
         "producer_headroom": _producer_headroom_snapshot(request, runtime_health),
     }
 
@@ -867,6 +888,57 @@ def _bridge_health_snapshot(state: StationState) -> dict:
         "queue_empty_elapsed_s": queue_empty_elapsed,
         "unhealthy": bool(unhealthy_reasons),
         "unhealthy_reasons": unhealthy_reasons,
+    }
+
+
+def _generation_waste_snapshot(state: StationState) -> dict:
+    """Generated segment waste for the admin Runtime Status card (#397).
+
+    Windows ``state.discard_events`` to surface recent pre-air drops and prorates
+    session API/TTS spend across discarded vs produced segment counts. The
+    ``cost_basis`` string carries the formula's known imprecision (count-based
+    proration over-attributes cost to discarded music).
+    """
+    now = time.time()
+    window = GENERATION_WASTE_WINDOW_SECONDS
+    recent = [e for e in state.discard_events if now - float(e.get("timestamp") or 0.0) <= window]
+    recent_segments = len(recent)
+    recent_duration_sec = round(sum(float(e.get("duration_sec") or 0.0) for e in recent), 1)
+    reason_counts: dict[str, int] = {}
+    for event in recent:
+        reason = str(event.get("reason") or "")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    recent_top_reason = max(reason_counts, key=lambda k: reason_counts[k]) if reason_counts else ""
+    session_cost, _ = _estimate_api_cost(state)
+    produced_plus_discarded = max(1, state.segments_produced + state.discarded_unproduced_segments_total)
+    if state.discarded_segments_total:
+        waste_cost = round(session_cost * state.discarded_segments_total / produced_plus_discarded, 4)
+    else:
+        waste_cost = 0.0
+    degraded = (
+        recent_duration_sec >= GENERATION_WASTE_DEGRADED_SECONDS or recent_segments >= GENERATION_WASTE_DEGRADED_COUNT
+    )
+    cost_basis = (
+        "Rough estimate: session API+TTS cost prorated by discarded segment count "
+        f"over segments produced plus discarded ({state.discarded_segments_total} discarded, "
+        f"{state.segments_produced} produced, "
+        f"{state.discarded_unproduced_segments_total} discarded before the produced counter). "
+        "Count-based proration over-attributes cost "
+        "to discarded music (which carries little AI/TTS spend)."
+    )
+    return {
+        "total_segments": state.discarded_segments_total,
+        "total_duration_sec": round(state.discarded_duration_total_sec, 1),
+        "unproduced_segments": state.discarded_unproduced_segments_total,
+        "window_seconds": window,
+        "recent_segments": recent_segments,
+        "recent_duration_sec": recent_duration_sec,
+        "by_reason": dict(state.discard_by_reason),
+        "by_type": dict(state.discard_by_type),
+        "recent_top_reason": recent_top_reason,
+        "estimated_waste_cost_usd": waste_cost,
+        "cost_basis": cost_basis,
+        "degraded": degraded,
     }
 
 
@@ -960,7 +1032,7 @@ def _apply_loaded_source(
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover: purge queued segments and skip current playback
-    purged = _purge_queue_and_shadow(request.app.state.queue, state)
+    purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.SOURCE_SWITCH)
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -1423,6 +1495,11 @@ async def run_playback_loop(app) -> None:
             # bookkeeping — the normal finally calls task_done for pulled segments.
             if getattr(segment, "ephemeral", False):
                 segment.path.unlink(missing_ok=True)
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.SESSION_STOPPED,
+                already_counted_in_produced=pulled_from_queue,
+            )
             if pulled_from_queue:
                 segment_queue.task_done()
             state.queue_empty_since = None
@@ -2218,7 +2295,9 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    purged = _purge_queue_and_shadow(request.app.state.queue, request.app.state.station_state)
+    purged = _purge_queue_and_shadow(
+        request.app.state.queue, request.app.state.station_state, reason=GenerationWasteReason.OPERATOR_PURGE
+    )
     return {"ok": True, "purged": purged}
 
 
@@ -2230,7 +2309,7 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     disconnect. Use /api/stop when a full session halt is intended.
     """
     state = request.app.state.station_state
-    purged = _purge_queue_and_shadow(request.app.state.queue, state)
+    purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PANIC)
     if state.now_streaming:
         request.app.state.skip_event.set()
     # force_next is set AFTER skip_event to avoid the producer consuming it
@@ -2315,8 +2394,14 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     if not real_removed and index < len(items):
         removed_segment = items.pop(index)
 
-    if removed_segment is not None and getattr(removed_segment, "ephemeral", False):
-        removed_segment.path.unlink(missing_ok=True)
+    if removed_segment is not None:
+        state.record_discard(
+            removed_segment,
+            reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
+            already_counted_in_produced=True,
+        )
+        if getattr(removed_segment, "ephemeral", False):
+            removed_segment.path.unlink(missing_ok=True)
 
     for item in items:
         q.put_nowait(item)
@@ -2332,7 +2417,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
     state = request.app.state.station_state
     # Purge queued segments
-    purged = _purge_queue_and_shadow(request.app.state.queue, state)
+    purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
     # Drop any pending interrupt/forced segment so it can't fire as stale audio on
     # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
     if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
@@ -2670,7 +2755,7 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
             state.chaos_cutover_epoch += 1
             state.chaos_audio_failures = 0
             state.chaos_last_degraded_reason = ""
-            purged = _purge_queue_and_shadow(queue, state)
+            purged = _purge_queue_and_shadow(queue, state, reason=GenerationWasteReason.STALE_CHAOS)
         else:
             state.chaos_mode_active = False
             state.chaos_pending = None
@@ -2980,7 +3065,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
             state.playlist_revision += 1
-            _purge_queue_and_shadow(segment_queue, state)
+            _purge_queue_and_shadow(segment_queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
             state.force_next = SegmentType.BANTER
 
     logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")

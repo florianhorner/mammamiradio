@@ -12,7 +12,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import ChaosSubtype, InterruptSpec, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    ChaosSubtype,
+    GenerationWasteReason,
+    InterruptSpec,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import LiveStreamHub, router
 
@@ -190,6 +198,9 @@ async def test_fire_interrupt_drains_queue_and_fires_skip(tmp_path: Path):
     assert fired is True
     assert queue.empty(), "queue must be drained after interrupt"
     assert state.queued_segments == [], "shadow queue must be cleared with the real queue"
+    assert state.discarded_segments_total == 3
+    assert state.discarded_unproduced_segments_total == 0
+    assert state.discard_by_reason == {GenerationWasteReason.INTERRUPT: 3}
     assert skip_event.is_set(), "skip_event must be set"
     assert state.ha_pending_directive == "La pasta sta bruciando!"
     assert state.chaos_pending == ChaosSubtype.URGENT_INTERRUPT

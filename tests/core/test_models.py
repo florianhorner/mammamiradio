@@ -635,3 +635,79 @@ def test_record_bridge_fire_ignores_unknown_bridge_type_in_by_type():
     assert state.bridge_fires_total == 1
     assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0}
     assert state.bridge_events[-1]["bridge_type"] == "mystery"
+
+
+# ---------------------------------------------------------------------------
+# Generated segment waste telemetry (#397 observability)
+# ---------------------------------------------------------------------------
+
+
+def test_record_discard_counts_total_duration_reason_and_type(tmp_path):
+    state = StationState()
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=12.5)
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+    assert state.discarded_segments_total == 1
+    assert state.discarded_duration_total_sec == 12.5
+    assert state.discard_by_reason == {"stale_source": 1}
+    assert state.discard_by_type == {"banter": 1}
+    assert list(state.discard_events) == [
+        {
+            "reason": "stale_source",
+            "type": "banter",
+            "duration_sec": 12.5,
+            "timestamp": 100.0,
+            "already_counted_in_produced": False,
+        }
+    ]
+    assert state.discarded_unproduced_segments_total == 1
+
+
+def test_record_discard_tracks_when_segment_was_already_counted_as_produced(tmp_path):
+    state = StationState(segments_produced=1)
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "m.mp3", duration_sec=30.0)
+
+    state.record_discard(
+        segment,
+        reason="source_switch",
+        timestamp=100.0,
+        already_counted_in_produced=True,
+    )
+
+    assert state.discarded_segments_total == 1
+    assert state.discarded_unproduced_segments_total == 0
+    assert state.discard_events[-1]["already_counted_in_produced"] is True
+
+
+def test_record_discard_tolerates_zero_duration_and_never_raises():
+    state = StationState()
+    bad_segment = Segment(type=SegmentType.MUSIC, path=Path("/tmp/x.mp3"), duration_sec=0.0)
+
+    state.record_discard(bad_segment, reason="session_stopped")
+    state.record_discard(bad_segment, reason="session_stopped")
+
+    assert state.discarded_segments_total == 2
+    assert state.discarded_duration_total_sec == 0.0
+
+
+def test_record_discard_total_survives_deque_eviction(tmp_path):
+    state = StationState()
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "m.mp3", duration_sec=1.0)
+
+    for i in range(120):
+        state.record_discard(segment, reason="operator_stop", timestamp=float(i))
+
+    assert state.discarded_segments_total == 120
+    assert len(state.discard_events) == 100
+    assert state.discard_events[0]["timestamp"] == 20.0
+
+
+def test_record_discard_defaults_timestamp_to_now(tmp_path):
+    state = StationState()
+    segment = Segment(type=SegmentType.AD, path=tmp_path / "a.mp3", duration_sec=5.0)
+
+    with patch("mammamiradio.core.models.time.time", return_value=999.0):
+        state.record_discard(segment, reason="operator_panic")
+
+    assert state.discard_events[-1]["timestamp"] == 999.0

@@ -9,6 +9,7 @@ The current version source of truth is `pyproject.toml`.
 ### Added
 
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
+- **Admin Diagnostics now surfaces how much rendered audio was generated but discarded before airing, with a rough cost estimate.** The Runtime Status card shows recent unheard segments, duration in the rolling window, the dominant discard reason, and a count-based proration of session API/TTS spend.
 
 ## [2.14.1] - 2026-06-21
 

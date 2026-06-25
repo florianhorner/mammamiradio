@@ -25,6 +25,24 @@ if TYPE_CHECKING:
 PartyMode = Literal["festival"]
 
 
+class GenerationWasteReason:
+    """Canonical discard reasons for generated-but-unbroadcast segment waste."""
+
+    STALE_SOURCE = "stale_source"
+    STALE_CHAOS = "stale_chaos"
+    SESSION_STOPPED = "session_stopped"
+    INTERRUPT = "interrupt"
+    AIR_NEXT_OVERFLOW = "air_next_overflow"
+    EGRESS_STALE = "egress_stale"
+    BLOCKLIST_GATE = "blocklist_gate"
+    OPERATOR_STOP = "operator_stop"
+    OPERATOR_PANIC = "operator_panic"
+    OPERATOR_PURGE = "operator_purge"
+    SOURCE_SWITCH = "source_switch"
+    OPERATOR_BAN = "operator_ban"
+    OPERATOR_QUEUE_REMOVE = "operator_queue_remove"
+
+
 class SegmentType(Enum):
     """Kinds of segments that can appear on the station timeline."""
 
@@ -618,6 +636,15 @@ class StationState:
     bridge_fires_total: int = 0
     bridge_fires_by_type: dict[str, int] = field(default_factory=lambda: {"drain": 0, "resume": 0, "idle": 0})
     bridge_events: deque[dict] = field(default_factory=lambda: deque(maxlen=50))
+    # Generated segment waste telemetry: rendered audio discarded before broadcast.
+    # Session-local counters mirror the bridge-health pattern — discard_events backs
+    # the rolling-window readout in admin Runtime Status.
+    discarded_segments_total: int = 0
+    discarded_duration_total_sec: float = 0.0
+    discarded_unproduced_segments_total: int = 0
+    discard_by_reason: dict[str, int] = field(default_factory=dict)
+    discard_by_type: dict[str, int] = field(default_factory=dict)
+    discard_events: deque[dict] = field(default_factory=lambda: deque(maxlen=100))
     # Most recent observable state change for the v1 integration contract.
     # Updated by on_stream_segment, /api/stop, and /api/resume so the
     # changed_at field and weak ETag in /api/integrations/v1/now-playing
@@ -676,6 +703,43 @@ class StationState:
         if bridge_type in self.bridge_fires_by_type:
             self.bridge_fires_by_type[bridge_type] += 1
         self.bridge_events.append({"bridge_type": bridge_type, "source": source, "timestamp": ts})
+
+    def record_discard(
+        self,
+        segment: Segment,
+        reason: str,
+        timestamp: float | None = None,
+        *,
+        already_counted_in_produced: bool = False,
+    ) -> None:
+        """Record one generated segment discarded before it started broadcasting.
+
+        Best-effort observability — never gates the audio path. Called at every
+        pre-air drop site (stale gates, queue purges, operator actions). Lifetime
+        totals survive deque eviction; discard_events backs the rolling-window
+        waste readout in admin Runtime Status.
+        """
+        try:
+            ts = timestamp if timestamp is not None else time.time()
+            duration = float(segment.duration_sec or 0.0)
+            seg_type = segment.type.value
+            self.discarded_segments_total += 1
+            self.discarded_duration_total_sec += duration
+            if not already_counted_in_produced:
+                self.discarded_unproduced_segments_total += 1
+            self.discard_by_reason[reason] = self.discard_by_reason.get(reason, 0) + 1
+            self.discard_by_type[seg_type] = self.discard_by_type.get(seg_type, 0) + 1
+            self.discard_events.append(
+                {
+                    "reason": reason,
+                    "type": seg_type,
+                    "duration_sec": duration,
+                    "timestamp": ts,
+                    "already_counted_in_produced": already_counted_in_produced,
+                }
+            )
+        except Exception:
+            pass
 
     def update_runtime_provider(
         self,

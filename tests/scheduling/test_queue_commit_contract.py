@@ -47,7 +47,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
     _adjacent_music_source,
@@ -178,6 +178,13 @@ async def test_stale_gate_discards_generated_speech(tmp_path, stale_field):
             assert queue.empty()  # discarded, never queued
             assert state.queued_segments == []  # no up-next row
             assert state.segments_produced == 0  # success callback (after_time_check) not run
+            expected_reason = (
+                GenerationWasteReason.STALE_SOURCE
+                if stale_field == "playlist_revision"
+                else GenerationWasteReason.STALE_CHAOS
+            )
+            assert state.discarded_segments_total >= 1
+            assert state.discard_by_reason.get(expected_reason, 0) >= 1
         finally:
             await _cancel(task)
 

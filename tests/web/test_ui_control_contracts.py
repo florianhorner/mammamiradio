@@ -1074,6 +1074,19 @@ class TestRuntimeProviderTransparencyUI:
         assert isinstance(producer_headroom["headroom_ok"], bool)
         assert producer_headroom["reason"] in {"ready runway", "building runway"}
 
+        # #397: generated segment waste rides along for the Generated waste card.
+        generation_waste = runtime_status["generation_waste"]
+        assert isinstance(generation_waste["total_segments"], int)
+        assert isinstance(generation_waste["unproduced_segments"], int)
+        assert isinstance(generation_waste["recent_segments"], int)
+        assert isinstance(generation_waste["degraded"], bool)
+        assert generation_waste["window_seconds"] > 0
+        assert "by_reason" in generation_waste
+        assert "by_type" in generation_waste
+        assert "estimated_waste_cost_usd" in generation_waste
+        assert "cost_basis" in generation_waste
+        assert isinstance(generation_waste["estimated_waste_cost_usd"], float)
+
     def test_status_helpers_emit_accessible_state_labels(self):
         html = ADMIN_HTML.read_text()
 

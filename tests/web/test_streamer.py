@@ -38,7 +38,7 @@ def test_streamer_exposes_chaos_route_and_purges_on_enable():
     src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
     assert '@router.post("/api/chaos")' in src
     assert "state.chaos_pending = first_strike" in src
-    assert "purged = _purge_queue_and_shadow(queue, state)" in src
+    assert "purged = _purge_queue_and_shadow(queue, state, reason=GenerationWasteReason.STALE_CHAOS)" in src
     assert "state.chaos_pending = None" in src
 
 
@@ -213,6 +213,23 @@ def test_run_playback_loop_strips_per_segment_metadata():
             assert "_skip_id3_and_xing_header" in body_src, (
                 "run_playback_loop must strip ID3/Xing before broadcasting (Safari banter cutoff regression guard)"
             )
+            break
+    else:
+        raise AssertionError("run_playback_loop not found")
+
+
+def test_run_playback_loop_records_session_stop_discard_before_airing():
+    """A stop landing after queue pull but before on_stream_segment must count as waste."""
+    import ast
+
+    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_playback_loop":
+            body_src = ast.get_source_segment(src, node)
+            assert "state.record_discard(" in body_src
+            assert "reason=GenerationWasteReason.SESSION_STOPPED" in body_src
+            assert "already_counted_in_produced=pulled_from_queue" in body_src
             break
     else:
         raise AssertionError("run_playback_loop not found")

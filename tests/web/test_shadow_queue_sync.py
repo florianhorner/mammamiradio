@@ -32,9 +32,12 @@ from mammamiradio.web.streamer import (
     BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
     BRIDGE_HEALTH_THRESHOLD,
     BRIDGE_HEALTH_WINDOW_SECONDS,
+    GENERATION_WASTE_DEGRADED_COUNT,
+    GENERATION_WASTE_WINDOW_SECONDS,
     LiveStreamHub,
     _apply_loaded_source,
     _bridge_health_snapshot,
+    _generation_waste_snapshot,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
     _sync_runtime_state,
@@ -1240,3 +1243,96 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
     assert headroom["queue_depth"] == 4
     assert headroom["headroom_ok"] is True
     assert headroom["reason"] == "ready runway"
+
+
+def test_generation_waste_snapshot_empty_is_not_degraded():
+    state = StationState()
+    gw = _generation_waste_snapshot(state)
+
+    assert gw["total_segments"] == 0
+    assert gw["recent_segments"] == 0
+    assert gw["estimated_waste_cost_usd"] == 0.0
+    assert gw["degraded"] is False
+    assert "cost_basis" in gw
+
+
+def test_generation_waste_snapshot_degraded_at_count_threshold(tmp_path):
+    state = StationState()
+    now = 10_000.0
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=5.0)
+    for i in range(GENERATION_WASTE_DEGRADED_COUNT):
+        state.record_discard(segment, reason="operator_stop", timestamp=now - i)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        gw = _generation_waste_snapshot(state)
+
+    assert gw["recent_segments"] == GENERATION_WASTE_DEGRADED_COUNT
+    assert gw["degraded"] is True
+    assert gw["recent_top_reason"] == "operator_stop"
+
+
+def test_generation_waste_snapshot_prorates_cost():
+    state = StationState()
+    state.segments_produced = 3
+    state.api_input_tokens = 1_000_000
+    state.api_output_tokens = 0
+    state.api_tokens_by_model = {}
+    segment = Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=10.0)
+    state.record_discard(segment, reason="source_switch", timestamp=1.0, already_counted_in_produced=True)
+    state.record_discard(segment, reason="source_switch", timestamp=2.0, already_counted_in_produced=True)
+
+    gw = _generation_waste_snapshot(state)
+
+    assert gw["total_segments"] == 2
+    assert gw["unproduced_segments"] == 0
+    assert gw["estimated_waste_cost_usd"] == 0.5333
+    assert "discarded" in gw["cost_basis"]
+    assert "produced" in gw["cost_basis"]
+
+
+def test_generation_waste_snapshot_adds_prequeue_discards_to_cost_denominator():
+    state = StationState()
+    state.segments_produced = 3
+    state.api_input_tokens = 1_000_000
+    state.api_output_tokens = 0
+    state.api_tokens_by_model = {}
+    segment = Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=10.0)
+    state.record_discard(segment, reason="stale_source", timestamp=1.0)
+    state.record_discard(segment, reason="stale_source", timestamp=2.0)
+
+    gw = _generation_waste_snapshot(state)
+
+    assert gw["total_segments"] == 2
+    assert gw["unproduced_segments"] == 2
+    assert gw["estimated_waste_cost_usd"] == 0.32
+
+
+def test_generation_waste_snapshot_ignores_events_outside_window(tmp_path):
+    state = StationState()
+    now = 10_000.0
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "m.mp3", duration_sec=60.0)
+    state.record_discard(segment, reason="stale_source", timestamp=now - GENERATION_WASTE_WINDOW_SECONDS - 10)
+    state.record_discard(segment, reason="operator_panic", timestamp=now - 5)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        gw = _generation_waste_snapshot(state)
+
+    assert gw["total_segments"] == 2
+    assert gw["recent_segments"] == 1
+    assert gw["recent_top_reason"] == "operator_panic"
+
+
+def test_runtime_status_snapshot_includes_generation_waste():
+    app = _make_app()
+    state = app.state.station_state
+    state.record_discard(
+        Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=5.0),
+        reason="operator_stop",
+        timestamp=1.0,
+    )
+
+    req = _fake_request(app)
+    rs = _runtime_status_snapshot(req)
+
+    assert "generation_waste" in rs
+    assert rs["generation_waste"]["total_segments"] == 1

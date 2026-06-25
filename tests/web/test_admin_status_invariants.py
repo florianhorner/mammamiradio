@@ -134,6 +134,18 @@ def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
     assert "rescueRow," in block
 
 
+def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> None:
+    """#397: the Runtime Status card adds a Generated waste row driven by
+    rs.generation_waste, flipping to the colorblind-safe 'degraded' state when
+    recent discards exceed the threshold."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const gw=rs.generation_waste" in block
+    assert "statusRow('Generated waste'" in block
+    assert "const wasteState=gw.degraded?'degraded':'ready'" in block
+    assert "wasteRow," in block
+
+
 def test_runtime_provider_row_handles_recovery_mode() -> None:
     block = _function_block(_read_admin_html(), "runtimeProviderRow")
 
