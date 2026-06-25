@@ -1067,6 +1067,87 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
     assert expected_model in state.api_tokens_by_model
     assert state.api_tokens_by_model[expected_model]["input"] == 123
     assert state.api_tokens_by_model[expected_model]["output"] == 456
+    assert state.api_calls_by_category["script_banter"] == 1
+    assert state.api_tokens_by_category_model["script_banter"][expected_model]["input"] == 123
+    assert state.api_tokens_by_category_model["script_banter"][expected_model]["output"] == 456
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "category"),
+    [
+        ("banter", "script_banter"),
+        ("news_flash", "script_banter"),
+        ("transition", "script_transition"),
+        ("ad", "script_ads"),
+    ],
+)
+async def test_generate_json_response_records_cost_category_by_caller(config, state, caller, category):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": True}))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="unused", max_tokens=100, caller=caller
+        )
+
+    expected_model = resolve_model(config.models, caller, "openai")
+    assert state.api_calls_by_category[category] == 1
+    assert state.api_tokens_by_category_model[category][expected_model]["input"] == 11
+    assert state.api_tokens_by_category_model[category][expected_model]["output"] == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", [None, ""])
+async def test_generate_json_response_requires_known_cost_caller(config, state, caller):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    with pytest.raises(ValueError, match="Unknown script cost caller"):
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="model", max_tokens=100, caller=caller
+        )
+
+
+@pytest.mark.asyncio
+async def test_billable_anthropic_parse_failure_and_openai_fallback_share_category(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 23
+    mock_usage.output_tokens = 29
+    mock_content = MagicMock()
+    mock_content.text = "not valid json {{{"
+    mock_response = MagicMock()
+    mock_response.content = [mock_content]
+    mock_response.usage = mock_usage
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        result = await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+
+    assert result == {"ok": "fallback"}
+    assert state.api_calls == 2
+    assert state.api_calls_by_category["script_banter"] == 2
+    assert state.api_tokens_by_category_model["script_banter"]["claude-test"] == {"input": 23, "output": 29}
+    openai_model = resolve_model(config.models, "banter", "openai")
+    assert state.api_tokens_by_category_model["script_banter"][openai_model] == {"input": 11, "output": 7}
 
 
 @pytest.mark.asyncio
@@ -1083,7 +1164,9 @@ async def test_malformed_anthropic_response_does_not_mark_anthropic_active(confi
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
     ):
-        result = await _generate_json_response(prompt="p", config=config, state=state, model="model", max_tokens=100)
+        result = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model", max_tokens=100, caller="banter"
+        )
 
     assert result == {"ok": "fallback"}
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
@@ -1146,7 +1229,9 @@ async def test_failed_openai_fallback_does_not_update_provider_state(config, sta
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
         pytest.raises(json.JSONDecodeError),
     ):
-        await _generate_json_response(prompt="p", config=config, state=state, model="model", max_tokens=100)
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="model", max_tokens=100, caller="ad"
+        )
 
     assert "script_provider" not in state.runtime_provider_state
     assert list(state.runtime_events) == []
@@ -1295,11 +1380,15 @@ async def test_model_not_found_backoff_is_scoped_to_model(config, state):
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
     ):
-        first = await _generate_json_response(prompt="p", config=config, state=state, model="bad-model", max_tokens=100)
-        second = await _generate_json_response(
-            prompt="p", config=config, state=state, model="good-model", max_tokens=100
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
         )
-        third = await _generate_json_response(prompt="p", config=config, state=state, model="bad-model", max_tokens=100)
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="good-model", max_tokens=100, caller="banter"
+        )
+        third = await _generate_json_response(
+            prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
+        )
 
     assert first == {"ok": "fallback"}
     assert second == {"ok": "anthropic"}
@@ -1329,8 +1418,12 @@ async def test_usage_limit_backoff_is_account_wide_across_models(config, state):
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
     ):
-        first = await _generate_json_response(prompt="p", config=config, state=state, model="model-a", max_tokens=100)
-        second = await _generate_json_response(prompt="p", config=config, state=state, model="model-b", max_tokens=100)
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="transition"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="transition"
+        )
 
     assert first == {"ok": "fallback"}
     assert second == {"ok": "fallback"}
@@ -1350,7 +1443,9 @@ async def test_blocked_anthropic_no_openai_raises(config, state):
     sw._anthropic_auth_blocked_until = float("inf")
 
     with pytest.raises(RuntimeError, match="temporarily disabled"):
-        await _generate_json_response(prompt="prompt", config=config, state=state, model="model", max_tokens=100)
+        await _generate_json_response(
+            prompt="prompt", config=config, state=state, model="model", max_tokens=100, caller="banter"
+        )
 
 
 @pytest.mark.asyncio
@@ -1370,7 +1465,9 @@ async def test_live_auth_error_no_openai_reraises(config, state):
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
         pytest.raises(AuthenticationError),
     ):
-        await _generate_json_response(prompt="prompt", config=config, state=state, model="model", max_tokens=100)
+        await _generate_json_response(
+            prompt="prompt", config=config, state=state, model="model", max_tokens=100, caller="banter"
+        )
 
     assert state.anthropic_auth_failures == 1
 
@@ -3230,7 +3327,9 @@ async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, sta
     ):
         results = await _asyncio.gather(
             *(
-                _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+                _generate_json_response(
+                    prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+                )
                 for _ in range(8)
             ),
             return_exceptions=True,
@@ -3264,7 +3363,9 @@ async def test_concurrent_400s_no_openai_all_reraise(config, state):
     ):
         results = await _asyncio.gather(
             *(
-                _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+                _generate_json_response(
+                    prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+                )
                 for _ in range(5)
             ),
             return_exceptions=True,
@@ -3310,9 +3411,13 @@ async def test_backoff_expiry_allows_exactly_one_retry_and_logs_once(config, sta
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
     ):
         # First call after expiry: should retry Anthropic once.
-        await _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
         # Second call within the new backoff: no Anthropic attempt.
-        await _generate_json_response(prompt="p", config=config, state=state, model="claude-test", max_tokens=100)
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
 
     assert mock_client.messages.create.await_count == 1
     expiry_logs = [r for r in caplog.records if "backoff expired" in r.getMessage()]
@@ -3341,7 +3446,7 @@ async def test_key_rotation_clears_block(config, state):
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", ok_client),
     ):
         result = await _generate_json_response(
-            prompt="p", config=config, state=state, model="claude-test", max_tokens=100
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
         )
 
     assert result == {"ok": True}

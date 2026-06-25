@@ -574,6 +574,11 @@ body::before {
 .a-engine-status .cost { margin-top: 12px; display: flex; justify-content: space-between; align-items: baseline; }
 .a-engine-status .cost .lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
 .a-engine-status .cost b { font-family: var(--font-mono); font-size: 13px; color: var(--sun); font-weight: 500; font-variant-numeric: tabular-nums; }
+.cost-split { display: grid; gap: 5px; margin-bottom: 14px; min-width: 0; }
+.cost-split-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: baseline; min-width: 0; }
+.cost-split-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cream-dk); }
+.cost-split-row .value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--sun); white-space: nowrap; }
+.cost-split-note { color: var(--muted); font-size: 11px; line-height: 1.45; }
 
 /* ── Content ── */
 .a-content { padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
@@ -1821,6 +1826,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
           <div class="card-label">Execution</div>
           <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Loading...</div>
+
+          <div class="card-label">Cost split</div>
+          <div id="engineCostSplit" class="cost-split">Loading...</div>
 
           <div class="card-label">Segment counts</div>
           <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
@@ -3715,6 +3723,40 @@ async function setQuality(value){
 }
 
 // ── Engine Room ──
+function formatCostValue(raw){
+  if(raw==null)return '—';
+  return (raw<1?'<$1':'~$'+Math.round(raw))+' est';
+}
+function renderCostSplit(con){
+  const target=document.getElementById('engineCostSplit');
+  if(!target)return;
+  const breakdown=con?.cost_breakdown;
+  if(!breakdown){
+    target.innerHTML='<div class="cost-split-note">Cost split not available yet.</div>';
+    return;
+  }
+  if(breakdown.available===false){
+    target.innerHTML='<div class="cost-split-note">Spend was recorded before category tracking started; the total above is still valid.</div>';
+    return;
+  }
+  const labels={
+    script_banter:'Host scripts',
+    script_transition:'Transitions',
+    script_ads:'Ad scripts',
+    tts:'Voice synthesis'
+  };
+  const cats=breakdown.categories||{};
+  const rows=Object.keys(labels).map(key=>{
+    const row=cats[key]||{};
+    const usage=(row.calls||0)+(row.input_tokens||0)+(row.output_tokens||0)+(row.characters||0);
+    if(!usage)return '';
+    return '<div class="cost-split-row"><span class="name">'+labels[key]+'</span><span class="value">'+formatCostValue(row.cost_usd||0)+'</span></div>';
+  }).filter(Boolean);
+  const notes=[];
+  if(!rows.length)notes.push('No paid AI spend recorded yet.');
+  if(breakdown.unpriced_model===true)notes.push('Some model pricing is estimated with the conservative fallback rate.');
+  target.innerHTML=(rows.join('')||'')+(notes.length?'<div class="cost-split-note">'+notes.map(esc).join(' ')+'</div>':'');
+}
 function updateEngineRoom(st,caps){
   const rt=document.getElementById('engineRuntime');
   if(!rt)return;
@@ -3759,6 +3801,7 @@ function updateEngineRoom(st,caps){
     apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' input / '+outTok.toLocaleString()+' output tokens) · est. <strong id="apiCostEl">'+cost+'</strong>':'AI calls: <strong>0</strong>',
     ttsCh>0?'TTS characters: <strong>'+ttsCh.toLocaleString()+'</strong>':'',
   ].filter(Boolean).join('<br>');
+  renderCostSplit(con);
 
   const seg=document.getElementById('engineSegments');
   const log=st.produced_log||[];

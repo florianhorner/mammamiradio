@@ -345,8 +345,8 @@ async def synthesize(
     be assembled and loudnorm'd as a single unit by the caller.
 
     state: when provided, characters synthesized by a PAID cloud engine (OpenAI,
-    Azure, ElevenLabs) are added to state.tts_characters for the operator's cost
-    estimate. Edge-tts is free and never counted — so a voice that requests a cloud
+    Azure, ElevenLabs) are added to state.tts_characters and the TTS cost bucket
+    for the operator's cost estimate. Edge-tts is free and never counted — so a voice that requests a cloud
     engine but falls back to Edge (missing key, API error) is correctly NOT billed.
     Best-effort only: never raises into the audio path.
     """
@@ -357,7 +357,10 @@ async def synthesize(
         # Rough by design — folded into a figure the UI labels an estimate.
         if state is not None:
             try:
-                state.tts_characters += len(text)
+                if hasattr(state, "record_tts_usage"):
+                    state.record_tts_usage(len(text))
+                else:
+                    state.tts_characters += len(text)
             except Exception:  # never let cost bookkeeping touch the audio path
                 pass
 
