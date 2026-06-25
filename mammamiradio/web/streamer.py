@@ -1766,12 +1766,19 @@ def _listener_context(request: Request, config, prefix: str) -> dict:
     listener.html `<script type="application/json">` bootstrap so JS reads it
     once at page load instead of refetching on every /public-status poll.
     """
+    state = getattr(request.app.state, "station_state", None)
     return {
         "brand": config.brand,
         "ingress_prefix": _sanitize_ingress_prefix(prefix),
         "csrf_token": _get_csrf_token(request.app),
         "asset_version": _ASSET_VERSION,
         "copy": copy_strings(bool(config.super_italian_mode)),
+        # Bake the live/stopped state into the first paint so a stopped station
+        # never flashes as "live" before the first JS poll hydrates (honesty).
+        "session_stopped": bool(getattr(state, "session_stopped", False)),
+        # Reflect the active copy register so screen readers don't read English
+        # utility copy with Italian phonemes (super_italian off => en).
+        "page_lang": "it" if config.super_italian_mode else "en",
     }
 
 
@@ -1852,6 +1859,16 @@ async def og_card(request: Request):
 
     headers = {"Cache-Control": "public, max-age=60"}
     return Response(content=cached, media_type="image/png", headers=headers)
+
+
+@router.get("/favicon.ico")
+async def favicon():
+    """Serve the browser default favicon path from the station icon."""
+    return FileResponse(
+        _STATIC_DIR / "icon-192.svg",
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/sw.js")
