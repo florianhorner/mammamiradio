@@ -27,20 +27,25 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
-## Version: two files, must match
+## Version: three files, must match
 
 | File | Field | Example |
 |------|-------|---------|
 | `ha-addon/mammamiradio/config.yaml` | `version:` | `1.1.0` |
 | `pyproject.toml` | `version =` | `"1.1.0"` |
+| `custom_components/mammamiradio/manifest.json` | `"version"` | `"1.1.0"` |
 
-CI validates they match. If they don't, the build fails.
+CI validates all three match (`scripts/pre-release-check.sh`). If they don't, the build
+fails. The HACS integration ships from this same repo and HACS reads its version from the
+git release tag, so its `manifest.json` rides the release number too — see
+`../release-process.md` → "The HACS integration shares the release number".
 
 **How to bump:**
 ```bash
-# Both files, same version, same commit
+# All three files, same version, same commit
 sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
+sed -i '' 's/"version": *"[^"]*"/"version": "X.Y.Z"/' custom_components/mammamiradio/manifest.json
 ```
 
 ## Cutting a stable release (the cadence model)

@@ -38,6 +38,40 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content)
 
 
+def _write_release_check_repo(
+    tmp_path: Path,
+    *,
+    version: str = "1.1.0",
+    manifest_version: str | None = "1.1.0",
+    addon_changelog: str = "# Changelog\n\n## Unreleased\n\n## 1.1.0\n",
+) -> None:
+    """Minimal repo layout that scripts/pre-release-check.sh inspects, in a state that
+    passes every check. Override one field to exercise a single gate."""
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", f"version: {version}\n")
+    _write(tmp_path / "pyproject.toml", f'[project]\nname = "mammamiradio"\nversion = "{version}"\n')
+    if manifest_version is not None:
+        _write(
+            tmp_path / "custom_components/mammamiradio/manifest.json",
+            '{\n  "domain": "mammamiradio",\n  "version": "' + manifest_version + '"\n}\n',
+        )
+    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", addon_changelog)
+    _write(
+        tmp_path / "mammamiradio/audio/normalizer.py",
+        'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
+    )
+    _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
+    _write(
+        tmp_path / "Makefile",
+        "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n"
+        "launch-smoke:\n\tpython scripts/ha-green-launch-smoke.py\n",
+    )
+    _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
+    _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
+    os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
+
+
 def _load_ha_green_perf_smoke() -> types.ModuleType:
     import importlib.util
 
@@ -177,24 +211,44 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
 
 
 def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Path) -> None:
-    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", "version: 1.1.0\n")
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
-    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n## 1.1.0\n")
-    _write(
-        tmp_path / "mammamiradio/audio/normalizer.py",
-        'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
+    _write_release_check_repo(tmp_path)
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+    assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) -> None:
+    # The HACS integration manifest must ride the release number (docs/release-process.md).
+    _write_release_check_repo(tmp_path, version="1.1.0", manifest_version="1.0.0")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.json version is '1.0.0' but config.yaml is 1.1.0" in result.stdout
+
+
+def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) -> None:
+    # Malformed manifest must produce a clean [FAIL], never a Python traceback that
+    # aborts the release gate.
+    _write_release_check_repo(tmp_path, manifest_version=None)
+    _write(tmp_path / "custom_components/mammamiradio/manifest.json", "{ not valid json ")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "manifest.json version is 'unreadable'" in result.stdout
+
+
+def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path) -> None:
+    # Guards the dated-header parse: "## 1.1.0 - 2026-06-21" reduces to "1.1.0".
+    _write_release_check_repo(
+        tmp_path,
+        addon_changelog="# Changelog\n\n## Unreleased\n\n## 1.1.0 - 2026-06-21\n",
     )
-    _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
-    _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
-    _write(
-        tmp_path / "Makefile",
-        "perf-smoke:\n\tpython scripts/ha-green-perf-smoke.py\n"
-        "launch-smoke:\n\tpython scripts/ha-green-launch-smoke.py\n",
-    )
-    _write(tmp_path / "scripts/ha-green-perf-smoke.py", "#!/usr/bin/env python3\n")
-    os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
-    _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
-    os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
 
