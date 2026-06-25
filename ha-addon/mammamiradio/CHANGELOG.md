@@ -4,12 +4,31 @@
 
 ### Added
 
+- **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
+
+### Security
+
+- **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
+
+## 2.15.0
+
+## 2.14.1 - 2026-06-21
+
+### Added
+
 - **A new On-air media player push option, and a real media player to go with it.** Mamma Mi Radio now has a Home Assistant integration you can install from HACS that registers the station as a proper, controllable media player (play, stop, next). If you install it, turn this new option off so the add-on stops pushing its own basic media player and lets the integration take over — your sensors keep working either way.
 - **Steer the music by mood, and the hosts notice.** Tap an era or a vibe in the admin panel and the station re-aims its programming toward it. The on-air host picks it up as a feeling rather than a setting — "someone's got a soft spot for the 80s tonight" — so it sounds like the station read the room. It sticks across a restart, clears with one tap back to automatic, respects your banned songs, and never interrupts what's playing.
+
+### Changed
+
+- **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared on row hover, so on a phone or tablet it was unreachable and on a computer it was easy to miss. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, a short note explains how it works until your first ban, and an "Undo" prompt appears right after a single ban so an accidental tap is one tap away from being lifted.
 
 ### Fixed
 
 - **Host chatter beds over the right song now.** When the hosts talk over the tail of a track, the music underneath is the song that actually just played — even right after the station recovers from a quiet stretch by reaching for a backup track.
+- **The admin producer desk no longer traps the phone screen under its header.** On mobile, the live console and tab bar now scroll away with the page instead of staying pinned over the work area. Desktop keeps the pinned producer deck, but phones get the vertical room they need to use Scaletta, Rotazione, and Motore without the upper controls covering the view.
+- **Leftover working audio no longer piles up in `/data`.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The add-on now sweeps away any stale leftovers when it starts, so its storage stays tidy on its own.
+- **Sharing a clip can't briefly switch off its own slow-down guard.** The "share this moment" button limits how often it can be tapped. If one tap failed to find audio at the same instant another succeeded, cleaning up after the failed one could wipe the successful tap's record and let the next tap skip the wait. The cleanup now only ever clears its own tap, so the gentle pacing always holds.
 
 ### Removed
 
@@ -18,21 +37,6 @@
 ### Security
 
 - **The handler that serves the app's icons and manifest is locked down tighter.** It now refuses any request that tries to reach outside the app's own static-asset folder — including links inside that folder that point elsewhere — so it can only ever return the bundled web files.
-- **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-
-## 2.14.1 - 2026-06-21
-
-### Changed
-
-- **The "ban a song" controls are easy to find now — and a slip is undoable.** Banning used to hide behind a tiny ✕ that only appeared on row hover, so on a phone or tablet it was unreachable and on a computer it was easy to miss. Every song in the rotation now shows a clear red "✕ Ban" button you can always see and tap, the "Banned" button carries a count so you can see at a glance how many songs are banned and where to manage them, a short note explains how it works until your first ban, and an "Undo" prompt appears right after a single ban so an accidental tap is one tap away from being lifted.
-
-### Fixed
-
-- **The admin producer desk no longer traps the phone screen under its header.** On mobile, the live console and tab bar now scroll away with the page instead of staying pinned over the work area. Desktop keeps the pinned producer deck, but phones get the vertical room they need to use Scaletta, Rotazione, and Motore without the upper controls covering the view.
-
-- **Leftover working audio no longer piles up in `/data`.** The station writes short-lived scratch files while it builds each segment and clears them as it goes, but a restart at the wrong moment could strand some on disk, and over many restarts they slowly added up. The add-on now sweeps away any stale leftovers when it starts, so its storage stays tidy on its own.
-
-- **Sharing a clip can't briefly switch off its own slow-down guard.** The "share this moment" button limits how often it can be tapped. If one tap failed to find audio at the same instant another succeeded, cleaning up after the failed one could wipe the successful tap's record and let the next tap skip the wait. The cleanup now only ever clears its own tap, so the gentle pacing always holds.
 
 ## 2.14.0
 

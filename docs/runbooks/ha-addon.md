@@ -6,11 +6,11 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 
 ```
 Code change
-  → bump version in BOTH files (see below)
+  → bump version in all three files (see below)
   → push/merge to main
   → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
   → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
@@ -27,20 +27,25 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
-## Version: two files, must match
+## Version: three files, must match
 
 | File | Field | Example |
 |------|-------|---------|
 | `ha-addon/mammamiradio/config.yaml` | `version:` | `1.1.0` |
 | `pyproject.toml` | `version =` | `"1.1.0"` |
+| `custom_components/mammamiradio/manifest.json` | `"version"` | `"1.1.0"` |
 
-CI validates they match. If they don't, the build fails.
+CI validates all three match (`scripts/pre-release-check.sh`). If they don't, the build
+fails. The HACS integration ships from this same repo and HACS reads its version from the
+git release tag, so its `manifest.json` rides the release number too — see
+`../release-process.md` → "The HACS integration shares the release number".
 
 **How to bump:**
 ```bash
-# Both files, same version, same commit
+# All three files, same version, same commit
 sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
 sed -i '' 's/^version = .*/version = "X.Y.Z"/' pyproject.toml
+sed -i '' 's/"version": *"[^"]*"/"version": "X.Y.Z"/' custom_components/mammamiradio/manifest.json
 ```
 
 ## Cutting a stable release (the cadence model)
@@ -70,8 +75,8 @@ judgment that the line you have been running has felt healthy, not a stopwatch o
    # X.Y.Z must equal the STABLE config.yaml version at $EDGE
    git tag vX.Y.Z "$EDGE" && git push origin vX.Y.Z
    ```
-   `addon-release.yml` pre-flight fails loud if `config.yaml` != tag or either arch `:sha`
-   image is missing — that is your safety net.
+   `addon-release.yml` pre-flight fails loud if `config.yaml` or `manifest.json` != tag,
+   or either arch `:sha` image is missing — that is your safety net.
 2. **Wait for `addon-release.yml` green**, then verify:
    `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`.
 3. **Open the next RC immediately** so the number keeps meaning something and CI stays green:
@@ -92,7 +97,7 @@ the notes actually in that SHA — never publish notes for commits the promoted 
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - A hotfix after you've opened the next RC (e.g. `2.13.1` once `main` is on `2.14.0`) needs a
-  release branch, because pre-flight requires `config.yaml` == tag.
+  release branch, because pre-flight requires `config.yaml` and `manifest.json` == tag.
 
 ## Addon stage
 
@@ -290,7 +295,7 @@ gates" (single source of truth). The short version:
 Before merging ANY change that touches addon files:
 
 - [ ] `scripts/validate-addon.sh` passes locally
-- [ ] Version bumped in both files (if this is a release)
+- [ ] Version bumped in all three files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] If new config option: added to config.yaml + run.sh + translations

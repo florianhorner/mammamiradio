@@ -2877,6 +2877,18 @@ _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 # (Edge-tts is free and never counted), so this never bills a silent fallback.
 TTS_BLENDED_RATE = 0.00002
 
+COST_BREAKDOWN_CATEGORY_ORDER = ("script_banter", "script_transition", "script_ads", "tts")
+LLM_COST_BREAKDOWN_CATEGORIES = ("script_banter", "script_transition", "script_ads")
+
+
+def _model_token_cost(model_id: str, toks: dict) -> tuple[float, bool]:
+    rates = MODEL_PRICES.get(model_id)
+    has_unpriced = False
+    if rates is None:
+        rates = _UNPRICED_FALLBACK
+        has_unpriced = True
+    return toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1], has_unpriced
+
 
 def _estimate_api_cost(state) -> tuple[float, bool]:
     """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
@@ -2898,18 +2910,92 @@ def _estimate_api_cost(state) -> tuple[float, bool]:
     total = 0.0
     has_unpriced = False
     for model_id, toks in by_model.items():
-        rates = MODEL_PRICES.get(model_id)
-        if rates is None:
-            rates = _UNPRICED_FALLBACK
-            has_unpriced = True
-        total += toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1]
+        model_cost, model_unpriced = _model_token_cost(model_id, toks)
+        total += model_cost
+        has_unpriced = has_unpriced or model_unpriced
     return round(total + tts_cost, 4), has_unpriced
 
 
 def _consumption_cost(state) -> dict:
     """Cost fields for the /status consumption block (protected UI element)."""
     cost, unpriced = _estimate_api_cost(state)
-    return {"api_cost_estimate_usd": cost, "api_cost_unpriced_model": unpriced}
+    return {
+        "api_cost_estimate_usd": cost,
+        "api_cost_unpriced_model": unpriced,
+        "cost_breakdown": _cost_breakdown(state, total_usd=cost, unpriced_model=unpriced),
+    }
+
+
+def _cost_breakdown(state, *, total_usd: float, unpriced_model: bool) -> dict:
+    by_category_model = getattr(state, "api_tokens_by_category_model", None) or {}
+    calls_by_category = getattr(state, "api_calls_by_category", None) or {}
+    tts_by_category = getattr(state, "tts_characters_by_category", None) or {}
+
+    categories: dict[str, dict] = {}
+    raw_total = 0.0
+    summed_calls = 0
+    summed_input = 0
+    summed_output = 0
+    summed_tts_chars = 0
+    has_unpriced = False
+
+    for category in COST_BREAKDOWN_CATEGORY_ORDER:
+        category_raw_cost = 0.0
+        category_unpriced = False
+        category_calls = 0
+        category_input = 0
+        category_output = 0
+        category_characters = 0
+        if category in LLM_COST_BREAKDOWN_CATEGORIES:
+            category_calls = int(calls_by_category.get(category, 0) or 0)
+            for model_id, toks in (by_category_model.get(category) or {}).items():
+                model_cost, model_unpriced = _model_token_cost(model_id, toks)
+                category_raw_cost += model_cost
+                category_unpriced = category_unpriced or model_unpriced
+                category_input += int(toks.get("input", 0) or 0)
+                category_output += int(toks.get("output", 0) or 0)
+        else:
+            category_characters = int(tts_by_category.get(category, 0) or 0)
+            category_raw_cost = category_characters * TTS_BLENDED_RATE
+
+        raw_total += category_raw_cost
+        summed_calls += category_calls
+        summed_input += category_input
+        summed_output += category_output
+        summed_tts_chars += category_characters
+        has_unpriced = has_unpriced or category_unpriced
+        categories[category] = {
+            "cost_usd": round(category_raw_cost, 4),
+            "raw_cost_usd": category_raw_cost,
+            "unpriced": category_unpriced,
+            "calls": category_calls,
+            "input_tokens": category_input,
+            "output_tokens": category_output,
+            "characters": category_characters,
+        }
+
+    aggregate_calls = int(getattr(state, "api_calls", 0) or 0)
+    aggregate_input = int(getattr(state, "api_input_tokens", 0) or 0)
+    aggregate_output = int(getattr(state, "api_output_tokens", 0) or 0)
+    aggregate_tts = int(getattr(state, "tts_characters", 0) or 0)
+    has_aggregate_usage = any((aggregate_calls, aggregate_input, aggregate_output, aggregate_tts))
+    unit_totals_match = (
+        summed_calls == aggregate_calls
+        and summed_input == aggregate_input
+        and summed_output == aggregate_output
+        and summed_tts_chars == aggregate_tts
+    )
+    available = unit_totals_match and (
+        not has_aggregate_usage or any(c["raw_cost_usd"] or c["calls"] or c["characters"] for c in categories.values())
+    )
+
+    return {
+        "available": available,
+        "total_usd": total_usd,
+        "raw_total_usd": raw_total,
+        "unpriced_model": bool(unpriced_model or has_unpriced),
+        "categories": categories,
+    }
 
 
 _party_lock = asyncio.Lock()

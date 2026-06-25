@@ -42,6 +42,9 @@ echo "1. Version consistency"
 
 ADDON_VER=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
 PYPROJECT_VER=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' pyproject.toml | head -1)
+# `.get('version','')` + `|| true` so malformed JSON or a missing key yields an empty
+# string and a clean [FAIL] below, never a Python traceback that aborts the release gate.
+MANIFEST_VER=$(python3 -c "import json; print(json.load(open('custom_components/mammamiradio/manifest.json')).get('version',''))" 2>/dev/null || true)
 
 if [ "$ADDON_VER" = "$PYPROJECT_VER" ]; then
     ok "config.yaml ($ADDON_VER) matches pyproject.toml ($PYPROJECT_VER)"
@@ -49,11 +52,26 @@ else
     fail "Version mismatch: config.yaml=$ADDON_VER pyproject.toml=$PYPROJECT_VER"
 fi
 
+# The HACS integration ships from this same repo. HACS shows the git release tag as the
+# integration's version while Home Assistant shows manifest.json's version; keeping
+# manifest.json == the release number makes those two displays agree. This is purely a
+# version-LABEL fix — it does NOT change HACS update behavior. See docs/release-process.md
+# "The HACS integration shares the release number". manifest.json is only ever bumped
+# alongside config.yaml + pyproject.toml.
+if [ -n "$MANIFEST_VER" ] && [ "$MANIFEST_VER" = "$ADDON_VER" ]; then
+    ok "custom_components/mammamiradio/manifest.json ($MANIFEST_VER) matches config.yaml ($ADDON_VER)"
+else
+    fail "manifest.json version is '${MANIFEST_VER:-unreadable}' but config.yaml is $ADDON_VER — bump custom_components/mammamiradio/manifest.json with the release (or fix malformed JSON)"
+fi
+
 # ── 2. ha-addon CHANGELOG covers the current version ─────────────────────────
 echo ""
 echo "2. ha-addon CHANGELOG"
 
-CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {gsub(/^\[|\]$/, "", version); print version; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
+# Take the FIRST whitespace-delimited token of the header, then strip brackets, so a dated
+# header ("## 2.14.1 - 2026-06-21") or a bracketed one ("## [2.14.1]") both reduce to the
+# bare version. Comparing the whole header string falsely failed whenever it carried a date.
+CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
 
 if [ "$CHANGELOG_VER" = "$ADDON_VER" ]; then
     ok "CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"

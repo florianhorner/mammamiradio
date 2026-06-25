@@ -1,0 +1,22 @@
+Verification — open 2.15.0 release candidate
+branch: chore/open-2.15.0-rc
+
+$ ruff check .
+All checks passed!
+
+$ bash scripts/pre-release-check.sh
+  Passed: 10  Failed: 0
+  [PASS] config.yaml (2.15.0) matches pyproject.toml (2.15.0)
+  [PASS] custom_components/mammamiradio/manifest.json (2.15.0) matches config.yaml (2.15.0)
+  [PASS] CHANGELOG latest version (## 2.15.0) matches config.yaml (2.15.0)
+
+$ .venv/bin/python -m pytest tests/
+  3295 passed, 2 skipped, 19 deselected in 58.96s
+
+Changelog fold (independently reviewed — verdict CLEAN):
+  - root [Unreleased] now holds only the post-cut integration reconfigure/repairs entry
+  - 9 entries that shipped in v2.14.1 (<= edge commit 7c4cb3e) folded into ## 2.14.1
+  - entry count conserved (18 -> 18: 9 moved, 0 dropped, 0 duplicated)
+  - ha-addon CHANGELOG: ## 2.15.0 added as the first versioned header; prior add-on
+    [Unreleased] entries folded into ## 2.14.1
+  - edge add-on config unchanged (SHA-versioned, stays 7c4cb3e)

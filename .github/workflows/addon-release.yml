@@ -64,15 +64,22 @@ jobs:
             echo "Current tag $VERSION is older than newest stable version $LATEST_STABLE; :latest will not be moved"
           fi
 
-      - name: Validate tag matches config.yaml version
+      - name: Validate tag matches config.yaml + manifest version
         run: |
           CONFIG_VERSION=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
+          MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('custom_components/mammamiradio/manifest.json')).get('version',''))")
           TAG_VERSION="${{ steps.semver.outputs.version }}"
           if [ "$CONFIG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::config.yaml version ($CONFIG_VERSION) does not match tag ($TAG_VERSION) — bump version in both files before tagging"
+            echo "::error::config.yaml version ($CONFIG_VERSION) does not match tag ($TAG_VERSION) — bump all three version files before tagging"
             exit 1
           fi
-          echo "Version match confirmed: $CONFIG_VERSION"
+          # The HACS integration ships from this repo and rides the release number
+          # (docs/release-process.md). A tagged commit must carry the matching manifest.
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::custom_components/mammamiradio/manifest.json version ($MANIFEST_VERSION) does not match tag ($TAG_VERSION) — bump the integration manifest with the release"
+            exit 1
+          fi
+          echo "Version match confirmed: config.yaml and manifest.json at $CONFIG_VERSION"
 
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
