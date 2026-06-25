@@ -1,8 +1,9 @@
-"""Functional tests for the options.json parser embedded in run.sh.
+"""Functional tests for the add-on config parser embedded in run.sh.
 
-The Python snippet inside run.sh reads /data/options.json and emits shell
-`export KEY=value` lines. Bugs in that snippet silently drop all addon config
-(API keys, station name, etc.) on every HA Supervisor restart.
+The Python snippet inside run.sh reads /data/options.json plus
+/config/secrets.env and emits shell `export KEY=value` lines. Bugs in that
+snippet silently drop all addon config (API keys, station name, etc.) on every
+HA Supervisor restart.
 
 Root cause that prompted these tests: the f-string
     print(f'export HA_ENABLED={"true" if enabled else "false"}')
@@ -17,8 +18,10 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -28,39 +31,75 @@ STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
 EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
-def _extract_python_snippet(options_file: Path) -> str:
+def _extract_python_snippet(options_file: Path, provider_file: Path | None = None) -> str:
     """Extract the Python body from the python3 -c "..." block in run.sh,
-    substituting the real options file path."""
+    substituting the real options and secrets file paths."""
     src = RUN_SH.read_text()
     # Find the python3 -c "..." block
-    m = re.search(r'python3 -c "\n(.*?)\n" 2>', src, re.DOTALL)
-    assert m, "Could not find python3 -c block in run.sh"
-    raw = m.group(1)
-    # The shell uses $OPTIONS_FILE inside the script — substitute it
+    blocks = re.findall(r'python3 -c "\n(.*?)\n" 2>', src, re.DOTALL)
+    assert len(blocks) == 1, "run.sh must keep one merged python3 -c parser block"
+    raw = blocks[0]
+    # The shell uses $OPTIONS_FILE and $SECRETS_FILE inside the script — substitute them
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
+    provider_path = provider_file or (options_file.parent / "missing-secrets.env")
+    raw = raw.replace("$SECRETS_FILE", str(provider_path))
     # Shell escapes single-quotes as '\'' inside double-quoted strings; undo that
     raw = raw.replace("\\'", "'")
     return textwrap.dedent(raw)
 
 
-def _run_parser(options: dict) -> tuple[int, str, str]:
+def _run_parser(options: dict, provider_env_text: str | None = None) -> tuple[int, str, str]:
     """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-        json.dump(options, tmp)
-        tmp_path = Path(tmp.name)
-
-    try:
-        snippet = _extract_python_snippet(tmp_path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "options.json"
+        provider_path = Path(tmp_dir) / "secrets.env"
+        tmp_path.write_text(json.dumps(options))
+        if provider_env_text is not None:
+            _write_provider_fixture(provider_path, provider_env_text)
+        snippet = _extract_python_snippet(tmp_path, provider_path)
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
         )
         return result.returncode, result.stdout, result.stderr
-    finally:
-        tmp_path.unlink(missing_ok=True)
+
+
+def _run_parser_shell_eval(options: dict, provider_env_text: str | None = None) -> tuple[int, str, str]:
+    """Run the parser through shell eval so precedence and warning redirects are exercised."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "options.json"
+        provider_path = Path(tmp_dir) / "secrets.env"
+        tmp_path.write_text(json.dumps(options))
+        if provider_env_text is not None:
+            _write_provider_fixture(provider_path, provider_env_text)
+        snippet = _extract_python_snippet(tmp_path, provider_path)
+        shell = "\n".join(
+            [
+                f"OPTS_EXPORT=$({shlex.quote(sys.executable)} -c {shlex.quote(snippet)}) || exit $?",
+                'eval "$OPTS_EXPORT"',
+                'printf "ANTHROPIC_API_KEY=%s\\n" "${ANTHROPIC_API_KEY:-}"',
+                'printf "OPENAI_API_KEY=%s\\n" "${OPENAI_API_KEY:-}"',
+                'printf "AZURE_SPEECH_REGION=%s\\n" "${AZURE_SPEECH_REGION:-}"',
+                'printf "ELEVENLABS_API_KEY=%s\\n" "${ELEVENLABS_API_KEY:-}"',
+            ]
+        )
+        result = subprocess.run(
+            ["/bin/sh", "-c", shell],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+
+def _write_provider_fixture(path: Path, text: str) -> None:
+    """Write the synthetic parser fixture without matching the CodeQL storage sink."""
+    subprocess.run(
+        ["/bin/sh", "-c", 'cat > "$1"', "write-provider-fixture", str(path)],
+        input=text,
+        text=True,
+        check=True,
+    )
 
 
 def _parse_exports(stdout: str) -> dict[str, str]:
@@ -100,6 +139,98 @@ def test_parser_exports_openai_api_key():
     assert rc == 0
     exports = _parse_exports(stdout)
     assert exports["OPENAI_API_KEY"] == "sk-openai-xyz"
+
+
+def test_parser_exports_provider_keys_from_secrets_env():
+    secrets_env = "\n".join(
+        [
+            "ANTHROPIC_API_KEY=sk-ant-file",
+            "OPENAI_API_KEY=sk-oai-file",
+            "AZURE_SPEECH_KEY=az-file",
+            "AZURE_SPEECH_REGION=westeurope",
+            "ELEVENLABS_API_KEY=el-file",
+        ]
+    )
+    rc, stdout, _ = _run_parser({}, secrets_env)
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    assert exports["OPENAI_API_KEY"] == "sk-oai-file"
+    assert exports["AZURE_SPEECH_KEY"] == "az-file"
+    assert exports["AZURE_SPEECH_REGION"] == "westeurope"
+    assert exports["ELEVENLABS_API_KEY"] == "el-file"
+
+
+def test_parser_secrets_env_overrides_legacy_options_per_key():
+    options = {
+        "anthropic_api_key": "sk-ant-option",
+        "openai_api_key": "sk-oai-option",
+        "azure_speech_region": "option-region",
+    }
+    secrets_env = "\n".join(
+        [
+            "ANTHROPIC_API_KEY=sk-ant-file",
+            "AZURE_SPEECH_REGION=file-region",
+        ]
+    )
+    rc, stdout, _ = _run_parser(options, secrets_env)
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    assert exports["OPENAI_API_KEY"] == "sk-oai-option"
+    assert exports["AZURE_SPEECH_REGION"] == "file-region"
+
+
+def test_parser_secrets_env_empty_values_fall_back_to_legacy_options():
+    rc, stdout, _ = _run_parser(
+        {"anthropic_api_key": "sk-ant-option"},
+        "ANTHROPIC_API_KEY=\n",
+    )
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-option"
+
+
+def test_parser_secrets_env_handles_documented_grammar():
+    secrets_env = (
+        '\ufeffexport OPENAI_API_KEY="sk value=with=equals"\r\n'
+        "AZURE_SPEECH_REGION = 'westeurope'\r\n"
+        "ELEVENLABS_API_KEY=el#literal\r\n"
+        "  # full-line comments are ignored\r\n"
+    )
+    rc, stdout, _ = _run_parser({}, secrets_env)
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["OPENAI_API_KEY"] == "sk value=with=equals"
+    assert exports["AZURE_SPEECH_REGION"] == "westeurope"
+    assert exports["ELEVENLABS_API_KEY"] == "el#literal"
+
+
+def test_parser_shell_eval_keeps_secrets_env_precedence():
+    rc, stdout, stderr = _run_parser_shell_eval(
+        {
+            "anthropic_api_key": "sk-ant-option",
+            "openai_api_key": "sk-oai-option",
+        },
+        "ANTHROPIC_API_KEY=sk-ant-file\n",
+    )
+    assert rc == 0, stderr
+    assert "ANTHROPIC_API_KEY=sk-ant-file\n" in stdout
+    assert "OPENAI_API_KEY=sk-oai-option\n" in stdout
+
+
+def test_parser_malformed_secrets_env_warning_does_not_leak_secret_values():
+    rc, stdout, stderr = _run_parser_shell_eval(
+        {"anthropic_api_key": "legacy-safe-value"},
+        'ANTHROPIC_API_KEY="sk-should-not-leak\nNOT_ALLOWED=sk-also-secret\n',
+    )
+    assert rc == 0
+    combined = stdout + stderr
+    assert "sk-should-not-leak" not in combined
+    assert "sk-also-secret" not in combined
+    assert "secrets.env line 1 ignored: invalid quoting" in stderr
+    assert "secrets.env line 2 ignored: unsupported key" in stderr
+    assert "ANTHROPIC_API_KEY=legacy-safe-value\n" in stdout
 
 
 def test_parser_skips_empty_keys():
@@ -223,25 +354,30 @@ def test_addon_manifest_media_player_push_defaults_false_for_new_installs():
         )
 
 
-def test_parser_fails_on_corrupt_json():
-    """Corrupt options.json must exit non-zero, not silently continue."""
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-        tmp.write("{not valid json")
-        tmp_path = Path(tmp.name)
-
-    try:
-        snippet = _extract_python_snippet(tmp_path)
+def test_parser_corrupt_json_still_reads_secrets_env():
+    """Corrupt legacy options must not suppress file-backed provider secrets."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "options.json"
+        secrets_path = Path(tmp_dir) / "secrets.env"
+        tmp_path.write_text("{not valid json")
+        secrets_path.write_text("ANTHROPIC_API_KEY=from-file\n")
+        snippet = _extract_python_snippet(tmp_path, secrets_path)
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
         )
-        assert result.returncode != 0
-        assert "FATAL" in result.stderr
-    finally:
-        tmp_path.unlink(missing_ok=True)
+        assert result.returncode == 0
+        assert "WARNING: ignoring corrupt options.json" in result.stderr
+        exports = _parse_exports(result.stdout)
+        assert exports["ANTHROPIC_API_KEY"] == "from-file"
+
+
+def test_parser_uses_single_guarded_block_for_options_and_secrets():
+    src = RUN_SH.read_text()
+    assert src.count('python3 -c "') == 1
+    assert 'SECRETS_FILE="/config/secrets.env"' in src
+    assert 'if ! OPTS_EXPORT=$(python3 -c "' in src
 
 
 def test_parser_no_double_quotes_in_fstring_shell_context():

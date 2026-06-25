@@ -15,6 +15,7 @@ import ipaddress
 import math
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -30,6 +31,15 @@ load_dotenv()
 
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
+
+_ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    ("openai_api_key", "OPENAI_API_KEY"),
+    ("azure_speech_key", "AZURE_SPEECH_KEY"),
+    ("azure_speech_region", "AZURE_SPEECH_REGION"),
+    ("elevenlabs_api_key", "ELEVENLABS_API_KEY"),
+)
+_ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
 
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
@@ -873,23 +883,28 @@ def _is_addon() -> bool:
 
 
 def _apply_addon_options() -> None:
-    """Read /data/options.json and set env vars for addon secrets."""
+    """Read add-on files and set env vars for add-on credentials."""
     import json
 
     options_path = Path("/data/options.json")
-    if not options_path.exists():
-        return
-    try:
-        options = json.loads(options_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
+    options = {}
+    if options_path.exists():
+        try:
+            options = json.loads(options_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            options = {}
+
+    provider_values = {}
+    for opt_key, env_key in _ADDON_PROVIDER_OPTIONS:
+        val = options.get(opt_key, "")
+        if val:
+            provider_values[env_key] = str(val)
+    provider_values.update(_read_addon_provider_secrets(Path("/config/secrets.env")))
+    for env_key, val in provider_values.items():
+        if val and not os.getenv(env_key):
+            os.environ[env_key] = val
 
     env_map = {
-        "anthropic_api_key": "ANTHROPIC_API_KEY",
-        "openai_api_key": "OPENAI_API_KEY",
-        "azure_speech_key": "AZURE_SPEECH_KEY",
-        "azure_speech_region": "AZURE_SPEECH_REGION",
-        "elevenlabs_api_key": "ELEVENLABS_API_KEY",
         "admin_password": "ADMIN_PASSWORD",
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
@@ -916,6 +931,52 @@ def _apply_addon_options() -> None:
     legacy_claude_model = options.get("claude_model") if not qp else None
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
+
+
+def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
+    """Parse /config/secrets.env without logging raw secret file contents."""
+    if not path.exists():
+        return {}
+
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log.warning("Could not read /config/secrets.env")
+        return {}
+
+    values: dict[str, str] = {}
+    for line_no, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" not in stripped:
+            log.warning("Ignoring /config/secrets.env line %s: missing KEY=VALUE", line_no)
+            continue
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in _ADDON_PROVIDER_ENV_KEYS:
+            log.warning("Ignoring /config/secrets.env line %s: unsupported key", line_no)
+            continue
+        value = raw_value.strip()
+        if value[:1] in ('"', "'"):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                log.warning("Ignoring /config/secrets.env line %s: invalid quoting", line_no)
+                continue
+            if len(parts) != 1:
+                log.warning("Ignoring /config/secrets.env line %s: invalid quoted value", line_no)
+                continue
+            value = parts[0].strip()
+        if value:
+            values[key] = value
+    return values
 
 
 def is_absolute_http_url(value: str) -> bool:
