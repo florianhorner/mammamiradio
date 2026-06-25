@@ -30,6 +30,7 @@ from mammamiradio.audio.normalizer import (
     normalize_ad,
     probe_duration_sec,
 )
+from mammamiradio.audio.synth_cache import duration_bucket_sec, materialize_synth_mp3, next_synth_variant
 from mammamiradio.audio.voice_catalog import (
     EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE,
 )
@@ -468,6 +469,7 @@ async def synthesize_ad(
     tmp_dir: Path,
     sfx_dir: Path | None = None,
     state: StationState | None = None,
+    cache_dir: Path | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
@@ -485,6 +487,77 @@ async def synthesize_ad(
 
     sonic_sig = script.sonic.sonic_signature if script.sonic else ""
     motif_path = tmp_dir / f"motif_{uuid4().hex[:8]}.mp3" if sonic_sig else None
+
+    def _sfx_asset_fingerprint(signature: str) -> list[dict[str, object]]:
+        fingerprint: list[dict[str, object]] = []
+        for component in [c.strip() for c in signature.split("+") if c.strip()]:
+            entry: dict[str, object] = {"component": component, "asset": None}
+            if sfx_dir and sfx_dir.is_dir():
+                for ext in (".mp3", ".wav", ".ogg"):
+                    candidate = sfx_dir / f"{component}{ext}"
+                    if not candidate.exists():
+                        continue
+                    try:
+                        stat = candidate.stat()
+                    except OSError:
+                        entry = {"component": component, "asset": str(candidate)}
+                    else:
+                        entry = {
+                            "component": component,
+                            "asset": str(candidate),
+                            "mtime_ns": stat.st_mtime_ns,
+                            "size": stat.st_size,
+                        }
+                    break
+            fingerprint.append(entry)
+        return fingerprint
+
+    def _render_brand_motif(path: Path) -> Path:
+        if cache_dir is None:
+            return generate_brand_motif(path, sonic_sig, sfx_dir)
+        return materialize_synth_mp3(
+            cache_dir,
+            "brand_motif",
+            path,
+            {
+                "sfx_assets": _sfx_asset_fingerprint(sonic_sig),
+                "sonic_signature": sonic_sig,
+            },
+            lambda out: generate_brand_motif(out, sonic_sig, sfx_dir),
+        )
+
+    def _render_music_bed(path: Path, bed_mood: str, duration_sec: float) -> Path:
+        if cache_dir is None:
+            return generate_music_bed(path, bed_mood, duration_sec)
+        bucket = duration_bucket_sec(duration_sec)
+        return materialize_synth_mp3(
+            cache_dir,
+            "music_bed",
+            path,
+            {
+                "duration_sec": bucket,
+                "mood": bed_mood,
+            },
+            lambda out: generate_music_bed(out, bed_mood, float(bucket)),
+        )
+
+    def _render_foley(path: Path, environment: str, duration_sec: float) -> Path:
+        if cache_dir is None:
+            return generate_foley_loop(path, environment, duration_sec)
+        bucket = duration_bucket_sec(duration_sec)
+        params = {
+            "duration_sec": bucket,
+            "environment": environment,
+        }
+        variant = next_synth_variant("foley", params)
+        return materialize_synth_mp3(
+            cache_dir,
+            "foley",
+            path,
+            params,
+            lambda out: generate_foley_loop(out, environment, float(bucket), variant=variant),
+            variant=variant,
+        )
 
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
@@ -523,7 +596,7 @@ async def synthesize_ad(
 
         async def _gen_motif():
             try:
-                await loop.run_in_executor(None, generate_brand_motif, motif_path, sonic_sig, sfx_dir)
+                await loop.run_in_executor(None, _render_brand_motif, motif_path)
                 return motif_path
             except Exception as e:
                 logger.warning("Brand motif generation failed, skipping: %s", e)
@@ -578,14 +651,14 @@ async def synthesize_ad(
     # Generate all three beds concurrently
     _dur = voice_duration + 1.0
     bed_tasks: list = [
-        loop.run_in_executor(None, lambda: generate_music_bed(bed_path, mood, _dur)),
+        loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
     ]
     if env_name:
         _env = env_name
         _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
         _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
-        bed_tasks.append(loop.run_in_executor(None, lambda: generate_music_bed(_env_bed_path, _env, _dur)))
-        bed_tasks.append(loop.run_in_executor(None, lambda: generate_foley_loop(_foley_path, _env, _dur)))
+        bed_tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
+        bed_tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
     try:
         await asyncio.gather(*bed_tasks)
     except Exception as e:
