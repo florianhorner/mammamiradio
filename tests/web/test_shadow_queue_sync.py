@@ -26,18 +26,27 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    GenerationWasteReason,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.web.streamer import (
     _FALLBACK_REASON_LABELS,
     BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
     BRIDGE_HEALTH_THRESHOLD,
     BRIDGE_HEALTH_WINDOW_SECONDS,
     GENERATION_WASTE_DEGRADED_COUNT,
+    GENERATION_WASTE_DEGRADED_SECONDS,
     GENERATION_WASTE_WINDOW_SECONDS,
     LiveStreamHub,
     _apply_loaded_source,
     _bridge_health_snapshot,
     _generation_waste_snapshot,
+    _purge_queue_and_shadow,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
     _sync_runtime_state,
@@ -1269,6 +1278,49 @@ def test_generation_waste_snapshot_degraded_at_count_threshold(tmp_path):
     assert gw["recent_segments"] == GENERATION_WASTE_DEGRADED_COUNT
     assert gw["degraded"] is True
     assert gw["recent_top_reason"] == "operator_stop"
+
+
+def test_generation_waste_snapshot_compares_raw_duration_before_rounding(tmp_path):
+    # A single discard just under the threshold whose duration would round UP to
+    # the threshold must NOT trip degraded — the comparison uses the raw sum and
+    # rounds only the displayed payload value (#397).
+    state = StationState()
+    now = 10_000.0
+    just_under = GENERATION_WASTE_DEGRADED_SECONDS - 0.04  # rounds to the threshold
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "m.mp3", duration_sec=just_under)
+    state.record_discard(segment, reason="quality_gate_reject", timestamp=now)
+
+    with patch("mammamiradio.web.streamer.time.time", return_value=now):
+        gw = _generation_waste_snapshot(state)
+
+    assert gw["recent_duration_sec"] == round(just_under, 1)  # display rounds up
+    assert gw["recent_duration_sec"] >= GENERATION_WASTE_DEGRADED_SECONDS
+    assert gw["degraded"] is False  # but the raw comparison keeps it under
+
+
+def test_purge_clears_queue_even_when_ephemeral_unlink_fails():
+    # A non-missing OSError during a temp unlink must not abort the purge: the
+    # queue drains, the shadow clears, discards are recorded, and the count is
+    # returned (#397).
+    q: asyncio.Queue = asyncio.Queue()
+    good = Segment(type=SegmentType.MUSIC, path=Path("/tmp/purge_ok.mp3"), metadata={"title": "A"}, ephemeral=True)
+    bad_path = MagicMock(spec=Path)
+    bad_path.unlink.side_effect = OSError("permission denied")
+    bad = Segment(type=SegmentType.MUSIC, path=bad_path, metadata={"title": "B"}, ephemeral=True)
+    q.put_nowait(good)
+    q.put_nowait(bad)
+
+    state = StationState()
+    state.queued_segments = [{"id": "1"}, {"id": "2"}]
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert count == 2
+    assert q.empty()
+    assert state.queued_segments == []
+    assert state.discarded_segments_total == 2
+    assert state.discard_by_reason.get("operator_purge") == 2
+    bad_path.unlink.assert_called_once()
 
 
 def test_generation_waste_snapshot_prorates_cost():

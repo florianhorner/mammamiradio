@@ -235,6 +235,21 @@ def _purge_segment_queue(q) -> int:
     return len(items)
 
 
+def _unlink_ephemeral_best_effort(seg) -> None:
+    """Delete an ephemeral segment's temp render without ever raising (#397).
+
+    Purge paths must always finish clearing the queue/shadow and returning their
+    count even when a temp unlink fails (permission/IO). ``missing_ok=True`` only
+    swallows a missing file; a real ``OSError`` would otherwise abort the purge
+    mid-loop and leave the UI shadow stale behind a half-drained queue.
+    """
+    if getattr(seg, "ephemeral", False):
+        try:
+            seg.path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Ephemeral purge unlink failed for %s", seg.path, exc_info=True)
+
+
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
@@ -254,8 +269,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     for seg in items:
         if reason is not None:
             state.record_discard(seg, reason=reason, already_counted_in_produced=True)
-        if seg.ephemeral:
-            seg.path.unlink(missing_ok=True)
+        _unlink_ephemeral_best_effort(seg)
     state.queued_segments.clear()
     return len(items)
 
@@ -304,8 +318,7 @@ def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple
                 if isinstance(qid, str):
                     dropped_ids.add(qid)
                 state.record_discard(seg, reason=GenerationWasteReason.OPERATOR_BAN, already_counted_in_produced=True)
-                if getattr(seg, "ephemeral", False):
-                    seg.path.unlink(missing_ok=True)
+                _unlink_ephemeral_best_effort(seg)
                 continue
         survivors.append(seg)
     for seg in survivors:
@@ -903,7 +916,10 @@ def _generation_waste_snapshot(state: StationState) -> dict:
     window = GENERATION_WASTE_WINDOW_SECONDS
     recent = [e for e in state.discard_events if now - float(e.get("timestamp") or 0.0) <= window]
     recent_segments = len(recent)
-    recent_duration_sec = round(sum(float(e.get("duration_sec") or 0.0) for e in recent), 1)
+    # Compare the RAW sum against the degraded threshold; rounding before the
+    # comparison shifts the boundary (e.g. 119.96s would round to 120.0 and trip
+    # the gate early). Round only the value returned in the payload (#397).
+    recent_duration_raw = sum(float(e.get("duration_sec") or 0.0) for e in recent)
     reason_counts: dict[str, int] = {}
     for event in recent:
         reason = str(event.get("reason") or "")
@@ -916,7 +932,7 @@ def _generation_waste_snapshot(state: StationState) -> dict:
     else:
         waste_cost = 0.0
     degraded = (
-        recent_duration_sec >= GENERATION_WASTE_DEGRADED_SECONDS or recent_segments >= GENERATION_WASTE_DEGRADED_COUNT
+        recent_duration_raw >= GENERATION_WASTE_DEGRADED_SECONDS or recent_segments >= GENERATION_WASTE_DEGRADED_COUNT
     )
     cost_basis = (
         "Rough estimate: session API+TTS cost prorated by discarded segment count "
@@ -932,7 +948,7 @@ def _generation_waste_snapshot(state: StationState) -> dict:
         "unproduced_segments": state.discarded_unproduced_segments_total,
         "window_seconds": window,
         "recent_segments": recent_segments,
-        "recent_duration_sec": recent_duration_sec,
+        "recent_duration_sec": round(recent_duration_raw, 1),
         "by_reason": dict(state.discard_by_reason),
         "by_type": dict(state.discard_by_type),
         "recent_top_reason": recent_top_reason,
@@ -2400,8 +2416,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
             reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
             already_counted_in_produced=True,
         )
-        if getattr(removed_segment, "ephemeral", False):
-            removed_segment.path.unlink(missing_ok=True)
+        _unlink_ephemeral_best_effort(removed_segment)
 
     for item in items:
         q.put_nowait(item)
