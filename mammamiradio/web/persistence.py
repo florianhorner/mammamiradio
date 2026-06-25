@@ -104,7 +104,9 @@ def _save_dotenv(updates: dict[str, str]) -> None:
             new_lines.append(f'{key}="{value}"')
 
     tmp = env_path.with_suffix(".env.tmp")
-    tmp.write_text("\n".join(new_lines) + "\n")
+    # The .env holds provider API keys; create it 0600 so it is not
+    # world-readable under a default umask (same hardening as secrets.env).
+    _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
     tmp.replace(env_path)
 
 
@@ -135,7 +137,12 @@ def _save_addon_options(updates: dict[str, str]) -> None:
     with _ADDON_OPTIONS_LOCK:
         options_path = Path("/data/options.json")
         secrets_path = Path("/config/secrets.env")
-        lines = secrets_path.read_text().splitlines() if secrets_path.exists() else []
+        try:
+            lines = secrets_path.read_text().splitlines() if secrets_path.exists() else []
+        except OSError:
+            # An unreadable existing secrets.env (bad perms / fs error) must not
+            # 500 the admin save — rewrite from scratch rather than propagate.
+            lines = []
 
         options: dict = {}
         if options_path.exists():

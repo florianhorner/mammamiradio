@@ -58,6 +58,18 @@ def test_save_addon_options_writes_env_keys_to_secrets_env(tmp_path):
     assert "AZURE_SPEECH_REGION=westeurope" in written
     assert "ELEVENLABS_API_KEY=el-test" in written
     assert "anthropic_api_key" not in written
+    # The secrets file holds provider keys — it must be owner-only (0600), the
+    # core security claim of the secrets.env hardening.
+    assert (secrets_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_save_dotenv_writes_owner_only_file(tmp_path, monkeypatch):
+    """Standalone .env holds provider keys — it must land 0600, not umask-default."""
+    monkeypatch.chdir(tmp_path)
+    persistence._save_dotenv({"ANTHROPIC_API_KEY": "sk-standalone"})
+    env_file = tmp_path / ".env"
+    assert 'ANTHROPIC_API_KEY="sk-standalone"' in env_file.read_text()
+    assert (env_file.stat().st_mode & 0o777) == 0o600
 
 
 def test_save_addon_options_appends_to_existing_plaintext_file(tmp_path):
