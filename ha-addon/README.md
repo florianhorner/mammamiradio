@@ -33,12 +33,14 @@ After installing, go to the add-on's **Configuration** tab:
 - **OpenAI API Key** (optional): Enables OpenAI `gpt-4o-mini-tts` host voices and script generation fallback through the active quality profile when Anthropic is unavailable.
 - **Azure Speech Key / Region** (optional): Enables official Azure Speech voices for Italian hosts, sweepers, and ad characters. Configure both values; missing or failing Azure voices fall back to Edge TTS.
 - **ElevenLabs API Key** (optional): Enables custom ElevenLabs character voices when `radio.toml` uses `engine = "elevenlabs"`. Missing or failing ElevenLabs voices fall back to Edge TTS.
-- **Claude Model**: Pick between Haiku, Sonnet, and Opus Claude models (default: Haiku 4.5).
+- **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
-- **Super Italian Mode**: Keep listener UI and hosts Italian-first (default: on).
+- **Super Italian Mode**: Keep listener UI and hosts Italian-first (default: off).
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
+- **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
+- **On-air media player push**: Off by default for new installs. Leave it off when using the HACS integration; turn it on only for legacy add-on-only dashboards that still depend on the REST-pushed media player.
 
 ## Usage
 
@@ -46,24 +48,27 @@ After installing, go to the add-on's **Configuration** tab:
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
 3. The dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
 4. Add an Anthropic API key to unlock live AI hosts
-5. Use the add-on's `/stream` endpoint with HA media players
+5. Install the HACS integration for the controllable `media_player.mammamiradio`
+   entity and native `media-source://mammamiradio/live` casting
 
 The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers
 
-To play the radio on a smart speaker or media player in Home Assistant, use the `media_player.play_media` service:
+With the HACS integration installed, play the radio on a smart speaker or media
+player through the native media source:
 
 ```yaml
 service: media_player.play_media
 target:
   entity_id: media_player.your_speaker
 data:
-  media_content_id: http://[YOUR_HA_IP]:8000/stream
+  media_content_id: media-source://mammamiradio/live
   media_content_type: music
 ```
 
-Or add a button to your Lovelace dashboard that triggers this automation.
+Without the HACS integration, direct `/stream` still works:
+`http://[YOUR_HA_IP]:8000/stream`.
 
 ## Screenshots
 

@@ -12,7 +12,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import HTTP_TIMEOUT, NOW_PLAYING_PATH, UPDATE_INTERVAL
+from .const import (
+    HTTP_TIMEOUT,
+    ISSUE_STATION_UNREACHABLE,
+    NOW_PLAYING_PATH,
+    UNREACHABLE_MIN_FAILURES,
+    UNREACHABLE_MIN_SECONDS,
+    UPDATE_INTERVAL,
+)
+from .repairs import create_issue, delete_issue
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,15 +73,30 @@ class MammaRadioCoordinator(DataUpdateCoordinator[RadioStatus]):
     """Polls the add-on's read contract every few seconds."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, base_url: str) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            config_entry=entry,
-            name="Mamma Mi Radio",
-            update_interval=UPDATE_INTERVAL,
-        )
+        try:
+            super().__init__(
+                hass,
+                _LOGGER,
+                config_entry=entry,
+                name="Mamma Mi Radio",
+                update_interval=UPDATE_INTERVAL,
+            )
+        except TypeError:
+            super().__init__(
+                hass,
+                _LOGGER,
+                name="Mamma Mi Radio",
+                update_interval=UPDATE_INTERVAL,
+            )
         self._base_url = base_url.rstrip("/")
         self._session = async_get_clientsession(hass)
+        self._consecutive_failures = 0
+        self._first_failure_at: float | None = None
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Return consecutive poll failures since the last successful refresh."""
+        return self._consecutive_failures
 
     async def _async_update_data(self) -> RadioStatus:
         """Fetch and parse the now-playing contract."""
@@ -82,10 +105,33 @@ class MammaRadioCoordinator(DataUpdateCoordinator[RadioStatus]):
             async with asyncio.timeout(HTTP_TIMEOUT):
                 async with self._session.get(url) as resp:
                     if resp.status != 200:
+                        self._record_failure()
                         raise UpdateFailed(f"now-playing returned HTTP {resp.status}")
                     payload = await resp.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError) as err:
+            self._record_failure()
             raise UpdateFailed(f"cannot reach the station: {err}") from err
         if not isinstance(payload, dict):
+            self._record_failure()
             raise UpdateFailed("now-playing returned a non-object payload")
-        return RadioStatus.from_payload(payload)
+        status = RadioStatus.from_payload(payload)
+        self._record_success()
+        return status
+
+    def _record_failure(self) -> None:
+        """Track failures and raise an actionable repair only on a sustained outage."""
+        now = self.hass.loop.time()
+        if self._first_failure_at is None:
+            self._first_failure_at = now
+        self._consecutive_failures += 1
+        if (
+            self._consecutive_failures >= UNREACHABLE_MIN_FAILURES
+            and now - self._first_failure_at >= UNREACHABLE_MIN_SECONDS
+        ):
+            create_issue(self.hass, ISSUE_STATION_UNREACHABLE)
+
+    def _record_success(self) -> None:
+        """Clear failure state after a successful poll."""
+        self._consecutive_failures = 0
+        self._first_failure_at = None
+        delete_issue(self.hass, ISSUE_STATION_UNREACHABLE)

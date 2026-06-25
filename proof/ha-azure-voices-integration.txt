@@ -1,0 +1,26 @@
+Proof — HA integration: repairs, reconfigure, diagnostics, push-default flip
+Branch: florianhorner/chore/azure-voices-usage
+Merged with origin/main (includes #677 media source, #681, #682, #684, #689-#691).
+
+== Integration tests (pytest-homeassistant-custom-component, Python 3.13) ==
+$ pytest tests_integration/ -o asyncio_mode=auto -p no:cacheprovider -q
+43 passed
+
+Covers: config-flow reconfigure (success+reload, duplicate abort, cannot_connect
+keeps the submitted input), single_config_entry abort, coordinator sustained-outage
+debounce (blip stays quiet, sustained raises, success clears), diagnostics redaction,
+async_remove_entry issue cleanup, stale legacy-conflict clear when station down at
+setup, ghost-present legacy-conflict raise, admin-token repair clears on auth success.
+
+== App test suite (Python 3.11) ==
+$ pytest tests/ -q
+3311 passed, 2 skipped
+
+== Lint / format ==
+$ ruff check custom_components/mammamiradio/ tests_integration/   -> All checks passed!
+$ ruff format --check custom_components/mammamiradio/ tests_integration/ -> formatted
+
+== Notes ==
+No version bump (per repo policy; ships under [Unreleased]).
+This PR does not touch the audio-delivery path (producer/streamer/normalizer);
+the 3-scenario audio rule is N/A.

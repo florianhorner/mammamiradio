@@ -1,6 +1,7 @@
 {
   "domain": "mammamiradio",
   "name": "Mamma Mi Radio",
+  "after_dependencies": ["media_source"],
   "codeowners": ["@florianhorner"],
   "config_flow": true,
   "dependencies": ["http"],
@@ -9,5 +10,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/florianhorner/mammamiradio/issues",
   "requirements": [],
+  "single_config_entry": true,
   "version": "1.0.0"
 }
