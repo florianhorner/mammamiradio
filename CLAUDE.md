@@ -62,6 +62,7 @@ Everything else lives under `docs/`:
 - `docs/architecture.md` - runtime flow, queue model, and audio pipeline
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
+- `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk rolling-RC mental model (the *how-to-cut* lives in the runbook below)
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
