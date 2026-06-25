@@ -86,6 +86,18 @@ def test_release_workflow_validates_tag_version_matches_config_yaml():
     )
 
 
+def test_release_workflow_validates_tag_version_matches_manifest_json():
+    """Pre-flight must read the HACS manifest version and compare it against tag version."""
+    text = _workflow_text()
+    assert "custom_components/mammamiradio/manifest.json" in text, (
+        "pre-flight must reference the HACS integration manifest to read the version field.\n"
+        "Without this, tagging v2.15.0 while manifest.json says 2.14.1 would publish a mismatched integration."
+    )
+    assert "MANIFEST_VERSION" in text and "does not match tag" in text, (
+        "pre-flight must extract manifest.json version and fail when it differs from the tag."
+    )
+
+
 def test_release_workflow_requires_prebuilt_sha_images():
     """Pre-flight must fail before publishing if addon-build.yml did not create :sha."""
     text = _workflow_text()
