@@ -15,6 +15,7 @@ from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
     _crosses_music_speech_boundary,
     _enqueue_with_egress,
+    _make_imaging_lib,
     run_producer,
 )
 
@@ -102,6 +103,14 @@ def test_music_speech_boundary_includes_voice_led_imaging_segments():
     ):
         assert _crosses_music_speech_boundary(SegmentType.MUSIC, speech_type)
         assert _crosses_music_speech_boundary(speech_type, SegmentType.MUSIC)
+
+
+def test_make_imaging_lib_passes_cache_dir(tmp_path):
+    config = _make_config(tmp_path)
+
+    lib = _make_imaging_lib(config)
+
+    assert lib.cache_dir == config.cache_dir
 
 
 @pytest.mark.asyncio

@@ -117,7 +117,20 @@ def test_check_version_sync_uses_staged_versions(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
-    _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
+    _write(
+        tmp_path / "custom_components/mammamiradio/manifest.json",
+        '{\n  "domain": "mammamiradio",\n  "version": "1.0.0"\n}\n',
+    )
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "custom_components/mammamiradio/manifest.json",
+        ],
+        cwd=tmp_path,
+    )
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
@@ -136,17 +149,108 @@ def test_check_version_sync_passes_when_index_matches(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
-    _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
+    _write(
+        tmp_path / "custom_components/mammamiradio/manifest.json",
+        '{\n  "domain": "mammamiradio",\n  "version": "1.0.0"\n}\n',
+    )
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "custom_components/mammamiradio/manifest.json",
+        ],
+        cwd=tmp_path,
+    )
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
 
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
+    _write(
+        tmp_path / "custom_components/mammamiradio/manifest.json",
+        '{\n  "domain": "mammamiradio",\n  "version": "1.1.0"\n}\n',
+    )
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "custom_components/mammamiradio/manifest.json",
+        ],
+        cwd=tmp_path,
+    )
+
+    result = _run(["bash", str(CHECK_VERSION_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_check_version_sync_detects_manifest_drift(tmp_path: Path) -> None:
+    # The HACS integration manifest rides the release number; the pre-commit hook must
+    # catch a bump that leaves it behind, not only a config.yaml ↔ pyproject.toml mismatch.
+    _init_git_repo(tmp_path)
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(
+        tmp_path / "custom_components/mammamiradio/manifest.json",
+        '{\n  "domain": "mammamiradio",\n  "version": "1.0.0"\n}\n',
+    )
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "custom_components/mammamiradio/manifest.json",
+        ],
+        cwd=tmp_path,
+    )
+    _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+
+    # Bump config + pyproject to 1.1.0 but leave the manifest at 1.0.0 in the index.
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
     _run(["git", "add", "ha-addon/mammamiradio/config.yaml", "pyproject.toml"], cwd=tmp_path)
 
     result = _run(["bash", str(CHECK_VERSION_SYNC)], cwd=tmp_path)
 
-    assert result.returncode == 0
-    assert result.stdout == ""
+    assert result.returncode == 1
+    assert "ERROR: Version mismatch!" in result.stdout
+    assert "custom_components/mammamiradio/manifest.json: 1.0.0" in result.stdout
+
+
+def test_check_version_sync_requires_parseable_manifest_version(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(tmp_path / "custom_components/mammamiradio/manifest.json", '{\n  "domain": "mammamiradio"\n}\n')
+    _run(
+        [
+            "git",
+            "add",
+            "ha-addon/mammamiradio/config.yaml",
+            "pyproject.toml",
+            "custom_components/mammamiradio/manifest.json",
+        ],
+        cwd=tmp_path,
+    )
+
+    result = _run(["bash", str(CHECK_VERSION_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert "ERROR: Could not parse version from staged files." in result.stdout
+    assert "custom_components/mammamiradio/manifest.json: <missing>" in result.stdout
+
+
+def test_pre_commit_registers_version_sync_hook() -> None:
+    config = (ROOT / ".pre-commit-config.yaml").read_text()
+
+    assert "id: version-sync" in config
+    assert "entry: scripts/check-version-sync.sh" in config
+    assert "stages: [pre-commit]" in config
 
 
 def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:

@@ -181,6 +181,17 @@ def test_token_cost_counter_survives_in_costs_group() -> None:
     assert html.index('id="engineRuntime"') < html.index('id="setupGroup"')
 
 
+def test_cost_split_survives_in_costs_group_before_segment_counts() -> None:
+    html = _html()
+    assert 'id="engineCostSplit"' in html
+    assert "cost_breakdown" in html
+    assert "Cost split" in html
+    assert "Host scripts" in html
+    assert "Ad scripts" in html
+    assert "Voice synthesis" in html
+    assert html.index('id="engineCostSplit"') < html.index('id="engineSegments"') < html.index('id="setupGroup"')
+
+
 def test_session_cost_reframe_template_invariants() -> None:
     """Protected cost display: the token-cost estimate copy and render targets
     survive the Concept B console rewrite. The 'Produced · Session N' segment
@@ -299,6 +310,8 @@ _ITALIAN_UTILITY_FORBIDDEN = (
     "— prossimo",
     " aggiornato'",
     "'Saltato'",
+    "applicato",
+    ">Classifiche<",
 )
 
 
@@ -319,3 +332,104 @@ def test_structural_italian_flair_preserved() -> None:
     html = _html()
     for flair in ("Diretta", "Scaletta", "Rotazione", "Conduttori", "Motore", "Archivio", "In onda"):
         assert flair in html
+
+
+def test_motore_runtime_groups_precede_setup() -> None:
+    html = _html()
+    pipeline = html.index('id="pipelineStatus"')
+    status = html.index('id="eg-status-h"')
+    costs = html.index('id="eg-costs-h"')
+    setup = html.index('id="setupGroup"')
+    assert pipeline < status < costs < setup, (
+        "Motore must show Pipeline, Status, and Costi before the collapsible Setup group."
+    )
+    super_italian = html.index('id="superItalianToggle"')
+    assert costs < super_italian < setup, (
+        "Station configuration controls must sit after runtime Costi and before Setup."
+    )
+    config = html.index('id="eg-config-h"')
+    assert costs < config < super_italian < setup, (
+        "Motore configuration controls must be grouped under their own subgroup, not "
+        "rendered as loose peers of Status, Costi, and Setup."
+    )
+
+
+def test_format_request_age_guards_invalid_values() -> None:
+    html = _html()
+    assert "function formatRequestAge" in html
+    block = html[html.index("function formatRequestAge") : html.index("function _statusSpan")]
+    assert "Number.isFinite" in block
+    assert "'s ago'" in block
+    assert "'m ago'" in block
+    assert " fa" not in block
+    listener_block = html[html.index("function updateListenerRequests") : html.index("let _lrReqs")]
+    assert "formatRequestAge(r.age_s)" in listener_block
+
+
+def test_conduttori_presets_sync_active_state_from_slider_values() -> None:
+    html = _html()
+    assert "function syncHostPresetActive" in html
+    assert "HOST_PRESETS" in html
+    assert "b.classList.toggle('active',b.dataset.preset===match)" in html.replace(" ", "")
+
+
+def test_undo_toast_reserves_mobile_safe_space() -> None:
+    html = _html()
+    assert "body.undo-toast-active" in html
+    assert ".undo-stack" in html
+    js = _js()
+    assert "undo-toast-active" in js
+    assert "_syncToastBodyClass" in js
+
+
+def test_undo_toast_cap_only_commits_older_undo_toasts() -> None:
+    js = _js()
+    block = js[js.index("function undoableToast") : js.index("/**\n   * Show a plain error toast")]
+    assert "_countToastsOfKind('undo') >= MAX_TOASTS" in block
+    assert "const oldestUndo = _oldestToastOfKind('undo')" in block
+    assert "_dismiss(oldestUndo, { runCommit: true })" in block
+    assert "kind: 'undo'" in block
+
+
+def test_error_toast_uses_same_safe_space_accounting_as_undo_toast() -> None:
+    js = _js()
+    block = js[js.index("function errorToast") : js.index("// ── Archivio")]
+    assert "const MAX_ERROR_TOASTS = 2" in js
+    assert "_countToastsOfKind('error') >= MAX_ERROR_TOASTS" in block
+    assert "const oldestError = _oldestToastOfKind('error')" in block
+    assert "_dismiss(oldestError, { runCommit: false })" in block
+    assert "runCommit: true" not in block
+    assert "kind: 'error'" in block
+    assert "const entry" in block
+    assert "_live.push(entry)" in block
+    assert "_syncToastBodyClass()" in block
+    assert "_dismiss(entry, { runCommit: false })" in block
+
+
+# ── Admin a11y structure: page h1 + ARIA tab pattern ────────────────
+
+
+def test_admin_has_h1_with_brand_accent() -> None:
+    """Admin must declare an <h1> so headings don't start at <h2> (WCAG 2.4.6).
+
+    The brand wordmark carries it, keeping the gold "Mi" protected accent inside
+    the document title (docs/design/admin-panel.md protected-elements list)."""
+    html = _html()
+    assert '<h1 class="wm">' in html, "the brand wordmark must be the page <h1>."
+    h1 = html[html.index('<h1 class="wm">') : html.index("</h1>")]
+    assert 'class="mi"' in h1, "the gold Mi accent must live inside the <h1>."
+
+
+def test_admin_tabs_use_aria_tab_pattern() -> None:
+    """Section tabs must implement the ARIA tablist/tab/tabpanel pattern so screen
+    readers announce selection state and panel association (WCAG 4.1.2)."""
+    html = _html()
+    assert 'role="tablist"' in html, "the tab bar must be a role=tablist."
+    assert html.count('role="tab"') >= 6, "each section tab must declare role=tab."
+    assert html.count('role="tabpanel"') >= 6, "each section panel must declare role=tabpanel."
+    # Cross-linking: a tab points at its panel and the panel back at the tab.
+    assert 'aria-controls="live-queue"' in html and 'aria-labelledby="tab-scaletta"' in html, (
+        "tabs and panels must be cross-linked via aria-controls / aria-labelledby."
+    )
+    js = _html()  # inline tab JS lives in admin.html
+    assert "setAttribute('aria-selected'" in js, "active tab must toggle aria-selected."

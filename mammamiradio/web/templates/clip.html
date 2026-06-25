@@ -15,6 +15,8 @@
 <meta name="twitter:title" content="{{ station_name }}{% if track_title %}: {{ track_title }}{% endif %}">
 <meta name="twitter:image" content="{{ og_image_url }}">
 <meta name="theme-color" content="#14110F">
+<link rel="icon" href="{{ ingress_prefix }}/static/icon-192.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{ ingress_prefix }}/static/icon-192.svg">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -117,17 +119,18 @@
     justify-content: center;
     min-height: 44px;
     padding: 12px 24px;
-    background: var(--ok, #2563EB);
-    color: white;
+    background: var(--sun, #F4D048);
+    color: var(--ink, #1A1410);
     text-decoration: none;
     font-weight: 600;
     font-size: 15px;
     border-radius: 8px;
     letter-spacing: 0.02em;
-    transition: background 0.15s ease;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+    transition: background 0.15s ease, transform 0.15s ease;
     width: 100%;
   }
-  .cta:hover, .cta:focus-visible { background: #1E50C2; }
+  .cta:hover, .cta:focus-visible { background: var(--sun2, #ECCC30); transform: translateY(-1px); }
   .cta:focus-visible { outline: 2px solid var(--sun, #F4D048); outline-offset: 2px; }
   .footer-line {
     text-align: center;
