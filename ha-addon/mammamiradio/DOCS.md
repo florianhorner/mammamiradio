@@ -227,19 +227,21 @@ The name appears roughly once every 3–4 banter exchanges, never forced. You ca
 
 ## Home Assistant entities
 
-New installs should use the HACS integration in `custom_components/mammamiradio`
-for the registered, controllable `media_player.mammamiradio` and the native
-`media-source://mammamiradio/live` stream source.
+The add-on automatically pushes a basic `media_player.mammamiradio` plus sensor
+state after each segment transition and every 30 seconds — no
+`configuration.yaml` changes required, so an add-on-only setup gets a media-player
+tile out of the box.
 
-The add-on still pushes sensor state after each segment transition and every 30
-seconds. The legacy REST-pushed `media_player.mammamiradio` is compatibility
-only: turn **On-air media player push** on only for old add-on-only dashboards
-that still depend on it. New installs default it off so the HACS integration
-owns the media-player entity.
+For a registered, controllable `media_player.mammamiradio` and the native
+`media-source://mammamiradio/live` stream source, install the HACS integration in
+`custom_components/mammamiradio`. When you do, turn **On-air media player push**
+off (Add-on → Configuration) so the add-on's push and the integration don't fight
+over the same entity; the `sensor.mammamiradio_*` / `binary_sensor` entities keep
+flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration owns this by default; legacy REST push only when `ha_media_player_push` is on |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
