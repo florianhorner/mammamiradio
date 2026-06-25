@@ -55,6 +55,9 @@ def _run_parser(options: dict, provider_env_text: str | None = None) -> tuple[in
         provider_path = Path(tmp_dir) / "secrets.env"
         tmp_path.write_text(json.dumps(options))
         if provider_env_text is not None:
+            # Synthetic parser fixture written to a private temp directory.
+            # lgtm[py/clear-text-storage-sensitive-data]
+            # codeql[py/clear-text-storage-sensitive-data]
             provider_path.write_text(provider_env_text)
         snippet = _extract_python_snippet(tmp_path, provider_path)
         result = subprocess.run(
@@ -72,6 +75,9 @@ def _run_parser_shell_eval(options: dict, provider_env_text: str | None = None) 
         provider_path = Path(tmp_dir) / "secrets.env"
         tmp_path.write_text(json.dumps(options))
         if provider_env_text is not None:
+            # Synthetic parser fixture written to a private temp directory.
+            # lgtm[py/clear-text-storage-sensitive-data]
+            # codeql[py/clear-text-storage-sensitive-data]
             provider_path.write_text(provider_env_text)
         snippet = _extract_python_snippet(tmp_path, provider_path)
         shell = "\n".join(
