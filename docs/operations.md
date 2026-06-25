@@ -280,13 +280,22 @@ The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes
 
 When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter, ad, and news-flash generation (so the weather flash grounds in a freshly refreshed forecast). It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The remaining entities are scored and capped before prompt assembly. When label generation is active (HA enabled and an Anthropic key configured), the display names and room assignments for non-sensitive entities are also sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. A startup log line confirms when this is active. The admin Engine Room shows the scored prompt slice and privacy filter counts under Home Assistant details; `/public-status` exposes only listener-safe Casa moments.
 
-## Home Assistant pushed entities
+## Home Assistant entities
 
-When the HA integration is enabled (`ha_enabled: true` in `radio.toml` or the HA add-on), mammamiradio automatically pushes its playback state to HA after each segment transition and every 30 seconds. No operator configuration required — entities appear in **Developer Tools → States** within 30 seconds of startup.
+The preferred HA surface is the HACS integration under
+`custom_components/mammamiradio`: it owns the registered
+`media_player.mammamiradio`, exposes native controls, provides diagnostics and
+Repairs, and adds `media-source://mammamiradio/live` for casting.
+
+The add-on still pushes sensor state after each segment transition and every 30
+seconds. Its legacy REST-pushed `media_player.mammamiradio` is compatibility
+only. New add-on installs default `ha_media_player_push` off so the HACS
+integration owns the media player. Existing installs with no saved option keep
+the old push until the operator turns it off.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | `media_title`, `media_artist`, `media_content_type`, `media_position`, `media_position_updated_at` (playing only), `entity_picture`, `mammamiradio_segment_type`, `mammamiradio_listeners`, `mammamiradio_queue_depth` |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration by default; legacy REST push only when `ha_media_player_push` is on |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
@@ -317,7 +326,7 @@ action:
       brightness_pct: 30
 ```
 
-**Note:** pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist requires a HACS integration for registry visibility.
+**Note:** REST-pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist, Repairs, diagnostics, and media-source browsing require the HACS integration for registry visibility.
 
 ## What is still not documented because it does not exist yet
 

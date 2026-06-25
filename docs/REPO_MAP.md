@@ -44,6 +44,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | SQLite schema / migrations                         | `mammamiradio/core/sync.py`                  |
 | App startup / shutdown lifecycle                   | `mammamiradio/main.py`                       |
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
+| HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
+| Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
 
 ## Tests
 
@@ -74,6 +76,8 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |
 | HA addon release process         | `docs/runbooks/ha-addon.md`      |
+| HACS/Home Assistant integration  | `docs/integrations/ha-integration.md` |
+| HA privacy + upstream proposals  | `docs/integrations/ha-privacy-and-upstream-proposals.md` |
 | Festival Mode (operator guide)   | `docs/festival-mode.md`          |
 | Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
