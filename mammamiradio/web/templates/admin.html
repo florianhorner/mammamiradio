@@ -2691,13 +2691,40 @@ function updateRuntimeStatus(st){
     if(!gw){
       wasteRow=statusRow('Generated waste','idle','—','No discard telemetry yet');
     }else{
+      // Operator-friendly labels for discard reasons (no machine strings on screen).
+      const REASON_LABELS={
+        stale_source:'source switch',
+        source_switch:'source switch',
+        stale_playlist:'playlist change',
+        stale_chaos:'chaos switch',
+        quality_gate_reject:'failed quality check',
+        session_stopped:'station stopped',
+        interrupt:'interrupted',
+        air_next_overflow:'queue overflow',
+        egress_stale:'stale on air',
+        blocklist_gate:'banned song',
+        operator_ban:'banned song',
+        operator_stop:'operator stop',
+        operator_panic:'panic stop',
+        operator_purge:'queue cleared',
+        operator_queue_remove:'removed from queue',
+      };
+      const reasonHuman=(r)=>REASON_LABELS[r]||String(r||'').replace(/_/g,' ');
       const wasteState=gw.degraded?'degraded':'ready';
-      const reasonHuman=(r)=>String(r||'').replace(/_/g,' ');
       const windowMin=Math.round((gw.window_seconds||900)/60);
       const durMin=Math.round((gw.recent_duration_sec||0)/60);
-      const topReason=gw.recent_top_reason?reasonHuman(gw.recent_top_reason):'mixed';
+      const wasteCost=Number(gw.estimated_waste_cost_usd||0);
+      // Same rough money convention as the token-cost readout: under a dollar
+      // reads "<$1", otherwise "~$N" rounded to whole dollars.
+      const costStr=wasteCost<1?'<$1':'~$'+Math.round(wasteCost);
       const wasteLabel=gw.degraded?'Discarding often':'Low waste';
-      const wasteDetail=`${gw.recent_segments||0} unheard segments · ~${durMin}m in ${windowMin}m · mostly ${topReason}`;
+      let wasteDetail;
+      if((gw.recent_segments||0)===0){
+        wasteDetail=`No unheard segments in the last ${windowMin}m · ${costStr} est. wasted this session`;
+      }else{
+        const topReason=gw.recent_top_reason?reasonHuman(gw.recent_top_reason):'mixed reasons';
+        wasteDetail=`${gw.recent_segments} unheard segments · ~${durMin}m in ${windowMin}m · mostly ${topReason} · ${costStr} est.`;
+      }
       wasteRow=statusRow('Generated waste',wasteState,wasteLabel,wasteDetail);
     }
     card.innerHTML=[

@@ -140,14 +140,17 @@ does not change scheduling, prefetch depth, or rescue selection.
 
 `runtime_status.generation_waste` reports rendered audio that was discarded
 before it started broadcasting — queue purges on source switch, chaos cutover,
-operator stop/panic, bans, and producer stale gates. The fields:
+operator stop/panic, bans, producer stale gates, and audio quality-gate rejects
+(a rendered music/banter/ad segment that failed the pre-air quality check). The
+fields:
 
 - `total_segments` / `total_duration_sec` — lifetime discarded count and audio
   seconds this session.
 - `recent_segments` / `recent_duration_sec` — discards inside the rolling window
   (`window_seconds`, default 900s / 15 min).
 - `by_reason` / `by_type` — lifetime breakdown by discard reason and segment
-  type (`stale_source`, `operator_stop`, `source_switch`, etc.).
+  type (`stale_source` for a true source switch, `stale_playlist` for a
+  same-source playlist edit, `quality_gate_reject`, `operator_stop`, etc.).
 - `recent_top_reason` — dominant reason in the rolling window (for "mostly …"
   copy in the admin card).
 - `unproduced_segments` — discarded segments that never reached the produced
@@ -157,13 +160,18 @@ operator stop/panic, bans, and producer stale gates. The fields:
   `session_cost * discarded / (produced + unproduced_discarded)`.
 - `cost_basis` — plain-English explanation of the formula and its imprecision
   (count-based proration over-attributes cost to discarded music).
-- `degraded` — `true` once **either** signal trips: `recent_duration_sec` reaches
-  `GENERATION_WASTE_DEGRADED_SECONDS` (default **120s**), **or**
-  `recent_segments` reaches `GENERATION_WASTE_DEGRADED_COUNT` (default **5**).
+- `degraded` — `true` once **either** signal trips: the raw recent discard
+  duration reaches `GENERATION_WASTE_DEGRADED_SECONDS` (default **120s**;
+  compared before rounding, so `recent_duration_sec` in the payload is the
+  rounded display value only), **or** `recent_segments` reaches
+  `GENERATION_WASTE_DEGRADED_COUNT` (default **5**).
 
 The Engine Room **Generated waste** row renders this as "Low waste" or
 "Discarding often", with recent unheard segment count, duration in the window,
-and the dominant reason. Admin-only — absent from `/public-status`. Counts are
+the dominant reason (shown with an operator-friendly label, e.g. "failed quality
+check"), and the rough `estimated_waste_cost_usd` shown as an approximation. When
+there are no recent discards the row drops the "mostly …" reason and shows plain
+low-waste copy. Admin-only — absent from `/public-status`. Counts are
 session-local and reset on restart. Observability only; does not change
 scheduling or generation depth.
 
