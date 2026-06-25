@@ -1,7 +1,7 @@
 Issue 688 validation evidence
 =============================
 
-Commit: d68a184ef0f04047c0cfc7fa516fb9569bdab634
+Commit: 27dd625608e89fcf4b0e53d02d789cf36a122e5f
 Branch: issue-688
 Date: 2026-06-25
 
@@ -15,6 +15,9 @@ Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pom
 
 - .venv/bin/python -m pytest tests/
   Result: 3313 passed, 2 skipped, 19 deselected, 1 warning in 61.09s.
+
+- .venv/bin/python -m pytest tests/repo/test_run_sh_options_parser.py
+  Result: 24 passed in 0.55s after the final test-fixture-only CodeQL rewrite.
 
 - bash -n ha-addon/mammamiradio/rootfs/run.sh
   Result: passed.
