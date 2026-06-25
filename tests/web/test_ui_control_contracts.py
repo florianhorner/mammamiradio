@@ -209,6 +209,53 @@ class TestSkipEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Ban-now-playing endpoint (on-air console "Ban" button = ban + immediate skip)
+# ---------------------------------------------------------------------------
+
+
+class TestBanNowPlayingEndpoint:
+    @pytest.mark.asyncio
+    async def test_ban_now_sets_skip_event_and_skipping_state(self):
+        """Mirrors the Skip contract: the airing music segment is cut synchronously —
+        skip_event set, now_streaming flips to 'skipping' — in one atomic response."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Modugno — Volare",
+                "started": time.time(),
+                "metadata": {"artist": "Modugno", "title_only": "Volare"},
+            }
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
+        body = resp.json()
+        assert body["ok"] is True and body["skipped"] is True
+        assert app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming["type"] == "skipping"
+        assert ("modugno", "volare") in app.state.station_state.blocklist
+
+    @pytest.mark.asyncio
+    async def test_ban_now_rejects_non_music_without_skipping(self):
+        """Banter/stopped on air -> reject, no spurious skip, blocklist untouched."""
+        app = _make_app(
+            now_streaming={"type": "banter", "label": "Sofia talking", "started": time.time(), "metadata": {}}
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
+        assert resp.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
+        assert app.state.station_state.blocklist == {}
+
+    def test_admin_html_has_ban_now_button_and_handler(self):
+        """The console wiring must survive HTML refactors: the button calls the
+        handler, and the handler hits the dedicated endpoint."""
+        html = ADMIN_HTML.read_text()
+        assert 'id="banNowBtn"' in html
+        assert "doBanNowPlaying(this)" in html
+        assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
+
+
+# ---------------------------------------------------------------------------
 # Stop endpoint
 # ---------------------------------------------------------------------------
 
