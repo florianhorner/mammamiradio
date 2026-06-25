@@ -3034,7 +3034,7 @@ async function setHeading(kind,el){
   const dispatch=_HEADING_DISPATCH[kind]||_HEADING_DISPATCH.classic_80s;
   const r=await api('POST','/api/heading',{seed:dispatch.seed});
   if(!r.ok){
-    toast(r.message||"Couldn't pull that vibe right now - give it a moment and try again.");
+    toast(r.message||wayOut('pull that vibe'));
     return;
   }
   toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
@@ -3341,7 +3341,7 @@ async function searchMore(){
     if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
   }
 }
-async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+async function addTr(i){const t=_sR[i];if(!t)return;const r=await api('POST','/api/playlist/move_to_next',{index:t.index});if(r&&r.ok){toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}else toast(wayOut('move that'))}
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -3426,7 +3426,7 @@ async function savePacingField(field,value,{silent=false}={}){
   const mySeq=(_paceSeq[field]=(_paceSeq[field]||0)+1);
   try{
     const r=await api('PATCH','/api/pacing',{[field]:+value});
-    if(r&&r.detail){
+    if(!r||r.detail||r.ok===false){
       toast(wayOut('save pacing'));
       if(_st.pacing)applyPacingResponse(_st.pacing,field);
       await refreshFast();
@@ -3569,8 +3569,9 @@ async function updHost(n,vals=null){
     if(!block)return;
     block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
   }
-  await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
-  toast(n+' updated');
+  const r=await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
+  if(r&&r.ok)toast(n+' updated');
+  else toast(wayOut('update '+n));
 }
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
@@ -3652,6 +3653,7 @@ let _lrReqs=[];
 async function lrDismiss(id){
   if(!id)return;
   const r=await api('POST','/api/listener-requests/dismiss',{id});
+  if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
 }
@@ -3659,6 +3661,7 @@ async function lrQueueNext(i){
   const req=_lrReqs[i];if(!req)return;
   if(req.type==='song_request'&&req.song_found){
     const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
+    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
     toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
   }
 }

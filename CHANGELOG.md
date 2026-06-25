@@ -18,6 +18,7 @@ The current version source of truth is `pyproject.toml`.
 ### Fixed
 
 - **The listener and admin pages read better with a screen reader, a keyboard, and on touch.** The listener page now offers a skip-to-content link and a labelled main region, its page language matches the words actually on screen (so a screen reader stops reading English with an Italian accent), and a stopped station no longer flashes "on air" for a beat before it settles. In the admin panel the section tabs are a proper tab strip you can move through with the arrow keys, the page has a real top-level heading, and faint blue status labels were brightened so they stay readable on the dark control room.
+- **Bad request bodies now fail gently instead of looking like a station fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses. The listener request form and admin controls still behave the same for valid requests.
 
 ## [2.14.1] - 2026-06-21
 

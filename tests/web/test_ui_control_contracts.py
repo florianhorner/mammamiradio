@@ -916,7 +916,7 @@ class TestPacingControlsMatchServerContract:
         # A save re-renders only the field it patched, never sibling sliders.
         assert "applyPacingResponse(r,field)" in html
         # On a rejected save the field re-syncs from the last server snapshot.
-        assert "if(r&&r.detail){" in html
+        assert "if(!r||r.detail||r.ok===false){" in html
         assert "if(_st.pacing)applyPacingResponse(_st.pacing,field);" in html
 
     def test_admin_quick_pacing_actions_check_save_result(self):
