@@ -73,7 +73,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available). Filter
    state persists via sessionStorage (`mmr.admin.archivio.filters`).
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
-   context), `Costi` (token cost counter + segment counts — always visible),
+   context), `Costi` (token cost counter + cost split + segment counts — always visible),
    `Setup` (a collapsible `<details>` that auto-collapses when every readiness item
    is ready; shows an `All ready ✓` blue badge when collapsed).
 

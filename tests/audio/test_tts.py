@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from mammamiradio.core.models import HostPersonality
+from mammamiradio.core.models import HostPersonality, StationState
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 
 
@@ -1439,6 +1439,26 @@ async def test_synthesize_bills_tts_chars_on_cloud_success(_mock_all, tmp_path, 
     with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
         await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
     assert state.tts_characters == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bills_station_state_tts_category_on_cloud_success(_mock_all, tmp_path, monkeypatch):
+    """A successful paid cloud synth updates aggregate and category TTS counters."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    mock_response = MagicMock()
+    mock_response.content = b"\x00" * 512
+    mock_client = MagicMock()
+    mock_client.audio.speech.create.return_value = mock_response
+
+    state = StationState(playlist=[])
+    text = "Ciao mondo"
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client):
+        await synthesize(text, "onyx", tmp_path / "o.mp3", engine="openai", state=state)
+
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
 
 
 @pytest.mark.asyncio
