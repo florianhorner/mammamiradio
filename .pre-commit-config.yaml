@@ -19,6 +19,12 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
+      - id: version-sync
+        name: version sync across release metadata
+        entry: scripts/check-version-sync.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
       - id: ha-addon-local-build
         name: ha-addon local build
         entry: scripts/test-addon-local.sh

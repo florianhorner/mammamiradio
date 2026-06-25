@@ -94,8 +94,11 @@ decides "is there an integration update?" by reading this repo's **GitHub releas
 are the add-on's `v*` tags.
 
 **Decision: keep ONE repo. The integration's `manifest.json` version is kept in lockstep
-with the release number** (bumped together with `config.yaml` + `pyproject.toml`; enforced by
-`scripts/pre-release-check.sh` and listed in the runbook's "Version: three files" table). The
+with the release number** (bumped together with `config.yaml` + `pyproject.toml`; enforced at
+every guard layer — the pre-commit hook (`scripts/check-version-sync.sh`), the PR version-sync
+check (`scripts/pre-release-check.sh`), the release-tag preflight (`addon-release.yml`), and an
+always-on test (`test_integration_manifest_version_matches_pyproject`) — and listed in the
+runbook's "Version: three files" table). The
 integration *ships with the station and carries the station's version.* On adopting this
 (2026-06-25) the manifest jumped `1.0.0 → 2.14.1` to join the station's version line.
 
