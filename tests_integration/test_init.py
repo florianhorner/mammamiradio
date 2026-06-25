@@ -64,3 +64,16 @@ async def test_stale_legacy_issue_cleared_when_station_down(hass: HomeAssistant)
         # Stop the scheduled retry so test teardown stays clean.
         await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
+
+
+async def test_ghost_state_at_setup_raises_conflict_issue(hass: HomeAssistant) -> None:
+    """A pre-existing REST-pushed ghost media_player state raises the conflict repair."""
+    registry = ir.async_get(hass)
+    hass.states.async_set(f"media_player.{DOMAIN}", "playing")
+    entry = _entry(hass)
+    with aioresponses() as mock:
+        mock.get(URL, status=200, payload=load_payload("music"), repeat=True)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert registry.async_get_issue(DOMAIN, ISSUE_LEGACY_MEDIA_PLAYER_PUSH_CONFLICT) is not None
