@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.
+
 ## 2.15.0
 
 ## 2.14.1 - 2026-06-21

@@ -10,6 +10,10 @@ The current version source of truth is `pyproject.toml`.
 
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
 
+### Fixed
+
+- **Bad request bodies now fail gently instead of looking like a station fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses. The listener request form and admin controls still behave the same for valid requests.
+
 ## [2.14.1] - 2026-06-21
 
 ### Added
