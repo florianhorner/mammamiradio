@@ -20,7 +20,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **Track buttons in Rotazione no longer wrap below the track title in the two-pane desktop view.** Next and Ban stay inline even when the admin panel is in a narrow column (~700px).
+- **Rotazione track buttons now lay out right at every width.** In the two-pane desktop column (~700px) Next and Ban stay inline on the track line instead of wrapping below it; on a real phone they drop to a stacked row with full-size touch targets.
 - **The listener and admin pages read better with a screen reader, a keyboard, and on touch.** The listener page now offers a skip-to-content link and a labelled main region, its page language matches the words actually on screen (so a screen reader stops reading English with an Italian accent), and a stopped station no longer flashes "on air" for a beat before it settles. In the admin panel the section tabs are a proper tab strip you can move through with the arrow keys, the page has a real top-level heading, and faint blue status labels were brightened so they stay readable on the dark control room.
 
 ## [2.14.1] - 2026-06-21

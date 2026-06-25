@@ -1098,11 +1098,10 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
-  /* pl-row stays single-line even at ~700px (two-pane view); never wrap the
-   * action buttons below the track — that looks broken. */
+  /* 481-768px = two-pane desktop column. Keep action buttons on the track
+   * line; never wrap them below — that looks broken. The ≤480px phone block
+   * below switches to a stacked touch-target grid instead. */
   .pl-a { opacity: 1; }
-  /* Give tap targets real touch height on phones without bloating the dense
-   * desktop list. */
   .pl-btn, .sr-add { min-height: 36px; }
   .undo-stack {
     left: 12px;
@@ -1115,6 +1114,27 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
   .a-topbar { flex-wrap: wrap; }
+}
+
+/* Real phones (≤480px): stack the row into a deliberate touch-target grid —
+ * action buttons drop to a second row with full 44px hit areas. The two-pane
+ * desktop column (481-768px, above) keeps them inline instead. */
+@media (max-width: 480px) {
+  .pl-row {
+    display: grid;
+    grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
+  .pl-grip { grid-column: 2; grid-row: 1; }
+  .pl-n { display: none; }
+  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; }
+  .pl-t { grid-column: 4; grid-row: 1; }
+  .pl-chips { grid-column: 5; grid-row: 1; margin-left: 0; }
+  .pl-a { grid-column: 2 / 4; grid-row: 2; width: auto; padding-left: 0; opacity: 1; }
+  .pl-ban { grid-column: 4 / 6; grid-row: 2; justify-self: end; margin-left: 0; }
+  .pl-btn, .sr-add { min-height: 44px; }
 }
 
 @media (max-width: 768px) {
