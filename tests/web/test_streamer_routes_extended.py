@@ -1107,10 +1107,12 @@ async def test_listener_request_invalid_payload_types():
         bad_json = await client.post("/api/listener-request", content="{", headers={"Content-Type": "application/json"})
         bad_name = await client.post("/api/listener-request", json={"name": 123, "message": "ciao"})
         bad_message = await client.post("/api/listener-request", json={"name": "Luca", "message": 456})
-    assert bad_payload.status_code == 400
-    assert bad_payload.json()["error"] == "invalid payload"
-    assert bad_json.status_code == 400
-    assert bad_json.json()["error"] == "invalid JSON"
+    assert bad_payload.status_code == 422
+    assert bad_payload.json()["ok"] is False
+    assert bad_payload.json()["error"]
+    assert bad_json.status_code == 422
+    assert bad_json.json()["ok"] is False
+    assert bad_json.json()["error"]
     assert bad_name.status_code == 400
     assert bad_message.status_code == 400
 
@@ -1696,10 +1698,12 @@ async def test_dismiss_listener_request_invalid_payload_returns_400():
             "/api/listener-requests/dismiss", content="{", headers={"Content-Type": "application/json"}
         )
         bad_payload = await client.post("/api/listener-requests/dismiss", json=["not", "an", "object"])
-    assert bad_json.status_code == 400
-    assert bad_json.json()["error"] == "invalid JSON"
-    assert bad_payload.status_code == 400
-    assert bad_payload.json()["error"] == "invalid payload"
+    assert bad_json.status_code == 422
+    assert bad_json.json()["ok"] is False
+    assert bad_json.json()["error"]
+    assert bad_payload.status_code == 422
+    assert bad_payload.json()["ok"] is False
+    assert bad_payload.json()["error"]
 
 
 @pytest.mark.asyncio
@@ -2198,13 +2202,14 @@ async def test_add_external_track_invalid_payload():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/playlist/add-external", json=["not", "an", "object"])
-    assert resp.status_code == 400
-    assert resp.json()["error"] == "invalid payload"
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]
 
 
 @pytest.mark.asyncio
 async def test_add_external_track_invalid_json():
-    """Malformed body returns 400, not a 500 — the parse is guarded."""
+    """Malformed body returns 422, not a 500 — the parse is guarded."""
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -2213,8 +2218,9 @@ async def test_add_external_track_invalid_json():
             content=b"{not valid json",
             headers={"Content-Type": "application/json"},
         )
-    assert resp.status_code == 400
-    assert resp.json()["error"] == "invalid JSON"
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]
 
 
 @pytest.mark.asyncio
@@ -3258,7 +3264,9 @@ async def test_patch_pacing_rejects_non_object_payload():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch("/api/pacing", json=[])
-    assert resp.status_code == 400
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]
     assert app.state.config.pacing.songs_between_banter == 4
 
 
@@ -3330,8 +3338,10 @@ async def test_patch_pacing_rejects_invalid_json_without_mutating_config(content
             content=content,
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "Pacing payload must be valid JSON"
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"]
     assert app.state.config.pacing.songs_between_banter == 4
     assert app.state.config.pacing.songs_between_ads == 7
     assert app.state.config.pacing.ad_spots_per_break == 3
@@ -3557,7 +3567,7 @@ async def test_post_super_italian_rejects_non_dict_body():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/super-italian", json=["not", "a", "dict"])
-    assert resp.status_code == 200
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
 
 

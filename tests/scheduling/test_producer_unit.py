@@ -1860,7 +1860,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
-        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as mock_synth_ad,
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -1875,6 +1875,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     assert "roles_used" in state.last_ad_script, "roles_used missing from last_ad_script"
     assert state.last_ad_script["sonic_worlds"] == ["cinematic"]
     assert state.last_ad_script["roles_used"] == [["hammer", "disclaimer_goblin"]]
+    assert mock_synth_ad.call_args.kwargs["cache_dir"] == config.cache_dir
 
     seg: Segment = queue.get_nowait()
     assert "sonic_worlds" in seg.metadata, "sonic_worlds missing from segment.metadata"

@@ -91,6 +91,7 @@ def test_tokens_css_has_core_primitives() -> None:
         "--cream",
         "--lancia",
         "--ok",
+        "--ok-text",
         "--error",
         "--warning",
         "--flag-green",
@@ -99,6 +100,7 @@ def test_tokens_css_has_core_primitives() -> None:
         "--font-display",
         "--font-body",
         "--font-mono",
+        "--seg-music-text",
     }
     missing = sorted(required - defined)
     assert not missing, f"mammamiradio/web/static/tokens.css is missing required primitives: {missing}"
@@ -305,6 +307,22 @@ def test_default_music_fill_uses_seg_music(selector: str) -> None:
     )
 
 
+def test_listener_now_playing_fill_uses_seg_music() -> None:
+    """The listener now-playing progress fill is music-semantic.
+
+    Mirrors the admin default-fill guard on the listener surface: .mmr-np-fill
+    must use var(--seg-music), never var(--ok) (the OK/connected status blue).
+    Reusing --ok here re-couples "music is playing" to "system is OK" — the same
+    drift the admin guard closes, previously unguarded on the listener side.
+    """
+    background = _css_declarations(_css_block(LISTENER_CSS.read_text(encoding="utf-8"), ".mmr-np-fill")).get(
+        "background"
+    )
+    assert background == "var(--seg-music)", (
+        f".mmr-np-fill colors the now-playing (music) progress and must use var(--seg-music), got {background!r}."
+    )
+
+
 # Eyebrow floor from docs/design/system.md, Typography (9-10px). Below this,
 # uppercase labels stop rendering legibly on the dense admin surface (the
 # regression caught after the design-review scrub: 5.5px preset axis initials,
@@ -442,3 +460,78 @@ def test_tricolor_stripes_use_flag_tokens() -> None:
         block = _css_block(path.read_text(encoding="utf-8"), selector)
         actual = _css_declarations(block).get("background")
         assert actual == expected, f"{path.name} {selector} background must be {expected}, got {actual!r}"
+
+
+def test_accessible_blue_text_tokens_are_documented_and_defined() -> None:
+    defined = set(_primitives_in(TOKENS_CSS))
+    for token in ("--ok-text", "--seg-music-text"):
+        assert token in defined, f"tokens.css must define {token} for readable blue labels on dark surfaces."
+    documented = _system_md_root_primitives()
+    assert "--ok-text" in documented and "--seg-music-text" in documented
+
+
+def test_admin_small_blue_labels_use_accessible_text_tokens() -> None:
+    """Tiny admin labels need lighter blue text tokens on the dark producer desk."""
+    expected_colors = {
+        '.le-type[data-t="music"]': "var(--seg-music-text)",
+        '.setup-steps li[data-s="done"] .setup-step-shape': "var(--ok-text)",
+        ".setup-ready-badge": "var(--ok-text)",
+        ".lr-badge-ok": "var(--ok-text)",
+    }
+    for selector, expected in expected_colors.items():
+        color = _css_declarations(_css_block(_ADMIN_HTML_TEXT, selector)).get("color")
+        assert color == expected, f"{selector} must use {expected}, got {color!r}."
+
+    keys_box = re.search(r'<div\b(?=[^>]*\bid="setupKeysConfigured")[^>]*>', _ADMIN_HTML_TEXT)
+    assert keys_box, "setupKeysConfigured banner must exist."
+    assert "rgba(37,99,235" not in keys_box.group(0)
+    assert "var(--ok)" in keys_box.group(0)
+
+    keys_label = re.search(r'<span\b(?=[^>]*\bid="setupKeysLabel")[^>]*>', _ADMIN_HTML_TEXT)
+    assert keys_label, "setupKeysLabel must exist."
+    assert "color:var(--ok-text)" in keys_label.group(0).replace(" ", "")
+
+
+def test_design_system_status_ready_docs_match_runtime_text_tokens() -> None:
+    """Docs must keep ready label color separate from ready status-dot fills."""
+    text = SYSTEM_MD.read_text(encoding="utf-8")
+    ready_block = text[text.index("/* State: ready */") : text.index("/* State: working */")]
+    assert ".status-chip.ready" in ready_block
+    assert ".status-inline.ready" in ready_block
+    assert ".status-dot.ready" in ready_block
+    assert "var(--ok-text)" in ready_block
+    assert ".status-dot.ready          { color: var(--ok); }" in ready_block
+
+
+def test_runtime_status_ready_css_matches_text_token_split() -> None:
+    """Runtime ready CSS must keep readable label color separate from dot fill."""
+    text = BASE_CSS.read_text(encoding="utf-8")
+    ready_block = text[text.index("/* State: ready") : text.index("/* State: working")]
+    assert re.search(
+        r"\.status-chip\.ready,\s*\.status-inline\.ready\s*\{\s*color:\s*var\(--ok-text\);\s*\}",
+        ready_block,
+    )
+    assert re.search(r"\.status-dot\.ready\s*\{\s*color:\s*var\(--ok\);\s*\}", ready_block)
+
+
+def test_admin_section_labels_keep_quiet_hierarchy() -> None:
+    """Nested admin labels must not all use the same loud gold eyebrow treatment."""
+    global_eyebrow = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".eyebrow"))
+    assert global_eyebrow.get("color") == "var(--muted)"
+    assert global_eyebrow.get("letter-spacing") == "0.12em"
+    assert global_eyebrow.get("line-height") == "1.35"
+
+    card_label = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".card-label"))
+    assert card_label.get("color") == "var(--muted)"
+    assert card_label.get("letter-spacing") == "0.12em"
+    assert card_label.get("line-height") == "1.35"
+    assert "rgba(245, 237, 216, 0.10)" in card_label.get("border-bottom", "")
+
+    group_label = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".drawer-section .ttl-eyebrow"))
+    assert group_label.get("color") == "var(--muted)"
+    assert group_label.get("letter-spacing") == "0.12em"
+    assert group_label.get("line-height") == "1.35"
+
+    panel_heading = _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".mmr-panel-head h2"))
+    assert panel_heading.get("line-height") == "1.22"
+    assert panel_heading.get("padding-top") == "2px"

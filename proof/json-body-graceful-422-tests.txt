@@ -1,0 +1,15 @@
+JSON-body graceful 422 consolidation — verification proof
+date: 2026-06-25T18:07:35Z
+commit: bd716890
+
+$ pytest tests/web/test_json_body_contract.py -q
+................................                                         [100%]
+32 passed in 0.82s
+
+Full suite (integrated with origin/main): pytest tests/ -q
+  3347 passed, 2 skipped, 19 deselected
+ruff check . : All checks passed
+ruff format --check : 4 changed files already formatted
+mypy json_body.py streamer.py listener_requests.py : Success, no issues
+scripts/check-release-invariants.sh : Passed 7 Failed 0
+scripts/check-changelog-lint.sh : Changelog lint clean

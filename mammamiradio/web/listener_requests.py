@@ -49,6 +49,7 @@ from mammamiradio.core.models import (
     SegmentType,
 )
 from mammamiradio.web.auth import _HASSIO_NETWORK, require_admin_access
+from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.streamer import _register_background_task
 
 logger = logging.getLogger("mammamiradio.listener_requests")
@@ -114,21 +115,6 @@ def _client_ip_for_rate_limit(request: Request) -> str:
         return real_ip
 
     return direct_ip
-
-
-async def _read_json_object(request: Request) -> tuple[dict, JSONResponse | None]:
-    """Parse the request body as a JSON object.
-
-    Returns `(body, None)` on success or `({}, JSONResponse)` on failure so
-    callers can use simple narrowing: `if error is not None: return error`.
-    """
-    try:
-        body = await request.json()
-    except ValueError:
-        return {}, JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
-    if not isinstance(body, dict):
-        return {}, JSONResponse({"ok": False, "error": "invalid payload"}, status_code=400)
-    return body, None
 
 
 @router.get("/api/listener-requests")
@@ -210,7 +196,7 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     an admin mutation handle.
     """
     state = request.app.state.station_state
-    body, error = await _read_json_object(request)
+    body, error = await read_json_object(request)
     if error is not None:
         return error
     req_id = str(body.get("id") or "")
@@ -242,7 +228,7 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
 @router.post("/api/listener-request")
 async def listener_request(request: Request):
     """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
-    body, error = await _read_json_object(request)
+    body, error = await read_json_object(request, error_message="Write your request and try again.")
     if error is not None:
         return error
     raw_name = body.get("name")
