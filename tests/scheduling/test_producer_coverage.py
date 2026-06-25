@@ -544,7 +544,10 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
 
     validate_calls: list[str] = []
 
-    def _validate_side_effect(path, seg_type):
+    def _validate_side_effect(path, seg_type, **_kwargs):
+        # The banter gate passes expected_min_duration_sec/expected_line_count
+        # kwargs, so accept **_kwargs or the gate raises TypeError and skips the
+        # AudioQualityError branch we are exercising here.
         validate_calls.append(str(path))
         # Reject the first validation (the generated banter); pass subsequent ones (canned)
         if len(validate_calls) == 1:
@@ -764,6 +767,9 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
 
     # songs_since_ad must have been reset to 0 to prevent scheduler lock on AD
     assert state.songs_since_ad == 0
+    # The rejected ad break is recorded as generation waste (#397).
+    assert state.discard_by_reason.get("quality_gate_reject", 0) >= 1
+    assert state.discard_by_type.get("ad", 0) >= 1
 
 
 # ---------------------------------------------------------------------------

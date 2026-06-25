@@ -141,14 +141,26 @@ async def _wait_for(predicate, timeout: float = 5.0) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("stale_field", ["playlist_revision", "chaos_cutover_epoch"])
+@pytest.mark.parametrize(
+    ("stale_fields", "expected_reason"),
+    [
+        # A true source switch (switch_playlist) bumps BOTH source_revision and
+        # playlist_revision → classified stale_source.
+        (["source_revision", "playlist_revision"], GenerationWasteReason.STALE_SOURCE),
+        # A same-source playlist edit (shuffle/add/move/enrich) bumps only
+        # playlist_revision → classified stale_playlist (#397 split).
+        (["playlist_revision"], GenerationWasteReason.STALE_PLAYLIST),
+        (["chaos_cutover_epoch"], GenerationWasteReason.STALE_CHAOS),
+    ],
+)
 @pytest.mark.asyncio
-async def test_stale_gate_discards_generated_speech(tmp_path, stale_field):
-    """A TIME_CHECK built before a source switch (``playlist_revision`` bump) OR a
-    chaos cutover (``chaos_cutover_epoch`` bump) is discarded by the same shared
-    epilogue gate that guards music (``producer.py:3019`` / ``:3025``). Pins that the
-    gate is NOT music-specific and covers BOTH stale axes; a discard queues nothing
-    and runs no success callback (``state.segments_produced`` stays 0)."""
+async def test_stale_gate_discards_generated_speech(tmp_path, stale_fields, expected_reason):
+    """A TIME_CHECK built before a source switch, a same-source playlist edit, or a
+    chaos cutover is discarded by the same shared epilogue gate that guards music
+    (``producer.py``). Pins that the gate is NOT music-specific, covers all stale
+    axes, and classifies a true source switch (``stale_source``) apart from a
+    same-source edit (``stale_playlist``); a discard queues nothing and runs no
+    success callback (``state.segments_produced`` stays 0)."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -158,8 +170,9 @@ async def test_stale_gate_discards_generated_speech(tmp_path, stale_field):
     def _staling_probe(_path):
         nonlocal probe_calls
         probe_calls += 1
-        # a source switch / chaos cutover landed during this build
-        setattr(state, stale_field, getattr(state, stale_field) + 1)
+        # a source switch / same-source playlist edit / chaos cutover landed during this build
+        for field in stale_fields:
+            setattr(state, field, getattr(state, field) + 1)
         return 1.0
 
     with (
@@ -178,11 +191,6 @@ async def test_stale_gate_discards_generated_speech(tmp_path, stale_field):
             assert queue.empty()  # discarded, never queued
             assert state.queued_segments == []  # no up-next row
             assert state.segments_produced == 0  # success callback (after_time_check) not run
-            expected_reason = (
-                GenerationWasteReason.STALE_SOURCE
-                if stale_field == "playlist_revision"
-                else GenerationWasteReason.STALE_CHAOS
-            )
             assert state.discarded_segments_total >= 1
             assert state.discard_by_reason.get(expected_reason, 0) >= 1
         finally:

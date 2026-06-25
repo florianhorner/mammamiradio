@@ -711,3 +711,13 @@ def test_record_discard_defaults_timestamp_to_now(tmp_path):
         state.record_discard(segment, reason="operator_panic")
 
     assert state.discard_events[-1]["timestamp"] == 999.0
+
+
+def test_generation_waste_reason_string_values_are_stable():
+    # These strings are persisted in discard_events, surfaced on /api/status, and
+    # mapped to operator-friendly labels in admin.html — they must not drift (#397).
+    from mammamiradio.core.models import GenerationWasteReason
+
+    assert GenerationWasteReason.QUALITY_GATE_REJECT == "quality_gate_reject"
+    assert GenerationWasteReason.STALE_PLAYLIST == "stale_playlist"
+    assert GenerationWasteReason.STALE_SOURCE == "stale_source"

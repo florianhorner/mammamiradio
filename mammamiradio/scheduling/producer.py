@@ -150,6 +150,27 @@ def _unlink_if_tmp_render(segment: Segment, tmp_dir: Path) -> None:
         segment.path.unlink(missing_ok=True)
 
 
+def _record_generated_waste(
+    state: StationState,
+    seg_type: SegmentType,
+    path: Path,
+    reason: str,
+    duration_sec: float = 0.0,
+    *,
+    ephemeral: bool = True,
+) -> None:
+    """Record a render dropped before broadcast as generation waste (#397).
+
+    ``record_discard`` only reads a Segment's type/duration, so build a minimal
+    one at quality-gate reject sites that drop a render before a full Segment
+    object exists. Best-effort — never gates the audio path.
+    """
+    state.record_discard(
+        Segment(type=seg_type, path=path, duration_sec=duration_sec, ephemeral=ephemeral),
+        reason=reason,
+    )
+
+
 def _is_under(path: Path, directory: Path) -> bool:
     """True when ``path`` resolves to a location inside ``directory`` (best-effort)."""
     try:
@@ -1124,6 +1145,14 @@ async def prewarm_first_segment(
                 logger.warning("Audio tool unavailable, skipping prewarm quality check: %s", exc)
             except AudioQualityError as exc:
                 logger.warning("Prewarm quality gate rejected track (%s): %s", norm_path.name, exc)
+                _record_generated_waste(
+                    state,
+                    SegmentType.MUSIC,
+                    norm_path,
+                    GenerationWasteReason.QUALITY_GATE_REJECT,
+                    duration_sec=(track.duration_ms or 0) / 1000.0,
+                    ephemeral=not rendered.cache_hit,
+                )
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
@@ -1768,6 +1797,12 @@ async def run_producer(
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
         generation_revision = state.playlist_revision
+        # source_revision bumps ONLY on a true source switch (switch_playlist),
+        # while playlist_revision also bumps on benign in-place edits (shuffle/
+        # add/move/enrich). Capturing both lets the stale gate tell a source
+        # switch (stale_source) apart from a same-source playlist edit
+        # (stale_playlist) for honest waste telemetry (#397).
+        generation_source_revision = state.source_revision
         success_callback: Callable[[], None] | None = None
         # Per-iteration reset of the cross-domain-callback "landed" flag. The
         # flash/ad branches also reset it before generating, but resetting here
@@ -2046,6 +2081,14 @@ async def run_producer(
                             # right escape valve, not a per-track block.
                             norm_cached.unlink(missing_ok=True)
                             logger.warning("Quality gate rejected music track (%s): %s", norm_path.name, exc)
+                            _record_generated_waste(
+                                state,
+                                SegmentType.MUSIC,
+                                norm_path,
+                                GenerationWasteReason.QUALITY_GATE_REJECT,
+                                duration_sec=(track.duration_ms or 0) / 1000.0,
+                                ephemeral=not norm_is_cached,
+                            )
                             if not norm_is_cached:
                                 norm_path.unlink(missing_ok=True)
                             continue
@@ -2365,6 +2408,12 @@ async def run_producer(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                         if canned is None:
+                            _record_generated_waste(
+                                state,
+                                SegmentType.BANTER,
+                                audio_path,
+                                GenerationWasteReason.QUALITY_GATE_REJECT,
+                            )
                             audio_path.unlink(missing_ok=True)
                         fallback_canned = _pick_canned_clip("banter", state=state)
                         if fallback_canned:
@@ -3008,6 +3057,12 @@ async def run_producer(
                         logger.warning("Audio tool unavailable, skipping ad quality check: %s", exc)
                     except AudioQualityError as exc:
                         logger.warning("Quality gate rejected ad break (%s): %s", ad_break_path.name, exc)
+                        _record_generated_waste(
+                            state,
+                            SegmentType.AD,
+                            ad_break_path,
+                            GenerationWasteReason.QUALITY_GATE_REJECT,
+                        )
                         ad_break_path.unlink(missing_ok=True)
                         # Prevent scheduler lock on AD if we reject a full break.
                         state.songs_since_ad = 0
@@ -3134,8 +3189,13 @@ async def run_producer(
                     logger.warning("Transition sting generation failed, using clean cut: %s", exc)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
-                logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
-                state.record_discard(segment, reason=GenerationWasteReason.STALE_SOURCE)
+                if generation_source_revision != state.source_revision:
+                    logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
+                    stale_reason = GenerationWasteReason.STALE_SOURCE
+                else:
+                    logger.info("Discarding stale %s segment after same-source playlist edit", seg_type.value)
+                    stale_reason = GenerationWasteReason.STALE_PLAYLIST
+                state.record_discard(segment, reason=stale_reason)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry

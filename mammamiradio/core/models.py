@@ -29,7 +29,9 @@ class GenerationWasteReason:
     """Canonical discard reasons for generated-but-unbroadcast segment waste."""
 
     STALE_SOURCE = "stale_source"
+    STALE_PLAYLIST = "stale_playlist"
     STALE_CHAOS = "stale_chaos"
+    QUALITY_GATE_REJECT = "quality_gate_reject"
     SESSION_STOPPED = "session_stopped"
     INTERRUPT = "interrupt"
     AIR_NEXT_OVERFLOW = "air_next_overflow"
