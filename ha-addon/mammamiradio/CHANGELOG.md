@@ -18,6 +18,7 @@
 ### Security
 
 - **The handler that serves the app's icons and manifest is locked down tighter.** It now refuses any request that tries to reach outside the app's own static-asset folder — including links inside that folder that point elsewhere — so it can only ever return the bundled web files.
+- **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
 
 ## 2.14.1 - 2026-06-21
 

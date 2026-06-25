@@ -78,6 +78,25 @@ Public:
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
+### Listener-request forwarded identity
+
+`POST /api/listener-request` is public and rate-limited per listener identity.
+The identity is used only as input to the HMAC-backed rate-limit key; raw IP
+addresses are not stored in listener-request state or returned by the API.
+
+When the app is served through Home Assistant Supervisor ingress, Supervisor
+appends the caller chain in `X-Forwarded-For`. The station trusts forwarded
+identity headers only when the direct peer is loopback or the Supervisor network
+(`172.30.32.0/23`). In that trusted-proxy case it reads `X-Forwarded-For` from
+right to left, skips blank/invalid entries and trusted proxy hops, and buckets on
+the closest non-trusted hop. If no usable forwarded hop exists, it falls back to
+a valid `X-Real-IP`, then to the direct proxy peer.
+
+Direct callers from public networks or private LANs are not trusted proxies. For
+them, `X-Forwarded-For` and `X-Real-IP` are ignored and the direct peer address
+is the rate-limit identity. This narrow listener-request trust boundary is
+separate from the `/admin` private-network access model below.
+
 Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`

@@ -104,9 +104,9 @@ def _client_ip_for_rate_limit(request: Request) -> str:
         return direct_ip
 
     forwarded_for = request.headers.get("X-Forwarded-For", "")
-    for part in forwarded_for.split(","):
+    for part in reversed(forwarded_for.split(",")):
         forwarded_ip = part.strip()
-        if _parse_ip(forwarded_ip):
+        if _parse_ip(forwarded_ip) and not _is_trusted_proxy_ip(forwarded_ip):
             return forwarded_ip
 
     real_ip = request.headers.get("X-Real-IP", "").strip()
