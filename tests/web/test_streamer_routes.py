@@ -1357,6 +1357,55 @@ async def test_get_root_renders_italian_when_super_italian_on():
 
 
 @pytest.mark.asyncio
+async def test_get_root_bakes_stopped_state_into_first_paint():
+    """A stopped station bakes data-stopped + is-stopped into the first paint so it
+    never flashes the live label before the JS poll hydrates (illusion/honesty)."""
+    app = _make_test_app()
+    app.state.config.super_italian_mode = False
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert 'data-stopped="true"' in resp.text
+    assert "is-stopped" in resp.text
+    assert re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Resume station")', resp.text)
+    assert not re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Listen now")', resp.text)
+    assert "In Onda" not in resp.text  # live label must not flash on a stopped station
+
+
+@pytest.mark.asyncio
+async def test_get_root_paints_live_when_not_stopped():
+    """Default (running) state paints the live indicators and emits no data-stopped."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert 'data-stopped="true"' not in resp.text
+    assert "In Onda" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_root_lang_attr_follows_copy_register():
+    """<html lang> reflects the active copy register (WCAG 3.1.1) so a screen reader
+    uses the right phoneme table for the copy actually on screen."""
+    app_it = _make_test_app()
+    app_it.state.config.super_italian_mode = True
+    transport_it = httpx.ASGITransport(app=app_it, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport_it, base_url="http://testserver") as client:
+        resp_it = await client.get("/")
+    assert 'lang="it"' in resp_it.text
+
+    app_en = _make_test_app()
+    app_en.state.config.super_italian_mode = False
+    transport_en = httpx.ASGITransport(app=app_en, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport_en, base_url="http://testserver") as client:
+        resp_en = await client.get("/")
+    assert 'lang="en"' in resp_en.text
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_json():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
@@ -1746,6 +1795,35 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
             _os.environ.pop("OPENAI_API_KEY", None)
         else:
             _os.environ["OPENAI_API_KEY"] = _prev_openai
+
+
+@pytest.mark.asyncio
+async def test_setup_save_keys_in_addon_mode_uses_addon_secret_file():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+
+    try:
+        with (
+            patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options,
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+            patch(
+                "mammamiradio.web.provider_verdict.check_provider_keys",
+                new=AsyncMock(return_value=_probe_payload(anthropic="ok")),
+            ),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-addon"})
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        save_addon_options.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-addon"})
+        save_dotenv.assert_not_called()
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
 
 
 @pytest.mark.asyncio

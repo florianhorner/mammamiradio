@@ -177,9 +177,21 @@ fi
 # ---- 7. run.sh syntax check ----
 echo "7. Shell syntax"
 if bash -n ha-addon/mammamiradio/rootfs/run.sh 2>/dev/null; then
-    pass "run.sh syntax OK"
+    pass "run.sh bash syntax OK"
 else
-    fail "run.sh has syntax errors"
+    fail "run.sh has bash syntax errors"
+fi
+
+if command -v ash >/dev/null 2>&1; then
+    if ash -n ha-addon/mammamiradio/rootfs/run.sh 2>/dev/null; then
+        pass "run.sh ash syntax OK"
+    else
+        fail "run.sh has ash syntax errors"
+    fi
+elif sh -n ha-addon/mammamiradio/rootfs/run.sh 2>/dev/null; then
+    pass "run.sh POSIX shell syntax OK"
+else
+    fail "run.sh has POSIX shell syntax errors"
 fi
 
 # ---- 8. Hardcoded value sync ----

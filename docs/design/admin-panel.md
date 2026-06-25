@@ -5,11 +5,11 @@ Every PR that modifies `mammamiradio/web/templates/admin.html` or `mammamiradio/
 
 ## Protected UI elements
 
-These have regressed in past refactors. Verify all five survive every HTML edit.
+These have regressed in past refactors. Verify each protected element survives every HTML edit.
 
 | Element | File | How to check |
 |---|---|---|
-| Token cost counter | `admin.html` Engine Room | Grep for `api_cost_estimate_usd`; verify it appears in the rendered status block |
+| Token cost counter + split | `admin.html` Engine Room | Grep for `api_cost_estimate_usd` and `cost_breakdown`; verify the rendered Costi group shows the session total and category split |
 | Play button blue state | `static/base.css` | `.play-btn.playing` uses `var(--ok)` (blue `#2563EB`), never `var(--sun2)` (golden) |
 | Station name from localStorage | `static/listener.js` | JS reads `localStorage.getItem('stationName')`; admin panel writes it |
 | Gold "Mi" accent | `admin.html`, `listener.html` | `<span class="mi">` present in `<h1>`, styled `color: var(--sun)` |
@@ -73,14 +73,16 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available). Filter
    state persists via sessionStorage (`mmr.admin.archivio.filters`).
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
-   context), `Costi` (token cost counter + segment counts — always visible),
-   `Setup` (a collapsible `<details>` that auto-collapses when every readiness item
-   is ready; shows an `All ready ✓` blue badge when collapsed).
+   context), `Costi` (token cost counter + cost split + segment counts — always visible),
+   `Configurazione` (station behavior controls), and `Setup` (a collapsible
+   `<details>` that auto-collapses when every readiness item is ready; shows an
+   `All ready ✓` blue badge when collapsed).
 
 Each panel carries exactly one header (Playfair title); the old per-drawer summary
 plus inner-panel double header is gone. On narrow viewports the console stacks to
-one column, the tab bar scrolls horizontally, and the full upper deck scrolls away
-with the page so it cannot cover the active panel.
+one column, the tab bar wraps into compact rows without exposing a horizontal
+scrollbar, and the full upper deck scrolls away with the page so it cannot cover
+the active panel.
 
 **Destructive actions use a 5s undo toast** (`undoableToast` in
 `static/admin.js`): the row is removed optimistically, the backend call is
@@ -106,6 +108,7 @@ Italian headlines and station-feel words).
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change
 - Admin controls must show feedback within 300ms of user action (toast, state change, or loading indicator)
+- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en) — admin stays `lang="it"`. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Chips and pills stay at the documented 36px minimum; only control buttons require 44px.
 
 ## QA requirement
 
@@ -119,7 +122,7 @@ Both must pass. A single combined run is insufficient.
 
 ```
 ## Admin Panel Standards
-- [ ] Token cost counter (`api_cost_estimate_usd`) still visible in Engine Room
+- [ ] Token cost counter (`api_cost_estimate_usd`) and cost split (`cost_breakdown`) still visible in Engine Room
 - [ ] Play button uses `var(--ok)` (blue) for playing state — not golden
 - [ ] Station name reads from `localStorage.stationName`
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file

@@ -29,6 +29,7 @@ from mammamiradio.core.config import StationConfig, resolve_model
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
+    CostCategory,
     Heading,
     HostPersonality,
     PersonalityAxes,
@@ -90,6 +91,23 @@ _OPENAI_REASONING_HEADROOM = 512
 # the block check and issue parallel 401 floods before the first failure trips
 # the circuit. Created lazily inside the running event loop.
 _anthropic_attempt_lock: asyncio.Lock | None = None
+
+_SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
+    "banter": "script_banter",
+    "news_flash": "script_banter",
+    "transition": "script_transition",
+    "ad": "script_ads",
+}
+
+
+def _script_cost_category(caller: str | None) -> CostCategory:
+    """Return the cost bucket for a script-generation caller."""
+    try:
+        return _SCRIPT_COST_CATEGORY_BY_CALLER[caller or ""]
+    except KeyError as exc:
+        raise ValueError(f"Unknown script cost caller: {caller!r}") from exc
+
+
 _anthropic_block_expired_logged: bool = False
 
 # Cached system prompt — rebuilt only when config changes
@@ -399,6 +417,7 @@ async def _generate_json_response(
 
     system_prompt = _get_system_prompt(config)
     fallback_reason = "anthropic_absent"
+    cost_category = _script_cost_category(caller)
 
     if config.anthropic_api_key:
         now = time.time()
@@ -474,14 +493,9 @@ async def _generate_json_response(
                         _anthropic_stop_reason = getattr(resp, "stop_reason", None)
                         _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
-                            state.api_calls += 1
                             _anthropic_in = resp.usage.input_tokens
                             _anthropic_out = resp.usage.output_tokens
-                            state.api_input_tokens += _anthropic_in
-                            state.api_output_tokens += _anthropic_out
-                            _bucket = state.api_tokens_by_model.setdefault(model, {"input": 0, "output": 0})
-                            _bucket["input"] += _anthropic_in
-                            _bucket["output"] += _anthropic_out
+                            state.record_llm_usage(cost_category, model, _anthropic_in, _anthropic_out)
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
@@ -661,14 +675,9 @@ async def _generate_json_response(
     prompt_tokens = 0
     completion_tokens = 0
     if getattr(resp, "usage", None):
-        state.api_calls += 1
         prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
         completion_tokens = getattr(resp.usage, "completion_tokens", 0)
-        state.api_input_tokens += prompt_tokens
-        state.api_output_tokens += completion_tokens
-        _bucket = state.api_tokens_by_model.setdefault(openai_model, {"input": 0, "output": 0})
-        _bucket["input"] += prompt_tokens
-        _bucket["output"] += completion_tokens
+        state.record_llm_usage(cost_category, openai_model, prompt_tokens, completion_tokens)
     raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
     try:
         parsed = json.loads(_strip_fences(raw))

@@ -6,11 +6,11 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 
 ```
 Code change
-  → bump version in BOTH files (see below)
+  → bump version in all three files (see below)
   → push/merge to main
   → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
   → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
@@ -18,7 +18,7 @@ Code change
   → User clicks "Update" in HA
   → HA pulls image from GHCR
   → Container starts with /run.sh
-  → run.sh reads /data/options.json → sets env vars
+  → run.sh reads /data/options.json + /config/secrets.env → sets env vars
   → config.py reads env vars + radio.toml → builds StationConfig
   → main.py starts producer + streamer
 ```
@@ -75,8 +75,8 @@ judgment that the line you have been running has felt healthy, not a stopwatch o
    # X.Y.Z must equal the STABLE config.yaml version at $EDGE
    git tag vX.Y.Z "$EDGE" && git push origin vX.Y.Z
    ```
-   `addon-release.yml` pre-flight fails loud if `config.yaml` != tag or either arch `:sha`
-   image is missing — that is your safety net.
+   `addon-release.yml` pre-flight fails loud if `config.yaml` or `manifest.json` != tag,
+   or either arch `:sha` image is missing — that is your safety net.
 2. **Wait for `addon-release.yml` green**, then verify:
    `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`.
 3. **Open the next RC immediately** so the number keeps meaning something and CI stays green:
@@ -97,7 +97,7 @@ the notes actually in that SHA — never publish notes for commits the promoted 
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - A hotfix after you've opened the next RC (e.g. `2.13.1` once `main` is on `2.14.0`) needs a
-  release branch, because pre-flight requires `config.yaml` == tag.
+  release branch, because pre-flight requires `config.yaml` and `manifest.json` == tag.
 
 ## Addon stage
 
@@ -121,8 +121,11 @@ Current config options:
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` |
-| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` |
-| `openai_api_key` | `password?` | `OPENAI_API_KEY` |
+| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `openai_api_key` | `password?` | `OPENAI_API_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_key` | `password?` | `AZURE_SPEECH_KEY` legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_region` | `str?` | `AZURE_SPEECH_REGION` legacy fallback; prefer `/config/secrets.env` |
+| `elevenlabs_api_key` | `password?` | `ELEVENLABS_API_KEY` legacy fallback; prefer `/config/secrets.env` |
 | `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
 | `admin_token` | `password?` | `ADMIN_TOKEN` (blank => add-on trusts the LAN, no token required) |
@@ -133,6 +136,18 @@ Current config options:
 | `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (new-install manifest default off; `run.sh` missing-key fallback true for legacy installs) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+
+**Provider secrets.** The five AI/TTS provider credentials are file-first in add-on mode:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
+`ELEVENLABS_API_KEY` should live in `/config/secrets.env`. Non-empty file values win over legacy
+Configuration-tab values per key. `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN` remain Supervisor options
+in this phase. `/config/secrets.env` is plaintext in the add-on config storage, not Home Assistant
+`/config/secrets.yaml`; anyone with host/add-on config access can read it.
+
+`secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
+whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,
+and CRLF endings are accepted. Full-line comments beginning with `#` are ignored. Inline comments are
+not special for unquoted values, so `OPENAI_API_KEY=sk#abc` means the value contains `#abc`.
 
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
@@ -148,7 +163,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator sa
 immediately; their cost line shows `estimate (unpriced model)` until a price is added
 to `MODEL_PRICES` in `web/streamer.py`.
 
-The option extraction in run.sh uses a single Python script that reads keys from `/data/options.json`. Tuple-loop keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new option:
+The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new non-provider option:
 
 1. Add to `options:` and `schema:` in `config.yaml` in the same order
 2. Add a translation entry in `translations/en.yaml`
@@ -164,7 +179,7 @@ explicitly turns it off.
 
 ## Secrets: password type
 
-API keys and secrets use `password` type in the schema (not `str`). This masks them in the HA UI:
+Secrets that remain in the Supervisor schema use `password` type (not `str`). This masks them in the HA UI. The AI/TTS provider fields still use `password?` as legacy fallbacks, but new provider credentials should be stored in `/config/secrets.env` instead.
 
 ```yaml
 schema:
@@ -295,7 +310,7 @@ gates" (single source of truth). The short version:
 Before merging ANY change that touches addon files:
 
 - [ ] `scripts/validate-addon.sh` passes locally
-- [ ] Version bumped in both files (if this is a release)
+- [ ] Version bumped in all three files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] If new config option: added to config.yaml + run.sh + translations

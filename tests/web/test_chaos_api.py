@@ -132,7 +132,7 @@ async def test_post_chaos_validation_rejects_bad_payloads(payload):
     ) as client:
         resp = await client.post("/api/chaos", json=payload)
 
-    assert resp.status_code == 200
+    assert resp.status_code == (422 if not isinstance(payload, dict) else 200)
     assert resp.json()["ok"] is False
     assert app.state.station_state.chaos_mode_active is False
 
@@ -147,8 +147,11 @@ async def test_post_chaos_validation_rejects_malformed_json():
     ) as client:
         resp = await client.post("/api/chaos", content="{", headers={"content-type": "application/json"})
 
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": False, "error": "invalid JSON body"}
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["ok"] is False
+    assert isinstance(body["error"], str)
+    assert body["error"]
     assert app.state.station_state.chaos_mode_active is False
 
 

@@ -1,0 +1,19 @@
+# Proof — test(ci): make quality-workflow artifact guard version-agnostic
+# Branch: florianhorner/fix-dependency-prs   HEAD: 09a48323
+# Generated: 2026-06-25T18:40:24Z
+
+## tests — pytest tests/repo/test_quality_workflow.py
+...                                                                      [100%]
+3 passed in 0.09s
+
+## lint — ruff check + format --check (changed files)
+All checks passed!
+1 file already formatted
+
+## build — mypy (changed file)
+Success: no issues found in 1 source file
+
+## runtime — N/A: CI-only test guard; no app runtime path changed.
+## regex sanity vs bumped values (v7/v8):
+upload@v7 -> True
+download@v8 -> True

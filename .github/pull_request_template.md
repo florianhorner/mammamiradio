@@ -12,7 +12,7 @@
 <!-- Required when `mammamiradio/web/templates/admin.html` or `mammamiradio/web/templates/listener.html` changed. -->
 <!-- CI will fail on admin panel PRs that omit this section. Skip if no HTML files changed. -->
 
-- [ ] Token cost counter (`api_cost_estimate_usd`) still visible in Engine Room
+- [ ] Token cost counter (`api_cost_estimate_usd`) and cost split (`cost_breakdown`) still visible in Engine Room
 - [ ] Play button uses `var(--ok)` (blue) for playing state — not golden
 - [ ] Station name reads from `localStorage.stationName`
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file

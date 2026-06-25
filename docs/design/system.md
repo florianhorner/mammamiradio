@@ -84,11 +84,13 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
 
   /* Semantic (never change these) */
   --ok:            #2563EB;   /* success / connected / playing — BLUE, never green (colorblind) */
+  --ok-text:       #60A5FA;   /* readable blue labels on dark surfaces — fills stay --ok */
   --error:         #c44a4a;
   --warning:       #D97706;
   --news:          #e07038;   /* news_flash segment type — warm orange, distinct from warning amber */
   --seg-ad:        var(--accent-warm);  /* ad segment type — warm amber, deliberately NOT --warning (degraded) */
   --seg-music:     #2563EB;   /* music segment type — blue, a DEDICATED token (never an alias of --ok) so the OK/connected status blue and a music badge stay decoupled */
+  --seg-music-text:#60A5FA;   /* music segment labels on dark surfaces */
   --seg-banter:    #F4D048;   /* banter segment type — one gold, a DEDICATED token (never --sun/--sun2) so accent gold and a banter badge stay decoupled */
 
   /* Structural */
@@ -121,21 +123,17 @@ html {
 ```
 A subtle warm-to-dark gradient at the very top — the last trace of sunset at the horizon. The grain texture (0.04 opacity) adds material feel without noise.
 
-### Sun glow
+### Sun Glow
 ```css
-body::before {
-  content: '';
-  position: fixed; top: -120px; right: 20%; z-index: 0;
-  width: 400px; height: 400px; border-radius: 50%;
-  background: radial-gradient(circle,
-    rgba(244,208,72,0.10) 0%,
-    rgba(236,204,48,0.03) 40%,
-    transparent 70%
-  );
-  pointer-events: none;
+html {
+  background:
+    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
+    linear-gradient(180deg, #1E1610 0%, #14110F 12%, var(--bg) 100%);
 }
 ```
-Single light source, upper-right. Dimmer than the old Volare glow. Do NOT add multiple glow blobs.
+Single light source, upper-right. Keep it in the normal page background; do
+not use fixed body pseudo-elements for the atmosphere because they can bleed
+through rounded translucent surfaces during scroll/compositing.
 
 ### Dark mode
 This IS dark mode. There is no light mode. Both listener and admin pages use this palette.
@@ -408,8 +406,8 @@ Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue
 
 /* State: ready */
 .status-chip.ready,
-.status-dot.ready,
-.status-inline.ready       { color: var(--ok); }
+.status-inline.ready       { color: var(--ok-text); }
+.status-dot.ready          { color: var(--ok); }
 .status-chip.ready::before,
 .status-inline.ready::before { content: "\2713"; }       /* ✓ */
 
@@ -506,27 +504,27 @@ Dark interior, cream text, golden focus ring.
   font-size: 9px; font-weight: 700;
   letter-spacing: 0.18em; text-transform: uppercase;
   color: var(--sun2);   /* golden for music sections */
-  /* or: color: var(--muted);  for structural labels */
+  /* or: 10px / 0.12em / muted for dense admin structural labels */
 }
 ```
 
 ### Section divider labels — canonical
 
 When dividing a single card (`.a-panel`, `.mmr-about-card`, etc.) into multiple
-subsections, use a **golden eyebrow with a thin gold underline rule**. Pure
-unstyled eyebrows wash into warm-brown surfaces; the underline gives the label
-a structural anchor that separates one subsection from the next without
-introducing a second card border.
+subsections, use a **quiet structural eyebrow with a thin neutral underline**.
+Reserve bright gold for active/accent states and primary titles; nested gold
+labels flatten the hierarchy (`Status` and `Systems` start reading as peers).
 
 ```css
 .card-label,            /* admin: subsection inside .a-panel */
 .setup-subhead {        /* admin: subsection inside the setup card */
-  font-size: 9px; font-weight: 700;
-  letter-spacing: 0.22em; text-transform: uppercase;
-  color: var(--sun2);
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase;
+  color: var(--muted);
   margin: 0 0 12px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(236, 204, 48, 0.22);  /* gold @ 22% */
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(245, 237, 216, 0.10);
 }
 ```
 
@@ -544,11 +542,10 @@ one label.
   ornament without structural cause. The pattern is admin-only by design.
 
 **Rationale:** body text inside admin cards (`--cream-dk` mono) and the
-warm-brown surface (`--surface`) sit close in luminance. Without the gold
-underline, the eye reads the card as one undifferentiated wash — the "brown
-mud" failure mode (observed 2026-05-04, Motore panel). The 22%-opacity gold
-rule is just enough to register as a divider without competing with the body
-text or the panel border.
+warm-brown surface (`--surface`) sit close in luminance. A subtle neutral rule
+gives dense diagnostic groups a structural anchor without turning every nested
+label into a bright accent. Bright gold is reserved for active states, live
+production, primary accents, and brand moments.
 
 ### "In produzione" feed — canonical (admin Scaletta)
 

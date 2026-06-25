@@ -17,7 +17,7 @@ RUN_MODES = [
         "id": "ha_addon",
         "label": "Home Assistant Add-on",
         "description": "Best when you want the radio inside Home Assistant with ingress.",
-        "surface": "Add-on Configuration",
+        "surface": "/config/secrets.env plus Add-on Configuration",
     },
     {
         "id": "docker",
@@ -107,15 +107,20 @@ def classify_station_mode(
 
 
 def addon_options_snippet(config: StationConfig) -> str:
-    """Return a copy-friendly JSON block for the Home Assistant add-on UI."""
+    """Return a copy-friendly provider secret block for the Home Assistant add-on."""
     values = {
-        "anthropic_api_key": "*** configured ***" if config.anthropic_api_key else "<optional>",
-        "openai_api_key": "*** configured ***" if config.openai_api_key else "<optional>",
-        "azure_speech_key": "*** configured ***" if config.azure_speech_key else "<optional>",
-        "azure_speech_region": config.azure_speech_region or "<optional>",
-        "elevenlabs_api_key": "*** configured ***" if config.elevenlabs_api_key else "<optional>",
+        "ANTHROPIC_API_KEY": "*** configured ***" if config.anthropic_api_key else "<optional>",
+        "OPENAI_API_KEY": "*** configured ***" if config.openai_api_key else "<optional>",
+        "AZURE_SPEECH_KEY": "*** configured ***" if config.azure_speech_key else "<optional>",
+        "AZURE_SPEECH_REGION": "*** configured ***" if config.azure_speech_region else "<optional>",
+        "ELEVENLABS_API_KEY": "*** configured ***" if config.elevenlabs_api_key else "<optional>",
     }
-    return json.dumps(values, indent=2)
+    lines = [
+        "# /config/secrets.env",
+        "# Plaintext add-on config file, not Home Assistant /config/secrets.yaml.",
+    ]
+    lines.extend(f"{key}={value}" for key, value in values.items())
+    return "\n".join(lines)
 
 
 def build_setup_status(config: StationConfig, state: StationState) -> dict:
@@ -156,7 +161,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
             "next_action": "Add ANTHROPIC_API_KEY or OPENAI_API_KEY for full AI banter and ad generation.",
             "skip_outcome": "If you skip this, the station still runs with simpler stock lines.",
             "where": {
-                "ha_addon": "Add-on Configuration",
+                "ha_addon": "/config/secrets.env in the add-on config folder",
                 "docker": ".env used by docker compose",
                 "macos": "the generated .env file behind the Mac launcher",
                 "local": ".env in the project root",
@@ -188,7 +193,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
             ),
             "skip_outcome": "If you skip this, configured cloud voices fall back to Edge voices.",
             "where": {
-                "ha_addon": "Add-on Configuration",
+                "ha_addon": "/config/secrets.env in the add-on config folder",
                 "docker": ".env used by docker compose",
                 "macos": "the generated .env file behind the Mac launcher",
                 "local": ".env in the project root",
@@ -292,7 +297,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
             "detail": (
                 "AI key detected."
                 if has_llm
-                else "Set ANTHROPIC_API_KEY or OPENAI_API_KEY for generated banter and ads."
+                else "Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your credentials file for generated banter and ads."
             ),
         },
         {

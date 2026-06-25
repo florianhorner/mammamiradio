@@ -61,6 +61,27 @@ async def test_public_status_returns_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_public_status_does_not_expose_admin_cost_breakdown():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.record_llm_usage("script_banter", "gpt-5.4-mini", 1000, 500)
+    state.record_tts_usage(250)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+
+    assert public_resp.status_code == 200
+    assert admin_resp.status_code == 200
+    public = public_resp.json()
+    admin = admin_resp.json()
+    assert "consumption" not in public
+    assert "cost_breakdown" not in str(public)
+    assert admin["consumption"]["cost_breakdown"]["available"] is True
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_uptime_and_tracks():
     """Cross-page invariant facts that must match admin /status."""
     app = _make_test_app()

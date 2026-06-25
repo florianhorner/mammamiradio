@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -64,6 +65,27 @@ def test_pick_stinger_speech_to_music_falls_back_to_synthetic(tmp_path):
     mock_generate.assert_called_once_with("banter", "music", out, motif)
 
 
+def test_pick_stinger_cache_reuses_synthetic_render(tmp_path):
+    cache_dir = tmp_path / "cache"
+    motif = [523, 659, 784, 1047]
+    lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing", cache_dir=cache_dir)
+    out_a = tmp_path / "transition_a.mp3"
+    out_b = tmp_path / "transition_b.mp3"
+
+    def _generate(_from_name, _to_name, output_path, _notes):
+        output_path.write_bytes(b"sting")
+        return output_path
+
+    with patch("mammamiradio.audio.imaging.generate_transition_sting", side_effect=_generate) as mock_generate:
+        assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_a) == out_a
+        assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_b) == out_b
+
+    assert mock_generate.call_count == 1
+    assert out_a.read_bytes() == b"sting"
+    assert out_b.read_bytes() == b"sting"
+    assert len(list(cache_dir.glob("synth_transition_sting_*.mp3"))) == 1
+
+
 def test_pick_talk_bed_uses_prerecorded_bed_before_source_track(tmp_path):
     assets = tmp_path / "assets"
     beds = assets / "beds"
@@ -106,6 +128,25 @@ def test_pick_talk_bed_ducks_existing_source_track(tmp_path):
     assert cmd[cmd.index("-t") + 1] == "3"
 
 
+def test_pick_talk_bed_source_track_bypasses_synth_cache(tmp_path):
+    source = tmp_path / "last_music.mp3"
+    source.write_bytes(b"music")
+    out = tmp_path / "bed.mp3"
+    lib = ImagingLibrary(
+        [523], tmp_path, bed_volume_db=-20.0, assets_dir=tmp_path / "assets", cache_dir=tmp_path / "cache"
+    )
+
+    with (
+        patch("mammamiradio.audio.imaging._run_ffmpeg") as mock_run,
+        patch("mammamiradio.audio.imaging.materialize_synth_mp3") as mock_cache,
+    ):
+        result = lib.pick_talk_bed(3.0, out, source)
+
+    assert result == out
+    mock_run.assert_called_once()
+    mock_cache.assert_not_called()
+
+
 def test_pick_talk_bed_fallback_synthetic_when_source_none(tmp_path):
     """Scenario 2: empty container/cold start has no last_music_file."""
     out = tmp_path / "synthetic_bed.mp3"
@@ -122,6 +163,23 @@ def test_pick_talk_bed_fallback_synthetic_when_source_none(tmp_path):
     assert "sin(2*PI*260*t)" in joined
     assert "loudnorm=I=-18" in joined
     assert str(out) in cmd
+
+
+def test_pick_talk_bed_cache_warms_bounded_synthetic_variant_pool(tmp_path):
+    cache_dir = tmp_path / "cache"
+    lib = ImagingLibrary([523], tmp_path, bed_volume_db=-18.0, assets_dir=tmp_path / "assets", cache_dir=cache_dir)
+    outputs = [tmp_path / f"synthetic_{idx}.mp3" for idx in range(4)]
+
+    def _write_output(cmd, _label):
+        Path(cmd[-1]).write_bytes(b"drone")
+
+    with patch("mammamiradio.audio.imaging._run_ffmpeg", side_effect=_write_output) as mock_run:
+        for output in outputs:
+            assert lib.pick_talk_bed(2.5, output, source_track=None) == output
+
+    assert mock_run.call_count == 3
+    assert all(output.read_bytes() == b"drone" for output in outputs)
+    assert len(list(cache_dir.glob("synth_talk_bed_*.mp3"))) == 3
 
 
 def test_pick_talk_bed_propagates_loop_bed_ffmpeg_failure(tmp_path):

@@ -349,8 +349,8 @@ async def startup():
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
-    # Validate configured AI keys in the background so a bogus key persisted in .env /
-    # options.json surfaces in the admin BEFORE any banter fails. Fire-and-forget —
+    # Validate configured AI keys in the background so a bogus persisted key
+    # surfaces in the admin BEFORE any banter fails. Fire-and-forget —
     # never awaited, so it can't delay first audio (Leadership Principle #2).
     if config.anthropic_api_key or config.openai_api_key:
         from mammamiradio.web.streamer import _run_provider_verdict

@@ -9,6 +9,9 @@
  * components are consumed via var(--*) and class references.
  */
 
+html {
+  scroll-padding-top: 96px;
+}
 html, body {
   width: 100%;
   min-height: 100vh;
@@ -53,6 +56,20 @@ html, body {
 .mmr-nav nav a.active { color: var(--brand-primary, var(--sun)); }
 .mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; min-height: 44px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
 .mmr-live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-accent, var(--lancia2)); box-shadow: 0 0 8px var(--brand-accent, var(--lancia2)); animation: live-pulse 1.4s ease-in-out infinite; }
+.mmr-live-pill.is-stopped, .mmr-live.is-stopped {
+  background: rgba(245,237,216,0.08);
+  color: var(--cream-dk);
+  border-color: rgba(245,237,216,0.22);
+}
+.mmr-live-pill.is-stopped .dot, .mmr-live.is-stopped .dot {
+  background: var(--muted);
+  box-shadow: none;
+  animation: none;
+}
+body[data-stopped="true"] .mmr-wave span { animation-play-state: paused; opacity: 0.25; }
+body[data-stopped="true"] .mmr-radio.is-playing { animation: none; }
+body[data-stopped="true"] .mmr-radio.is-playing .mmr-radio-antenna,
+body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: none; }
 @keyframes live-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
 
 /* Live chip */
@@ -125,12 +142,25 @@ html, body {
 }
 .mmr-stage-header .mmr-np-meta { flex: 1; min-width: 0; }
 .mmr-stage-header .mmr-np-meta .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 4px; font-family: var(--font-body); }
-.mmr-stage-header .mmr-np-meta .title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 22px; color: var(--cream); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mmr-stage-header .mmr-np-meta .title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--cream);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}
 .mmr-stage-header .mmr-np-meta .artist { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.mmr-np-progress { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.mmr-np-progress { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0; }
 .mmr-np-progress-inner { display: flex; align-items: center; gap: 6px; }
 .mmr-np-bar { width: 80px; height: 2px; background: var(--card-strong); border-radius: 1px; overflow: hidden; }
-.mmr-np-fill { height: 100%; background: var(--ok); border-radius: 1px; transition: width 1s linear; width: 0; }
+.mmr-np-fill { height: 100%; background: var(--seg-music); border-radius: 1px; transition: width 1s linear; width: 0; }
 .mmr-stage-seam { display: flex; height: 2px; grid-column: 1 / -1; grid-row: 2; }
 .mmr-stage-seam .seg { flex: 1; opacity: 0.7; }
 .mmr-stage-seam .seg.g { background: var(--flag-green); }
@@ -153,13 +183,13 @@ html, body {
 .mmr-stat-n { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 24px; color: var(--brand-primary, var(--sun)); }
 /* Host stat is a name string, not a hero number — scale + font reset so it doesn't read as a track title. */
 .mmr-stat-n#stat-hosts { font-family: var(--font-body); font-style: normal; font-weight: 600; font-size: 14px; line-height: 1.4; color: var(--cream); }
-.mmr-stat-l { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.mmr-stat-l { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 
 /* Casa card */
 .mmr-casa { margin-top: 28px; width: 260px; background: rgba(14,12,10,0.95); backdrop-filter: blur(12px); border: 1px solid rgba(245,237,216,0.14); border-radius: 10px; padding: 11px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.6); font-size: 12px; }
 .mmr-casa .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 8px; display: block; font-family: var(--font-body); }
 .mmr-casa .row { display: flex; align-items: center; gap: 8px; color: var(--cream-dk); margin-bottom: 3px; }
-.mmr-casa .row.dim { color: var(--muted); }
+.mmr-casa .row.dim { color: var(--text-secondary); }
 .mmr-casa .row .ico { font-family: var(--font-mono); font-size: 10px; color: var(--ok); width: 10px; display: inline-block; }
 
 /* Radio illustration */
@@ -229,14 +259,20 @@ html, body {
 .mmr-sec-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; gap: 16px; }
 .mmr-sec-head h2 { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 28px; line-height: 1.25; color: var(--cream); margin: 0; letter-spacing: -0.01em; }
 .mmr-sec-head h2 em { color: var(--brand-primary, var(--sun)); }
-.mmr-sec-note { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+.mmr-sec-note { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-secondary); }
 
 /* Schedule */
 /* Schedule, dedica, about-card all use the hero-stage's perception trick:
  * inset top-edge highlight + drop-shadow. Without this, dark surfaces blend
  * into the body bg mid-scroll and the eye registers them as page bg, not
  * panels. See .context/listener-contrast/ANALYSIS.md for the contrast math. */
-.mmr-schedule { list-style: none; padding: 0; margin: 0; background: var(--card); border: 1px solid var(--card-line); border-radius: var(--radius-lg); overflow: hidden; scroll-margin-top: 90px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
+.mmr-dedica-form,
+#request-form,
+#req-name,
+#req-msg {
+  scroll-margin-top: 96px;
+}
+.mmr-schedule { list-style: none; padding: 0; margin: 0; background: var(--card); border: 1px solid var(--card-line); border-radius: var(--radius-lg); overflow: hidden; scroll-margin-top: 96px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.04), 0 2px 10px rgba(0,0,0,0.3); }
 .mmr-schedule li { display: grid; grid-template-columns: 80px 1fr auto; gap: 16px; align-items: center; padding: 14px 18px; border-bottom: 1px solid rgba(245,237,216,0.05); transition: background 180ms; }
 .mmr-schedule li:last-child { border-bottom: none; }
 .mmr-schedule li:hover { background: rgba(245,237,216,0.03); }
@@ -245,9 +281,14 @@ html, body {
 .mmr-schedule .t { font-family: var(--font-mono); font-size: 13px; color: var(--brand-primary, var(--sun)); font-weight: 500; font-variant-numeric: tabular-nums; }
 .mmr-schedule .m .title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 17px; color: var(--cream); }
 .mmr-schedule .m .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.mmr-schedule .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(245,237,216,0.12); color: var(--muted); }
-.mmr-schedule .pill.pill-on { background: rgba(160,32,24,0.18); color: var(--brand-accent, var(--lancia2)); border-color: rgba(184,44,32,0.35); }
-.mmr-schedule .pill.pill-next { background: rgba(37,99,235,0.1); color: var(--ok); border-color: rgba(37,99,235,0.3); }
+.mmr-schedule .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; padding: 4px 10px 4px 12px; border-radius: 999px; border: 1px solid rgba(245,237,216,0.12); color: var(--cream-dk); background: rgba(245,237,216,0.04); box-shadow: inset 3px 0 0 var(--pill-type, var(--muted)); }
+.mmr-schedule .pill.pill-current { border-color: rgba(236,204,48,0.45); background: rgba(236,204,48,0.12); color: var(--sun2); }
+.mmr-schedule .pill.pill-next { border-color: rgba(245,237,216,0.16); background: rgba(245,237,216,0.05); color: var(--cream-dk); }
+.mmr-schedule .pill.pill-music { --pill-type: var(--seg-music-text); }
+.mmr-schedule .pill.pill-banter { --pill-type: var(--seg-banter); }
+.mmr-schedule .pill.pill-ad { --pill-type: var(--seg-ad); }
+.mmr-schedule .pill.pill-news { --pill-type: var(--news); }
+.mmr-schedule .pill.pill-idle { --pill-type: var(--muted); }
 
 /* Dediche */
 .mmr-dediche-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 22px; align-items: stretch; }
@@ -277,10 +318,10 @@ html, body {
 .mmr-dedica-form textarea, .mmr-dedica-form button, .mmr-dedica-form .hint, .mmr-dedica-form-input { position: relative; z-index: 2; }
 .mmr-dedica-form-input { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 8px 12px; font-family: var(--font-body); font-size: 16px; color: #1A1410; outline: none; margin-bottom: 8px; box-sizing: border-box; }
 .mmr-dedica-form-input::placeholder { color: #5A4A3D; }
-.mmr-dedica-form-input:focus { border-color: var(--brand-primary, var(--sun2)); box-shadow: 0 0 0 3px rgba(236,204,48,0.18); }
+.mmr-dedica-form-input:focus { border-color: var(--lancia); box-shadow: 0 0 0 3px rgba(160,32,24,0.30); }
 .mmr-dedica-form textarea { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 10px 12px; font-family: var(--font-body); font-size: 16px; color: #1A1410; resize: vertical; outline: none; margin-bottom: 10px; box-sizing: border-box; }
 .mmr-dedica-form textarea::placeholder { color: #5A4A3D; }
-.mmr-dedica-form textarea:focus { border-color: var(--brand-primary, var(--sun2)); box-shadow: 0 0 0 3px rgba(236,204,48,0.18); }
+.mmr-dedica-form textarea:focus { border-color: var(--lancia); box-shadow: 0 0 0 3px rgba(160,32,24,0.30); }
 .mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 13px 14px; min-height: 44px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
 .mmr-dedica-form .hint { font-size: 11px; color: #5A4A3D; margin-top: 10px; line-height: 1.4; font-style: italic; position: relative; z-index: 2; }
 .mmr-dedica-form .hint em { color: var(--lancia); font-style: italic; }
@@ -335,6 +376,16 @@ html, body {
      on phones; the pill stays as the primary CTA. */
   .mmr-nav nav { display: none; }
   .mmr-foot-inner { grid-template-columns: 1fr; }
+  .mmr-stage > .mmr-hero-art { max-height: 360px; padding-left: 16px; padding-right: 16px; }
+  .mmr-radio { width: min(92%, 320px); max-width: 320px; }
+  .mmr-waves { right: 0; width: 14%; max-width: 48px; overflow: hidden; }
+  .mmr-knob-cap { display: none; }
+  .mmr-display-lede { font-size: 6px; }
+  .mmr-display-mhz { font-size: 14px; }
+  .mmr-stage-header { gap: 10px; padding: 14px 16px; }
+  .mmr-stage-header .mmr-np-meta { flex: 1 1 150px; }
+  .mmr-stage-header .mmr-np-meta .title { display: block; font-size: 20px; line-height: 1.2; overflow: visible; -webkit-line-clamp: unset; }
+  .mmr-wave { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mmr-live-pill .dot, .mmr-live .dot { animation: none; }
