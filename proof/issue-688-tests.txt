@@ -1,23 +1,25 @@
 Issue 688 validation evidence
 =============================
 
-Commit: 27dd625608e89fcf4b0e53d02d789cf36a122e5f
+Commit: fe46850f324cf4d5bbc0e3288bf3855c510ac8d1
 Branch: issue-688
 Date: 2026-06-25
 
-Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pompeii-v1:
+Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pompeii-v1
+(after merging origin/main and applying the pre-ship squad credential-hardening
+fixes):
 
 - .venv/bin/ruff check .
   Result: passed.
 
 - .venv/bin/ruff format --check .
-  Result: passed; 227 files already formatted.
+  Result: passed; 231 files already formatted.
 
 - .venv/bin/python -m pytest tests/
-  Result: 3313 passed, 2 skipped, 19 deselected, 1 warning in 61.09s.
+  Result: 3449 passed, 2 skipped, 19 deselected, 1 warning in 60.84s.
 
 - .venv/bin/python -m pytest tests/repo/test_run_sh_options_parser.py
-  Result: 24 passed in 0.55s after the final test-fixture-only CodeQL rewrite.
+  Result: 24 passed in 0.50s.
 
 - bash -n ha-addon/mammamiradio/rootfs/run.sh
   Result: passed.
@@ -39,13 +41,6 @@ Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pom
 - Secret scan for common token/private-key patterns:
   Result: no real credential material found in the final diff.
 
-Pre-ship review:
-
-- Security review finding fixed: add-on credential saves now migrate legacy
-  provider option values from /data/options.json into /config/secrets.env and
-  prune the provider option fields while preserving non-secret add-on options.
-
-- Docs/release finding fixed: the add-on changelog provider-secrets note is
-  under 2.15.0, matching ha-addon/mammamiradio/config.yaml.
-
-- Design review lite: clean. The only HTML change is a setup snippet label.
+Credential-file hardening verified by test (tests/web/test_persistence.py):
+- /config/secrets.env lands 0600 (test_save_addon_options_writes_env_keys_to_secrets_env).
+- Standalone .env lands 0600 (test_save_dotenv_writes_owner_only_file).
