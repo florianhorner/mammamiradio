@@ -1,15 +1,16 @@
 """Credential persistence for the admin setup flow.
 
 Extracted verbatim from ``web/streamer.py`` (god-module split). Writes operator
-credentials to ``.env`` (standalone) or ``/data/options.json`` (HA add-on) and
-applies them to the live env/config/state. Persistence I/O and live application
-plus the credential field maps; the request-body parsing and the route handlers
-stay in ``streamer``.
+credentials to ``.env`` (standalone) or ``/config/secrets.env`` (HA add-on)
+and applies them to the live env/config/state. Persistence I/O and live
+application plus the credential field maps; the request-body parsing and the
+route handlers stay in ``streamer``.
 """
 
 from __future__ import annotations
 
 import os
+import shlex
 import threading
 from pathlib import Path
 
@@ -29,6 +30,11 @@ _ADDON_OPTIONS_LOCK = threading.Lock()
 def _sanitize_credential_value(value: str) -> str:
     """Strip env-breaking characters before persistence or live application."""
     return value.replace("\n", "").replace("\r", "")
+
+
+def _env_assignment(key: str, value: str) -> str:
+    """Serialize a KEY=VALUE line that the add-on secrets parser can read back."""
+    return f"{key}={shlex.quote(value)}"
 
 
 def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
@@ -105,24 +111,59 @@ def _save_addon_option(key: str, value) -> None:
 
 
 def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /data/options.json with new credential values."""
+    """Update /config/secrets.env with new provider credential values."""
     import json as _json
     import os as _os
 
     with _ADDON_OPTIONS_LOCK:
         options_path = Path("/data/options.json")
-        options = {}
+        secrets_path = Path("/config/secrets.env")
+        lines = secrets_path.read_text().splitlines() if secrets_path.exists() else []
+
+        options: dict = {}
         if options_path.exists():
             try:
-                options = _json.loads(options_path.read_text())
+                loaded_options = _json.loads(options_path.read_text())
+                if isinstance(loaded_options, dict):
+                    options = loaded_options
             except (ValueError, OSError):
-                pass
+                options = {}
 
-        for env_key, value in updates.items():
-            opt_key = _CREDENTIAL_ENV_TO_FIELD.get(env_key)
-            if opt_key:
-                options[opt_key] = _sanitize_credential_value(value)
+        safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items() if k in _CREDENTIAL_ENV_TO_FIELD}
+        legacy_updates = {}
+        for opt_key, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
+            value = options.get(opt_key)
+            if value and env_key not in safe_updates:
+                legacy_updates[env_key] = _sanitize_credential_value(str(value))
 
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
+        secret_updates = {**legacy_updates, **safe_updates}
+        if not secret_updates:
+            return
+
+        written = set()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+            if candidate and not candidate.startswith("#") and "=" in candidate:
+                key = candidate.split("=", 1)[0].strip()
+                if key in secret_updates:
+                    new_lines.append(_env_assignment(key, secret_updates[key]))
+                    written.add(key)
+                    continue
+            new_lines.append(line)
+        for _opt_key, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
+            if env_key in secret_updates and env_key not in written:
+                new_lines.append(_env_assignment(env_key, secret_updates[env_key]))
+
+        tmp_path = secrets_path.with_suffix(secrets_path.suffix + ".tmp")
+        tmp_path.write_text("\n".join(new_lines) + "\n")
+        _os.replace(tmp_path, secrets_path)
+
+        pruned_options = dict(options)
+        for opt_key in _CREDENTIAL_FIELDS:
+            pruned_options.pop(opt_key, None)
+        if pruned_options != options:
+            tmp_options_path = options_path.with_suffix(options_path.suffix + ".tmp")
+            tmp_options_path.write_text(_json.dumps(pruned_options, indent=2) + "\n")
+            _os.replace(tmp_options_path, options_path)

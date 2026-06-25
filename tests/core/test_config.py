@@ -493,6 +493,104 @@ def test_apply_addon_options(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
+def test_apply_addon_options_reads_provider_secrets_file(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=from_file\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+            _apply_addon_options()
+        assert os.environ.get("ANTHROPIC_API_KEY") == "from_file"
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+def test_apply_addon_options_reads_provider_secrets_without_options_file(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "missing-options.json"
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=from_file\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+            _apply_addon_options()
+        assert os.environ.get("ANTHROPIC_API_KEY") == "from_file"
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+def test_apply_addon_options_corrupt_json_still_reads_provider_secrets(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text("not json{{{")
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=from_file\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+            _apply_addon_options()
+        assert os.environ.get("ANTHROPIC_API_KEY") == "from_file"
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+def test_apply_addon_options_provider_secrets_file_wins_per_key(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"anthropic_api_key": "from_options", "openai_api_key": "openai_options"}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=from_file\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+            _apply_addon_options()
+        assert os.environ.get("ANTHROPIC_API_KEY") == "from_file"
+        assert os.environ.get("OPENAI_API_KEY") == "openai_options"
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("OPENAI_API_KEY", None)
+
+
+def test_apply_addon_options_empty_provider_secret_falls_back_to_options(monkeypatch, tmp_path):
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"anthropic_api_key": "from_options"}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+            _apply_addon_options()
+        assert os.environ.get("ANTHROPIC_API_KEY") == "from_options"
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+def test_apply_addon_options_malformed_provider_secret_log_is_sanitized(tmp_path, caplog):
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text('ANTHROPIC_API_KEY="sk-should-not-leak\nNOT_ALLOWED=sk-also-secret\n')
+
+    with patch("mammamiradio.core.config.Path", side_effect=[options_file, secrets_file]):
+        _apply_addon_options()
+
+    combined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-should-not-leak" not in combined
+    assert "sk-also-secret" not in combined
+    assert "invalid quoting" in combined
+    assert "unsupported key" in combined
+
+
 def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
     """An upgraded standalone radio.toml that still has claude_model /
     claude_creative_model / openai_script_model in [audio] must still boot —
@@ -619,19 +717,19 @@ def test_apply_addon_options_no_override(monkeypatch, tmp_path):
 
 
 def test_apply_addon_options_missing_file(monkeypatch):
-    """No /data/options.json should be a no-op."""
+    """No options.json or secrets.env should be a no-op."""
     with patch("mammamiradio.core.config.Path") as mock_path_cls:
         mock_path_cls.return_value.exists.return_value = False
         _apply_addon_options()  # Should not raise
 
 
 def test_apply_addon_options_invalid_json(monkeypatch, tmp_path):
-    """Invalid JSON should be a no-op, not crash."""
+    """Invalid JSON without secrets.env should be a no-op, not crash."""
     bad_file = tmp_path / "options.json"
     bad_file.write_text("not json{{{")
+    secrets_file = tmp_path / "missing-secrets.env"
 
-    with patch("mammamiradio.core.config.Path") as mock_path_cls:
-        mock_path_cls.return_value = bad_file
+    with patch("mammamiradio.core.config.Path", side_effect=[bad_file, secrets_file]):
         _apply_addon_options()  # Should not raise
 
 

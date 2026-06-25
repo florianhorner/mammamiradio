@@ -10,6 +10,10 @@ The current version source of truth is `pyproject.toml`.
 
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
 
+### Security
+
+- **Home Assistant add-on provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
+
 ## [2.14.1] - 2026-06-21
 
 ### Added

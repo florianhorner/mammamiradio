@@ -3260,6 +3260,36 @@ async def test_credentials_saves_valid_key(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
+    """The legacy credentials route must persist add-on keys to secrets.env."""
+    app = _make_test_app(is_addon=True)
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    try:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        with (
+            patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options,
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+            patch(
+                "mammamiradio.web.provider_verdict.check_provider_keys",
+                new=AsyncMock(return_value={"ok": True, "providers": {}}),
+            ),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "ANTHROPIC_API_KEY" in body["saved"]
+        save_addon_options.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-addon"})
+        save_dotenv.assert_not_called()
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
 async def test_credentials_bad_key_surfaces_rejected(tmp_path):
     """A bogus key saved via /api/credentials must read as rejected without a restart."""
     app = _make_test_app()

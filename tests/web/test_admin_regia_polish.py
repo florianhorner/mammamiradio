@@ -310,7 +310,7 @@ def test_no_italian_utility_strings_remain() -> None:
 
 def test_setup_controls_are_english() -> None:
     html = _html()
-    for s in ("Save Keys", "Re-check", "Replace", "Runtime Status", "Home Assistant Add-on Snippet"):
+    for s in ("Save Keys", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
         assert s in html
 
 

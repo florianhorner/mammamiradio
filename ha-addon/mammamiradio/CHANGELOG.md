@@ -4,6 +4,10 @@
 
 ## 2.15.0
 
+### Security
+
+- **Provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
+
 ## 2.14.1 - 2026-06-21
 
 ### Added
