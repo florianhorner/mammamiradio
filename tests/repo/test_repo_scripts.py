@@ -7,6 +7,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
@@ -40,6 +42,17 @@ def _load_ha_green_perf_smoke() -> types.ModuleType:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("ha_green_perf_smoke", HA_GREEN_PERF_SMOKE)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_ha_green_launch_smoke() -> types.ModuleType:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ha_green_launch_smoke", HA_GREEN_LAUNCH_SMOKE)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -215,6 +228,38 @@ def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "message"),
+    [
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+    ],
+)
+def test_ha_green_launch_smoke_validates_timeout_env_vars(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, env_value: str, message: str
+) -> None:
+    monkeypatch.setenv(env_name, env_value)
+
+    with pytest.raises(RuntimeError, match=f"{env_name} {message}"):
+        _load_ha_green_launch_smoke()
+
+
+def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    def missing_ffmpeg(*_args, **_kwargs) -> None:
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(smoke.subprocess, "run", missing_ffmpeg)
+
+    with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
+        smoke._seed_warm_norm_cache(str(tmp_path))
 
 
 def test_makefile_has_launch_smoke_target() -> None:

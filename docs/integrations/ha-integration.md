@@ -21,8 +21,12 @@ now-playing contract; this integration is the HA-native face of it.
   Supervisor network); a remote or Docker install needs the admin token. Next is
   shown only while on air. A control that can't reach the station surfaces a
   clear error instead of doing nothing.
-- `media-source://mammamiradio/live` — a native media source for casting the
-  station stream to another HA speaker or media player.
+- **Media Source:** `media-source://mammamiradio/live` resolves to a signed
+  Home Assistant stream proxy (`/api/mammamiradio/stream`), so Home Assistant
+  automations, Music Assistant, and Follow Me Music-style speaker handoffs can
+  play the station on real media players — the speaker only needs to reach Home
+  Assistant, not the add-on directly — while `media_player.mammamiradio` remains
+  the station control surface.
 - Repairs and diagnostics for the common recovery paths: unreachable station,
   rejected admin token, and old REST-pushed media-player conflicts. The Repairs
   clear themselves once resolved and are removed if you delete the integration;
@@ -73,13 +77,14 @@ Mamma Mi Radio → ⋮ → **Reload**) to clear the Repair notice.
 The integration polls the add-on's read contract
 (`GET /api/integrations/v1/now-playing`) every 5 seconds and maps it to the
 entity. Controls POST to `/api/resume`, `/api/stop`, `/api/skip` with the
-`X-Radio-Admin-Token` header. See `docs/integrations/now-playing.md` for the
+`X-Radio-Admin-Token` header. The media-source entry resolves to a signed
+Home Assistant stream proxy, so speaker devices receive a HA-reachable URL while
+the integration still pulls audio from the configured host/port plus `/stream`.
+Use `media-source://mammamiradio/live` as a `media_content_id` for
+`media_player.play_media`. See `docs/integrations/now-playing.md` for the
 contract.
 
-The media source resolves `media-source://mammamiradio/live` to a
-Home-Assistant-served stream proxy (`/api/mammamiradio/stream`, `audio/mpeg`),
-so the speaker only needs to reach Home Assistant, not the add-on directly. Use
-it from the media browser or with `media_player.play_media`:
+Example `media_player.play_media` usage:
 
 ```yaml
 service: media_player.play_media
@@ -89,6 +94,13 @@ data:
   media_content_id: media-source://mammamiradio/live
   media_content_type: music
 ```
+
+**Long speaker handoffs:** the proxy URL Home Assistant hands a speaker is
+signed and valid for 24 hours. A speaker streaming continuously keeps playing
+past that, but if it drops and reconnects more than a day later (or after Home
+Assistant restarts), that one speaker can go quiet. Start it again from the
+media browser or your automation and it picks up a fresh URL. The web player and
+the `media_player.mammamiradio` card are never affected.
 
 ## Deferred to a later version
 

@@ -16,7 +16,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
 
-from mammamiradio.audio.normalizer import _run_ffmpeg
+from mammamiradio.audio.normalizer import _run_ffmpeg, ffmpeg_slot
 from mammamiradio.core.models import Track
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,8 @@ def validate_download(filepath: Path) -> tuple[bool, str]:
 
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        with ffmpeg_slot():
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return False, "ffprobe timed out"
     except OSError as exc:

@@ -3,6 +3,7 @@
   "name": "Mamma Mi Radio",
   "codeowners": ["@florianhorner"],
   "config_flow": true,
+  "dependencies": ["http"],
   "documentation": "https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md",
   "integration_type": "service",
   "iot_class": "local_polling",

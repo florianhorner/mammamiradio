@@ -59,5 +59,5 @@ pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG he
 	./scripts/pre-release-check.sh
 	./scripts/check-merge-gate.sh
 
-edge-release: ## Cut a manual edge release (edge version = main short-SHA, opens a PR)
+edge-release: ## Cut a manual edge release (edge version = newest built main short-SHA, opens a PR)
 	./scripts/cut-edge-release.sh

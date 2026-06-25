@@ -1142,6 +1142,10 @@ class LiveStreamHub:
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
         self._state: StationState | None = None
+        # Set by subscribe() so the playback loop wakes the instant a listener
+        # connects to an empty room, instead of sleeping out a fixed poll. Bound
+        # to the loop lazily on first await/set (asyncio.Event, 3.10+).
+        self._listener_arrived = asyncio.Event()
 
     def bind_state(self, state: StationState) -> None:
         """Attach station state for listener tracking. Call once at startup."""
@@ -1160,6 +1164,10 @@ class LiveStreamHub:
             self._state.listeners_total += 1
             self._state.listeners_peak = max(self._state.listeners_peak, active)
             self._state.new_listeners_pending += 1
+        # Wake a playback loop parked on the empty-room wait. The dict insert
+        # above happens-before this set(), so the loop's check-clear-recheck
+        # sees the new listener and never misses the wakeup.
+        self._listener_arrived.set()
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
@@ -1226,7 +1234,17 @@ async def run_playback_loop(app) -> None:
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
             state.queue_empty_since = None
-            await asyncio.sleep(1.0)
+            # Wait on the listener-arrived event instead of a fixed 1s poll, so a
+            # connect to an empty room resumes playback immediately. Clear then
+            # re-check (no await between) to avoid a lost wakeup if a listener
+            # subscribed between the emptiness check and the clear; the 1s timeout
+            # preserves the old periodic re-check as a backstop.
+            hub._listener_arrived.clear()
+            if not hub._listeners:
+                try:
+                    await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
+                except TimeoutError:
+                    pass
             continue
 
         # Priority slot: interrupt bridge audio plays before anything in the queue.
@@ -3434,7 +3452,13 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/heading")
 async def set_heading(request: Request, _: None = Depends(require_admin_access)):
     """Blend an operator-selected era heading into the live rotation."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "Choose one of the era buttons and try again."},
+            status_code=422,
+        )
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=422)
     seed = str(body.get("seed", "")).strip()

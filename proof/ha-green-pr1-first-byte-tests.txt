@@ -1,0 +1,34 @@
+Proof — PR1 (HA Green): resume playback the instant a listener connects
+Branch: florianhorner/fix/ha-green-pr1-first-byte
+Commit: d2ed235b (+ this proof commit)
+Captured: 2026-06-24
+
+== Full test suite (pytest tests/) ==
+3248 passed, 2 skipped, 19 deselected, 1 warning in 78.01s
+
+== Targeted suite (tests/web/test_streamer_routes.py, fresh re-run) ==
+135 passed in 2.02s
+Includes the two new wake-event unit tests:
+  - test_subscribe_sets_listener_arrived_event
+  - test_listener_arrived_wakes_empty_room_waiter_before_poll_timeout
+
+== Type check (mypy mammamiradio/web/streamer.py) ==
+Success: no issues found in 1 source file
+
+== Lint / format (ruff) ==
+ruff check: All checks passed!
+ruff format --check: 2 files already formatted
+
+== Release invariants (bash scripts/check-release-invariants.sh) ==
+Passed: 7  Failed: 0 — All invariants passed.
+
+== Runtime proof — cold-launch first byte (make launch-smoke) ==
+"Cold-launch smoke passed (first byte under 2.0s)."
+(Asserts a real cold station serves first audio <= 2.0s; the wake event removes
+the up-to-1s empty-room poll latency on the connect path.)
+
+== Adversarial review (codex exec, read-only, diff-scoped) ==
+"No real bugs found in this diff."
+Confirmed: no lost-wakeup race (dict insert happens-before set(); clear-then-recheck
+with no await between); asyncio.Event() in __init__ safe on Python 3.11 (lazy loop
+bind); FIRST_BYTE_GRACE_SECONDS behavior preserved; no session_stopped/close() regression.

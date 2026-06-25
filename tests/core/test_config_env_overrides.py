@@ -30,6 +30,36 @@ def test_ha_enabled_false_override_blocks_auto_enable(monkeypatch):
     assert config.homeassistant.enabled is False
 
 
+def test_ha_context_refresh_timeout_default():
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_refresh_timeout == 2.0
+
+
+def test_ha_context_refresh_timeout_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "3.5")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_refresh_timeout == 3.5
+
+
+def test_ha_context_refresh_timeout_env_non_float_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "soon")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_refresh_timeout == 2.0
+
+
+def test_ha_context_refresh_timeout_env_non_positive_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "0")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_refresh_timeout == 2.0
+
+
+def test_ha_context_refresh_timeout_env_infinite_ignored(monkeypatch):
+    # inf would disable the deadline entirely — reject it, keep the default.
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "inf")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_refresh_timeout == 2.0
+
+
 def test_ha_auto_enable_with_token_and_url(monkeypatch):
     """HA should auto-enable when both token and URL are present."""
     monkeypatch.setenv("HA_TOKEN", "test-token")
