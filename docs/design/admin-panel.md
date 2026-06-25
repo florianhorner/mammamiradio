@@ -5,11 +5,11 @@ Every PR that modifies `mammamiradio/web/templates/admin.html` or `mammamiradio/
 
 ## Protected UI elements
 
-These have regressed in past refactors. Verify all five survive every HTML edit.
+These have regressed in past refactors. Verify each protected element survives every HTML edit.
 
 | Element | File | How to check |
 |---|---|---|
-| Token cost counter | `admin.html` Engine Room | Grep for `api_cost_estimate_usd`; verify it appears in the rendered status block |
+| Token cost counter + split | `admin.html` Engine Room | Grep for `api_cost_estimate_usd` and `cost_breakdown`; verify the rendered Costi group shows the session total and category split |
 | Play button blue state | `static/base.css` | `.play-btn.playing` uses `var(--ok)` (blue `#2563EB`), never `var(--sun2)` (golden) |
 | Station name from localStorage | `static/listener.js` | JS reads `localStorage.getItem('stationName')`; admin panel writes it |
 | Gold "Mi" accent | `admin.html`, `listener.html` | `<span class="mi">` present in `<h1>`, styled `color: var(--sun)` |
@@ -73,7 +73,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available). Filter
    state persists via sessionStorage (`mmr.admin.archivio.filters`).
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
-   context), `Costi` (token cost counter + segment counts — always visible),
+   context), `Costi` (token cost counter + cost split + segment counts — always visible),
    `Setup` (a collapsible `<details>` that auto-collapses when every readiness item
    is ready; shows an `All ready ✓` blue badge when collapsed).
 
@@ -119,7 +119,7 @@ Both must pass. A single combined run is insufficient.
 
 ```
 ## Admin Panel Standards
-- [ ] Token cost counter (`api_cost_estimate_usd`) still visible in Engine Room
+- [ ] Token cost counter (`api_cost_estimate_usd`) and cost split (`cost_breakdown`) still visible in Engine Room
 - [ ] Play button uses `var(--ok)` (blue) for playing state — not golden
 - [ ] Station name reads from `localStorage.stationName`
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file

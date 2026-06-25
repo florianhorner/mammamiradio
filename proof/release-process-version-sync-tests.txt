@@ -1,0 +1,27 @@
+Verification — release-process docs + version-consistency gate hardening
+branch: florianhorner/stable-vs-dev-release-delta
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+9 files already formatted
+
+$ shellcheck scripts/pre-release-check.sh
+(no output — clean)
+
+$ bash scripts/pre-release-check.sh
+  Passed: 10  Failed: 0
+  [PASS] config.yaml (2.14.1) matches pyproject.toml (2.14.1)
+  [PASS] custom_components/mammamiradio/manifest.json (2.14.1) matches config.yaml (2.14.1)
+  [PASS] CHANGELOG latest version (## 2.14.1) matches config.yaml (2.14.1)
+
+$ .venv/bin/python -m pytest tests/repo/test_repo_scripts.py -k pre_release_check
+  4 passed
+    test_pre_release_check_skips_unreleased_addon_changelog_heading   (synced manifest passes)
+    test_pre_release_check_fails_on_manifest_version_mismatch         (mismatch -> [FAIL], exit != 0)
+    test_pre_release_check_fails_cleanly_on_unreadable_manifest       (malformed JSON -> clean [FAIL], no traceback)
+    test_pre_release_check_accepts_dated_addon_changelog_heading      ("## 1.1.0 - 2026-06-21" -> 1.1.0)
+
+$ .venv/bin/python -m pytest tests/
+  3295 passed, 2 skipped, 19 deselected in 62.07s
