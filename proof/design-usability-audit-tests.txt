@@ -1,19 +1,18 @@
 Proof: design-usability-audit (a11y + contrast + honest stopped-state)
-verified-at-commit: 389f1bd55157a45c97ba62f1b51e4cccefba2e9d
+verified-at-commit: 42d786804903ec5fdcdabec62f2374cc3102edbb
+(re-verified on the full suite after merging origin/main; main had opened the 2.15.0 RC)
 
-== pytest tests/web (full) ==
+== make test (full suite + coverage) ==
+TOTAL                                      11915    582   3728    335    94%
+Required test coverage of 92.0% reached. Total coverage: 93.74%
+===== 3331 passed, 2 skipped, 19 deselected, 1 warning in 73.29s =====
 
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1037 passed, 1 warning in 7.37s
-
-== render tests: stopped-state bake (M1) + dynamic lang (M8) ==
-...                                                                      [100%]
-3 passed, 133 deselected in 0.23s
-
-== ruff check . ==
+== make lint (ruff check .) ==
 All checks passed!
-== ruff format --check . ==
-219 files already formatted
-== mypy mammamiradio/ ==
-mammamiradio/main.py:305: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
-Success: no issues found in 63 source files
+
+== make typecheck (mypy mammamiradio/ tests/) ==
+Success: no issues found in 203 source files
+
+== make coverage-check (per-module floors) ==
+Required test coverage of 92.0% reached. Total coverage: 93.74%
+All coverage floors held. Total: 94% (floor: 92%)
