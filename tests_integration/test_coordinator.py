@@ -6,10 +6,11 @@ import aiohttp
 import pytest
 from aioresponses import aioresponses
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.mammamiradio.const import DOMAIN, NOW_PLAYING_PATH
+from custom_components.mammamiradio.const import DOMAIN, ISSUE_STATION_UNREACHABLE, NOW_PLAYING_PATH
 from custom_components.mammamiradio.coordinator import (
     MammaRadioCoordinator,
     RadioStatus,
@@ -46,6 +47,37 @@ async def test_update_failed_on_network_error(hass: HomeAssistant) -> None:
         mock.get(URL, exception=aiohttp.ClientConnectionError("down"))
         with pytest.raises(UpdateFailed):
             await _coordinator(hass)._async_update_data()
+
+
+async def test_unreachable_repair_needs_sustained_outage(hass: HomeAssistant) -> None:
+    """A brief blip stays quiet; only a sustained outage raises the repair, then success clears it."""
+    coordinator = _coordinator(hass)
+    registry = ir.async_get(hass)
+
+    # Three rapid failures inside the window: no repair yet (don't flap on a blip).
+    with aioresponses() as mock:
+        mock.get(URL, status=503, repeat=3)
+        for _ in range(3):
+            with pytest.raises(UpdateFailed):
+                await coordinator._async_update_data()
+    assert registry.async_get_issue(DOMAIN, ISSUE_STATION_UNREACHABLE) is None
+    assert coordinator.consecutive_failures == 3
+
+    # Simulate the outage having persisted past the window, then one more failure.
+    assert coordinator._first_failure_at is not None
+    coordinator._first_failure_at -= 120
+    with aioresponses() as mock:
+        mock.get(URL, status=503)
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+    assert registry.async_get_issue(DOMAIN, ISSUE_STATION_UNREACHABLE) is not None
+
+    # A good poll clears the repair and resets the streak.
+    with aioresponses() as mock:
+        mock.get(URL, status=200, payload=load_payload("music"))
+        await coordinator._async_update_data()
+    assert registry.async_get_issue(DOMAIN, ISSUE_STATION_UNREACHABLE) is None
+    assert coordinator.consecutive_failures == 0
 
 
 def test_as_float_coercion() -> None:
