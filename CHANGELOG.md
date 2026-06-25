@@ -8,12 +8,19 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **You can now ban a song without leaving the On Air console.** While a music segment is playing, a ✕ Ban button appears next to the on-air indicator — tap it to permanently remove the track from rotation. The current segment finishes normally; the song won't come back.
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
 - **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
 
 ### Changed
 
+- **Scaletta is now the first tab in the admin panel.** The live queue opens by default — Diretta (pacing controls) moves one position right.
+- **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Svuota tutto) moves to a separate Pool row below.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
+
+### Fixed
+
+- **Track buttons in Rotazione no longer wrap below the track title in the two-pane desktop view.** Next and Ban stay inline even when the admin panel is in a narrow column (~700px).
 
 ## [2.14.1] - 2026-06-21
 

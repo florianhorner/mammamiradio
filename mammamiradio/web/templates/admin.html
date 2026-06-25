@@ -1043,12 +1043,13 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .search-row { flex-direction: column; }
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
-  .pl-row, .sr-row { flex-wrap: wrap; }
-  .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
-  /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
-   * on phones — give them a real touch height here without bloating the dense
+  .sr-row { flex-wrap: wrap; }
+  /* pl-row stays single-line even at ~700px (two-pane view); never wrap the
+   * action buttons below the track — that looks broken. */
+  .pl-a { opacity: 1; }
+  /* Give tap targets real touch height on phones without bloating the dense
    * desktop list. */
-  .pl-btn, .sr-add { min-height: 44px; }
+  .pl-btn, .sr-add { min-height: 36px; }
   .force-badge { margin-left: 28px; }
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
@@ -1389,6 +1390,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-progress .on-air-progress-track{flex:1}
 .mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:14px}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.mmr-ban-now{font-size:10px;padding:3px 8px;margin-right:4px;}
+.btn-chip-danger{color:#E8A29B;border-color:rgba(184,44,32,0.45);}
+.btn-chip-danger:hover{background:rgba(184,44,32,0.18);border-color:rgba(184,44,32,0.7);color:var(--cream);}
+#playlistPoolControls{margin-top:4px;}
 .mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
 .mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
 .mmr-air-cost b{color:var(--cream-dk)}
@@ -1494,6 +1499,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
             </button>
+            <button type="button" id="banNowBtn" class="pl-btn pl-ban mmr-ban-now" onclick="banNowPlaying()" title="Ban this song — won't play again (current segment finishes normally)" style="display:none">&#10005; Ban</button>
             <span class="mmr-air-badge label on" id="onAirBadge">In onda</span>
             <span class="mmr-air-cost"><span class="lbl">cost</span> <b id="sidebarCost">—</b></span>
           </div>
@@ -1548,8 +1554,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <!-- ══ Tab strip — swaps the work area below; the console above stays pinned ══ -->
     <nav class="mmr-tabbar" id="adminTabs" aria-label="Sezioni regia">
-      <button type="button" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
+      <button type="button" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" class="mmr-tab" data-tab="rotazione">Rotazione</button>
       <button type="button" class="mmr-tab" data-tab="conduttori">Conduttori</button>
       <button type="button" class="mmr-tab" data-tab="archivio">Archivio</button>
@@ -1598,8 +1604,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+        </div>
+        <div class="quick-actions" id="playlistPoolControls">
+          <span class="quick-add-label">Pool:</span>
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
+          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Svuota tutto</button>
         </div>
         <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
           <span class="quick-add-label">Steer:</span>
@@ -2349,6 +2359,7 @@ function updateNow(ns){
     document.getElementById('nowTitle').textContent='Waiting for signal...';
     document.getElementById('nowArtist').textContent='';
     document.getElementById('nowElapsed').textContent='—';
+    const _bnb=document.getElementById('banNowBtn');if(_bnb)_bnb.style.display='none';
     const pf=document.getElementById('progFill');
     if(pf){pf.style.width='0';pf.setAttribute('data-t','music');}
     const topBarTitleText=document.getElementById('topBarTitleText');
@@ -2378,6 +2389,15 @@ function updateNow(ns){
     artistEl.textContent='';
   }
   titleEl.textContent=title;
+  // Ban-during-play: show ✕ Ban only for music segments; suppress if this track was just banned
+  const banNowBtn=document.getElementById('banNowBtn');
+  if(banNowBtn){
+    const nsArtist=(ns.metadata?.artist||'').toLowerCase();
+    const nsTitle=(ns.metadata?.title_only||ns.metadata?.title||'').toLowerCase();
+    const thisKey=nsArtist+'|'+nsTitle;
+    if(thisKey!==_bannedNowKey)banNowBtn.style.display=(typeKey==='music')?'':'none';
+    else banNowBtn.style.display='none';
+  }
   // Update TopBar
   const topBarTitleText=document.getElementById('topBarTitleText');
   const topBarArtist=document.getElementById('topBarArtist');
@@ -2902,6 +2922,33 @@ async function shufflePlaylist(el){
   if(!r.ok){toast(wayOut());return;}
   toast('Playlist shuffled');
   await refreshFast();
+}
+async function purgePool(el){
+  if(!confirm('Svuota tutto? Tutti i brani verranno rimossi dalla rotazione.\nLa musica riprende appena aggiungi una sorgente.'))return;
+  flash(el);
+  const r=await api('POST','/api/playlist/purge',{});
+  if(r&&r.ok){toast('Rotazione svuotata');await refreshFast();}
+  else toast(r?.error||wayOut('empty the rotation'));
+}
+let _bannedNowKey=’’;
+async function banNowPlaying(){
+  const ns=_st?.now_streaming;
+  if(!ns||!ns.type||ns.type!==’music’)return;
+  const artist=ns.metadata?.artist||’’;
+  // title_only is the bare track title (no artist prefix); metadata.title is the display string
+  const title=ns.metadata?.title_only||ns.metadata?.title||(ns.label||’’).replace(/^.*?\s[—–-]\s/,’’);
+  if(!artist&&!title){toast(‘Nothing playing right now’);return;}
+  if(!confirm(‘Ban this song from rotation?\nIt won\’t play again — but the current segment finishes normally.’))return;
+  try{
+    const r=await api(‘POST’,’/api/track/ban’,{keys:[[artist,title]]});
+    if(r&&r.ok){
+      const msg=r.persisted===false?’Banned for now — but couldn\’t save it’:’Banned — won\’t come back’;
+      toast(msg);
+      _bannedNowKey=(artist+’|’+title).toLowerCase();
+      document.getElementById(‘banNowBtn’).style.display=’none’;
+      await refreshFast();refreshBanCount();
+    }else toast(r?.error||wayOut(‘ban that’));
+  }catch(_){toast(offlineMsg());}
 }
 async function enrichPlaylistSource(kind,el){
   flash(el);
