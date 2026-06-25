@@ -24,3 +24,6 @@ htmlcov/
 # Ephemeral render staging dir (scripts/generate_welcome_clips.py) — never
 # commit/package a partial render left by an interrupted run.
 **/.staging/
+
+# Playwright QA scratch — ad-hoc visual-capture scripts + screenshots, regenerable, never committed.
+output/

@@ -59,6 +59,8 @@
 
   /* ── Warm amber accent ── */
   --accent-warm:     #E8A030;
+  /* Low end of the admin pacing-slider track gradient (warm brown). */
+  --slider-track-low: #7a5020;
 
   /* ── Structural lines ──
    * --line / --line-strong are calm by design for admin's dense control-room
@@ -69,6 +71,8 @@
 
   /* ── Semantic (blue for success — red-green colorblind safe) ── */
   --ok:              #2563EB;
+  /* Accessible text on dark surfaces (~5:1 vs --bg). Keep --ok for fills. */
+  --ok-text:         #60A5FA;
   --error:           #c44a4a;
   --warning:         #D97706;
   --news:            #e07038;
@@ -87,6 +91,7 @@
    * dedicated token, never an alias of --ok (the OK/connected status blue), so
    * a music badge and an OK status chip stay decoupled. */
   --seg-music:       #2563EB;
+  --seg-music-text:  #60A5FA;
 
   /* ── Segment-type color: banter ──
    * Banter is the station's gold voice. One gold — banter rules previously split
