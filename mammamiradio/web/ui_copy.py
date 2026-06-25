@@ -17,6 +17,8 @@ COPY: dict[str, dict[str, str]] = {
         # Listener page — buttons, CTAs, aria labels
         "listen_now": "Listen Now",
         "listen_now_aria": "Listen now",
+        "listen_paused_aria": "Station paused",
+        "listen_resume_aria": "Resume station",
         "schedule_button": "Schedule",
         "install_app": "Install app",
         "footer_listen": "Listen",
@@ -47,6 +49,8 @@ COPY: dict[str, dict[str, str]] = {
         "seg_default": "On Air",
         # Now-playing strip + palinsesto inline strings rendered by listener.js
         "np_paused": "Paused",
+        "np_stopped": "Stopped",
+        "skip_to_content": "Skip to content",
         "np_welcome": "Welcome aboard",
         "np_ad_message": "Sponsored message",
         "np_banter_strip": "in conversation",
@@ -67,6 +71,8 @@ COPY: dict[str, dict[str, str]] = {
     "it": {
         "listen_now": "Ascolta Ora",
         "listen_now_aria": "Ascolta ora",
+        "listen_paused_aria": "Radio in pausa",
+        "listen_resume_aria": "Riprendi la radio",
         "schedule_button": "Il Palinsesto",
         "install_app": "Installa app",
         "footer_listen": "Ascolta",
@@ -92,6 +98,8 @@ COPY: dict[str, dict[str, str]] = {
         "seg_welcome": "Benvenuto",
         "seg_default": "In onda",
         "np_paused": "In pausa",
+        "np_stopped": "Fermo",
+        "skip_to_content": "Salta al contenuto",
         "np_welcome": "Ben arrivato",
         "np_ad_message": "Messaggio pubblicitario",
         "np_banter_strip": "in diretta",

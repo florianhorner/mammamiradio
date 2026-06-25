@@ -1,0 +1,17 @@
+Proof: design-usability-audit (a11y + contrast + honest stopped-state)
+verified-at-commit: 544677f02c9c407bceb6ccf18c9574333775f0db
+(re-verified on the full suite after merging origin/main; main had opened the 2.15.0 RC)
+
+== make test (full suite + coverage) ==
+Required test coverage of 92.0% reached. Total coverage: 93.75%
+===== 3351 passed, 2 skipped, 19 deselected, 1 warning in 72.35s =====
+
+== make lint (ruff check .) ==
+All checks passed!
+
+== make typecheck (mypy mammamiradio/ tests/) ==
+Success: no issues found in 203 source files
+
+== make coverage-check (per-module floors) ==
+Required test coverage of 92.0% reached. Total coverage: 93.75%
+All coverage floors held.

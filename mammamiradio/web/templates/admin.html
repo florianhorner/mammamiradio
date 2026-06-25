@@ -24,6 +24,7 @@
 html {
   font-size: 16px; -webkit-font-smoothing: antialiased; min-height: 100vh;
   background:
+    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") repeat,
     linear-gradient(180deg, #1E1610 0%, #14110F 12%, #14110F 100%);
 }
@@ -37,11 +38,13 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 
 .eyebrow {
-  font-family: var(--font-display);
-  font-size: 10px; font-style: italic;
+  font-family: var(--font-body);
+  font-size: 10px; font-weight: 700;
   color: var(--muted);
   margin: 16px 0 6px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.12em;
+  line-height: 1.35;
+  text-transform: uppercase;
 }
 
 @keyframes btn-flash { 0% { box-shadow: 0 0 0 3px rgba(244,208,72,0.5); } 100% { box-shadow: 0 0 0 3px transparent; } }
@@ -52,7 +55,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .filter-pill {
   font-family: var(--font-body); font-size: 11px; font-weight: 600;
-  padding: 6px 12px; border-radius: 20px; border: none; min-height: 32px;
+  padding: 8px 12px; border-radius: 20px; border: none; min-height: 36px;
   background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.5);
   border: 1px solid rgba(245,237,216,0.1);
   cursor: pointer; transition: background 0.15s, color 0.15s;
@@ -100,7 +103,7 @@ body[data-stopped="true"] .btn-util {
 }
 .accordion-head:hover { background: rgba(245,237,216,0.03); }
 .accordion-title {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase;
   color: rgba(245,237,216,0.5);
 }
 .accordion-meta { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: 8px; }
@@ -111,13 +114,15 @@ body[data-stopped="true"] .btn-util {
 
 /* ── CARDS (for accordion content) ── */
 /* Section divider label — used inside .a-panel to divide a card into subsections.
-   Golden eyebrow + thin gold underline rule. See docs/design/system.md
+   Quiet structural eyebrow + thin neutral underline. See docs/design/system.md
    §§ "Section divider labels". Pair with .setup-subhead. */
 .card-label {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
-  color: var(--sun2); margin: 0 0 12px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(236, 204, 48, 0.22);
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 12px;
+  padding-bottom: 7px;
+  line-height: 1.35;
+  border-bottom: 1px solid rgba(245, 237, 216, 0.10);
 }
 
 /* ── TRANSPORT BUTTONS (full size, for Broadcast Triggers etc.) ── */
@@ -209,19 +214,19 @@ body[data-stopped="true"] .btn-util {
 .host-presets-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
 .host-preset {
-  flex: 1; padding: 7px 5px 6px; border-radius: 8px; cursor: pointer;
-  font-family: inherit; text-align: center;
-  background: rgba(20,17,15,0.55); border: 1px solid rgba(245,237,216,0.11);
+  flex: 1; min-width: 44px; min-height: 44px; padding: 10px 8px 8px; border-radius: 8px; cursor: pointer;
+  font-family: inherit; text-align: center; color: var(--cream-dk);
+  background: rgba(20,17,15,0.55); border: 1px solid rgba(245,237,216,0.16);
   transition: border-color 0.15s, background 0.15s;
 }
 .host-preset:hover { border-color: rgba(244,208,72,0.32); background: rgba(244,208,72,0.06); }
-.host-preset.active { border-color: rgba(244,208,72,0.48); background: rgba(244,208,72,0.09); }
-.host-preset-name { display: block; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(245,237,216,0.5); margin-bottom: 5px; }
+.host-preset.active { border-color: rgba(244,208,72,0.48); background: rgba(244,208,72,0.12); }
+.host-preset-name { display: block; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cream); margin-bottom: 5px; }
 .host-preset.active .host-preset-name { color: var(--sun); }
 /* Checkmark shape cue on the active chip — colorblind safety (don't rely on
    the gold border/background alone). */
 .preset-check { display: none; margin-right: 3px; }
-.host-preset.active .preset-check { display: inline; color: var(--ok); }
+.host-preset.active .preset-check { display: inline; color: var(--ok-text); }
 .preset-bars { display: flex; gap: 2px; align-items: flex-end; height: 16px; justify-content: center; }
 .preset-bar { width: 5px; border-radius: 2px 2px 0 0; background: rgba(245,237,216,0.14); transition: background 0.15s; }
 .host-preset.active .preset-bar { background: var(--sun2); }
@@ -234,16 +239,28 @@ body[data-stopped="true"] .btn-util {
 .ha-axis { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,237,216,0.4); }
 .ha-word { font-size: 11px; font-weight: 600; color: var(--sun); }
 .ha input[type="range"] {
-  -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
-  border-radius: 3px; outline: none; cursor: pointer;
-  background: rgba(20,17,15,0.85);
+  -webkit-appearance: none; appearance: none; width: 100%; height: 44px;
+  padding: 19px 0; border-radius: 0; outline: none; cursor: pointer;
+  background: transparent;
+}
+.ha input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px; background: rgba(20,17,15,0.85);
 }
 .ha input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+  margin-top: -9px;
   background: var(--cream-dk); border: 2px solid var(--surface); cursor: pointer;
   box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 .ha input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
+.ha input[type="range"]::-moz-range-track {
+  height: 6px; border-radius: 3px; background: rgba(20,17,15,0.85);
+}
+.ha input[type="range"]::-moz-range-thumb {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--cream-dk); border: 2px solid var(--surface); cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
 .ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: var(--muted); margin-top: 2px; padding: 0 2px; }
 .host-preview {
   margin-top: 11px; padding: 10px 12px;
@@ -255,14 +272,14 @@ body[data-stopped="true"] .btn-util {
 }
 .host-preview-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
 .host-preview-text { font-size: 12px; font-style: italic; color: var(--cream-dk); line-height: 1.6; font-family: 'Playfair Display', Georgia, serif; transition: opacity 0.2s; min-height: 38px; }
-.host-reset { font-size: 10px; margin-top: 10px; padding: 0; background: transparent; border: none; cursor: pointer; color: var(--muted); font-family: inherit; transition: color 0.15s; }
+.host-reset { font-size: 11px; margin-top: 10px; min-width: 44px; min-height: 44px; padding: 10px 0; background: transparent; border: none; cursor: pointer; color: var(--muted); font-family: inherit; transition: color 0.15s; }
 .host-reset:hover { color: var(--error); }
 
 /* ── LOG ── */
 .log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; }
 .le-time { color: rgba(245,237,216,0.3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
-.le-type[data-t="music"] { color: var(--seg-music); }
+.le-type[data-t="music"] { color: var(--seg-music-text); }
 .le-type[data-t="banter"] { color: var(--seg-banter); }
 .le-type[data-t="ad"] { color: var(--seg-ad); }
 .le-type[data-t="news_flash"] { color: var(--news); }
@@ -280,7 +297,7 @@ body[data-stopped="true"] .btn-util {
 .setup-headline { font-family: var(--font-display); font-size: 18px; font-style: italic; margin-bottom: 4px; }
 .setup-meta { font-size: 12px; color: rgba(245,237,216,0.72); margin-bottom: 10px; }
 .setup-next { font-size: 12px; color: rgba(245,237,216,0.85); background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
-.setup-subhead { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--sun2); margin: 14px 0 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(236, 204, 48, 0.22); }
+.setup-subhead { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); margin: 14px 0 8px; padding-bottom: 7px; border-bottom: 1px solid rgba(245, 237, 216, 0.10); }
 .setup-list { display: flex; flex-direction: column; gap: 6px; }
 .setup-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; background: rgba(20,17,15,0.2); border: 1px solid rgba(245,237,216,0.08); border-radius: 8px; padding: 8px 10px; }
 .setup-title { font-size: 12px; font-weight: 700; color: var(--cream); }
@@ -292,11 +309,16 @@ body[data-stopped="true"] .btn-util {
 .setup-steps li[data-s="todo"] .setup-step-dot { background: var(--warning); }
 .setup-steps li[data-s="blocked"] .setup-step-dot { background: var(--error); }
 .setup-step-shape { font-size: 10px; font-weight: 700; margin-left: auto; padding-left: 8px; }
-.setup-steps li[data-s="done"] .setup-step-shape { color: var(--ok); }
+.setup-steps li[data-s="done"] .setup-step-shape { color: var(--ok-text); }
 .setup-steps li[data-s="todo"] .setup-step-shape { color: var(--warning); }
 .setup-steps li[data-s="blocked"] .setup-step-shape { color: var(--error); }
 .setup-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
 .setup-keys { display: grid; gap: 8px; margin-top: 8px; }
+.setup-inline-action {
+  margin-left: 0.75rem; min-height: 44px; min-width: 44px; padding: 10px 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.9rem; line-height: 1.15;
+}
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
 /* Motore Setup group — collapsible <details>; auto-collapses when all-ready. */
@@ -307,7 +329,7 @@ body[data-stopped="true"] .btn-util {
 .setup-summary .drawer-arrow { margin-left: auto; transition: transform 0.2s ease; }
 .setup-group[open] .setup-summary .drawer-arrow { transform: rotate(90deg); }
 .setup-ready-badge {
-  font-size: 11px; font-weight: 600; color: var(--ok);
+  font-size: 11px; font-weight: 600; color: var(--ok-text);
   font-family: var(--font-body);
 }
 .setup-group-body { margin-top: 12px; }
@@ -338,22 +360,23 @@ body[data-stopped="true"] .btn-util {
 .load-more-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
 .load-more-btn.loading { opacity: 0.5; pointer-events: none; }
 
-.pl-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
+.pl-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
 .pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
 .pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
 .pl-row.dragging { opacity: 0.4; }
-.pl-grip { cursor: grab; color: var(--muted); width: 16px; display: inline-flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
+.pl-grip { cursor: grab; color: var(--muted); min-width: 44px; min-height: 44px; width: 44px; display: inline-flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
 .pl-grip:active { cursor: grabbing; }
 .pl-grip:hover, .pl-grip:focus-visible { color: var(--cream); }
 .pl-grip:focus-visible { outline: 2px solid var(--sun2); outline-offset: 2px; border-radius: 4px; }
 .grip-dots { width: 10px; height: 16px; }
 .pl-n { font-size: 10px; color: rgba(245,237,216,0.3); width: 22px; text-align: right; }
-.pl-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-check-hit { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; margin: -13px 0; cursor: pointer; }
+.pl-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
 .pl-art-empty { width: 18px; height: 18px; border-radius: 3px; background: rgba(245,237,216,0.05); border: 1px solid rgba(245,237,216,0.12); flex-shrink: 0; position: relative; }
 .pl-art-empty::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; border-top: 1px solid rgba(245,237,216,0.28); transform: rotate(-35deg); }
-.pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+.pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; min-width: 0; flex-shrink: 0; }
 .pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
 .pl-src.classic { color: var(--sun); background: rgba(244,208,72,0.10); border: 1px solid rgba(244,208,72,0.20); }
@@ -362,8 +385,23 @@ body[data-stopped="true"] .btn-util {
 .pl-src.local   { color: var(--muted); background: transparent; border: 1px solid rgba(245,237,216,0.10); }
 .pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .pl-row:hover .pl-a { opacity: 1; }
-.pl-btn { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
+.pl-btn { font-size: 10px; font-weight: 600; min-height: 44px; padding: 10px 12px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+#plBody {
+  max-height: 400px;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245,237,216,0.28) transparent;
+}
+#plBody::-webkit-scrollbar { width: 8px; }
+#plBody::-webkit-scrollbar-track { background: transparent; }
+#plBody::-webkit-scrollbar-thumb {
+  background: rgba(245,237,216,0.22);
+  border-radius: 999px;
+}
 /* The per-row ban control is ALWAYS visible (not hover-gated like .pl-a) so it
    is reachable on touch devices and obvious as a destructive action: Lancia red
    + the ✕ glyph + the word "Ban" (never colour alone — colorblind-safe). */
@@ -378,16 +416,16 @@ body[data-stopped="true"] .btn-util {
 .lr-age { font-size: 10px; color: rgba(245,237,216,0.35); margin-left: auto; }
 .lr-msg { font-size: 12px; color: rgba(245,237,216,0.65); line-height: 1.4; margin-bottom: 6px; }
 .lr-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.lr-btn { font-family: var(--font-body); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 5px; border: none; cursor: pointer; transition: background 0.15s; }
+.lr-btn { font-family: var(--font-body); font-size: 11px; font-weight: 600; min-width: 44px; min-height: 44px; padding: 10px 12px; border-radius: 5px; border: none; cursor: pointer; transition: background 0.15s; }
 .lr-btn-dismiss { background: rgba(245,237,216,0.08); color: rgba(245,237,216,0.45); }
 .lr-btn-dismiss:hover { background: rgba(184,44,32,0.25); color: var(--error); }
-.lr-btn-queue { background: rgba(37,99,235,0.18); color: var(--ok); }
-.lr-btn-queue:hover { background: rgba(37,99,235,0.32); }
+.lr-btn-queue { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok-text); }
+.lr-btn-queue:hover { background: color-mix(in srgb, var(--ok) 32%, transparent); }
 .lr-head .status-inline { font-size: 10px; font-weight: 600; }
 .lr-consumed-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(245,237,216,0.3); margin: 10px 0 4px; }
 .lr-item-consumed { opacity: 0.6; }
 .lr-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
-.lr-badge-ok { background: rgba(37,99,235,0.18); color: var(--ok); }
+.lr-badge-ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok-text); }
 .lr-badge-warn { background: rgba(244,208,72,0.12); color: var(--sun); }
 .lr-track { margin-left: 6px; font-style: italic; color: rgba(245,237,216,0.45); }
 
@@ -412,7 +450,10 @@ body[data-stopped="true"] .btn-util {
   position: fixed; bottom: 20px; right: 20px; z-index: 100;
   display: flex; flex-direction: column-reverse; gap: 8px;
   max-width: min(360px, calc(100vw - 40px));
+  pointer-events: none;
 }
+.undo-stack .undo-toast { pointer-events: auto; }
+body.undo-toast-active .a-content { padding-bottom: calc(16px + var(--undo-toast-space, 96px)); }
 .undo-toast {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   font-size: 13px; font-weight: 600; padding: 10px 14px;
@@ -456,16 +497,8 @@ input[type="range"]:focus-visible {
 
 /* ══ VOLARE REFINED — Admin Kit (from design kit) ══ */
 
-/* Espresso glow body treatment — opacity + position match listener.css for
-   cross-surface consistency (see docs/design/system.md "Background gradient"). */
-body::before {
-  content: "";
-  position: fixed; inset: 0;
-  background:
-    radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
-    linear-gradient(180deg, #1E1610 0%, #14110F 12%, var(--bg) 100%);
-  pointer-events: none; z-index: 0;
-}
+/* The warm page atmosphere lives on html, not in a fixed overlay. A fixed
+   pseudo-element can bleed through rounded translucent panels while scrolling. */
 
 /* Full-bleed tricolor at the very top of /admin — same brand signature as
    listener (see docs/design/system.md). Lives above .a-app so it sits at the
@@ -505,19 +538,19 @@ body::before {
 
 .a-brand { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0 14px; border-bottom: 1px solid var(--line); }
 .a-brand img { width: 34px; height: 34px; }
-.a-brand .wm { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 18px; color: var(--cream); line-height: 1; letter-spacing: -0.01em; }
+.a-brand .wm { font-family: var(--font-display); font-style: italic; font-weight: 700; font-size: 18px; color: var(--cream); line-height: 1; letter-spacing: -0.01em; margin: 0; }
 .a-brand .wm em,
 .a-brand .wm .mi { color: var(--sun); font-style: italic; }
-.a-brand .sub { font-family: var(--font-body); font-size: 9px; color: var(--sun2); letter-spacing: 0.22em; text-transform: uppercase; margin-top: 5px; font-weight: 700; }
+.a-brand .sub { font-family: var(--font-body); font-size: 10px; color: var(--sun2); letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; margin-top: 5px; font-weight: 700; }
 
 /* Station card */
 .a-station-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
-.a-station-card .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sun2); margin-bottom: 10px; }
+.a-station-card .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .a-station-card .row { display: flex; align-items: center; gap: 8px; }
 .a-station-card .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .a-station-card .dot.on { background: var(--lancia2); box-shadow: 0 0 10px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 .a-station-card .dot.off { background: var(--muted); }
-.a-station-card .label { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--cream); }
+.a-station-card .label { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--cream); }
 .a-station-card .label.on { color: var(--lancia2); }
 .a-station-card .toggle-btn {
   margin-left: auto; border: none; padding: 5px 11px; border-radius: 6px;
@@ -563,7 +596,7 @@ body::before {
 
 /* Engine status */
 .a-engine-status { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
-.a-engine-status .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.a-engine-status .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .a-engine-status .srow { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
 .a-engine-status .status-chip {
   font-size: 9px;
@@ -572,13 +605,24 @@ body::before {
   padding: 3px 8px 3px 6px;
 }
 .a-engine-status .cost { margin-top: 12px; display: flex; justify-content: space-between; align-items: baseline; }
-.a-engine-status .cost .lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+.a-engine-status .cost .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); }
 .a-engine-status .cost b { font-family: var(--font-mono); font-size: 13px; color: var(--sun); font-weight: 500; font-variant-numeric: tabular-nums; }
 .cost-split { display: grid; gap: 5px; margin-bottom: 14px; min-width: 0; }
 .cost-split-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: baseline; min-width: 0; }
 .cost-split-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cream-dk); }
 .cost-split-row .value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--sun); white-space: nowrap; }
 .cost-split-note { color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+.a-brand .sub,
+.a-station-card .eyebrow,
+.a-engine-status .eyebrow,
+.a-engine-status .cost .lbl,
+.a-topbar .eyebrow {
+  letter-spacing: 0.12em;
+  line-height: 1.35;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 
 /* ── Content ── */
 .a-content { padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
@@ -606,14 +650,14 @@ body::before {
   padding: 5px 11px;
   border: 1px solid rgba(184,44,32,0.4);
   background: rgba(160,32,24,0.18);
-  color: var(--lancia2);
+  color: var(--cream);
   border-radius: 999px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.25; text-transform: uppercase;
   flex-shrink: 0;
 }
 .a-topbar .live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 8px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 .a-topbar .meta { flex: 1; min-width: 0; }
-.a-topbar .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sun2); margin-bottom: 4px; }
+.a-topbar .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
 .a-topbar .np-title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 22px; color: var(--cream); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-topbar .np-title .by { color: var(--text-secondary); font-size: 14px; font-family: var(--font-mono); font-style: normal; }
 
@@ -655,11 +699,11 @@ body::before {
 .a-panel { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px 20px; box-shadow: inset 0 1px 0 rgba(245,237,216,0.06), 0 8px 24px -12px rgba(0,0,0,0.55); }
 .a-panel header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); gap: 16px; }
 .a-panel header .ttl-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.a-panel header .ttl-eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sun2); }
-.a-panel header h2 { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 22px; color: var(--cream); margin: 0; line-height: 1.1; letter-spacing: -0.01em; }
+.a-panel header .ttl-eyebrow { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase; color: var(--muted); max-width: 100%; overflow-wrap: anywhere; }
+.a-panel header h2 { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 22px; color: var(--cream); margin: 0; padding-top: 2px; line-height: 1.22; letter-spacing: 0; overflow: visible; }
 .a-panel header h2 em { color: var(--sun); font-style: italic; }
 .a-panel header .sub { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; flex-shrink: 0; }
-.a-panel header .sub.live { display: inline-flex; align-items: center; gap: 6px; color: var(--lancia2); font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; font-size: 9px; }
+.a-panel header .sub.live { display: inline-flex; align-items: center; gap: 6px; color: var(--lancia2); font-weight: 700; letter-spacing: 0.12em; line-height: 1.25; text-transform: uppercase; font-size: 10px; }
 .a-panel header .sub.live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 6px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 
 /* Programme table */
@@ -730,7 +774,15 @@ body::before {
   padding: 5px 2px; font-size: 11px; color: var(--text-secondary);
 }
 .prod-entry.recent { opacity: 0.5; }
-.prod-entry .prod-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prod-entry .prod-label {
+  flex: 1; min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  line-height: 1.25;
+}
 .prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* Compact non-status segment labels for programme categories */
@@ -747,7 +799,7 @@ body::before {
   white-space: nowrap;
 }
 .segment-inline { color: var(--muted); }
-.segment-inline.segment-music { color: var(--seg-music); }
+.segment-inline.segment-music { color: var(--seg-music-text); }
 .segment-inline.segment-banter { color: var(--seg-banter); }
 .segment-inline.segment-ad { color: var(--seg-ad); } /* dedicated ad token — distinct from --warning (degraded) */
 .segment-inline.segment-news_flash { color: var(--news); }
@@ -930,7 +982,7 @@ body::before {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 8px; border-radius: 999px;
   background: rgba(160,32,24,0.18); border: 1px solid rgba(184,44,32,0.4);
-  color: var(--lancia2); font-size: 9px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; font-family: var(--font-body);
+  color: var(--lancia2); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.25; text-transform: uppercase; font-family: var(--font-body);
 }
 .a-host .live-tag .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 6px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 
@@ -941,11 +993,11 @@ body::before {
 .a-log { background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .lg-detail { padding: 4px 12px 10px 12px; font-size: 11px; color: var(--text-secondary); font-style: italic; border-bottom: 1px solid rgba(245,237,216,0.04); }
 .lg-row.has-detail { cursor: pointer; }
-.lg-row { display: grid; grid-template-columns: 80px 110px 1fr; align-items: center; gap: 12px; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.04); }
+.lg-row { display: grid; grid-template-columns: 80px 110px minmax(0, 1fr); align-items: center; gap: 12px; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.04); }
 .lg-row:last-child { border-bottom: none; }
 .lg-row.now { background: rgba(236,204,48,0.06); box-shadow: inset 2px 0 0 var(--sun2); }
 .lg-row .ts { font-family: var(--font-mono); font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.lg-row .tx { color: var(--cream-dk); }
+.lg-row .tx { color: var(--cream-dk); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lg-row.now .tx { color: var(--cream); font-weight: 600; font-family: var(--font-display); font-style: italic; font-size: 14px; }
 
 /* 2-column grid */
@@ -1040,15 +1092,37 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
     border-top: 3px solid var(--sun2);
   }
   .a-content { padding: 16px 16px; }
+  .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
+  .lg-row .ts { font-size: 9px; }
   .search-row { flex-direction: column; }
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
-  .pl-row, .sr-row { flex-wrap: wrap; }
-  .pl-a { width: 100%; padding-left: 30px; opacity: 1; }
+  .sr-row { flex-wrap: wrap; }
+  .pl-row {
+    display: grid;
+    grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
+  .pl-grip { grid-column: 2; grid-row: 1; }
+  .pl-n { display: none; }
+  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; }
+  .pl-t { grid-column: 4; grid-row: 1; }
+  .pl-chips { grid-column: 5; grid-row: 1; margin-left: 0; }
+  .pl-a { grid-column: 2 / 4; grid-row: 2; width: auto; padding-left: 0; opacity: 1; }
+  .pl-ban { grid-column: 4 / 6; grid-row: 2; justify-self: end; margin-left: 0; }
   /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
    * on phones — give them a real touch height here without bloating the dense
    * desktop list. */
   .pl-btn, .sr-add { min-height: 44px; }
+  .undo-stack {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+  }
+  body.undo-toast-active .a-content { padding-bottom: calc(24px + var(--undo-toast-space, 120px)); }
   .force-badge { margin-left: 28px; }
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
@@ -1247,9 +1321,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 #plSelCount { font-weight: 600; margin-right: 2px; }
 .pl-check {
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
   cursor: pointer;
+  transform: scale(2);
+  transform-origin: center;
   accent-color: var(--lancia, #B82C20);
 }
 /* Ban is destructive: Lancia red, paired with the explicit word "Ban" (no colour-only meaning) */
@@ -1301,7 +1382,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
-.drawer-subgroup > .ttl-eyebrow { margin-bottom: 10px; }
+.drawer-subgroup > .ttl-eyebrow { display: block; margin-bottom: 10px; }
 .btn-danger-outline {
   border-color: var(--lancia2) !important;
   color: var(--lancia2) !important;
@@ -1327,11 +1408,15 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   min-width: 0;
 }
 .drawer-section .ttl-eyebrow {
-  font-size: 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.12em;
+  line-height: 1.35;
   text-transform: uppercase;
-  color: var(--sun2);
+  color: var(--muted);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .drawer-section h2 {
   font-family: var(--font-display);
@@ -1340,7 +1425,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   font-size: 22px;
   color: var(--cream);
   margin: 0;
-  line-height: 1.1;
+  padding-top: 2px;
+  line-height: 1.22;
+  letter-spacing: 0;
+  overflow: visible;
 }
 .drawer-section h2 em {
   color: var(--sun);
@@ -1375,7 +1463,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:16px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 12px 38px -20px rgba(0,0,0,.85);
   overflow:hidden;margin-bottom:14px}
-.mmr-console::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1}
+.mmr-console::before{content:"";position:absolute;top:0;left:1px;right:1px;height:2px;background:linear-gradient(90deg,var(--lancia2),var(--sun));border-radius:16px 16px 0 0;z-index:1}
 .mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}
 .mmr-console-air{padding:18px 22px}
 .mmr-console-side{padding:18px 20px;border-left:1px solid var(--line)}
@@ -1392,15 +1480,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
 .mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
 .mmr-air-cost b{color:var(--cream-dk)}
-.mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:9px}
+.mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;line-height:1.35;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:9px;max-width:100%;overflow-wrap:anywhere}
 .mmr-side-label.sun{color:var(--sun)}
 .mmr-console-triggers{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .mmr-console-triggers .a-trigger{min-height:0}
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-.mmr-tabbar{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--line-strong);overflow-x:auto}
-.mmr-tab{position:relative;padding:12px 18px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap}
+.mmr-tabbar{display:flex;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
+.mmr-tabbar::-webkit-scrollbar{display:none}
+.mmr-tab{position:relative;flex:1 1 0;min-width:0;padding:12px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
 .mmr-tab.is-active{color:var(--cream)}
 .mmr-tab.is-active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--sun);border-radius:2px}
@@ -1409,13 +1498,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-tabpanel{display:none}
 .mmr-tabpanel.is-active{display:block}
 /* One header per panel */
-.mmr-panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
-.mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0}
+.mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0;padding-top:2px;line-height:1.22;letter-spacing:0;overflow:visible}
 .mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
-@media (max-width:760px){
+@media (max-width:768px){
   .mmr-console-grid{grid-template-columns:1fr}
   .mmr-console-side{border-left:0;border-top:1px solid var(--line)}
   .mmr-air-title{font-size:22px}
+  .mmr-tabbar{flex-wrap:wrap;align-items:stretch;gap:4px 6px;border-bottom:0;padding-bottom:4px;overflow:visible;overflow-x:visible;overflow-y:visible}
+  .mmr-tab{flex:1 1 calc(33.333% - 6px);padding:10px 6px;border-bottom:1px solid var(--line-strong);font-size:13px}
+  .mmr-tab.is-active::after{left:10px;right:10px}
 }
 </style>
 </head>
@@ -1450,7 +1542,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div class="a-brand">
         <img src="/static/icon-192.svg" alt="" width="36" height="36">
         <div>
-          <div class="wm">Mamma <span class="mi">Mi</span> Radio</div>
+          <h1 class="wm">Mamma <span class="mi">Mi</span> Radio</h1>
           <div class="tricolor-stripe" aria-hidden="true"></div>
           <div class="sub">Regia · Producer Desk</div>
         </div>
@@ -1547,13 +1639,13 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </div>
 
     <!-- ══ Tab strip — swaps the work area below; the console above stays pinned ══ -->
-    <nav class="mmr-tabbar" id="adminTabs" aria-label="Sezioni regia">
-      <button type="button" class="mmr-tab" data-tab="diretta">Diretta</button>
-      <button type="button" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
-      <button type="button" class="mmr-tab" data-tab="rotazione">Rotazione</button>
-      <button type="button" class="mmr-tab" data-tab="conduttori">Conduttori</button>
-      <button type="button" class="mmr-tab" data-tab="archivio">Archivio</button>
-      <button type="button" class="mmr-tab" data-tab="motore">Motore<span class="mmr-tab-alert" id="motoreTabAlert" style="display:none"></span></button>
+    <nav class="mmr-tabbar" id="adminTabs" role="tablist" aria-label="Sezioni regia">
+      <button type="button" role="tab" id="tab-diretta" aria-controls="drawer-steer" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="diretta">Diretta</button>
+      <button type="button" role="tab" id="tab-scaletta" aria-controls="live-queue" aria-selected="true" tabindex="0" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
+      <button type="button" role="tab" id="tab-rotazione" aria-controls="rotation-pool" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="rotazione">Rotazione</button>
+      <button type="button" role="tab" id="tab-conduttori" aria-controls="drawer-hosts" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="conduttori">Conduttori</button>
+      <button type="button" role="tab" id="tab-archivio" aria-controls="drawer-history" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="archivio">Archivio</button>
+      <button type="button" role="tab" id="tab-motore" aria-controls="drawer-diagnostics" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="motore">Motore<span class="mmr-tab-alert" id="motoreTabAlert" style="display:none"></span></button>
     </nav>
 
     </div><!-- /mmr-deck -->
@@ -1561,7 +1653,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     <div class="mmr-tabpanels">
 
     <!-- Scaletta zone -->
-    <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta">
+    <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta" role="tabpanel" aria-labelledby="tab-scaletta" tabindex="0">
       <header class="mmr-panel-head">
         <h2>Scaletta</h2>
         <div class="programme-toolbar">
@@ -1585,7 +1677,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </section>
 
     <!-- Rotation Pool zone -->
-    <section class="a-panel producer-zone mmr-tabpanel" id="rotation-pool" data-panel="rotazione">
+    <section class="a-panel producer-zone mmr-tabpanel" id="rotation-pool" data-panel="rotazione" role="tabpanel" aria-labelledby="tab-rotazione" tabindex="0">
       <header class="mmr-panel-head">
         <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
@@ -1593,7 +1685,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div class="rotation-toolbar">
         <div class="quick-actions" id="playlistSourceControls">
           <span class="quick-add-label">Add:</span>
-          <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Classifiche</button>
+          <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
           <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
@@ -1626,11 +1718,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div id="searchResults"></div>
       <div id="banlistPanel" style="display:none"></div>
       <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo your bans with the <strong>Banned</strong> button above.</div>
-      <div id="plBody" style="max-height:400px;overflow-y:auto;overflow-x:hidden"></div>
+      <div id="plBody"></div>
     </section>
 
     <!-- Diretta zone -->
-    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-steer" data-panel="diretta">
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-steer" data-panel="diretta" role="tabpanel" aria-labelledby="tab-diretta" tabindex="0">
       <header class="mmr-panel-head"><h2>Diretta</h2><div class="sub">cadenza · modalità · azioni</div></header>
     <section class="drawer-section" id="triggers">
 
@@ -1712,7 +1804,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </section>
 
     <!-- Conduttori zone -->
-    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-hosts" data-panel="conduttori">
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-hosts" data-panel="conduttori" role="tabpanel" aria-labelledby="tab-conduttori" tabindex="0">
       <section class="drawer-section" id="hosts">
         <header class="mmr-panel-head">
           <h2>Conduttori</h2>
@@ -1723,7 +1815,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </section>
 
     <!-- Archivio zone -->
-    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-history" data-panel="archivio">
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-history" data-panel="archivio" role="tabpanel" aria-labelledby="tab-archivio" tabindex="0">
     <section class="drawer-section" id="log">
       <header class="mmr-panel-head">
         <h2>Archivio</h2>
@@ -1749,7 +1841,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     </section>
 
     <!-- Motore zone -->
-    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore">
+    <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore" role="tabpanel" aria-labelledby="tab-motore" tabindex="0">
       <header class="mmr-panel-head"><h2>Motore</h2><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></header>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
@@ -1757,49 +1849,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     <!-- ── MOTORE PANEL ── -->
     <section class="drawer-section" id="engine">
       <div>
-
-        <!-- Super Italian Mode toggle (station personality dial) -->
-        <div class="card-label">Super Italian Mode</div>
-        <div style="margin-bottom:14px">
-          <label class="super-italian-toggle">
-            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
-            <span><strong>Super Italian Mode</strong></span>
-          </label>
-          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            Full Italian mode: hosts speak as an Italian station and the listener page stays in Italian.
-          </div>
-        </div>
-
-        <!-- AI Quality dial (model profile: premium | balanced | economy) -->
-        <div class="card-label">AI Quality</div>
-        <div style="margin-bottom:14px">
-          <select id="qualityProfile" onchange="setQuality(this.value)"
-                  style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
-            <option value="premium">Premium — best hosts, highest cost</option>
-            <option value="balanced" selected>Balanced — great hosts, sensible cost</option>
-            <option value="economy">Economy — cheapest, lighter hosts</option>
-          </select>
-          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            Picks the right model per task automatically. Hot-swaps live — the current segment finishes first. No model names to track.
-          </div>
-        </div>
-
-        <!-- On-Air Sound toggle (FM broadcast chain — live A/B against studio-clean) -->
-        <div class="card-label">On-Air Sound</div>
-        <div style="margin-bottom:14px">
-          <label class="super-italian-toggle">
-            <input type="checkbox" id="broadcastChainToggle" class="super-italian-checkbox" onchange="toggleBroadcastChain(this)">
-            <span><strong>On-Air Sound</strong></span>
-          </label>
-          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            <strong>Off by default = studio-clean.</strong> When on, every song, break, and ad gets a very
-            subtle "tuned-in FM" colour: a gentle softening of the highest frequencies and a slight band-limit,
-            the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
-            good speakers you may not hear any difference at all; it is most noticeable on small or phone
-            speakers. Toggling it does not change the track that is playing now: it takes effect on the next
-            few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
-          </div>
-        </div>
 
         <!-- Group 1: Status -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-status-h">
@@ -1834,6 +1883,51 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <div id="engineSegments" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
         </div>
 
+        <!-- Station configuration (below runtime diagnosis, above collapsible Setup) -->
+        <div class="drawer-subgroup" role="group" aria-labelledby="eg-config-h">
+          <div class="ttl-eyebrow" id="eg-config-h">Configurazione</div>
+
+          <div class="card-label">Super Italian Mode</div>
+          <div style="margin-bottom:14px">
+            <label class="super-italian-toggle">
+              <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
+              <span><strong>Super Italian Mode</strong></span>
+            </label>
+            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              Full Italian mode: hosts speak as an Italian station and the listener page stays in Italian.
+            </div>
+          </div>
+
+          <div class="card-label">AI Quality</div>
+          <div style="margin-bottom:14px">
+            <select id="qualityProfile" onchange="setQuality(this.value)"
+                    style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
+              <option value="premium">Premium — best hosts, highest cost</option>
+              <option value="balanced" selected>Balanced — great hosts, sensible cost</option>
+              <option value="economy">Economy — cheapest, lighter hosts</option>
+            </select>
+            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              Picks the right model per task automatically. Hot-swaps live — the current segment finishes first. No model names to track.
+            </div>
+          </div>
+
+          <div class="card-label">On-Air Sound</div>
+          <div style="margin-bottom:14px">
+            <label class="super-italian-toggle">
+              <input type="checkbox" id="broadcastChainToggle" class="super-italian-checkbox" onchange="toggleBroadcastChain(this)">
+              <span><strong>On-Air Sound</strong></span>
+            </label>
+            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              <strong>Off by default = studio-clean.</strong> When on, every song, break, and ad gets a very
+              subtle "tuned-in FM" colour: a gentle softening of the highest frequencies and a slight band-limit,
+              the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
+              good speakers you may not hear any difference at all; it is most noticeable on small or phone
+              speakers. Toggling it does not change the track that is playing now: it takes effect on the next
+              few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
+            </div>
+          </div>
+        </div>
+
         <!-- Group 3: Setup (collapsible — auto-collapses when all-ready) -->
         <details class="drawer-subgroup setup-group" role="group" aria-labelledby="eg-setup-h" id="setupGroup">
           <summary class="setup-summary">
@@ -1852,10 +1946,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="setup-list" id="setupEssentials"></div>
             <div class="setup-subhead">Initial checks</div>
             <div class="setup-list" id="setupChecks"></div>
-            <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;margin-bottom:0.75rem">
-              <span style="color:var(--ok);font-weight:600" id="setupKeysLabel">&#10003; Provider keys configured</span>
+            <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:color-mix(in srgb, var(--ok) 10%, transparent);border:1px solid color-mix(in srgb, var(--ok) 30%, transparent);border-radius:8px;margin-bottom:0.75rem">
+              <span style="color:var(--ok-text);font-weight:600" id="setupKeysLabel">&#10003; Provider keys configured</span>
               <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-              <button type="button" class="btn btn-util" style="margin-left:0.75rem;font-size:0.8em;padding:0.2rem 0.6rem" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+              <button type="button" class="btn btn-util setup-inline-action" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
             <div id="setupKeysForm">
               <div class="setup-subhead">Save Keys</div>
@@ -1990,6 +2084,11 @@ function segmentClass(type){return String(type||'music').replace(/[^a-z0-9_-]/gi
 const STATUS_STATES=['ready','working','degraded','blocked','idle'];
 function statusState(state){const s=String(state||'idle');return STATUS_STATES.includes(s)?s:'idle'}
 function statusTitle(state,label,title=''){return title||`${label} (${state})`}
+function formatRequestAge(ageS){
+  if(ageS==null||!Number.isFinite(ageS)||ageS<0)return'';
+  if(ageS<60)return ageS+'s ago';
+  return Math.floor(ageS/60)+'m ago';
+}
 function _statusSpan(cls,state,label,title=''){
   const safeState=statusState(state);
   return `<span class="${cls} ${safeState}" aria-label="${esc(label)}: status ${esc(safeState)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
@@ -2060,7 +2159,7 @@ function initTabs(){
   function show(name,render){
     if(!panels.some(p=>p.dataset.panel===name))name='scaletta';
     _activeTab=name;
-    tabs.forEach(t=>{const on=t.dataset.tab===name;t.classList.toggle('is-active',on);if(on)t.setAttribute('aria-current','true');else t.removeAttribute('aria-current');});
+    tabs.forEach(t=>{const on=t.dataset.tab===name;t.classList.toggle('is-active',on);t.setAttribute('aria-selected',on?'true':'false');t.tabIndex=on?0:-1;if(on)t.setAttribute('aria-current','true');else t.removeAttribute('aria-current');});
     panels.forEach(p=>p.classList.toggle('is-active',p.dataset.panel===name));
     try{sessionStorage.setItem('adminTab',name);}catch(_){}
     // Render the newly-shown panel immediately from cached state so switching
@@ -2068,6 +2167,20 @@ function initTabs(){
     if(render)renderActiveTab();
   }
   tabs.forEach(t=>t.addEventListener('click',()=>show(t.dataset.tab,true)));
+  const tablistEl=document.getElementById('adminTabs');
+  if(tablistEl){tablistEl.addEventListener('keydown',e=>{
+    const keys=['ArrowRight','ArrowLeft','Home','End'];
+    if(!keys.includes(e.key))return;
+    e.preventDefault();
+    let j=tabs.findIndex(t=>t.classList.contains('is-active'));
+    if(j<0)j=0;
+    if(e.key==='ArrowRight')j=(j+1)%tabs.length;
+    else if(e.key==='ArrowLeft')j=(j-1+tabs.length)%tabs.length;
+    else if(e.key==='Home')j=0;
+    else j=tabs.length-1;
+    const next=tabs[j];
+    if(next){show(next.dataset.tab,true);next.focus();}
+  });}
   let initTab='scaletta';try{initTab=sessionStorage.getItem('adminTab')||'scaletta';}catch(_){}
   show(initTab,false);
   // Once the operator manually toggles the Setup group, stop auto-collapsing it.
@@ -2994,7 +3107,7 @@ function updatePl(tracks,page){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -3371,7 +3484,7 @@ function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
 
 function sliderBg(val){
   const pct=val+'%';
-  const mid=val>60?'var(--accent-warm)':'#7a5020';
+  const mid=val>60?'var(--accent-warm)':'var(--slider-track-low)';
   const hi=val>60?',var(--sun)':'';
   return `linear-gradient(90deg,#3a2010,${mid}${hi} ${pct},rgba(20,17,15,0.85) ${pct})`;
 }
@@ -3421,8 +3534,20 @@ function renderHosts(hosts){
     return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
   document.querySelectorAll('.host-block').forEach(block=>{
+    syncHostPresetActive(block);
     refreshHostPreview(block);
   });
+}
+
+function syncHostPresetActive(block){
+  if(!block)return;
+  const vals={};
+  block.querySelectorAll('input[type="range"]').forEach(sl=>{vals[sl.dataset.a]=+sl.value;});
+  let match=null;
+  for(const [name,preset] of Object.entries(HOST_PRESETS)){
+    if(AX.every(a=>vals[a]===preset[a])){match=name;break;}
+  }
+  block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===match));
 }
 
 function onSliderInput(sl,n){
@@ -3432,7 +3557,7 @@ function onSliderInput(sl,n){
   if(wordEl)wordEl.textContent=axWord(ax,val);
   const block=sl.closest('.host-block');
   if(block){
-    block.querySelectorAll('.host-preset').forEach(b=>b.classList.remove('active'));
+    syncHostPresetActive(block);
     refreshHostPreview(block);
   }
 }
@@ -3466,7 +3591,7 @@ async function applyHostPreset(n,presetName){
   block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===presetName));
   refreshHostPreview(block);
   await updHost(n,preset);
-  toast(`${n}: preset ${PRESET_LABEL[presetName]||presetName} applicato`);
+  toast(`${n}: preset ${PRESET_LABEL[presetName]||presetName} applied`);
 }
 
 // ── Listener Requests ──
@@ -3486,7 +3611,7 @@ function updateListenerRequests(reqs,consumed){
   if(wrap)wrap.style.display='';
   meta.textContent=_lrReqs.length?_lrReqs.length+' pending':'';
   html+=_lrReqs.map((r,i)=>{
-    const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
+    const age=formatRequestAge(r.age_s);
     let status='';
     let actions='';
     if(r.type==='song_request'){
@@ -3511,7 +3636,7 @@ function updateListenerRequests(reqs,consumed){
   if(consumed.length){
     html+=`<div class="lr-consumed-label">Recently handled</div>`;
     html+=consumed.map(r=>{
-      const age=r.age_s<60?r.age_s+'s fa':Math.floor(r.age_s/60)+'m fa';
+      const age=formatRequestAge(r.age_s);
       const badge=r.status==='song_not_found'
         ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';

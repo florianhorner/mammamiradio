@@ -6,6 +6,10 @@
 
 - **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
 
+### Changed
+
+- **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
+
 ### Fixed
 
 - **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.

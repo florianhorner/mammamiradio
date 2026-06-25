@@ -152,6 +152,8 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
             f.unlink(missing_ok=True)
             purged += 1
             continue
+        if f.name.startswith("synth_"):
+            continue
         try:
             size = f.stat().st_size
         except OSError:
