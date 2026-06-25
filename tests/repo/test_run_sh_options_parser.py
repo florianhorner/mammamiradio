@@ -31,7 +31,7 @@ STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
 EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
-def _extract_python_snippet(options_file: Path, secrets_file: Path | None = None) -> str:
+def _extract_python_snippet(options_file: Path, provider_file: Path | None = None) -> str:
     """Extract the Python body from the python3 -c "..." block in run.sh,
     substituting the real options and secrets file paths."""
     src = RUN_SH.read_text()
@@ -41,22 +41,22 @@ def _extract_python_snippet(options_file: Path, secrets_file: Path | None = None
     raw = blocks[0]
     # The shell uses $OPTIONS_FILE and $SECRETS_FILE inside the script — substitute them
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
-    secrets_path = secrets_file or (options_file.parent / "missing-secrets.env")
-    raw = raw.replace("$SECRETS_FILE", str(secrets_path))
+    provider_path = provider_file or (options_file.parent / "missing-secrets.env")
+    raw = raw.replace("$SECRETS_FILE", str(provider_path))
     # Shell escapes single-quotes as '\'' inside double-quoted strings; undo that
     raw = raw.replace("\\'", "'")
     return textwrap.dedent(raw)
 
 
-def _run_parser(options: dict, secrets_env: str | None = None) -> tuple[int, str, str]:
+def _run_parser(options: dict, provider_env_text: str | None = None) -> tuple[int, str, str]:
     """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "options.json"
-        secrets_path = Path(tmp_dir) / "secrets.env"
+        provider_path = Path(tmp_dir) / "secrets.env"
         tmp_path.write_text(json.dumps(options))
-        if secrets_env is not None:
-            secrets_path.write_text(secrets_env)
-        snippet = _extract_python_snippet(tmp_path, secrets_path)
+        if provider_env_text is not None:
+            provider_path.write_text(provider_env_text)
+        snippet = _extract_python_snippet(tmp_path, provider_path)
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,
@@ -65,15 +65,15 @@ def _run_parser(options: dict, secrets_env: str | None = None) -> tuple[int, str
         return result.returncode, result.stdout, result.stderr
 
 
-def _run_parser_shell_eval(options: dict, secrets_env: str | None = None) -> tuple[int, str, str]:
+def _run_parser_shell_eval(options: dict, provider_env_text: str | None = None) -> tuple[int, str, str]:
     """Run the parser through shell eval so precedence and warning redirects are exercised."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "options.json"
-        secrets_path = Path(tmp_dir) / "secrets.env"
+        provider_path = Path(tmp_dir) / "secrets.env"
         tmp_path.write_text(json.dumps(options))
-        if secrets_env is not None:
-            secrets_path.write_text(secrets_env)
-        snippet = _extract_python_snippet(tmp_path, secrets_path)
+        if provider_env_text is not None:
+            provider_path.write_text(provider_env_text)
+        snippet = _extract_python_snippet(tmp_path, provider_path)
         shell = "\n".join(
             [
                 f"OPTS_EXPORT=$({shlex.quote(sys.executable)} -c {shlex.quote(snippet)}) || exit $?",

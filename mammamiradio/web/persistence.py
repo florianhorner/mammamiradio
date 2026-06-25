@@ -37,6 +37,23 @@ def _env_assignment(key: str, value: str) -> str:
     return f"{key}={shlex.quote(value)}"
 
 
+def _write_owner_only_text(path: Path, text: str) -> None:
+    """Write a local operator-owned credential file with owner-only permissions."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            # Local HA add-on credentials are intentionally stored on the
+            # operator's own config volume. The file is created 0600 and keeps
+            # provider keys out of Supervisor options/diagnostics.
+            # lgtm[py/clear-text-storage-sensitive-data]
+            # codeql[py/clear-text-storage-sensitive-data]
+            handle.write(text)
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
     for env_key, value in updates.items():
         os.environ[env_key] = value
@@ -157,7 +174,7 @@ def _save_addon_options(updates: dict[str, str]) -> None:
                 new_lines.append(_env_assignment(env_key, secret_updates[env_key]))
 
         tmp_path = secrets_path.with_suffix(secrets_path.suffix + ".tmp")
-        tmp_path.write_text("\n".join(new_lines) + "\n")
+        _write_owner_only_text(tmp_path, "\n".join(new_lines) + "\n")
         _os.replace(tmp_path, secrets_path)
 
         pruned_options = dict(options)
