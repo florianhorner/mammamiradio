@@ -1,6 +1,6 @@
 [project]
 name = "mammamiradio"
-version = "2.14.1"
+version = "2.15.0"
 description = "AI-powered Italian radio station engine"
 license = "Apache-2.0"
 requires-python = ">=3.11"
