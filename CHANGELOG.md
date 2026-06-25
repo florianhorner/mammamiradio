@@ -8,6 +8,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Ban the song that's playing, right from the on-air controls.** A new "Ban" button sits next to Skip in the admin console: one tap blocks the song that's on air for good and moves straight to the next thing, instead of hunting for it in the rotation list and waiting for it to finish. It works even for a song that came from a one-off request or the station's own backup audio, and an "Undo" prompt lets you lift the ban if you tapped it by mistake. The music never goes quiet during the switch.
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
 - **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
 

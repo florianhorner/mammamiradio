@@ -683,6 +683,9 @@ input[type="range"]:focus-visible {
 .btn-icon svg { width: 16px; height: 16px; }
 .btn-icon:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
 .btn-icon:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+/* Destructive ban-now icon: Lancia red on hover (not gold) — the slash glyph keeps it
+   colorblind-legible without relying on hue (shape, not colour, carries the meaning). */
+.btn-icon-ban:hover { color: var(--lancia, #B82C20); border-color: var(--lancia, #B82C20); background: rgba(184,44,32,0.10); }
 .btn-primary-sm {
   background: var(--sun2); color: #14110F; border: none;
   padding: 8px 14px; border-radius: 8px;
@@ -1580,6 +1583,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
+            <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
+            </button>
             <button type="button" id="stopBtn" class="btn-icon" title="Stop" onclick="doStop(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
             </button>
@@ -2223,6 +2229,37 @@ initOnAirSticky();
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
+async function doBanNowPlaying(el){
+  // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
+  // the segment leaves the air the instant the skip lands.
+  const ns=_st&&_st.now_streaming;
+  const meta=(ns&&ns.metadata)||{};
+  let artist=String(meta.artist||'').trim();
+  let title=String(meta.title_only||'').trim();
+  if(!artist&&!title){
+    const parts=String((ns&&ns.label)||'').split(/\s[—–-]\s/);
+    if(parts.length===2){artist=parts[0].trim();title=parts[1].trim();}
+  }
+  flash(el);
+  const r=await api('POST','/api/track/ban-now-playing');
+  if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban this song');toast(m);return;}
+  await refreshFast();refreshBanCount();
+  // Prefer the server-resolved key so Undo lifts exactly what was banned, even if
+  // the segment advanced between our last poll and the server read.
+  if(Array.isArray(r.key)&&r.key.length===2){artist=r.key[0];title=r.key[1];}
+  // Undo only lifts the ban — the song was already skipped off the air, so the copy
+  // says "can come back" rather than implying it returns to air now.
+  const msg=r.persisted===false?'Banned and skipped — but I couldn’t save it, so it may come back after a restart':'Banned and skipped — won’t come back';
+  if(typeof window.undoableToast==='function'&&(artist||title)){
+    window.undoableToast(msg,async()=>{
+      const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
+      toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
+      await refreshFast();refreshBanCount();
+    });
+  }else{
+    toast(msg);
+  }
+}
 async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
@@ -2456,6 +2493,10 @@ function durationSec(item){
   return null;
 }
 function updateNow(ns){
+  // Ban-now is only meaningful while a song is on air — derive it straight from the
+  // segment type the admin already polls (no extra server field needed).
+  const banBtn=document.getElementById('banNowBtn');
+  if(banBtn)banBtn.style.display=(ns&&segmentTypeKey(ns.type)==='music')?'':'none';
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
     if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','Waiting: status idle');ty.title='Waiting for signal';ty.textContent='—';}

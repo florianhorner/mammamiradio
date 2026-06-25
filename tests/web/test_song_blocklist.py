@@ -6,6 +6,11 @@ Scenarios (CLAUDE.md audio-delivery rule):
   * Post-restart — covered at the data layer in tests/playlist/test_blocklist.py.
 Plus: durable ✕ removal, unban, the 4th ingest doorway (_commit_external_download),
 on-air queue purge, and pinned-track clear.
+
+The on-air console "Ban" button (``/api/track/ban-now-playing`` = ban + immediate skip)
+carries its own three-scenario block at the foot of this file: Normal (ban+purge+cut),
+Empty fallback (bridge so a queue emptied by the ban never goes dead), and Post-restart
+(session stopped -> reject cleanly, no spurious skip).
 """
 
 from __future__ import annotations
@@ -234,3 +239,275 @@ async def test_ban_reports_not_persisted_when_disk_write_fails(tmp_path):
     assert body["persisted"] is False
     # In-memory ban still holds for the session.
     assert ("modugno", "volare") in state.blocklist
+
+
+# --- Ban-now-playing: the on-air console "Ban" button (ban + immediate skip) --------
+#
+# Audio-delivery rule (CLAUDE.md): this path touches the streamer/skip/bridge, so all
+# three scenarios are covered — Normal, Empty fallback (bridge, never dead air), and
+# Post-restart (session stopped -> reject cleanly).
+
+
+def _airing_music(state, *, artist="Modugno", title_only="Volare", label=None):
+    """Stamp now_streaming as a music segment the way the playback loop does."""
+    state.now_streaming = {
+        "type": "music",
+        "label": label if label is not None else f"{artist} — {title_only}",
+        "started": time.time(),
+        "metadata": {"artist": artist, "title_only": title_only},
+    }
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_bans_skips_and_purges(tmp_path):
+    """Scenario 1 — Normal: the airing song is blocklisted, dropped from the pool,
+    its queued copy purged, and the air segment cut (skip_event set, now -> skipping)."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    q = app.state.queue
+    _airing_music(state)
+    # A queued copy of the same song + an innocent one, plus a third innocent so the
+    # queue is non-empty after the purge (no bridge expected).
+    q.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/v.mp3"),
+            ephemeral=False,
+            metadata={"artist": "Modugno", "title_only": "Volare", "queue_id": "q-ban"},
+        )
+    )
+    q.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/f.mp3"),
+            ephemeral=False,
+            metadata={"artist": "Al Bano", "title_only": "Felicità", "queue_id": "q-keep"},
+        )
+    )
+    state.queued_segments = [{"id": "q-ban", "label": "Volare"}, {"id": "q-keep", "label": "Felicità"}]
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True and body["skipped"] is True and body["bridged"] is False
+    assert body["purged"] == 1
+    # Server returns the resolved key so the client's Undo can't target a stale song.
+    assert body["key"] == ["modugno", "volare"]
+    # Durable ban + dropped from the pool.
+    assert ("modugno", "volare") in state.blocklist
+    assert [t.title for t in state.playlist] == ["Felicità"]
+    # Queued copy gone, innocent kept.
+    assert [s["id"] for s in state.queued_segments] == ["q-keep"]
+    # Air segment cut.
+    assert app.state.skip_event.is_set()
+    assert state.now_streaming["type"] == "skipping"
+    # Shares the skip path, so the listener profile records the skip (no drift between
+    # the two _request_skip callers).
+    assert state.listener.songs_skipped >= 1
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_works_when_song_not_in_playlist(tmp_path):
+    """The airing song came from the rescue cache / a one-off download and is NOT in
+    state.playlist. Index-based row ban can't reach it; ban-now-playing bans by
+    identity and still cuts the air. The big win over /api/playlist/remove."""
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="OneOff", title_only="Ghost Track")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True and body["skipped"] is True
+    assert ("oneoff", "ghost track") in state.blocklist
+    # The unrelated pool song is untouched.
+    assert [t.title for t in state.playlist] == ["Felicità"]
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_bridges_when_queue_empty(tmp_path):
+    """Scenario 2 — Empty fallback: queue empty + no queued segments. Ban-now must
+    force the next music (the queue-empty bridge directive) before cutting, so a queue
+    the ban itself emptied never goes dead. This pins the directive (force_next=MUSIC);
+    that the producer can satisfy it under an empty cache is the producer/rescue tests'
+    job, not this one's."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    _airing_music(state)
+    assert app.state.queue.empty() and not state.queued_segments
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True and body["bridged"] is True
+    # The bridge directive that prevents dead air.
+    assert state.force_next is SegmentType.MUSIC
+    assert app.state.skip_event.is_set()
+    assert any(a.get("source") == "ban_now_playing" for a in state.pending_actions)
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_is_starvation_exempt(tmp_path):
+    """Contract pin: ban-now is EXEMPT from MIN_ROTATION_AFTER_BAN (like the per-row ✕
+    Ban), unlike bulk /api/track/ban which refuses below the floor. Banning the only
+    song in a 1-track pool must succeed and empty the pool — the operator asked for
+    THIS song gone now. If someone routes ban-now through the floor check, this fails
+    with a clear reason instead of the bridge test failing obscurely."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    _airing_music(state)
+    async with _client(app) as c:
+        # Same one-track pool the bulk endpoint would refuse to empty...
+        bulk = (await c.post("/api/track/ban", json={"indices": [0]})).json()
+        assert bulk["ok"] is False  # bulk refuses (would starve)
+    # ...but ban-now bans it anyway.
+    state.blocklist.clear()
+    state.playlist = [_track("Volare", "Modugno")]
+    _airing_music(state)
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+    assert body["ok"] is True
+    assert ("modugno", "volare") in state.blocklist
+    assert state.playlist == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label,expected",
+    [
+        ("Mina — Tintarella di Luna", ("mina", "tintarella di luna")),  # em dash
+        ("Mina – Tintarella", ("mina", "tintarella")),  # en dash
+        ("Mina - Tintarella", ("mina", "tintarella")),  # hyphen
+    ],
+)
+async def test_ban_now_playing_label_dash_variants(tmp_path, label, expected):
+    """Identity-from-label must handle all three separators the UI renders."""
+    app = _make_app(tmp_path, [])
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": label, "started": time.time(), "metadata": {}}
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+    assert body["ok"] is True
+    assert expected in state.blocklist
+    assert body["key"] == list(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label", ["Mina —", "— Volare", "Mina"])
+async def test_ban_now_playing_one_sided_label_is_refused(tmp_path, label):
+    """A malformed one-sided label is not a song identity — refuse rather than ban a
+    half-key like ('mina', '') that would match nothing real."""
+    app = _make_app(tmp_path, [])
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": label, "started": time.time(), "metadata": {}}
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+    assert body["ok"] is False
+    assert state.blocklist == {}
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_rejected_after_restart_stop(tmp_path):
+    """Scenario 3 — Post-restart: the session is stopped (now_streaming type 'stopped').
+    Nothing musical is on air, so ban-now rejects with a warm message and never raises
+    into the audio path or fires a spurious skip."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is False
+    assert "on air" in body["error"].lower()
+    assert state.blocklist == {}
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_rejected_during_banter(tmp_path):
+    """Only music can be banned — a banter/ad segment on air is rejected, button stays
+    a no-op, no skip fired."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    state.now_streaming = {"type": "banter", "label": "Hosts chatting", "started": time.time(), "metadata": {}}
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is False
+    assert state.blocklist == {}
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_falls_back_to_label_when_metadata_missing(tmp_path):
+    """No artist/title_only in metadata -> resolve identity from the 'Artist — Title'
+    label the queue/programme rows already render."""
+    app = _make_app(tmp_path, [])
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Mina — Tintarella di Luna",
+        "started": time.time(),
+        "metadata": {},
+    }
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True
+    assert ("mina", "tintarella di luna") in state.blocklist
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_unresolvable_identity_is_refused(tmp_path):
+    """Music on air but no identity anywhere (no metadata, label is just the bare type)
+    -> refuse with a way-out message rather than ban an empty key."""
+    app = _make_app(tmp_path, [])
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "music", "started": time.time(), "metadata": {}}
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is False
+    assert state.blocklist == {}
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_idempotent_when_already_banned(tmp_path):
+    """Already on the blocklist (e.g. banned from the row while it kept airing): the
+    operator still wants it OFF NOW, so ban-now skips anyway."""
+    app = _make_app(tmp_path, [])
+    state = app.state.station_state
+    state.blocklist = {
+        ("modugno", "volare"): {"display": "Modugno - Volare", "banned_by": "operator", "banned_at": 0.0}
+    }
+    _airing_music(state)
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True and body["skipped"] is True
+    assert ("modugno", "volare") in state.blocklist
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_honest_when_disk_write_fails(tmp_path):
+    """Best-effort persistence surfaced honestly: a failed save still bans for the
+    session and cuts the air, but persisted=False so the toast doesn't over-promise."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    _airing_music(state)
+    with patch("mammamiradio.web.streamer.save_blocklist", return_value=False):
+        async with _client(app) as c:
+            body = (await c.post("/api/track/ban-now-playing")).json()
+    assert body["ok"] is True and body["persisted"] is False
+    assert ("modugno", "volare") in state.blocklist
+    assert app.state.skip_event.is_set()
