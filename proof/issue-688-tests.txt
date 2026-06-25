@@ -1,7 +1,7 @@
 Issue 688 validation evidence
 =============================
 
-Commit: d4204709978f1f252cc81eb2198eb900ea91b982
+Commit: d68a184ef0f04047c0cfc7fa516fb9569bdab634
 Branch: issue-688
 Date: 2026-06-25
 
@@ -14,7 +14,7 @@ Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pom
   Result: passed; 227 files already formatted.
 
 - .venv/bin/python -m pytest tests/
-  Result: 3313 passed, 2 skipped, 19 deselected, 1 warning in 59.41s.
+  Result: 3313 passed, 2 skipped, 19 deselected, 1 warning in 61.09s.
 
 - bash -n ha-addon/mammamiradio/rootfs/run.sh
   Result: passed.
