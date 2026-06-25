@@ -287,15 +287,15 @@ The preferred HA surface is the HACS integration under
 `media_player.mammamiradio`, exposes native controls, provides diagnostics and
 Repairs, and adds `media-source://mammamiradio/live` for casting.
 
-The add-on still pushes sensor state after each segment transition and every 30
-seconds. Its legacy REST-pushed `media_player.mammamiradio` is compatibility
-only. New add-on installs default `ha_media_player_push` off so the HACS
-integration owns the media player. Existing installs with no saved option keep
-the old push until the operator turns it off.
+The add-on also pushes a basic `media_player.mammamiradio` plus sensor state
+after each segment transition and every 30 seconds, so an add-on-only setup gets
+a media-player tile out of the box. When the HACS integration is installed, turn
+`ha_media_player_push` off so its registered `media_player.mammamiradio` owns the
+id instead of the REST-pushed ghost; the sensors keep flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration by default; legacy REST push only when `ha_media_player_push` is on |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |

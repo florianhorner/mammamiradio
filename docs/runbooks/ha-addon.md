@@ -133,7 +133,7 @@ Current config options:
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 | `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
-| `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (new-install manifest default off; `run.sh` missing-key fallback true for legacy installs) |
+| `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
@@ -170,12 +170,14 @@ The option extraction in run.sh uses a single guarded Python script that reads k
 3. Add the run.sh export, either in the tuple loop for direct UPPER_CASE keys or as an explicit mapping for app-specific env vars
 4. Read it in `config.py` via `os.getenv("MY_OPTION", "default")`
 
-**Media-player ownership migration.** Stable and Edge manifests default
-`ha_media_player_push` to `false` for new installs so the HACS integration owns
-the registered, controllable `media_player.mammamiradio`. Do not change the
-`run.sh` missing-key fallback from `true`: older installs that never saved this
-option should keep their historical REST-pushed media player until the operator
-explicitly turns it off.
+**Media-player ownership.** Stable and Edge manifests default
+`ha_media_player_push` to `true`, so an add-on-only setup gets a basic
+`media_player.mammamiradio` tile out of the box. When the operator installs the
+HACS integration (which registers a controllable `media_player.mammamiradio`),
+they turn this option off so the two don't fight over the id; the integration
+raises a Repair if it detects the lingering REST ghost. Keep the `run.sh`
+missing-key fallback at `true` so installs that never saved the option still get
+the tile.
 
 ## Secrets: password type
 

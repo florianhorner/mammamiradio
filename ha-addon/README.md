@@ -38,7 +38,7 @@ After installing, go to the add-on's **Configuration** tab:
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
-- **On-air media player push**: Off by default for new installs. Leave it off when using the HACS integration; turn it on only for legacy add-on-only dashboards that still depend on the REST-pushed media player.
+- **On-air media player push**: On by default — the station appears in Home Assistant as a media player automatically. Turn it off if you install the HACS integration (which provides a controllable media player and would otherwise fight this push); the station's sensors keep working either way.
 
 ## Usage
 

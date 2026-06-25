@@ -346,11 +346,11 @@ def test_parser_media_player_push_explicit_true_and_false():
         assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == expected
 
 
-def test_addon_manifest_media_player_push_defaults_false_for_new_installs():
+def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
     for config in (STABLE_CONFIG, EDGE_CONFIG):
         body = config.read_text()
-        assert re.search(r"(?m)^  ha_media_player_push: false$", body), (
-            f"{config} must default new installs to the HACS integration owning media_player.mammamiradio"
+        assert re.search(r"(?m)^  ha_media_player_push: true$", body), (
+            f"{config} must default new installs to On so an add-on-only setup gets a media_player tile out of the box"
         )
 
 
