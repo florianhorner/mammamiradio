@@ -2835,9 +2835,10 @@ function updateRuntimeStatus(st){
       const windowMin=Math.round((gw.window_seconds||900)/60);
       const durMin=Math.round((gw.recent_duration_sec||0)/60);
       const wasteCost=Number(gw.estimated_waste_cost_usd||0);
-      // Same rough money convention as the token-cost readout: under a dollar
+      // Same rough money convention as the token-cost readout: exactly zero reads
+      // "$0" (a clean session wasted nothing — never imply spend), under a dollar
       // reads "<$1", otherwise "~$N" rounded to whole dollars.
-      const costStr=wasteCost<1?'<$1':'~$'+Math.round(wasteCost);
+      const costStr=wasteCost<=0?'$0':(wasteCost<1?'<$1':'~$'+Math.round(wasteCost));
       const wasteLabel=gw.degraded?'Discarding often':'Low waste';
       let wasteDetail;
       if((gw.recent_segments||0)===0){

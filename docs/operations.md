@@ -156,8 +156,9 @@ fields:
 - `unproduced_segments` — discarded segments that never reached the produced
   counter, used only to keep the rough cost denominator from double-counting
   queued segments later purged.
-- `estimated_waste_cost_usd` — rough proration of session API+TTS spend:
-  `session_cost * discarded / (produced + unproduced_discarded)`.
+- `estimated_waste_cost_usd` — rough proration of session API+TTS spend,
+  clamped to the session total (it never exceeds what the session actually spent):
+  `min(session_cost, session_cost * discarded / (produced + unproduced_discarded))`.
 - `cost_basis` — plain-English explanation of the formula and its imprecision
   (count-based proration over-attributes cost to discarded music).
 - `degraded` — `true` once **either** signal trips: the raw recent discard

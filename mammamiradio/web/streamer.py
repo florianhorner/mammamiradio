@@ -1518,13 +1518,15 @@ async def run_playback_loop(app) -> None:
             # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
             # bridge captured just before the stop) and balance the queue
             # bookkeeping — the normal finally calls task_done for pulled segments.
-            if getattr(segment, "ephemeral", False):
-                segment.path.unlink(missing_ok=True)
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.SESSION_STOPPED,
                 already_counted_in_produced=pulled_from_queue,
             )
+            # Use the hardened helper (never raises) instead of a raw unlink: a
+            # throwing unlink here would escape into the playback coroutine and
+            # drop the stream (#1), and skip the task_done() balance below.
+            _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
             state.queue_empty_since = None

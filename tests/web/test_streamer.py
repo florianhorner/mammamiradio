@@ -219,20 +219,57 @@ def test_run_playback_loop_strips_per_segment_metadata():
 
 
 def test_run_playback_loop_records_session_stop_discard_before_airing():
-    """A stop landing after queue pull but before on_stream_segment must count as waste."""
+    """A stop landing after queue pull but before on_stream_segment must count as
+    waste (a record_discard call with the right keywords) AND clean up the temp via
+    the hardened best-effort helper — never a raw ``segment.path.unlink()`` that could
+    throw into the playback coroutine and drop the stream.
+
+    Inspects the call node inside the ``if state.session_stopped:`` branch directly
+    (not a whole-function substring grep, which false-passes on unrelated matches).
+    """
     import ast
 
     src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
     tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_playback_loop":
-            body_src = ast.get_source_segment(src, node)
-            assert "state.record_discard(" in body_src
-            assert "reason=GenerationWasteReason.SESSION_STOPPED" in body_src
-            assert "already_counted_in_produced=pulled_from_queue" in body_src
-            break
-    else:
-        raise AssertionError("run_playback_loop not found")
+    loop = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_playback_loop"),
+        None,
+    )
+    assert loop is not None, "run_playback_loop not found"
+
+    # The loop has more than one `session_stopped` guard; pick the mid-selection
+    # branch that actually records the discard (not the early bail-out guard).
+    stop_branch = next(
+        (
+            n
+            for n in ast.walk(loop)
+            if isinstance(n, ast.If)
+            and "session_stopped" in (ast.get_source_segment(src, n.test) or "")
+            and "record_discard" in (ast.get_source_segment(src, n) or "")
+        ),
+        None,
+    )
+    assert stop_branch is not None, "session_stopped stop-race branch not found"
+
+    discard_calls = [
+        c
+        for c in ast.walk(stop_branch)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "record_discard"
+    ]
+    assert len(discard_calls) == 1, "expected exactly one record_discard in the stop-race branch"
+    kwargs = {k.arg: ast.unparse(k.value) for k in discard_calls[0].keywords}
+    assert kwargs.get("reason") == "GenerationWasteReason.SESSION_STOPPED"
+    assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
+
+    # Temp cleanup must go through the hardened helper (never raises), not a raw
+    # unlink that could escape into the playback coroutine and drop the stream.
+    assert any(
+        isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_unlink_ephemeral_best_effort"
+        for c in ast.walk(stop_branch)
+    ), "stop-race branch must clean up via _unlink_ephemeral_best_effort"
+    assert "segment.path.unlink(" not in (ast.get_source_segment(src, stop_branch) or ""), (
+        "no raw unlink in the stop-race branch — it must use the hardened helper"
+    )
 
 
 # --- Additional branch coverage for _skip_id3_and_xing_header ---
