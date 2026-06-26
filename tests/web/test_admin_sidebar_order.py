@@ -72,8 +72,8 @@ def test_admin_has_pinned_console_and_full_tabbar() -> None:
     assert not parser._in_admin_content
     assert parser.console_present, "pinned live console (.mmr-console) must be present"
     assert parser.tab_order == [
-        "diretta",
         "scaletta",
+        "diretta",
         "rotazione",
         "conduttori",
         "archivio",

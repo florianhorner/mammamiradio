@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _golden_path_status,
@@ -132,6 +132,24 @@ async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
     assert state.queued_segments == []
     assert not eph.exists()  # ephemeral unlinked
     assert keep.exists()  # non-ephemeral kept
+
+
+@pytest.mark.asyncio
+async def test_purge_queue_and_shadow_records_discard_reason(tmp_path):
+    """Operator purges record each drained segment with the supplied reason."""
+    q = asyncio.Queue()
+    f = tmp_path / "banter.mp3"
+    f.write_bytes(b"x")
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=f, duration_sec=30.0, ephemeral=True))
+    state = StationState()
+
+    purged = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_STOP)
+
+    assert purged == 1
+    assert state.discarded_segments_total == 1
+    assert state.discard_by_reason == {GenerationWasteReason.OPERATOR_STOP: 1}
+    assert state.discard_by_type == {"banter": 1}
+    assert not f.exists()
 
 
 # ---------------------------------------------------------------------------

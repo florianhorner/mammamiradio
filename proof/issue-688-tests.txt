@@ -1,0 +1,46 @@
+Issue 688 validation evidence
+=============================
+
+Commit: fe46850f324cf4d5bbc0e3288bf3855c510ac8d1
+Branch: issue-688
+Date: 2026-06-25
+
+Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pompeii-v1
+(after merging origin/main and applying the pre-ship squad credential-hardening
+fixes):
+
+- .venv/bin/ruff check .
+  Result: passed.
+
+- .venv/bin/ruff format --check .
+  Result: passed; 231 files already formatted.
+
+- .venv/bin/python -m pytest tests/
+  Result: 3449 passed, 2 skipped, 19 deselected, 1 warning in 60.84s.
+
+- .venv/bin/python -m pytest tests/repo/test_run_sh_options_parser.py
+  Result: 24 passed in 0.50s.
+
+- bash -n ha-addon/mammamiradio/rootfs/run.sh
+  Result: passed.
+
+- bash -n scripts/validate-addon.sh
+  Result: passed.
+
+- ./scripts/validate-addon.sh
+  Result: passed. Covered add-on version sync, options/schema mapping,
+  rootfs/run.sh shell syntax, hardcoded value sync, translations, ingress
+  safety, Dockerfile safety, repository discovery, and edge add-on parity.
+
+- bash scripts/check-release-invariants.sh
+  Result: passed. 7 passed, 0 failed.
+
+- bash scripts/pre-release-check.sh
+  Result: passed. 10 passed, 0 failed.
+
+- Secret scan for common token/private-key patterns:
+  Result: no real credential material found in the final diff.
+
+Credential-file hardening verified by test (tests/web/test_persistence.py):
+- /config/secrets.env lands 0600 (test_save_addon_options_writes_env_keys_to_secrets_env).
+- Standalone .env lands 0600 (test_save_dotenv_writes_owner_only_file).

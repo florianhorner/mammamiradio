@@ -155,6 +155,46 @@ every fire so log aggregators can alert on sustained starvation. Counts are
 session-local by design and reset on restart. This is observability only — it
 does not change scheduling, prefetch depth, or rescue selection.
 
+### Reading generated segment waste
+
+`runtime_status.generation_waste` reports rendered audio that was discarded
+before it started broadcasting — queue purges on source switch, chaos cutover,
+operator stop/panic, bans, producer stale gates, and audio quality-gate rejects
+(a rendered music/banter/ad segment that failed the pre-air quality check). The
+fields:
+
+- `total_segments` / `total_duration_sec` — lifetime discarded count and audio
+  seconds this session.
+- `recent_segments` / `recent_duration_sec` — discards inside the rolling window
+  (`window_seconds`, default 900s / 15 min).
+- `by_reason` / `by_type` — lifetime breakdown by discard reason and segment
+  type (`stale_source` for a true source switch, `stale_playlist` for a
+  same-source playlist edit, `quality_gate_reject`, `operator_stop`, etc.).
+- `recent_top_reason` — dominant reason in the rolling window (for "mostly …"
+  copy in the admin card).
+- `unproduced_segments` — discarded segments that never reached the produced
+  counter, used only to keep the rough cost denominator from double-counting
+  queued segments later purged.
+- `estimated_waste_cost_usd` — rough proration of session API+TTS spend,
+  clamped to the session total (it never exceeds what the session actually spent):
+  `min(session_cost, session_cost * discarded / (produced + unproduced_discarded))`.
+- `cost_basis` — plain-English explanation of the formula and its imprecision
+  (count-based proration over-attributes cost to discarded music).
+- `degraded` — `true` once **either** signal trips: the raw recent discard
+  duration reaches `GENERATION_WASTE_DEGRADED_SECONDS` (default **120s**;
+  compared before rounding, so `recent_duration_sec` in the payload is the
+  rounded display value only), **or** `recent_segments` reaches
+  `GENERATION_WASTE_DEGRADED_COUNT` (default **5**).
+
+The Engine Room **Generated waste** row renders this as "Low waste" or
+"Discarding often", with recent unheard segment count, duration in the window,
+the dominant reason (shown with an operator-friendly label, e.g. "failed quality
+check"), and the rough `estimated_waste_cost_usd` shown as an approximation. When
+there are no recent discards the row drops the "mostly …" reason and shows plain
+low-waste copy. Admin-only — absent from `/public-status`. Counts are
+session-local and reset on restart. Observability only; does not change
+scheduling or generation depth.
+
 ### Reading producer headroom
 
 `runtime_status.producer_headroom` shows how full the lookahead queue is relative
@@ -293,7 +333,7 @@ The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The cont
 
 The `ha-addon/` directory contains a complete HA add-on scaffold. Users add the repo URL in HA Settings > Add-ons > Repositories, then install "Mamma Mi Radio" from the store.
 
-The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads add-on options from `/data/options.json`, and starts uvicorn. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
+The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads add-on options from `/data/options.json`, overlays AI/TTS provider secrets from `/config/secrets.env`, and starts uvicorn. Provider secrets in `/config/secrets.env` win over legacy option values per key; `ADMIN_TOKEN` and `JAMENDO_CLIENT_ID` remain add-on options. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow exposes the same setup checks there as every other run mode, and the stream URL can be played on any HA media player.
 
@@ -306,15 +346,15 @@ The preferred HA surface is the HACS integration under
 `media_player.mammamiradio`, exposes native controls, provides diagnostics and
 Repairs, and adds `media-source://mammamiradio/live` for casting.
 
-The add-on still pushes sensor state after each segment transition and every 30
-seconds. Its legacy REST-pushed `media_player.mammamiradio` is compatibility
-only. New add-on installs default `ha_media_player_push` off so the HACS
-integration owns the media player. Existing installs with no saved option keep
-the old push until the operator turns it off.
+The add-on also pushes a basic `media_player.mammamiradio` plus sensor state
+after each segment transition and every 30 seconds, so an add-on-only setup gets
+a media-player tile out of the box. When the HACS integration is installed, turn
+`ha_media_player_push` off so its registered `media_player.mammamiradio` owns the
+id instead of the REST-pushed ghost; the sensors keep flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration by default; legacy REST push only when `ha_media_player_push` is on |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |

@@ -826,6 +826,9 @@ async def test_prewarm_quality_gate_rejection():
 
     assert result is False
     assert queue.empty()
+    # The rejected prewarm render is recorded as generation waste (#397).
+    assert state.discard_by_reason.get("quality_gate_reject") == 1
+    assert state.discard_by_type.get("music") == 1
 
 
 @pytest.mark.asyncio

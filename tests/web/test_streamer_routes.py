@@ -1798,6 +1798,35 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
 
 
 @pytest.mark.asyncio
+async def test_setup_save_keys_in_addon_mode_uses_addon_secret_file():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+
+    try:
+        with (
+            patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options,
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+            patch(
+                "mammamiradio.web.provider_verdict.check_provider_keys",
+                new=AsyncMock(return_value=_probe_payload(anthropic="ok")),
+            ),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-addon"})
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        save_addon_options.assert_called_once_with({"ANTHROPIC_API_KEY": "sk-addon"})
+        save_dotenv.assert_not_called()
+    finally:
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
 async def test_setup_save_keys_rejects_empty_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

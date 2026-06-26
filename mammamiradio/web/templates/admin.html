@@ -1101,6 +1101,28 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
+  /* 481-768px = two-pane desktop column. Keep action buttons on the track
+   * line; never wrap them below — that looks broken. The ≤480px phone block
+   * below switches to a stacked touch-target grid instead. */
+  .pl-a { opacity: 1; }
+  .pl-btn, .sr-add { min-height: 36px; }
+  .undo-stack {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+  }
+  body.undo-toast-active .a-content { padding-bottom: calc(24px + var(--undo-toast-space, 120px)); }
+  .force-badge { margin-left: 28px; }
+  .a-triggers { grid-template-columns: 1fr 1fr; }
+  .a-row-2 { grid-template-columns: 1fr; }
+  .a-topbar { flex-wrap: wrap; }
+}
+
+/* Real phones (≤480px): stack the row into a deliberate touch-target grid —
+ * action buttons drop to a second row with full 44px hit areas. The two-pane
+ * desktop column (481-768px, above) keeps them inline instead. */
+@media (max-width: 480px) {
   .pl-row {
     display: grid;
     grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
@@ -1115,21 +1137,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .pl-chips { grid-column: 5; grid-row: 1; margin-left: 0; }
   .pl-a { grid-column: 2 / 4; grid-row: 2; width: auto; padding-left: 0; opacity: 1; }
   .pl-ban { grid-column: 4 / 6; grid-row: 2; justify-self: end; margin-left: 0; }
-  /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
-   * on phones — give them a real touch height here without bloating the dense
-   * desktop list. */
   .pl-btn, .sr-add { min-height: 44px; }
-  .undo-stack {
-    left: 12px;
-    right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    max-width: none;
-  }
-  body.undo-toast-active .a-content { padding-bottom: calc(24px + var(--undo-toast-space, 120px)); }
-  .force-badge { margin-left: 28px; }
-  .a-triggers { grid-template-columns: 1fr 1fr; }
-  .a-row-2 { grid-template-columns: 1fr; }
-  .a-topbar { flex-wrap: wrap; }
 }
 
 @media (max-width: 768px) {
@@ -1480,6 +1488,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-progress .on-air-progress-track{flex:1}
 .mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:14px}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.btn-chip-danger{color:#E8A29B;border-color:rgba(184,44,32,0.45);}
+.btn-chip-danger:hover{background:rgba(184,44,32,0.18);border-color:rgba(184,44,32,0.7);color:var(--cream);}
+#playlistPoolControls{margin-top:4px;}
 .mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
 .mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
 .mmr-air-cost b{color:var(--cream-dk)}
@@ -1646,8 +1657,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <!-- ══ Tab strip — swaps the work area below; the console above stays pinned ══ -->
     <nav class="mmr-tabbar" id="adminTabs" role="tablist" aria-label="Sezioni regia">
-      <button type="button" role="tab" id="tab-diretta" aria-controls="drawer-steer" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" role="tab" id="tab-scaletta" aria-controls="live-queue" aria-selected="true" tabindex="0" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
+      <button type="button" role="tab" id="tab-diretta" aria-controls="drawer-steer" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" role="tab" id="tab-rotazione" aria-controls="rotation-pool" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="rotazione">Rotazione</button>
       <button type="button" role="tab" id="tab-conduttori" aria-controls="drawer-hosts" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="conduttori">Conduttori</button>
       <button type="button" role="tab" id="tab-archivio" aria-controls="drawer-history" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="archivio">Archivio</button>
@@ -1696,8 +1707,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+        </div>
+        <div class="quick-actions" id="playlistPoolControls">
+          <span class="quick-add-label">Pool:</span>
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
+          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Svuota tutto</button>
         </div>
         <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
           <span class="quick-add-label">Steer:</span>
@@ -1974,7 +1989,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <button type="button" class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
             </div>
             <div class="setup-snippet" id="setupSnippetWrap">
-              <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+              <div class="setup-subhead" style="margin-top:0">Home Assistant secrets.env Snippet</div>
               <button type="button" class="btn btn-util" onclick="copySetupSnippet()">Copy snippet</button>
               <pre class="setup-pre" id="setupSnippet"></pre>
             </div>
@@ -2847,12 +2862,56 @@ function updateRuntimeStatus(st){
       const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
       rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
     }
+    // Generated waste (#397): rendered segments discarded before broadcast.
+    const gw=rs.generation_waste;
+    let wasteRow;
+    if(!gw){
+      wasteRow=statusRow('Generated waste','idle','—','No discard telemetry yet');
+    }else{
+      // Operator-friendly labels for discard reasons (no machine strings on screen).
+      const REASON_LABELS={
+        stale_source:'source switch',
+        source_switch:'source switch',
+        stale_playlist:'playlist change',
+        stale_chaos:'chaos switch',
+        quality_gate_reject:'failed quality check',
+        session_stopped:'station stopped',
+        interrupt:'interrupted',
+        air_next_overflow:'queue overflow',
+        egress_stale:'stale on air',
+        blocklist_gate:'banned song',
+        operator_ban:'banned song',
+        operator_stop:'operator stop',
+        operator_panic:'panic stop',
+        operator_purge:'queue cleared',
+        operator_queue_remove:'removed from queue',
+      };
+      const reasonHuman=(r)=>REASON_LABELS[r]||String(r||'').replace(/_/g,' ');
+      const wasteState=gw.degraded?'degraded':'ready';
+      const windowMin=Math.round((gw.window_seconds||900)/60);
+      const durMin=Math.round((gw.recent_duration_sec||0)/60);
+      const wasteCost=Number(gw.estimated_waste_cost_usd||0);
+      // Same rough money convention as the token-cost readout: exactly zero reads
+      // "$0" (a clean session wasted nothing — never imply spend), under a dollar
+      // reads "<$1", otherwise "~$N" rounded to whole dollars.
+      const costStr=wasteCost<=0?'$0':(wasteCost<1?'<$1':'~$'+Math.round(wasteCost));
+      const wasteLabel=gw.degraded?'Discarding often':'Low waste';
+      let wasteDetail;
+      if((gw.recent_segments||0)===0){
+        wasteDetail=`No unheard segments in the last ${windowMin}m · ${costStr} est. wasted this session`;
+      }else{
+        const topReason=gw.recent_top_reason?reasonHuman(gw.recent_top_reason):'mixed reasons';
+        wasteDetail=`${gw.recent_segments} unheard segments · ~${durMin}m in ${windowMin}m · mostly ${topReason} · ${costStr} est.`;
+      }
+      wasteRow=statusRow('Generated waste',wasteState,wasteLabel,wasteDetail);
+    }
     card.innerHTML=[
       statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
       rescueRow,
+      wasteRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
     ].join('');
   }catch(e){
@@ -3056,6 +3115,13 @@ async function shufflePlaylist(el){
   if(!r.ok){toast(wayOut());return;}
   toast('Playlist shuffled');
   await refreshFast();
+}
+async function purgePool(el){
+  if(!confirm('Svuota tutto? Tutti i brani verranno rimossi dalla rotazione.\nLa musica riprende appena aggiungi una sorgente.'))return;
+  flash(el);
+  const r=await api('POST','/api/playlist/purge',{});
+  if(r&&r.ok){toast('Rotazione svuotata');await refreshFast();}
+  else toast(r?.error||wayOut('empty the rotation'));
 }
 async function enrichPlaylistSource(kind,el){
   flash(el);

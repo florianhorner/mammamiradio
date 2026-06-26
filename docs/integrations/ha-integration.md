@@ -50,23 +50,23 @@ now-playing contract; this integration is the HA-native face of it.
      Use the same value as the add-on's `admin_token` option. Leave blank for
      now-playing display only.
 
-## Media-player ownership
+## Turn off the add-on's media_player push (when using this integration)
 
-New add-on installs default `On-air media player push`
-(`ha_media_player_push`) to **Off**, so this HACS integration owns
-`media_player.mammamiradio` from the start.
+The add-on pushes a `media_player.mammamiradio` "ghost" every few seconds over
+the REST API — **on by default**, so an add-on-only setup gets a basic
+media-player tile automatically. Once this integration owns that entity, the push
+fights it (the HA state machine is last-writer-wins) and flaps the card. So when
+you install this integration:
 
-Existing add-on installs may still have the old REST-pushed
-`media_player.mammamiradio` "ghost" enabled. If Home Assistant shows a Repair
-about a legacy media-player conflict:
+**Add-on → Configuration → turn off `On-air media player push`
+(`ha_media_player_push`).**
 
-**Add-on → Configuration → turn off `On-air media player push`.**
-
-The add-on then stops pushing `media_player.mammamiradio` and deletes the stale
-ghost once, while the `sensor.mammamiradio_*` /
-`binary_sensor.mammamiradio_on_air` entities keep flowing as before. After
-turning the push off, reload the integration (Settings → Devices & Services →
-Mamma Mi Radio → ⋮ → **Reload**) to clear the Repair notice.
+The add-on then stops pushing `media_player.mammamiradio` (and deletes the stale
+ghost once so this integration claims the id cleanly), while the
+`sensor.mammamiradio_*` / `binary_sensor.mammamiradio_on_air` entities keep
+flowing as before. If Home Assistant shows a Repair about a legacy media-player
+conflict, reload the integration (Settings → Devices & Services → Mamma Mi Radio
+→ ⋮ → **Reload**) to clear the notice.
 
 > Migration note: if you have automations that read the old pushed
 > `media_player.mammamiradio` state, they keep working — the registered entity

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,600;1,700&family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --espresso:#14110F; --surface:#251E19; --surface2:#2f2620;
+    --cream:#F5EDD8; --muted:#b8ab92;
+    --sun:#F4D048; --sun2:#ECCC30;
+    --red:#B82C20; --blue:#2563EB; --amber:#E08A2B;
+    --line:rgba(245,237,216,.14);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1280px;height:720px}
+  body{
+    font-family:'Outfit',system-ui,sans-serif; color:var(--cream);
+    background:
+      radial-gradient(900px 360px at 18% -8%, rgba(244,208,72,.10), transparent 60%),
+      linear-gradient(180deg,#1a1612 0%, var(--espresso) 46%);
+    padding:46px 56px 40px; position:relative; overflow:hidden;
+  }
+  .tricolor{position:absolute;top:0;left:0;right:0;height:5px;
+    background:linear-gradient(90deg,#1f7a4d 0 33.3%,#f2efe6 33.3% 66.6%,#b8332a 66.6% 100%)}
+  header{display:flex;justify-content:space-between;align-items:baseline}
+  .brand{font-family:'Playfair Display',serif;font-style:italic;font-weight:700;
+    font-size:30px;letter-spacing:.3px}
+  .brand .mi{color:var(--sun)}
+  .kicker{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted);letter-spacing:1px}
+  h1{font-family:'Playfair Display',serif;font-style:italic;font-weight:700;
+    font-size:62px;line-height:1.02;margin-top:26px}
+  .sub{font-size:19px;color:var(--muted);margin-top:10px;font-weight:300}
+
+  /* timeline */
+  .tl{margin-top:34px}
+  .bar{display:flex;height:62px;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+  .seg{display:flex;flex-direction:column;justify-content:center;padding:0 18px;position:relative}
+  .seg .cls{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:1.5px;
+    text-transform:uppercase;font-weight:500}
+  .seg .ttl{font-size:15px;font-weight:500;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .seg.music{flex:0 0 12%;background:linear-gradient(180deg,rgba(244,208,72,.30),rgba(244,208,72,.16));}
+  .seg.music .cls{color:var(--sun)}
+  .seg.voice{flex:1;background:linear-gradient(180deg,rgba(37,99,235,.26),rgba(37,99,235,.12));border-left:1px solid var(--line)}
+  .seg.voice .cls{color:#7aa6ff}
+  .seg.inter{flex:0 0 50%;background:linear-gradient(180deg,rgba(184,44,32,.30),rgba(184,44,32,.15));border-left:1px solid var(--line)}
+  .seg.inter .cls{color:#ef7a6e}
+  .ticks{display:flex;margin-top:8px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted)}
+  .ticks span{flex:0 0 12%}
+  .ticks .v{flex:1}
+  .ticks .i{flex:0 0 50%}
+  .legend{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--muted);margin-top:12px;letter-spacing:.3px}
+  .legend b{color:var(--cream);font-weight:500}
+
+  /* three layers */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px 20px 18px}
+  .card .tag{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .d1{background:var(--sun)} .d2{background:var(--blue)} .d3{background:var(--amber)}
+  .card h3{font-size:19px;font-weight:600;line-height:1.15}
+  .card p{font-size:14px;color:var(--muted);margin-top:9px;line-height:1.45;font-weight:300}
+  .card .q{color:var(--cream);font-style:italic;font-family:'Playfair Display',serif}
+  .mono{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--sun2)}
+
+  footer{position:absolute;left:56px;right:56px;bottom:30px;display:flex;justify-content:space-between;
+    align-items:center;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);
+    border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+  <div class="tricolor"></div>
+  <header>
+    <div class="brand">Mamma <span class="mi">Mi</span> Radio</div>
+    <div class="kicker">SHOWREEL · 1:45 · ONE CONTINUOUS CAPTURE, NO STITCHING</div>
+  </header>
+
+  <h1>The coffee knew.</h1>
+  <div class="sub">What came together in 105 seconds of real radio — a song, two hosts, an ad break.</div>
+
+  <div class="tl">
+    <div class="bar">
+      <div class="seg music"><div class="cls">music</div><div class="ttl">Night in Venice</div></div>
+      <div class="seg voice"><div class="cls">voice</div><div class="ttl">Marco &amp; Giulia — host banter</div></div>
+      <div class="seg inter"><div class="cls">interstitial</div><div class="ttl">Ad: Caffè Turbino</div></div>
+    </div>
+    <div class="ticks"><span>0:00</span><span class="v">0:08</span><span class="i">0:51</span></div>
+    <div class="legend">Each block is a <b>typed segment</b> the provider hands to Music Assistant as <span class="mono">segment_class</span> — so the now-playing card changes correctly through song → talk → ad. A pasted stream URL shows one frozen label for all of it.</div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="tag"><span class="dot d1"></span>Layer 1 · the provider reason</div>
+      <h3>Typed, segment-aware metadata</h3>
+      <p>music / voice / interstitial, each with title, artist, host — the audible answer to "why not just add the stream URL?"</p>
+    </div>
+    <div class="card">
+      <div class="tag"><span class="dot d2"></span>Layer 2 · the product reason</div>
+      <h3>It knows your home</h3>
+      <p>The hosts notice the coffee machine just switched on, the window's open, rain's coming — from live Home Assistant state. Read-only: the station <b>notices</b>, never acts.</p>
+    </div>
+    <div class="card">
+      <div class="tag"><span class="dot d3"></span>Layer 3 · the part nobody wrote</div>
+      <h3>Emergent character</h3>
+      <p>Unprompted, the writer scored the hosts' argument like a sport: <span class="q">"il campanello della vittoria… lui perde, voi vincete il caffè."</span> The ledger proves the gag engine was off — <span class="mono">gag_offered: false</span>.</p>
+    </div>
+  </div>
+
+  <footer>
+    <div>real production pipeline · staged inputs · provenance-logged</div>
+    <div>CC0 music (FreePD) · fictional ad brand · home details fictionalized</div>
+  </footer>
+</body>
+</html>

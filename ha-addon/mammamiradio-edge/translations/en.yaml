@@ -7,19 +7,19 @@ configuration:
     description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
   anthropic_api_key:
     name: Anthropic API Key
-    description: Unlocks Claude AI hosts for generated banter and ads. Without this, the station can use OpenAI as a script fallback when configured, then stock banter.
+    description: "Legacy fallback field. Prefer ANTHROPIC_API_KEY in /config/secrets.env; non-empty file values win. Unlocks Claude AI hosts for generated banter and ads."
   openai_api_key:
     name: OpenAI API Key
-    description: Enables OpenAI host voices and serves as the script-generation fallback when Anthropic is unavailable. Without this, OpenAI hosts use Edge TTS and scripts fall back to stock copy.
+    description: "Legacy fallback field. Prefer OPENAI_API_KEY in /config/secrets.env; non-empty file values win. Enables OpenAI host voices and script fallback."
   azure_speech_key:
     name: Azure Speech Key
-    description: Enables official Azure Speech voices for Italian hosts, sweepers, and ads. Requires Azure Speech Region; missing or failing Azure voices fall back to Edge TTS.
+    description: "Legacy fallback field. Prefer AZURE_SPEECH_KEY in /config/secrets.env; non-empty file values win. Enables official Azure Speech voices with Azure Speech Region."
   azure_speech_region:
     name: Azure Speech Region
-    description: Azure Speech resource region, such as westeurope or eastus. Required with Azure Speech Key.
+    description: "Legacy fallback field. Prefer AZURE_SPEECH_REGION in /config/secrets.env; non-empty file values win. Azure Speech resource region, such as westeurope or eastus."
   elevenlabs_api_key:
     name: ElevenLabs API Key
-    description: Enables custom ElevenLabs character voices when radio.toml uses engine = "elevenlabs". Missing or failing voices fall back to Edge TTS.
+    description: "Legacy fallback field. Prefer ELEVENLABS_API_KEY in /config/secrets.env; non-empty file values win. Enables custom ElevenLabs character voices."
   quality_profile:
     name: AI Quality
     description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."
@@ -43,4 +43,4 @@ configuration:
     description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect on the next few tracks as the buffered queue cycles through, not the one playing now."
   ha_media_player_push:
     name: On-air media player push
-    description: "Off (default for new installs): let the separate Mamma Mi Radio HACS integration own the controllable media player. Turn this On only for legacy add-on-only dashboards that still rely on the REST-pushed media player. The station's sensors keep working either way."
+    description: "On (default): the station shows up in Home Assistant as a media player automatically, so an add-on-only setup gets a tile out of the box. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."

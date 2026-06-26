@@ -1,0 +1,23 @@
+Showreel pipeline — local verification
+date: 2026-06-25
+scope: offline GTM tooling under scripts/ + shareable artifacts.
+       No mammamiradio/ package code, routes, config, env, or auth changed.
+
+# lint (ruff)
+$ ruff check scripts/showreel/capture.py scripts/showreel/mock_ha.py
+All checks passed!
+$ ruff format --check scripts/showreel/capture.py scripts/showreel/mock_ha.py
+2 files already formatted
+
+# compile
+$ python -m py_compile scripts/showreel/capture.py scripts/showreel/mock_ha.py
+OK
+
+# full test suite (unchanged by this PR — no mammamiradio/ or tests/ change)
+$ python -m pytest tests/ -q
+exit code 0
+
+# runtime artifact
+scripts/showreel_out/ma-pr-3836.mp3  — rendered by the pipeline:
+  one continuous capture (music -> banter -> ad), ~1:45, 192 kbps / 48 kHz,
+  no stitching; segments aired back-to-back on the live /stream, outer ends trimmed.

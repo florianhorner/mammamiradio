@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
 
 
@@ -80,6 +80,8 @@ def test_front_insert_dropped_when_session_stopped(tmp_path):
     assert state.queued_segments == []
     assert not f.exists()  # ephemeral temp unlinked, no leak
     assert state.operator_force_pending is None  # guard released — operator can retry after resume
+    assert state.discarded_segments_total == 1
+    assert state.discard_by_reason == {GenerationWasteReason.SESSION_STOPPED: 1}
 
 
 def test_front_insert_drops_furthest_future_tail_on_full_queue():
@@ -124,3 +126,5 @@ def test_front_insert_unlinks_dropped_ephemeral_tail(tmp_path):
 
     assert not f1.exists()  # dropped ephemeral tail unlinked
     assert f0.exists()  # non-ephemeral survivor kept
+    assert state.discarded_segments_total == 1
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
