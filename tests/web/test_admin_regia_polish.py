@@ -210,6 +210,15 @@ def test_session_cost_reframe_template_invariants() -> None:
     assert "'~$'+Math.round(_rawCost)" in html
 
 
+def test_generated_waste_cost_zero_state_renders_dollar_zero() -> None:
+    """A clean session (waste cost 0.0) must render "$0", never "<$1" — the
+    waste row must never imply spend when nothing was wasted (#397)."""
+    html = _html()
+    # The zero-state branch is the protected invariant: $0 at exactly zero,
+    # "<$1" only for a positive sub-dollar cost, "~$N" at a dollar or more.
+    assert "wasteCost<=0?'$0'" in html
+
+
 # ── Archivio filters + sessionStorage (T6) ──────────────────────────
 
 

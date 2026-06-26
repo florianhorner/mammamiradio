@@ -225,6 +225,24 @@ async def test_public_status_no_admin_secrets_leak():
 
 
 @pytest.mark.asyncio
+async def test_public_status_omits_generation_waste_telemetry():
+    """Generated segment waste is admin-only — it must not appear on /public-status."""
+    app = _make_test_app()
+    app.state.station_state.record_discard(
+        Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=5.0),
+        reason="operator_stop",
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+    assert public_resp.status_code == 200
+    assert admin_resp.status_code == 200
+    assert "generation_waste" not in public_resp.json()
+    assert "generation_waste" in admin_resp.json()["runtime_status"]
+
+
+@pytest.mark.asyncio
 async def test_public_status_exposes_audio_format():
     """Integrations read stream.audio_format before declaring /stream playback.
 
