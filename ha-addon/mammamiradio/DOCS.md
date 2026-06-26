@@ -9,12 +9,18 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
 Add: `https://github.com/florianhorner/mammamiradio`
 
-### 2. Configure API key
+### 2. Configure provider secrets
 
-In the add-on Configuration tab, set your `anthropic_api_key` (recommended for AI banter and ads).
-`openai_api_key` is optional for script fallback and OpenAI TTS voices. `azure_speech_key` plus
-`azure_speech_region` unlock official Azure Italian voices, and `elevenlabs_api_key` unlocks custom
-ElevenLabs character voices when configured in `radio.toml`.
+Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
+`ANTHROPIC_API_KEY` (recommended for AI banter and ads), `OPENAI_API_KEY` (script fallback and OpenAI
+TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
+`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). The legacy
+Configuration-tab provider fields still work as per-key fallbacks, but new provider secrets should go
+in `/config/secrets.env`.
+
+`secrets.env` accepts `KEY=VALUE` lines, optional `export KEY=VALUE`, whitespace around keys or
+values, single or double quoted values, values containing `=`, UTF-8 BOM, and CRLF endings. Full-line
+comments beginning with `#` are ignored; inline comments are treated as part of unquoted values.
 
 Before committing to a voice mix, run a local audition from the repository:
 
@@ -62,7 +68,7 @@ HA Supervisor
 
 ## Startup sequence
 
-1. `run.sh` reads `/data/options.json` and exports env vars for the addon runtime.
+1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
 2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`.
 3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
@@ -129,7 +135,7 @@ If silence is in cache from a failed run: stop the addon, SSH to the HA host, de
 
 **Cause**: API key is invalid or quota exceeded. The producer falls back to demo clips but they may be exhausted.
 
-**Fix**: Verify your `anthropic_api_key` is valid. Check the log for `AuthenticationError` or `RateLimitError`.
+**Fix**: Verify your `ANTHROPIC_API_KEY` in `/config/secrets.env` is valid. Legacy add-on installs may still use `anthropic_api_key` in options. Check the log for `AuthenticationError` or `RateLimitError`.
 
 ### Accessing the station directly
 
@@ -156,11 +162,14 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
 ## Env var flow
 
 ```
-/data/options.json (HA UI)
+/config/secrets.env (provider secrets, preferred)
   |
-  +-- run.sh reads JSON, exports as env vars
+  +-- run.sh reads KEY=VALUE lines, exports non-empty values
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
-  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY,
+  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
+  |
+  +-- /data/options.json (HA UI; legacy provider fallback + non-provider options)
+  |     Legacy provider fields are used only when the same /config/secrets.env key is blank or missing.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
   |     HA_ENABLED (from enable_home_assistant)
@@ -227,19 +236,21 @@ The name appears roughly once every 3–4 banter exchanges, never forced. You ca
 
 ## Home Assistant entities
 
-New installs should use the HACS integration in `custom_components/mammamiradio`
-for the registered, controllable `media_player.mammamiradio` and the native
-`media-source://mammamiradio/live` stream source.
+The add-on automatically pushes a basic `media_player.mammamiradio` plus sensor
+state after each segment transition and every 30 seconds — no
+`configuration.yaml` changes required, so an add-on-only setup gets a media-player
+tile out of the box.
 
-The add-on still pushes sensor state after each segment transition and every 30
-seconds. The legacy REST-pushed `media_player.mammamiradio` is compatibility
-only: turn **On-air media player push** on only for old add-on-only dashboards
-that still depend on it. New installs default it off so the HACS integration
-owns the media-player entity.
+For a registered, controllable `media_player.mammamiradio` and the native
+`media-source://mammamiradio/live` stream source, install the HACS integration in
+`custom_components/mammamiradio`. When you do, turn **On-air media player push**
+off (Add-on → Configuration) so the add-on's push and the integration don't fight
+over the same entity; the `sensor.mammamiradio_*` / `binary_sensor` entities keep
+flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | HACS integration owns this by default; legacy REST push only when `ha_media_player_push` is on |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
 | `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
 | `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
@@ -275,5 +286,5 @@ The dashboard shows one of three tiers based on your configuration:
 | Tier | What you hear | What it needs |
 |------|--------------|---------------|
 | Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
-| Full AI Radio | Live AI banter and ads, yt-dlp charts | `anthropic_api_key` or `openai_api_key` |
+| Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env` (legacy add-on option fallback still works) |
 | Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |

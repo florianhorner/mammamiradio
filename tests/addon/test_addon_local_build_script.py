@@ -78,6 +78,16 @@ def test_addon_run_sh_respects_home_assistant_toggle():
     assert "Home Assistant integration disabled by add-on option" in run_sh
 
 
+def test_addon_run_sh_uses_guarded_file_backed_provider_secrets_parser():
+    run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+
+    assert 'SECRETS_FILE="/config/secrets.env"' in run_sh
+    assert run_sh.count('python3 -c "') == 1
+    assert 'if ! OPTS_EXPORT=$(python3 -c "' in run_sh
+    assert "secret_keys = tuple(env_key for _, env_key in provider_option_map)" in run_sh
+    assert "cat '$SECRETS_FILE'" not in run_sh
+
+
 def test_addon_run_sh_preserves_operator_stop_flag():
     run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
 
