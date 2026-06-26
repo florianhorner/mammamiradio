@@ -2414,6 +2414,12 @@ async def run_producer(
                                 SegmentType.BANTER,
                                 audio_path,
                                 GenerationWasteReason.QUALITY_GATE_REJECT,
+                                # Probe the real rendered length so speech waste is
+                                # counted like music waste (which passes a duration).
+                                # Without this, banter rejects record 0.0s and the
+                                # duration-based "discarding often" gate never sees
+                                # them. Best-effort helper: returns 0.0, never raises.
+                                duration_sec=await loop.run_in_executor(None, _probe_segment_duration, audio_path),
                             )
                             audio_path.unlink(missing_ok=True)
                         fallback_canned = _pick_canned_clip("banter", state=state)
@@ -3063,6 +3069,9 @@ async def run_producer(
                             SegmentType.AD,
                             ad_break_path,
                             GenerationWasteReason.QUALITY_GATE_REJECT,
+                            # Probe the real rendered length so ad-break waste is
+                            # counted like music waste; best-effort, returns 0.0.
+                            duration_sec=await loop.run_in_executor(None, _probe_segment_duration, ad_break_path),
                         )
                         ad_break_path.unlink(missing_ok=True)
                         # Prevent scheduler lock on AD if we reject a full break.

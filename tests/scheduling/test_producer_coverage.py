@@ -647,6 +647,10 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
     # Exactly one rejected GENERATED banter recorded as waste; the regenerated one queued.
     assert state.discard_by_reason.get("quality_gate_reject", 0) == 1
     assert state.discard_by_type.get("banter", 0) == 1
+    # Fix (#397): the banter reject records its real rendered length (probe mocked
+    # to 30.0s), not 0.0 — so speech waste feeds the duration-based degraded gate
+    # like music waste does.
+    assert state.discarded_duration_total_sec == 30.0
 
 
 @pytest.mark.asyncio
@@ -820,6 +824,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=12.0),
     ):
         from mammamiradio.scheduling.producer import run_producer
 
@@ -841,6 +846,9 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     # The rejected ad break is recorded as generation waste (#397).
     assert state.discard_by_reason.get("quality_gate_reject", 0) >= 1
     assert state.discard_by_type.get("ad", 0) >= 1
+    # Fix (#397): the ad reject records its real rendered length (probe mocked to
+    # 12.0s), not 0.0.
+    assert state.discarded_duration_total_sec >= 12.0
 
 
 # ---------------------------------------------------------------------------

@@ -1323,6 +1323,49 @@ def test_purge_clears_queue_even_when_ephemeral_unlink_fails():
     bad_path.unlink.assert_called_once()
 
 
+def test_purge_clears_queue_even_when_unlink_raises_non_oserror():
+    # The unlink guard is broad (except Exception), so even a NON-OSError — e.g. a
+    # malformed segment whose path raises AttributeError on .unlink — must not abort
+    # the purge mid-loop and strand the UI shadow behind a half-drained queue (#397).
+    q: asyncio.Queue = asyncio.Queue()
+    good = Segment(type=SegmentType.MUSIC, path=Path("/tmp/purge_ok2.mp3"), metadata={"title": "A"}, ephemeral=True)
+    bad_path = MagicMock(spec=Path)
+    bad_path.unlink.side_effect = AttributeError("segment path is not a real Path")
+    bad = Segment(type=SegmentType.MUSIC, path=bad_path, metadata={"title": "B"}, ephemeral=True)
+    q.put_nowait(good)
+    q.put_nowait(bad)
+
+    state = StationState()
+    state.queued_segments = [{"id": "1"}, {"id": "2"}]
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert count == 2
+    assert q.empty()
+    assert state.queued_segments == []
+    assert state.discarded_segments_total == 2
+
+
+def test_generation_waste_snapshot_clamps_cost_to_session_spend():
+    # Operator-honesty bound (#5, #397): the waste figure can never exceed total
+    # session spend, even if a counter edge case (a burst of already-counted purges
+    # against a lagging produced counter) pushes the raw count ratio above 1.0.
+    state = StationState()
+    state.segments_produced = 1
+    state.api_input_tokens = 1_000_000  # session_cost == 0.8 (see prorate test below)
+    state.api_output_tokens = 0
+    state.api_tokens_by_model = {}
+    segment = Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=10.0)
+    for i in range(5):  # 5 already-counted discards vs 1 produced -> raw ratio 5.0
+        state.record_discard(segment, reason="operator_purge", timestamp=float(i), already_counted_in_produced=True)
+
+    gw = _generation_waste_snapshot(state)
+
+    assert gw["total_segments"] == 5
+    # Raw proration would be 0.8 * 5 / 1 = 4.0; clamp pins it to session_cost (0.8).
+    assert gw["estimated_waste_cost_usd"] == 0.8
+
+
 def test_generation_waste_snapshot_prorates_cost():
     state = StationState()
     state.segments_produced = 3

@@ -246,8 +246,12 @@ def _unlink_ephemeral_best_effort(seg) -> None:
     if getattr(seg, "ephemeral", False):
         try:
             seg.path.unlink(missing_ok=True)
-        except OSError:
-            logger.debug("Ephemeral purge unlink failed for %s", seg.path, exc_info=True)
+        except Exception:
+            # Broad on purpose: a non-OSError (e.g. a malformed segment whose
+            # path is None -> AttributeError) must not abort the purge loop and
+            # leave the UI shadow stale behind a half-drained queue. Honors this
+            # helper's "without ever raising" contract.
+            logger.debug("Ephemeral purge unlink failed for %s", getattr(seg, "path", None), exc_info=True)
 
 
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
@@ -928,7 +932,12 @@ def _generation_waste_snapshot(state: StationState) -> dict:
     session_cost, _ = _estimate_api_cost(state)
     produced_plus_discarded = max(1, state.segments_produced + state.discarded_unproduced_segments_total)
     if state.discarded_segments_total:
-        waste_cost = round(session_cost * state.discarded_segments_total / produced_plus_discarded, 4)
+        # Clamp at session_cost: you cannot waste more than you spent. A burst of
+        # already-counted discards (queue purges/bans) can push the count-based
+        # ratio above 1.0 and overstate wasted spend on the operator card — an
+        # operator-honesty break (#5). The clamp makes the upper bound structural.
+        raw_waste = session_cost * state.discarded_segments_total / produced_plus_discarded
+        waste_cost = round(min(raw_waste, session_cost), 4)
     else:
         waste_cost = 0.0
     degraded = (
