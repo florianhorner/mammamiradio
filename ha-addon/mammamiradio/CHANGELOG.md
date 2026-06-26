@@ -14,6 +14,10 @@
 
 - **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.
 
+### Security
+
+- **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
+
 ## 2.15.0
 
 ### Security

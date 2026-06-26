@@ -27,6 +27,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Security
 
+- **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
 - **Home Assistant add-on provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
 
 ## [2.14.1] - 2026-06-21

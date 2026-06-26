@@ -1,0 +1,24 @@
+Issue #361: listener-request X-Forwarded-For rate-limit hardening
+
+Pinned Supervisor source evidence:
+- home-assistant/supervisor@9d02546054d90bd7f432fb9ba8351616ccd7a5dd
+- supervisor/api/ingress.py lines 352-356
+- Evidence: Supervisor appends the request remote address to X-Forwarded-For before forwarding ingress traffic to the add-on.
+- Source URL: https://github.com/home-assistant/supervisor/blob/9d02546054d90bd7f432fb9ba8351616ccd7a5dd/supervisor/api/ingress.py#L352-L356
+
+Synthetic probe:
+- Command that demonstrates the new behavior:
+  .venv/bin/python -m pytest tests/web/test_streamer_routes_extended.py -q -k "listener_request_rate_limit"
+- Ran in autopilot Phase 3: 15 passed (3297 passed full suite, 2 skipped).
+- The selected tests assert that:
+  - a spoofed leftmost X-Forwarded-For value from a trusted HA peer does not choose the bucket;
+  - the closest non-trusted forwarded hop is used instead;
+  - distinct real clients behind one trusted HA peer get distinct buckets;
+  - private-LAN forwarded clients are treated as listeners, not skipped as proxies;
+  - usable X-Forwarded-For beats conflicting X-Real-IP;
+  - missing, blank, invalid-only, or all-trusted X-Forwarded-For falls back to X-Real-IP or the direct peer;
+  - direct public and private-LAN clients cannot spoof their bucket with forwarded headers;
+  - the no-client fallback remains the existing "unknown" bucket;
+  - bucket membership is checked via _hash_submitter_ip(...) keys in _listener_request_rl, not raw IP storage.
+
+ha-ingress: not verified - no live HA Supervisor ingress/container available in the autopilot workspace; behavior asserted via synthetic unit tests only

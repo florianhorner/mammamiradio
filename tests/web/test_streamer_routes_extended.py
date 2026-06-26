@@ -1382,7 +1382,135 @@ async def test_listener_request_rate_limit_uses_forwarded_ip_from_trusted_proxy(
 
 
 @pytest.mark.asyncio
-async def test_listener_request_ignores_forwarded_ip_from_untrusted_client():
+async def test_listener_request_rate_limit_uses_rightmost_non_trusted_xff_from_trusted_proxy():
+    """Trusted proxy XFF parsing must ignore spoofable leftmost values."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    spoofed_ip = "198.51.100.200"
+    real_ip = "203.0.113.25"
+    trusted_hop = "172.30.32.6"
+    spoofed_key = _hash_submitter_ip(spoofed_ip, app.state.config)
+    real_key = _hash_submitter_ip(real_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": f"{spoofed_ip}, {real_ip}, {trusted_hop}"},
+        )
+
+    assert resp.status_code == 200
+    assert real_key in app.state.station_state._listener_request_rl
+    assert spoofed_key not in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_treats_private_lan_xff_as_listener():
+    """Private LAN forwarded hops are listeners unless they are trusted proxies."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    listener_ip = "192.168.1.77"
+    listener_key = _hash_submitter_ip(listener_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": f"198.51.100.200, {listener_ip}, 172.30.32.6"},
+        )
+
+    assert resp.status_code == 200
+    assert listener_key in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_xff_wins_over_conflicting_x_real_ip():
+    """A usable X-Forwarded-For client is preferred over X-Real-IP."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    xff_ip = "203.0.113.70"
+    real_ip = "198.51.100.70"
+    xff_key = _hash_submitter_ip(xff_ip, app.state.config)
+    real_key = _hash_submitter_ip(real_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": xff_ip, "X-Real-IP": real_ip},
+        )
+
+    assert resp.status_code == 200
+    assert xff_key in app.state.station_state._listener_request_rl
+    assert real_key not in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_all_trusted_xff_falls_back_to_x_real_ip_then_peer():
+    """All-trusted XFF hops are skipped before fallback identity selection."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    xff = "127.0.0.1, 172.30.32.6"
+
+    app_with_real = _make_test_app(admin_token="phase2-token")
+    real_ip = "203.0.113.80"
+    real_key = _hash_submitter_ip(real_ip, app_with_real.state.config)
+    transport_with_real = httpx.ASGITransport(app=app_with_real, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport_with_real, base_url="http://testserver") as client:
+        with_real = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": xff, "X-Real-IP": real_ip},
+        )
+
+    app_no_real = _make_test_app(admin_token="phase2-token")
+    proxy_ip = "172.30.32.5"
+    proxy_key = _hash_submitter_ip(proxy_ip, app_no_real.state.config)
+    transport_no_real = httpx.ASGITransport(app=app_no_real, client=(proxy_ip, 12345))
+
+    async with httpx.AsyncClient(transport=transport_no_real, base_url="http://testserver") as client:
+        no_real = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": xff},
+        )
+
+    assert with_real.status_code == 200
+    assert no_real.status_code == 200
+    assert real_key in app_with_real.state.station_state._listener_request_rl
+    assert proxy_key in app_no_real.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_blank_invalid_xff_falls_back_to_x_real_ip():
+    """Blank and invalid XFF entries are ignored instead of becoming buckets."""
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(admin_token="phase2-token")
+    real_ip = "203.0.113.81"
+    real_key = _hash_submitter_ip(real_ip, app.state.config)
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post(
+            "/api/listener-request",
+            json={"name": "A", "message": "ciao"},
+            headers={"X-Forwarded-For": " , not-an-ip, 999.999.999.999", "X-Real-IP": real_ip},
+        )
+
+    assert resp.status_code == 200
+    assert real_key in app.state.station_state._listener_request_rl
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limit_ignores_forwarded_ip_from_untrusted_public_client():
     """Direct public callers cannot spoof another listener's rate-limit bucket."""
     from mammamiradio.web.listener_requests import _hash_submitter_ip
 
@@ -1412,7 +1540,7 @@ async def test_listener_request_ignores_forwarded_ip_from_untrusted_client():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_ignores_forwarded_ip_from_private_lan_client():
+async def test_listener_request_rate_limit_ignores_forwarded_ip_from_private_lan_client():
     """Private LAN clients are not automatically trusted proxy sources."""
     from mammamiradio.web.listener_requests import _hash_submitter_ip
 
