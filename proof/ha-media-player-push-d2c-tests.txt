@@ -1,0 +1,19 @@
+Verification — D2-C revert: ha_media_player_push defaults on for new installs
+branch: florianhorner/fix/ha-media-player-push-default-on
+
+$ pytest tests/repo/test_run_sh_options_parser.py tests/home/test_ha_media_player_push_flag.py -q
+................................                                         [100%]
+32 passed in 0.42s
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check $(git diff --name-only origin/main..HEAD)
+1 file already formatted
+
+$ git diff --check
+(clean — no whitespace errors)
+
+$ ./scripts/validate-addon.sh (final line)
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.

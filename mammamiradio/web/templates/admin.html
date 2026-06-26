@@ -683,6 +683,9 @@ input[type="range"]:focus-visible {
 .btn-icon svg { width: 16px; height: 16px; }
 .btn-icon:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
 .btn-icon:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+/* Destructive ban-now icon: Lancia red on hover (not gold) — the slash glyph keeps it
+   colorblind-legible without relying on hue (shape, not colour, carries the meaning). */
+.btn-icon-ban:hover { color: var(--lancia, #B82C20); border-color: var(--lancia, #B82C20); background: rgba(184,44,32,0.10); }
 .btn-primary-sm {
   background: var(--sun2); color: #14110F; border: none;
   padding: 8px 14px; border-radius: 8px;
@@ -1098,6 +1101,28 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
+  /* 481-768px = two-pane desktop column. Keep action buttons on the track
+   * line; never wrap them below — that looks broken. The ≤480px phone block
+   * below switches to a stacked touch-target grid instead. */
+  .pl-a { opacity: 1; }
+  .pl-btn, .sr-add { min-height: 36px; }
+  .undo-stack {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+  }
+  body.undo-toast-active .a-content { padding-bottom: calc(24px + var(--undo-toast-space, 120px)); }
+  .force-badge { margin-left: 28px; }
+  .a-triggers { grid-template-columns: 1fr 1fr; }
+  .a-row-2 { grid-template-columns: 1fr; }
+  .a-topbar { flex-wrap: wrap; }
+}
+
+/* Real phones (≤480px): stack the row into a deliberate touch-target grid —
+ * action buttons drop to a second row with full 44px hit areas. The two-pane
+ * desktop column (481-768px, above) keeps them inline instead. */
+@media (max-width: 480px) {
   .pl-row {
     display: grid;
     grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
@@ -1112,21 +1137,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .pl-chips { grid-column: 5; grid-row: 1; margin-left: 0; }
   .pl-a { grid-column: 2 / 4; grid-row: 2; width: auto; padding-left: 0; opacity: 1; }
   .pl-ban { grid-column: 4 / 6; grid-row: 2; justify-self: end; margin-left: 0; }
-  /* Row actions are hover-revealed (mouse) on desktop but always-on tap targets
-   * on phones — give them a real touch height here without bloating the dense
-   * desktop list. */
   .pl-btn, .sr-add { min-height: 44px; }
-  .undo-stack {
-    left: 12px;
-    right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    max-width: none;
-  }
-  body.undo-toast-active .a-content { padding-bottom: calc(24px + var(--undo-toast-space, 120px)); }
-  .force-badge { margin-left: 28px; }
-  .a-triggers { grid-template-columns: 1fr 1fr; }
-  .a-row-2 { grid-template-columns: 1fr; }
-  .a-topbar { flex-wrap: wrap; }
 }
 
 @media (max-width: 768px) {
@@ -1477,6 +1488,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-progress .on-air-progress-track{flex:1}
 .mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:14px}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.btn-chip-danger{color:#E8A29B;border-color:rgba(184,44,32,0.45);}
+.btn-chip-danger:hover{background:rgba(184,44,32,0.18);border-color:rgba(184,44,32,0.7);color:var(--cream);}
+#playlistPoolControls{margin-top:4px;}
 .mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
 .mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
 .mmr-air-cost b{color:var(--cream-dk)}
@@ -1580,6 +1594,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
+            <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
+            </button>
             <button type="button" id="stopBtn" class="btn-icon" title="Stop" onclick="doStop(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
             </button>
@@ -1640,8 +1657,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <!-- ══ Tab strip — swaps the work area below; the console above stays pinned ══ -->
     <nav class="mmr-tabbar" id="adminTabs" role="tablist" aria-label="Sezioni regia">
-      <button type="button" role="tab" id="tab-diretta" aria-controls="drawer-steer" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" role="tab" id="tab-scaletta" aria-controls="live-queue" aria-selected="true" tabindex="0" class="mmr-tab is-active" data-tab="scaletta" aria-current="true">Scaletta</button>
+      <button type="button" role="tab" id="tab-diretta" aria-controls="drawer-steer" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="diretta">Diretta</button>
       <button type="button" role="tab" id="tab-rotazione" aria-controls="rotation-pool" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="rotazione">Rotazione</button>
       <button type="button" role="tab" id="tab-conduttori" aria-controls="drawer-hosts" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="conduttori">Conduttori</button>
       <button type="button" role="tab" id="tab-archivio" aria-controls="drawer-history" aria-selected="false" tabindex="-1" class="mmr-tab" data-tab="archivio">Archivio</button>
@@ -1690,8 +1707,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+        </div>
+        <div class="quick-actions" id="playlistPoolControls">
+          <span class="quick-add-label">Pool:</span>
           <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
+          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Svuota tutto</button>
         </div>
         <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
           <span class="quick-add-label">Steer:</span>
@@ -1968,7 +1989,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <button type="button" class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
             </div>
             <div class="setup-snippet" id="setupSnippetWrap">
-              <div class="setup-subhead" style="margin-top:0">Home Assistant Add-on Snippet</div>
+              <div class="setup-subhead" style="margin-top:0">Home Assistant secrets.env Snippet</div>
               <button type="button" class="btn btn-util" onclick="copySetupSnippet()">Copy snippet</button>
               <pre class="setup-pre" id="setupSnippet"></pre>
             </div>
@@ -2223,6 +2244,37 @@ initOnAirSticky();
 
 // ── Transport ──
 async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
+async function doBanNowPlaying(el){
+  // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
+  // the segment leaves the air the instant the skip lands.
+  const ns=_st&&_st.now_streaming;
+  const meta=(ns&&ns.metadata)||{};
+  let artist=String(meta.artist||'').trim();
+  let title=String(meta.title_only||'').trim();
+  if(!artist&&!title){
+    const parts=String((ns&&ns.label)||'').split(/\s[—–-]\s/);
+    if(parts.length===2){artist=parts[0].trim();title=parts[1].trim();}
+  }
+  flash(el);
+  const r=await api('POST','/api/track/ban-now-playing');
+  if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban this song');toast(m);return;}
+  await refreshFast();refreshBanCount();
+  // Prefer the server-resolved key so Undo lifts exactly what was banned, even if
+  // the segment advanced between our last poll and the server read.
+  if(Array.isArray(r.key)&&r.key.length===2){artist=r.key[0];title=r.key[1];}
+  // Undo only lifts the ban — the song was already skipped off the air, so the copy
+  // says "can come back" rather than implying it returns to air now.
+  const msg=r.persisted===false?'Banned and skipped — but I couldn’t save it, so it may come back after a restart':'Banned and skipped — won’t come back';
+  if(typeof window.undoableToast==='function'&&(artist||title)){
+    window.undoableToast(msg,async()=>{
+      const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
+      toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
+      await refreshFast();refreshBanCount();
+    });
+  }else{
+    toast(msg);
+  }
+}
 async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
@@ -2456,6 +2508,10 @@ function durationSec(item){
   return null;
 }
 function updateNow(ns){
+  // Ban-now is only meaningful while a song is on air — derive it straight from the
+  // segment type the admin already polls (no extra server field needed).
+  const banBtn=document.getElementById('banNowBtn');
+  if(banBtn)banBtn.style.display=(ns&&segmentTypeKey(ns.type)==='music')?'':'none';
   if(!ns||!ns.type){
     const ty=document.getElementById('nowType');
     if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','Waiting: status idle');ty.title='Waiting for signal';ty.textContent='—';}
@@ -3060,6 +3116,13 @@ async function shufflePlaylist(el){
   toast('Playlist shuffled');
   await refreshFast();
 }
+async function purgePool(el){
+  if(!confirm('Svuota tutto? Tutti i brani verranno rimossi dalla rotazione.\nLa musica riprende appena aggiungi una sorgente.'))return;
+  flash(el);
+  const r=await api('POST','/api/playlist/purge',{});
+  if(r&&r.ok){toast('Rotazione svuotata');await refreshFast();}
+  else toast(r?.error||wayOut('empty the rotation'));
+}
 async function enrichPlaylistSource(kind,el){
   flash(el);
   const dispatch=_SOURCE_DISPATCH[kind]||_SOURCE_DISPATCH.charts;
@@ -3078,7 +3141,7 @@ async function setHeading(kind,el){
   const dispatch=_HEADING_DISPATCH[kind]||_HEADING_DISPATCH.classic_80s;
   const r=await api('POST','/api/heading',{seed:dispatch.seed});
   if(!r.ok){
-    toast(r.message||"Couldn't pull that vibe right now - give it a moment and try again.");
+    toast(r.message||wayOut('pull that vibe'));
     return;
   }
   toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
@@ -3385,7 +3448,7 @@ async function searchMore(){
     if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
   }
 }
-async function addTr(i){const t=_sR[i];if(!t)return;await api('POST','/api/playlist/move_to_next',{index:t.index});toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}
+async function addTr(i){const t=_sR[i];if(!t)return;const r=await api('POST','/api/playlist/move_to_next',{index:t.index});if(r&&r.ok){toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}else toast(wayOut('move that'))}
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -3470,7 +3533,7 @@ async function savePacingField(field,value,{silent=false}={}){
   const mySeq=(_paceSeq[field]=(_paceSeq[field]||0)+1);
   try{
     const r=await api('PATCH','/api/pacing',{[field]:+value});
-    if(r&&r.detail){
+    if(!r||r.detail||r.ok===false){
       toast(wayOut('save pacing'));
       if(_st.pacing)applyPacingResponse(_st.pacing,field);
       await refreshFast();
@@ -3613,8 +3676,9 @@ async function updHost(n,vals=null){
     if(!block)return;
     block.querySelectorAll('input[type="range"]').forEach(e=>{b[e.dataset.a]=+e.value});
   }
-  await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
-  toast(n+' updated');
+  const r=await api('PATCH',`/api/hosts/${encodeURIComponent(n)}/personality`,b);
+  if(r&&r.ok)toast(n+' updated');
+  else toast(wayOut('update '+n));
 }
 async function rstHost(n){await api('POST',`/api/hosts/${encodeURIComponent(n)}/personality/reset`);toast(n+' reset');const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
 async function applyHostPreset(n,presetName){
@@ -3696,6 +3760,7 @@ let _lrReqs=[];
 async function lrDismiss(id){
   if(!id)return;
   const r=await api('POST','/api/listener-requests/dismiss',{id});
+  if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
 }
@@ -3703,6 +3768,7 @@ async function lrQueueNext(i){
   const req=_lrReqs[i];if(!req)return;
   if(req.type==='song_request'&&req.song_found){
     const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
+    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
     toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
   }
 }

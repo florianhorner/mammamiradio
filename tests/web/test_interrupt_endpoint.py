@@ -122,7 +122,8 @@ def test_interrupt_non_object_body_returns_422():
             headers={"X-Radio-Admin-Token": "test-token"},
         )
     assert resp.status_code == 422
-    assert resp.json()["error"] == "expected JSON object"
+    assert resp.json()["ok"] is False
+    assert resp.json()["error"]
 
 
 # ---------------------------------------------------------------------------

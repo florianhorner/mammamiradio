@@ -35,10 +35,11 @@ owners. For add-ons, Supervisor could optionally expose a standard capability
 flag that tells the add-on to stop pushing compatibility ghosts once the
 registered integration is installed.
 
-Mammamiradio local behavior: new add-on installs default the ghost media-player
-push off; legacy installs preserve the old default until the operator changes
-the option. The HACS integration raises a Repair when it sees a legacy
-`media_player.mammamiradio` conflict.
+Mammamiradio local behavior: the add-on pushes a compatibility media-player
+ghost by default, so an add-on-only setup gets a tile out of the box. When the
+HACS integration is installed, the operator turns that push off so the registered
+entity owns the id, and the integration raises a Repair if it still detects the
+legacy `media_player.mammamiradio` conflict.
 
 ## Proposal: Assist And AI Context Privacy
 
