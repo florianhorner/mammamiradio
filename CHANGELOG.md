@@ -14,10 +14,13 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Scaletta is now the first tab in the admin panel.** The live queue opens by default — Diretta (pacing controls) moves one position right.
+- **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Svuota tutto) moves to a separate Pool row below.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 
 ### Fixed
 
+- **Rotazione track buttons now lay out right at every width.** In the two-pane desktop column (~700px) Next and Ban stay inline on the track line instead of wrapping below it; on a real phone they drop to a stacked row with full-size touch targets.
 - **The listener and admin pages read better with a screen reader, a keyboard, and on touch.** The listener page now offers a skip-to-content link and a labelled main region, its page language matches the words actually on screen (so a screen reader stops reading English with an Italian accent), and a stopped station no longer flashes "on air" for a beat before it settles. In the admin panel the section tabs are a proper tab strip you can move through with the arrow keys, the page has a real top-level heading, and faint blue status labels were brightened so they stay readable on the dark control room.
 - **Bad request bodies now fail gently instead of looking like a station fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses. The listener request form and admin controls still behave the same for valid requests.
 
