@@ -21,6 +21,24 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Mobile Edge/Safari "font boosting" (text autosizing) inflates type inside
+   text blocks, which bloats nowrap elements (np-title, tabs, log labels) past
+   their containers and widens the layout viewport beyond device-width — at
+   which point `@media (max-width: 768px)` evaluates against the inflated width
+   and never fires, so the desktop layout renders at phone width and scrolls
+   sideways. Pinning text-size-adjust to 100% keeps type at its authored size.
+   Headless Chromium disables boosting, so this only ever bit real devices. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Belt-and-suspenders: no element may create page-level horizontal scroll.
+   `clip` (not `hidden`) so `position: sticky` headers keep working. */
+html, body {
+  overflow-x: clip;
+}
+
 /* iOS double-tap-to-zoom adds a 300 ms latency on every tap of a button or
    link and makes our In Onda pill feel laggy. `manipulation` keeps pinch-zoom
    on the page itself but disables the double-tap zoom shortcut on controls. */

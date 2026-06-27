@@ -1,0 +1,17 @@
+mobile-overflow fix — test + lint proof
+commit: d6ccc9a8ea060888749089550cf7b6f5e16546d3
+date: 2026-06-27T01:02:46Z
+
+=== ruff check . ===
+All checks passed!
+=== ruff format --check . ===
+233 files already formatted
+
+=== pytest tests/ (full suite) ===
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3479 passed, 2 skipped, 19 deselected, 1 warning in 64.30s (0:01:04)
+
+=== new guard tests (negative-checked: fail when base.css fix reverted) ===
+..                                                                       [100%]
+2 passed, 17 deselected in 0.07s

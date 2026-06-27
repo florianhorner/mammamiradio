@@ -1,0 +1,33 @@
+mobile-overflow fix — runtime QA proof
+commit: d6ccc9a8ea060888749089550cf7b6f5e16546d3
+date: 2026-06-27
+
+Method: booted the app (uvicorn, 127.0.0.1:8123) and drove the headless browse
+tool. document.scrollWidth === innerWidth means no page-level horizontal scroll.
+
+=== overflow regression sweep (both surfaces) ===
+url=/        w=320  scrollWidth=320  overflow=false
+url=/        w=375  scrollWidth=375  overflow=false
+url=/        w=430  scrollWidth=430  overflow=false
+url=/        w=768  scrollWidth=768  overflow=false
+url=/        w=1024 scrollWidth=1024 overflow=false
+url=/admin   w=320  scrollWidth=320  overflow=false
+url=/admin   w=375  scrollWidth=375  overflow=false
+url=/admin   w=430  scrollWidth=430  overflow=false
+url=/admin   w=768  scrollWidth=768  overflow=false
+url=/admin   w=1024 scrollWidth=1024 overflow=false
+
+=== simulated font-boost (150%) at 390px — the real-device failure mode ===
+/admin: pageOverflow=false, tabbarOverflowsSelf=false
+(tab bar wraps to two clean rows; nothing clipped; text-size-adjust resolves to 100%)
+
+=== tab bar never wraps at desktop widths (active-underline cannot bleed) ===
+w=769  rows=1   w=850  rows=1   w=900  rows=1
+w=1000 rows=1   w=1050 rows=1   w=1280 rows=1
+
+=== protected UI elements intact ===
+gold "Mi" accent present; tricolor present (listener x5); play-btn.playing uses
+var(--ok) blue; cost counter + station-name localStorage untouched (not in diff).
+
+Real-device confirmation (Edge, where the bug reproduced) is the operator gate;
+overflow-x: clip guarantees no sideways scroll regardless of browser.

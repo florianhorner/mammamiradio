@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
 LISTENER_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.css"
 LISTENER_JS = REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 LISTENER_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
@@ -350,3 +351,46 @@ def test_listener_lang_reflects_copy_register() -> None:
     makes screen readers read English copy with Italian phonemes (WCAG 3.1.1)."""
     html = LISTENER_HTML.read_text(encoding="utf-8")
     assert 'lang="{{ page_lang }}"' in html, "<html lang> must be driven by page_lang, not hardcoded to it."
+
+
+def _read_base_css() -> str:
+    return _COMMENT_RE.sub("", BASE_CSS.read_text(encoding="utf-8"))
+
+
+def test_base_css_pins_text_size_adjust() -> None:
+    """base.css (shared by listener + admin) must pin `text-size-adjust: 100%`.
+
+    Without it, mobile Edge/Safari apply text autosizing ("font boosting") and
+    inflate type inside text blocks. That bloats `white-space: nowrap` elements
+    (admin np-title, tab bar, log labels) past their containers, widens the
+    layout viewport beyond device-width, and makes `@media (max-width: 768px)`
+    evaluate against the inflated width — so the mobile breakpoint never fires
+    and the desktop layout renders at phone width with horizontal scroll. This
+    shipped to a real device (Edge) and was invisible to headless Chromium,
+    which disables boosting. Both prefixed and unprefixed declarations required.
+    """
+    css = _read_base_css()
+    assert re.search(r"-webkit-text-size-adjust\s*:\s*100%", css), (
+        "base.css must declare `-webkit-text-size-adjust: 100%` to stop mobile font boosting."
+    )
+    assert re.search(r"(?<!-)text-size-adjust\s*:\s*100%", css), (
+        "base.css must declare the unprefixed `text-size-adjust: 100%`."
+    )
+
+
+def test_base_css_contains_page_level_horizontal_overflow() -> None:
+    """base.css must clip page-level horizontal overflow on html/body.
+
+    A single too-wide element otherwise widens the layout viewport and scrolls
+    the whole page sideways on mobile (the reported /admin breakage). `clip`
+    is preferred over `hidden` because `hidden` creates a scroll container that
+    breaks `position: sticky` headers; either satisfies the contract.
+    """
+    css = _read_base_css()
+    bodies = _rule_bodies_for_selector(css, "html") + _rule_bodies_for_selector(css, "html, body")
+    bodies += _rule_bodies_for_selector(css, "body")
+    has_guard = any(re.search(r"overflow-x\s*:\s*(clip|hidden)", body) for body in bodies)
+    assert has_guard, (
+        "base.css must set `overflow-x: clip` (or hidden) on html/body so no "
+        "element can create page-wide horizontal scroll on mobile."
+    )
