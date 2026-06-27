@@ -82,6 +82,10 @@ jamendo_country = "ITA"          # ISO 3166-1 alpha-3; "" disables country filte
 jamendo_order = "popularity_week" # popularity_week|popularity_month|popularity_total|releasedate_desc|"" (default)
 jamendo_limit = 200              # Jamendo API result depth, 1-200
 
+[moderation]
+# Exact real-name phrases to reject from listener dediche and song wishes.
+blocked_names = []
+
 [pacing]
 songs_between_banter = 2
 songs_between_ads = 4

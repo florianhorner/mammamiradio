@@ -48,6 +48,7 @@ from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     SegmentType,
 )
+from mammamiradio.hosts.moderation import is_blocked
 from mammamiradio.web.auth import _HASSIO_NETWORK, require_admin_access
 from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.streamer import _register_background_task
@@ -239,15 +240,30 @@ async def listener_request(request: Request):
         return JSONResponse({"ok": False, "error": "message must be a string"}, status_code=400)
     from mammamiradio.hosts.scriptwriter import _sanitize_prompt_data
 
-    name = _sanitize_prompt_data((raw_name or "Un ascoltatore").strip(), max_len=60)
-    message = _sanitize_prompt_data((raw_message or "").strip(), max_len=200)
+    raw_name_str = (raw_name or "Un ascoltatore").strip()
+    raw_message_str = (raw_message or "").strip()
+    if not raw_message_str:
+        return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
+
+    # Static moderation gate runs on the RAW input, before sanitization. The
+    # sanitizer truncates to a length cap (name 60 / message 200) and appends an
+    # ellipsis, so a blocked name padded to that boundary would be split and slip
+    # past the word-boundary match. Matching the raw text closes that bypass.
+    # Rejects before the request is queued and before the rate-limit window below.
+    config = request.app.state.config
+    moderation = getattr(config, "moderation", None)
+    blocked_names = getattr(moderation, "blocked_names", [])
+    if is_blocked(raw_name_str, blocked_names) or is_blocked(raw_message_str, blocked_names):
+        return JSONResponse({"ok": False, "error": "request not accepted"}, status_code=400)
+
+    name = _sanitize_prompt_data(raw_name_str, max_len=60)
+    message = _sanitize_prompt_data(raw_message_str, max_len=200)
     if not message:
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
     # IP rate limit: 1 request per 30s per listener identity.
     ip = _client_ip_for_rate_limit(request)
     state = request.app.state.station_state
-    config = request.app.state.config
     submitter_ip_hash = _hash_submitter_ip(ip, config)
     now = time.time()
     last = state._listener_request_rl.get(submitter_ip_hash, 0)
