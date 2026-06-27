@@ -276,7 +276,7 @@ body[data-stopped="true"] .btn-util {
 .host-reset:hover { color: var(--error); }
 
 /* ── LOG ── */
-.log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; }
+.log-entry { display: flex; gap: 8px; padding: 3px 0; font-size: 11px; min-width: 0; }
 .le-time { color: rgba(245,237,216,0.3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
 .le-type[data-t="music"] { color: var(--seg-music-text); }
@@ -1501,7 +1501,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-.mmr-tabbar{display:flex;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
+.mmr-tabbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
 .mmr-tabbar::-webkit-scrollbar{display:none}
 .mmr-tab{position:relative;flex:1 1 0;min-width:0;padding:12px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
