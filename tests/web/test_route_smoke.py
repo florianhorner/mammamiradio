@@ -247,12 +247,8 @@ async def test_listener_request_blocked_name_not_split_by_truncation():
     message_pad = "ciao " * 40 + "Meloni"  # past the 200-char message cap
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        by_name = await c.post(
-            "/api/listener-request", json={"name": name_pad, "message": "Ciao"}
-        )
-        by_message = await c.post(
-            "/api/listener-request", json={"name": "Marco", "message": message_pad}
-        )
+        by_name = await c.post("/api/listener-request", json={"name": name_pad, "message": "Ciao"})
+        by_message = await c.post("/api/listener-request", json={"name": "Marco", "message": message_pad})
 
     assert by_name.status_code == 400
     assert by_name.json() == {"ok": False, "error": "request not accepted"}
