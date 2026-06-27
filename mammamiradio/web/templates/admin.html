@@ -241,10 +241,17 @@ body[data-stopped="true"] .btn-util {
 .ha input[type="range"] {
   -webkit-appearance: none; appearance: none; width: 100%; height: 44px;
   padding: 19px 0; border-radius: 0; outline: none; cursor: pointer;
-  background: transparent;
+  /* The value-fill gradient (sliderBg) is painted on the element itself, but the
+     hit area is 44px tall, so confine it to a 6px band centred on the track —
+     otherwise the gradient fills the whole tall box. The track pseudo-elements
+     are transparent so the band shows through. */
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-size: 100% 6px;
+  background-position: center;
 }
 .ha input[type="range"]::-webkit-slider-runnable-track {
-  height: 6px; border-radius: 3px; background: rgba(20,17,15,0.85);
+  height: 6px; border-radius: 3px; background: transparent;
 }
 .ha input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
@@ -254,7 +261,7 @@ body[data-stopped="true"] .btn-util {
 }
 .ha input[type="range"]::-webkit-slider-thumb:hover { background: var(--sun); }
 .ha input[type="range"]::-moz-range-track {
-  height: 6px; border-radius: 3px; background: rgba(20,17,15,0.85);
+  height: 6px; border-radius: 3px; background: transparent;
 }
 .ha input[type="range"]::-moz-range-thumb {
   width: 24px; height: 24px; border-radius: 50%;
@@ -1340,8 +1347,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   padding: 0;
   box-sizing: border-box;
   cursor: pointer;
-  transform: scale(2);
-  transform-origin: center;
   accent-color: var(--lancia, #B82C20);
 }
 /* Ban is destructive: Lancia red, paired with the explicit word "Ban" (no colour-only meaning) */
@@ -1474,7 +1479,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:16px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 12px 38px -20px rgba(0,0,0,.85);
   overflow:hidden;margin-bottom:14px}
-.mmr-console::before{content:"";position:absolute;top:0;left:1px;right:1px;height:2px;background:linear-gradient(90deg,var(--lancia2),var(--sun));border-radius:16px 16px 0 0;z-index:1}
+/* Inner top accent: keep the real 1px rounded border visible. Placing this at
+   top:0 made the accent replace the border, so the corner read as broken. */
+.mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:15px 15px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
 .mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}
 .mmr-console-air{padding:18px 22px}
 .mmr-console-side{padding:18px 20px;border-left:1px solid var(--line)}
@@ -1513,6 +1520,18 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-tabpanel.is-active{display:block}
 /* One header per panel */
 .mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.a-panel header.mmr-panel-head-stacked{display:grid;grid-template-columns:1fr;gap:10px}
+.mmr-panel-head-stacked .programme-toolbar{width:100%;justify-content:flex-end}
+/* The panel head keeps its own divider (from the generic `.a-panel header`
+   rule) on every tab. Only list-era drawer sections directly below a head drop
+   their redundant top rule; bordered standalone strips, such as pending listener
+   requests in Scaletta, keep all four sides of their frame. */
+.mmr-panel-head + .drawer-section { border-top: none; padding-top: 0; }
+/* Conduttori / Archivio wrap their head in a .drawer-section, so that section is
+   the first thing in the panel — its list-era border-top would draw a stray line
+   across the panel top, above the head's own divider. A section that OPENS a
+   panel has nothing above it to divide from, so it sheds the top rule. */
+.mmr-tabpanel > .drawer-section:first-child { border-top: none; padding-top: 0; }
 .mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0;padding-top:2px;line-height:1.22;letter-spacing:0;overflow:visible}
 .mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
 @media (max-width:768px){
@@ -1671,7 +1690,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <!-- Scaletta zone -->
     <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta" role="tabpanel" aria-labelledby="tab-scaletta" tabindex="0">
-      <header class="mmr-panel-head">
+      <header class="mmr-panel-head mmr-panel-head-stacked">
         <h2>Scaletta</h2>
         <div class="programme-toolbar">
           <span class="filter-count" id="programmeCount"></span>
@@ -1710,9 +1729,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="quick-actions" id="playlistPoolControls">
           <span class="quick-add-label">Pool:</span>
-          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg width="12" height="12" style="vertical-align:-1px"><use href="#ic-shuffle"/></svg> Shuffle</button>
+          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
-          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Svuota tutto</button>
+          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
         </div>
         <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
           <span class="quick-add-label">Steer:</span>
@@ -1863,7 +1882,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
     <!-- Motore zone -->
     <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore" role="tabpanel" aria-labelledby="tab-motore" tabindex="0">
-      <header class="mmr-panel-head"><h2>Motore</h2><span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></header>
+      <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">pipeline · runtime · costi <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
 
@@ -2685,7 +2704,7 @@ function renderProgramme(st){
     const m=Math.floor(s/60),r=s%60;
     return m+':'+(r<10?'0':'')+r;
   };
-  const relLabel=idx=>idx===0?'next':idx===1?'after that':'later';
+  const relLabel=idx=>idx===0?'next':idx===1?'after':'later';
 
   const upFiltered=upcoming.map((it,idx)=>({...it,_queueIndex:idx})).filter(it=>matchFilter(it.type));
   upFiltered.slice(0,8).forEach(it=>{
@@ -3117,10 +3136,10 @@ async function shufflePlaylist(el){
   await refreshFast();
 }
 async function purgePool(el){
-  if(!confirm('Svuota tutto? Tutti i brani verranno rimossi dalla rotazione.\nLa musica riprende appena aggiungi una sorgente.'))return;
+  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.'))return;
   flash(el);
   const r=await api('POST','/api/playlist/purge',{});
-  if(r&&r.ok){toast('Rotazione svuotata');await refreshFast();}
+  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared');await refreshFast();}
   else toast(r?.error||wayOut('empty the rotation'));
 }
 async function enrichPlaylistSource(kind,el){
@@ -3636,7 +3655,7 @@ function renderHosts(hosts){
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
-      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
+      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background-image:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
     }).join('');
     return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
@@ -3659,7 +3678,7 @@ function syncHostPresetActive(block){
 
 function onSliderInput(sl,n){
   const val=+sl.value,ax=sl.dataset.a;
-  sl.style.background=sliderBg(val);
+  sl.style.backgroundImage=sliderBg(val);
   const wordEl=document.getElementById(`hw-${n}-${ax}`);
   if(wordEl)wordEl.textContent=axWord(ax,val);
   const block=sl.closest('.host-block');
@@ -3690,7 +3709,7 @@ async function applyHostPreset(n,presetName){
     const ax=sl.dataset.a;
     if(ax in preset){
       sl.value=preset[ax];
-      sl.style.background=sliderBg(preset[ax]);
+      sl.style.backgroundImage=sliderBg(preset[ax]);
       const wordEl=document.getElementById(`hw-${n}-${ax}`);
       if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
     }

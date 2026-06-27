@@ -321,6 +321,10 @@ _ITALIAN_UTILITY_FORBIDDEN = (
     "'Saltato'",
     "applicato",
     ">Classifiche<",
+    "Rotazione svuotata",
+    "può tornare dopo un riavvio",
+    "Svuota tutto?",
+    ">Svuota tutto<",
 )
 
 
@@ -345,6 +349,9 @@ def test_structural_italian_flair_preserved() -> None:
 
 def test_motore_runtime_groups_precede_setup() -> None:
     html = _html()
+    header = html[html.index("<h2>Motore</h2>") : html.index('id="pipelineStatus"')]
+    assert "pipeline · runtime · costi" in header
+    assert 'id="engineAlertDot"' in header
     pipeline = html.index('id="pipelineStatus"')
     status = html.index('id="eg-status-h"')
     costs = html.index('id="eg-costs-h"')

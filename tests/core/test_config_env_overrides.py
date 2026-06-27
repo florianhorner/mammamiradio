@@ -4,9 +4,33 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mammamiradio.core.config import load_config, resolve_model
+from mammamiradio.core.config import GUEST_HOST_NAME, load_config, resolve_model
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+
+
+def test_guest_host_present_by_default(monkeypatch):
+    # The roster ships with the guest host; the switch defaults ON.
+    monkeypatch.delenv("MAMMAMIRADIO_GUEST_HOST", raising=False)
+    config = load_config(TOML_PATH)
+    assert any(h.name == GUEST_HOST_NAME for h in config.hosts)
+    assert any(h.engine_host == GUEST_HOST_NAME for h in config.brand.hosts)
+
+
+def test_guest_host_disabled_drops_him_from_roster(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_GUEST_HOST", "false")
+    config = load_config(TOML_PATH)
+    assert all(h.name != GUEST_HOST_NAME for h in config.hosts)
+    assert all(h.engine_host != GUEST_HOST_NAME for h in config.brand.hosts)
+    # Regular hosts survive — only the guest is removed.
+    assert len(config.hosts) >= 1
+
+
+def test_guest_host_enabled_explicit_keeps_him(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_GUEST_HOST", "true")
+    config = load_config(TOML_PATH)
+    assert any(h.name == GUEST_HOST_NAME for h in config.hosts)
+    assert any(h.engine_host == GUEST_HOST_NAME for h in config.brand.hosts)
 
 
 def test_ha_url_override(monkeypatch):

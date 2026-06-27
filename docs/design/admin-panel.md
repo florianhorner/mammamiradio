@@ -61,7 +61,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    banter / fewer ads / reload / flag, plus a Lancia-red `Purge queue`), `Cadenza`
    (pacing sliders). The `Azioni immediate` triggers moved up into the console.
 2. **Scaletta** (default tab) — forward-only rundown of up to ~8 upcoming items,
-   each with a relative label (`next` / `after that` / `later`) + rough duration.
+   each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
    played history.
 3. **Rotazione** — searchable/prunable music library. Row checkboxes select songs

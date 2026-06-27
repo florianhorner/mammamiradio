@@ -346,6 +346,28 @@ def test_parser_media_player_push_explicit_true_and_false():
         assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == expected
 
 
+def test_parser_guest_host_explicit_true_and_false():
+    for value, expected in ((True, "true"), (False, "false")):
+        rc, stdout, _ = _run_parser({"guest_host": value})
+        assert rc == 0
+        exports = _parse_exports(stdout)
+        assert exports["MAMMAMIRADIO_GUEST_HOST"] == expected
+
+
+def test_parser_guest_host_missing_key_preserves_default_on():
+    rc, stdout, _ = _run_parser({})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_GUEST_HOST"] == "true"
+
+
+def test_addon_manifest_guest_host_defaults_true_for_new_installs():
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        body = config.read_text()
+        assert re.search(r"(?m)^  guest_host: true$", body), f"{config} must default the guest host option to On"
+        assert re.search(r"(?m)^  guest_host: bool\?$", body), f"{config} must expose guest_host in the schema"
+
+
 def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
     for config in (STABLE_CONFIG, EDGE_CONFIG):
         body = config.read_text()

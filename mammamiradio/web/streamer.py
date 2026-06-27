@@ -48,6 +48,7 @@ from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
 from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
+    PERSISTED_SOURCE_FILENAME,
     ExplicitSourceError,
     filter_blocklisted,
     load_explicit_source,
@@ -1087,6 +1088,16 @@ def _delete_persisted_heading(cache_dir: Path) -> bool:
         return True
     except OSError:
         logger.warning("Failed to clear persisted heading", exc_info=True)
+        return False
+
+
+def _delete_persisted_source(cache_dir: Path) -> bool:
+    """Remove the selected playlist source from cache; return whether it is gone."""
+    try:
+        (cache_dir / PERSISTED_SOURCE_FILENAME).unlink(missing_ok=True)
+        return True
+    except OSError:
+        logger.warning("Failed to clear persisted playlist source", exc_info=True)
         return False
 
 
@@ -3225,6 +3236,29 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
     target = "add-on secrets.env" if request.app.state.config.is_addon else ".env"
     logger.info("Credentials saved to %s: %s", target, ", ".join(updates.keys()))
     return {"ok": True, "saved": list(updates.keys())}
+
+
+@router.post("/api/playlist/purge")
+async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
+    """Empty the rotation pool ("Svuota tutto").
+
+    Clears every track from the pool, the pin, play history and segment counters
+    via ``switch_playlist([], None)`` (which also bumps the revision so any
+    in-flight producer segment is discarded on commit), then purges the
+    pre-produced lookahead queue so the cleared pool takes effect. The current
+    segment is left to finish — purging the pool is not a reason to cut the air;
+    once it ends the starvation rescue covers the gap until a source is re-added
+    (INSTANT AUDIO — never dead air). Sources can be re-added from the toolbar.
+    """
+    state = request.app.state.station_state
+    config = request.app.state.config
+    source_switch_lock = request.app.state.source_switch_lock
+    async with source_switch_lock:
+        state.switch_playlist([], None)
+        persisted = _delete_persisted_source(config.cache_dir)
+        purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+    logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments", purged)
+    return {"ok": True, "purged": purged, "persisted": persisted}
 
 
 @router.post("/api/playlist/remove")

@@ -126,6 +126,9 @@ print('export MAMMAMIRADIO_BROADCAST_CHAIN=' + bc_val)
 media_player_push = opts.get('ha_media_player_push', True)
 mpp_val = 'true' if media_player_push else 'false'
 print('export MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH=' + mpp_val)
+guest_host = opts.get('guest_host', True)
+gh_val = 'true' if guest_host else 'false'
+print('export MAMMAMIRADIO_GUEST_HOST=' + gh_val)
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
