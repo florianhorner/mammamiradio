@@ -121,6 +121,40 @@ def test_load_config_running_gags_malformed_degrades(tmp_path):
     assert config.running_gags.domain_allowlist == []
 
 
+def test_load_config_parses_moderation_blocked_names(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace(
+        "blocked_names = []",
+        'blocked_names = ["Meloni", "  Mario Rossi  ", ""]',
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    assert config.moderation.blocked_names == ["Meloni", "Mario Rossi"]
+
+
+def test_load_config_moderation_defaults_empty_when_section_missing(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    without_moderation = []
+    skipping_moderation = False
+    for line in source.read_text().splitlines():
+        if line.strip() == "[moderation]":
+            skipping_moderation = True
+            continue
+        if skipping_moderation and line.startswith("[") and line.strip():
+            skipping_moderation = False
+        if not skipping_moderation:
+            without_moderation.append(line)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text("\n".join(without_moderation))
+
+    config = load_config(str(custom_path))
+
+    assert config.moderation.blocked_names == []
+
+
 def test_load_config_home_non_table_degrades(tmp_path):
     """A `[home]` declared as a non-table value must not raise during load."""
     source = Path(__file__).resolve().parents[2] / "radio.toml"

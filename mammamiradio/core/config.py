@@ -98,6 +98,13 @@ class PlaylistSection:
 
 
 @dataclass
+class ModerationSection:
+    """Deterministic listener-request moderation knobs."""
+
+    blocked_names: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PacingSection:
     """Rules that control how often banter and ad breaks occur."""
 
@@ -593,6 +600,7 @@ class StationConfig:
     models: ModelsSection = field(default_factory=_build_default_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
+    moderation: ModerationSection = field(default_factory=ModerationSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
     brand: BrandSection = field(default_factory=BrandSection)
     brand_warnings: list[str] = field(default_factory=list)
@@ -1407,6 +1415,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         entity_allowlist=_str_list(gags_raw.get("entity_allowlist")),
         entity_denylist=_str_list(gags_raw.get("entity_denylist")),
     )
+    moderation_raw = raw.get("moderation", {})
+    if not isinstance(moderation_raw, dict):
+        moderation_raw = {}
+    moderation = ModerationSection(blocked_names=_str_list(moderation_raw.get("blocked_names")))
     ha_token = os.getenv("HA_TOKEN", "")
     # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
     if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
@@ -1480,6 +1492,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         models=models_section,
         homeassistant=ha_section,
         running_gags=running_gags,
+        moderation=moderation,
         persona=PersonaSection(**raw.get("persona", {})),
         brand=brand,
         brand_warnings=brand_warnings,
