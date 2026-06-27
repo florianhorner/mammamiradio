@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Listener dediche can now reject configured real-name matches before they reach the hosts.** Operators can keep `blocked_names` under `[moderation]` in `radio.toml`; it ships empty, but when filled it catches names case-insensitively and accent-insensitively without echoing the private list back to listeners.
 - **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
 
 ### Changed

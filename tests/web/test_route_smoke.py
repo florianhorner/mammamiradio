@@ -179,6 +179,7 @@ async def test_listener_request_accepts_unauthenticated_post():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("ok") is True
+    assert len(app.state.station_state.pending_requests) == 1
 
 
 @pytest.mark.asyncio
@@ -188,3 +189,73 @@ async def test_listener_request_rejects_empty_message():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.post("/api/listener-request", json={"name": "Marco", "message": "   "})
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "Melóni", "message": "Ciao"},
+        {"name": "Marco", "message": "Una dedica per meloni"},
+    ],
+)
+async def test_listener_request_blocked_name_rejects_without_queueing(payload):
+    """Configured blocked names reject before a listener request reaches the queue."""
+    app = _make_app()
+    app.state.config.moderation.blocked_names = ["Meloni"]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.post("/api/listener-request", json=payload)
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body == {"ok": False, "error": "request not accepted"}
+    assert "Meloni" not in resp.text
+    assert "block" not in resp.text.lower()
+    assert app.state.station_state.pending_requests == []
+
+
+@pytest.mark.asyncio
+async def test_listener_request_blocked_name_does_not_consume_rate_limit():
+    """A static moderation rejection must not burn the 30s per-IP submit window."""
+    app = _make_app()
+    app.state.config.moderation.blocked_names = ["Meloni"]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        blocked = await c.post("/api/listener-request", json={"name": "Meloni", "message": "Ciao"})
+        allowed = await c.post("/api/listener-request", json={"name": "Marco", "message": "Ciao"})
+
+    assert blocked.status_code == 400
+    assert blocked.json()["ok"] is False
+    assert allowed.status_code == 200
+    assert allowed.json()["ok"] is True
+    assert len(app.state.station_state.pending_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_request_blocked_name_not_split_by_truncation():
+    """A blocked name padded past the sanitizer length cap must still reject.
+
+    The gate matches the raw input, so a name placed at the 60/200-char
+    truncation boundary cannot be split (and thus bypass the word-boundary
+    match) by sanitization's ellipsis clip.
+    """
+    app = _make_app()
+    app.state.config.moderation.blocked_names = ["Meloni"]
+
+    name_pad = "a" * 58 + " Meloni"  # blocked word lands past the 60-char name cap
+    message_pad = "ciao " * 40 + "Meloni"  # past the 200-char message cap
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        by_name = await c.post(
+            "/api/listener-request", json={"name": name_pad, "message": "Ciao"}
+        )
+        by_message = await c.post(
+            "/api/listener-request", json={"name": "Marco", "message": message_pad}
+        )
+
+    assert by_name.status_code == 400
+    assert by_name.json() == {"ok": False, "error": "request not accepted"}
+    assert by_message.status_code == 400
+    assert by_message.json() == {"ok": False, "error": "request not accepted"}
+    assert app.state.station_state.pending_requests == []
