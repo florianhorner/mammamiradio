@@ -276,3 +276,12 @@ The pre-push hook logs every `--no-verify` to `~/.commit-bypass.log` with the ov
 - **Canonical spec:** https://github.com/florianhorner/engineering-standards/blob/main/specs/commit-message-spec.md
 - **Vendored copy in this repo:** [`.config/commit-rules.json`](.config/commit-rules.json) — SHA-pinned snapshot consumed by the local hook, the commitlint config, and CI. Do not hand-edit.
 <!-- END: commit-message-standards -->
+
+## Contributors
+
+Thanks to the people who've shaped Mamma Mi Radio:
+
+- [@florianhorner](https://github.com/florianhorner): maintainer
+- [@ashika-rai-n](https://github.com/ashika-rai-n): dashboard CSS/JS extraction into `/static/` ([PR #203](https://github.com/florianhorner/mammamiradio/pull/203))
+
+First-time contributors are especially welcome and are protected by the merge-first protocol: an approved first-time PR lands before any maintainer refactor touches the same files, so the "Merged" badge stays earned.
