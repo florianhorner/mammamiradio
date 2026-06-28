@@ -221,6 +221,67 @@ def test_producer_desk_console_is_responsive() -> None:
     assert phone_tabbar.get("overflow-y") == "visible"
 
 
+def test_compact_deck_is_complete() -> None:
+    """Compact upper deck retains the required operator elements."""
+    text = _read_admin_html()
+    deck = text[text.index('class="mmr-deck"') : text.index('id="live-queue"')]
+
+    assert 'id="sidebarCost"' in deck
+    assert 'id="productionFeed"' in deck
+    assert "doTrigger('banter'" in deck
+    assert "doTrigger('ad'" in deck
+    assert "doTrigger('news_flash'" in deck
+    assert "doQuickAction('more_chaos'" in deck
+    assert 'class="mmr-tabbar"' in deck
+
+
+def test_on_air_idle_state_compacts_dead_space() -> None:
+    """Idle console state should collapse only the non-useful now-playing space."""
+    css = _admin_css()
+    idle_title = _declarations_for_selector(css, ".mmr-console.is-idle .mmr-air-title")
+    idle_artist = _declarations_for_selector(css, ".mmr-console.is-idle .mmr-air-artist")
+    idle_progress = _declarations_for_selector(css, ".mmr-console.is-idle .mmr-air-progress")
+    trigger_grid = _declarations_for_selector(css, ".mmr-console-triggers")
+    trigger_button = _declarations_for_selector(css, ".mmr-console-triggers .a-trigger")
+
+    assert idle_title.get("font-size") == "16px"
+    assert idle_title.get("font-style") == "normal"
+    assert idle_title.get("color") == "var(--muted)"
+    assert idle_artist.get("display") == "none"
+    assert idle_progress.get("display") == "none"
+    assert trigger_grid.get("grid-template-columns") == "repeat(4,1fr)"
+    assert trigger_button.get("padding") == "10px 12px"
+    assert re.search(
+        r"@media \(max-width:900px\)\{[^}]*\.mmr-console-triggers\{grid-template-columns:1fr 1fr\}",
+        css,
+        re.DOTALL,
+    )
+    assert ".mmr-console-triggers .a-trigger{flex-direction:row" in css
+
+
+def test_update_now_toggles_idle_console_state() -> None:
+    """updateNow() owns both sides of the idle-state class transition."""
+    text = _read_admin_html()
+    update_now = text[text.index("function updateNow(ns)") : text.index("// ── Programme Filter")]
+
+    assert "onAir.classList.add('is-idle')" in update_now
+    assert "onAir.classList.remove('is-idle')" in update_now
+
+
+def test_fetch_failure_clears_idle_state() -> None:
+    """refreshFast() catch block must remove is-idle so poll errors don't compress the console."""
+    text = _read_admin_html()
+    refresh_fast = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    assert "_oa.classList.remove('is-idle')" in refresh_fast
+
+
+def test_on_air_section_starts_idle() -> None:
+    """#on-air must start with is-idle class to avoid pre-poll full-UI flash."""
+    text = _read_admin_html()
+    assert 'class="mmr-console is-idle" id="on-air"' in text
+
+
 def test_admin_background_uses_no_fixed_body_overlay() -> None:
     text = _read_admin_html()
     assert not re.search(r"body::before\s*\{[^}]*position\s*:\s*fixed", text, re.DOTALL), (
@@ -509,9 +570,26 @@ def test_scaletta_relative_labels_use_actual_queue_position() -> None:
 
 
 def test_filter_pills_meet_chip_touch_floor() -> None:
-    declarations = _declarations_for_selector(_admin_css(), ".filter-pill")
-    height = _effective_px(declarations, "height", "min-height")
-    assert height >= 36, f".filter-pill must be at least 36px tall; got {height}px."
+    _assert_touch_target(".filter-pill")
+
+
+def test_archivio_filter_pills_meet_touch_floor() -> None:
+    """Archivio log pills must not override the 44px base to a smaller value."""
+    _assert_touch_target(".archivio-controls .filter-pill")
+
+
+def test_admin_tabs_have_44px_touch_targets() -> None:
+    _assert_touch_target(".mmr-tab")
+
+
+def test_mobile_admin_tabs_read_as_one_segmented_control() -> None:
+    phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
+    phone_tab = _declarations_for_selector(_phone_css(), ".mmr-tab")
+
+    assert phone_tabbar.get("gap") == "0"
+    assert phone_tabbar.get("border-radius") == "8px"
+    assert phone_tab.get("flex") == "1 1 33.333%"
+    assert phone_tab.get("border-right") == "1px solid var(--line-strong)"
 
 
 def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:

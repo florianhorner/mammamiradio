@@ -55,7 +55,7 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .filter-pill {
   font-family: var(--font-body); font-size: 11px; font-weight: 600;
-  padding: 8px 12px; border-radius: 20px; border: none; min-height: 36px;
+  padding: 8px 12px; border-radius: 20px; border: none; min-width: 44px; min-height: 44px;
   background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.5);
   border: 1px solid rgba(245,237,216,0.1);
   cursor: pointer; transition: background 0.15s, color 0.15s;
@@ -999,7 +999,6 @@ input[type="range"]:focus-visible {
 /* Log */
 .archivio-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .archivio-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
-.archivio-controls .filter-pill { min-height: 36px; }
 .a-log { background: var(--bg-elevated); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .lg-detail { padding: 4px 12px 10px 12px; font-size: 11px; color: var(--text-secondary); font-style: italic; border-bottom: 1px solid rgba(245,237,216,0.04); }
 .lg-row.has-detail { cursor: pointer; }
@@ -1476,25 +1475,28 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   .mmr-deck{position:static;top:auto;z-index:auto}
 }
 /* Pinned live console */
-.mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:16px;
-  background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 12px 38px -20px rgba(0,0,0,.85);
-  overflow:hidden;margin-bottom:14px}
+.mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:12px;
+  background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 8px 24px -16px rgba(0,0,0,.7);
+  overflow:hidden;margin-bottom:10px}
 /* Inner top accent: keep the real 1px rounded border visible. Placing this at
    top:0 made the accent replace the border, so the corner read as broken. */
-.mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:15px 15px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
+.mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:11px 11px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
 .mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}
-.mmr-console-air{padding:18px 22px}
-.mmr-console-side{padding:18px 20px;border-left:1px solid var(--line)}
+.mmr-console-air{padding:14px 18px}
+.mmr-console-side{padding:14px 16px;border-left:1px solid var(--line)}
 .mmr-air-top{display:flex;align-items:center;gap:9px}
 .mmr-air-top .status-chip{margin:0}
 .mmr-air-sig{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--muted)}
-.mmr-air-title{font-family:var(--font-display);font-style:italic;font-size:27px;line-height:1.1;margin-top:8px;color:var(--cream);overflow-wrap:anywhere}
+.mmr-air-title{font-family:var(--font-display);font-style:italic;font-size:24px;line-height:1.1;margin-top:6px;color:var(--cream);overflow-wrap:anywhere}
 .mmr-air-artist{font-size:12.5px;color:var(--muted);margin-top:2px;min-height:1em}
-.mmr-air-progress{display:flex;align-items:center;gap:11px;margin-top:13px}
+.mmr-air-progress{display:flex;align-items:center;gap:11px;margin-top:10px}
 .mmr-air-progress .progress-time{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);min-width:34px}
 .mmr-air-progress .on-air-progress-track{flex:1}
-.mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:14px}
+.mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:10px}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.mmr-console.is-idle .mmr-air-title{font-size:16px;font-style:normal;color:var(--muted);margin-top:4px}
+.mmr-console.is-idle .mmr-air-artist{display:none}
+.mmr-console.is-idle .mmr-air-progress{display:none}
 .btn-chip-danger{color:#E8A29B;border-color:rgba(184,44,32,0.45);}
 .btn-chip-danger:hover{background:rgba(184,44,32,0.18);border-color:rgba(184,44,32,0.7);color:var(--cream);}
 #playlistPoolControls{margin-top:4px;}
@@ -1503,14 +1505,15 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-cost b{color:var(--cream-dk)}
 .mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;line-height:1.35;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:9px;max-width:100%;overflow-wrap:anywhere}
 .mmr-side-label.sun{color:var(--sun)}
-.mmr-console-triggers{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-.mmr-console-triggers .a-trigger{min-height:0}
+.mmr-console-triggers{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.mmr-console-triggers .a-trigger{min-height:44px;padding:10px 12px}
+.mmr-console-triggers .a-trigger .ico-wrap{margin-bottom:4px}
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
 .mmr-tabbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
 .mmr-tabbar::-webkit-scrollbar{display:none}
-.mmr-tab{position:relative;flex:1 1 0;min-width:0;padding:12px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
+.mmr-tab{position:relative;display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:44px;min-height:44px;padding:9px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
 .mmr-tab.is-active{color:var(--cream)}
 .mmr-tab.is-active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--sun);border-radius:2px}
@@ -1534,12 +1537,20 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-tabpanel > .drawer-section:first-child { border-top: none; padding-top: 0; }
 .mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0;padding-top:2px;line-height:1.22;letter-spacing:0;overflow:visible}
 .mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
+@media (max-width:900px){
+  .mmr-console-triggers{grid-template-columns:1fr 1fr}
+  .mmr-console-triggers .a-trigger{flex-direction:row;align-items:center;gap:10px;min-height:56px}
+  .mmr-console-triggers .a-trigger .ico-wrap{flex:0 0 32px;margin-bottom:0}
+  .mmr-console-triggers .a-trigger .lb{line-height:1.2}
+}
 @media (max-width:768px){
   .mmr-console-grid{grid-template-columns:1fr}
   .mmr-console-side{border-left:0;border-top:1px solid var(--line)}
   .mmr-air-title{font-size:22px}
-  .mmr-tabbar{flex-wrap:wrap;align-items:stretch;gap:4px 6px;border-bottom:0;padding-bottom:4px;overflow:visible;overflow-x:visible;overflow-y:visible}
-  .mmr-tab{flex:1 1 calc(33.333% - 6px);padding:10px 6px;border-bottom:1px solid var(--line-strong);font-size:13px}
+  .mmr-tabbar{flex-wrap:wrap;align-items:stretch;gap:0;border:1px solid var(--line-strong);border-radius:8px;padding-bottom:0;overflow:visible;overflow-x:visible;overflow-y:visible}
+  .mmr-tab{flex:1 1 33.333%;padding:10px 6px;border-right:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong);font-size:13px}
+  .mmr-tab:nth-child(3n){border-right:0}
+  .mmr-tab:nth-child(n+4){border-bottom:0}
   .mmr-tab.is-active::after{left:10px;right:10px}
 }
 </style>
@@ -1593,7 +1604,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     <div class="mmr-deck">
 
     <!-- ══ Pinned live console — transport + triggers + cooking feed, always in view ══ -->
-    <section class="mmr-console" id="on-air" aria-label="Console live">
+    <section class="mmr-console is-idle" id="on-air" aria-label="Console live">
       <div class="mmr-console-grid">
         <div class="mmr-console-air">
           <div class="mmr-air-top">
@@ -2530,8 +2541,10 @@ function updateNow(ns){
   // Ban-now is only meaningful while a song is on air — derive it straight from the
   // segment type the admin already polls (no extra server field needed).
   const banBtn=document.getElementById('banNowBtn');
+  const onAir=document.getElementById('on-air');
   if(banBtn)banBtn.style.display=(ns&&segmentTypeKey(ns.type)==='music')?'':'none';
   if(!ns||!ns.type){
+    if(onAir)onAir.classList.add('is-idle');
     const ty=document.getElementById('nowType');
     if(ty){ty.className='status-chip idle';ty.setAttribute('aria-label','Waiting: status idle');ty.title='Waiting for signal';ty.textContent='—';}
     document.getElementById('nowTitle').textContent='Waiting for signal...';
@@ -2546,6 +2559,7 @@ function updateNow(ns){
     if(_tick){clearInterval(_tick);_tick=null;_prevNowKey='';}
     return;
   }
+  if(onAir)onAir.classList.remove('is-idle');
   const typeKey=segmentTypeKey(ns.type);
   const ty=document.getElementById('nowType');
   const typeStatus=nowTypeStatus(typeKey);
@@ -4167,7 +4181,7 @@ async function refreshFast(){
     updateChaosState(_st.chaos_mode);
     if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
     if(!_hostsOk){_hostsOk=true;const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
-  }catch(e){console.error('refreshFast',e)}
+  }catch(e){console.error('refreshFast',e);const _oa=document.getElementById('on-air');if(_oa)_oa.classList.remove('is-idle');}
 }
 async function refreshSlow(){
   try{

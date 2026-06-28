@@ -22,7 +22,7 @@ def _html() -> str:
 def test_console_holds_triggers_and_cooking_feed() -> None:
     """The four air-next triggers and the live In-Produzione feed live in the console."""
     html = _html()
-    console = html[html.index('class="mmr-console"') : html.index('class="mmr-tabbar"')]
+    console = html[html.index('class="mmr-console') : html.index('class="mmr-tabbar"')]
     for trig in ("doTrigger('banter'", "doTrigger('ad'", "doTrigger('news_flash'", "doQuickAction('more_chaos'"):
         assert trig in console, f"console must hold the {trig} trigger"
     assert 'id="queue-production"' in console
