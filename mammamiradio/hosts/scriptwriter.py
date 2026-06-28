@@ -1639,7 +1639,7 @@ Make this the focus of this banter break. It happened just now — react natural
         or course_change_block
         or listener_request_block
         or festival_block
-        or (state.chaos_mode_active or chaos_subtype is not None)
+        or chaos_subtype is not None
         or new_listener_block
     )
     exchange_count = _banter_exchange_count(warranted=warranted_long)

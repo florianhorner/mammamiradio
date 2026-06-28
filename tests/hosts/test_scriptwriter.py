@@ -438,6 +438,24 @@ async def test_write_banter_prompt_stretches_for_ha_directive(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_chaos_mode_ambient_stays_short(config, state):
+    # Regression: state.chaos_mode_active alone must not expand the exchange count.
+    # Only a per-break chaos_subtype (ChaosSubtype.URGENT_INTERRUPT etc.) warrants long.
+    config.party_mode = None
+    state.chaos_mode_active = True  # ambient Chaos Mode ON — no interrupt fired
+    host_name = config.hosts[0].name
+    mock_cls = _mock_anthropic_response(json.dumps({"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None}))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+    prompt = _banter_user_prompt(mock_cls)
+    assert "2-3 exchanges" in prompt
+    assert "4-6 exchanges" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_write_banter_strips_markdown_fences(config, state):
     host_name = config.hosts[0].name
     response_text = (

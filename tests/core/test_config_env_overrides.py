@@ -24,6 +24,7 @@ def test_guest_host_disabled_drops_him_from_roster(monkeypatch):
     assert all(h.engine_host != GUEST_HOST_NAME for h in config.brand.hosts)
     # Regular hosts survive — only the guest is removed.
     assert len(config.hosts) >= 1
+    assert any(h.engine_host != GUEST_HOST_NAME for h in config.brand.hosts)
 
 
 def test_guest_host_enabled_explicit_keeps_him(monkeypatch):
