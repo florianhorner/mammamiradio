@@ -52,7 +52,18 @@ one block:
 - **Right:** the four **air-next** triggers (Banter / Ad break / News flash / More
   chaos) and the live **In Produzione** "cooking now" feed (per-segment phase +
   label). This is the only place an operator sees work in flight, so it stays in
-  view at all times.
+  view at all times. On wider screens the four triggers sit in a single horizontal
+  row (`grid-template-columns: repeat(4,1fr)`); on ≤900px they wrap to two columns.
+
+**Idle-state compact console.** While the station has not yet produced its first
+segment, the console carries the CSS class `is-idle` (set in the initial HTML
+markup; removed by `updateNow()` when the first segment appears; re-added by
+`updateNow()` when `ns` is null). In idle state `.mmr-air-title` shrinks to 16px
+plain text (muted colour), `.mmr-air-artist` and `.mmr-air-progress` are hidden, so
+the section tabs and Live Queue are visible without scrolling. When the first segment
+arrives `is-idle` is removed and the console expands to full height automatically.
+If `refreshFast()` errors, the catch block also removes `is-idle` so a network
+failure never leaves the console permanently compact.
 
 Below the console, a **tab bar** swaps a single **work area** — one panel visible
 at a time, choice persisted in `sessionStorage['adminTab']`:
@@ -104,11 +115,11 @@ Italian headlines and station-feel words).
 
 ## Interaction standards
 
-- Minimum touch target: 44px height on control buttons, 36px on chips/pills
+- Minimum touch target: 44px on control buttons, filter chips/pills, and section tabs
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change
 - Admin controls must show feedback within 300ms of user action (toast, state change, or loading indicator)
-- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en) — admin stays `lang="it"`. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Chips and pills stay at the documented 36px minimum; only control buttons require 44px.
+- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en) — admin stays `lang="it"`. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Chips, pills, and section tabs all meet the 44px minimum — the same floor as control buttons.
 
 ## QA requirement
 
