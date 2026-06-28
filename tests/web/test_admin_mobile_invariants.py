@@ -391,6 +391,20 @@ def test_playlist_source_controls_are_non_destructive_by_default() -> None:
     assert "'/api/playlist/enrich'" in text
 
 
+def test_purge_pool_toast_is_honest_when_source_clear_is_not_persisted() -> None:
+    """If playlist_source.json could not be cleared, the admin must not promise permanence."""
+    text = _read_admin_html()
+    purge_block = text[text.index("async function purgePool") : text.index("async function enrichPlaylistSource")]
+
+    assert "r.persisted===false" in purge_block
+    assert "Rotation pool cleared for now" in purge_block
+    assert "may come back after a restart" in purge_block
+    assert "Clear the rotation pool?" in purge_block
+    assert "Rotazione svuotata" not in purge_block
+    assert "può tornare dopo un riavvio" not in purge_block
+    assert "'/api/playlist/purge'" in purge_block
+
+
 def test_playlist_and_search_have_load_more_controls() -> None:
     """Admin playlist/search rendering must expose lazy-load controls backed by paginated APIs."""
     text = _read_admin_html()
@@ -490,6 +504,8 @@ def test_scaletta_relative_labels_use_actual_queue_position() -> None:
 
     assert "relLabel(it._queueIndex)" in render_block
     assert "it._queueIndex===0?'next'" in render_block
+    assert "idx===1?'after'" in render_block
+    assert "after that" not in render_block
 
 
 def test_filter_pills_meet_chip_touch_floor() -> None:
@@ -510,7 +526,11 @@ def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:
     declarations = _declarations_for_selector(_admin_css(), '.ha input[type="range"]')
     height = _effective_px(declarations, "height", "min-height")
     assert height >= 44, f"Conduttori sliders must expose a 44px touch box; got {height}px."
-    assert declarations.get("background") == "transparent"
+    # The value-fill gradient must be confined to a 6px band centred on the track —
+    # otherwise it paints the whole 44px touch box (the gold-block slider bug).
+    assert declarations.get("background-color") == "transparent"
+    assert declarations.get("background-size") == "100% 6px"
+    assert declarations.get("background-repeat") == "no-repeat"
 
     text = _admin_css()
     track = re.search(
@@ -529,6 +549,79 @@ def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:
     assert re.search(r"width\s*:\s*24px", thumb.group(1))
     assert re.search(r"height\s*:\s*24px", thumb.group(1))
 
+    html = _read_admin_html()
+    preset_block = html[html.index("async function applyHostPreset") : html.index("// ── Listener Requests ──")]
+    assert "sl.style.backgroundImage=sliderBg(preset[ax])" in preset_block
+    assert "sl.style.background=sliderBg(preset[ax])" not in preset_block
+
+
+def test_producer_panel_head_is_the_single_divider() -> None:
+    """No double / missing hairlines in the tabbed producer desk.
+
+    The panels were split out of one long scrolling list, so first children still
+    carried list-era top borders that stacked with the panel head's border into a
+    DOUBLE hairline (Diretta, Scaletta) — and an over-broad fix once removed the
+    head border entirely, leaving panels with NO divider. The contract: the panel
+    head keeps its divider; the element directly under it, and any section that
+    opens a panel, shed their redundant top border. (Regressed twice.)
+    """
+    css = _admin_css()
+    assert ".mmr-panel-head + *" not in css, (
+        "Do not use a broad adjacent-sibling reset: it strips the top border from the "
+        "Scaletta pending-request strip when requests are visible."
+    )
+    dangerous_adjacent_resets = []
+    for selector_block, body in _iter_top_level_css_rules(css):
+        if not re.search(r"border-top\s*:\s*none", body):
+            continue
+        for selector in selector_block.split(","):
+            compact = re.sub(r"\s+", "", selector)
+            if re.search(r"(?:header|\.mmr-panel-head)\+(?:\*|div|\.queue-requests|#queue-requests)", compact):
+                dangerous_adjacent_resets.append(selector.strip())
+    assert not dangerous_adjacent_resets, (
+        "Adjacent-sibling divider resets must target drawer sections only; broad rules "
+        f"can strip the pending-request border: {dangerous_adjacent_resets}"
+    )
+    assert re.search(r"\.mmr-panel-head\s*\+\s*\.drawer-section\s*\{[^}]*border-top:\s*none", css), (
+        "Only drawer sections directly under a panel head should drop their list-era top border."
+    )
+    assert re.search(r"\.mmr-tabpanel\s*>\s*\.drawer-section:first-child\s*\{[^}]*border-top:\s*none", css), (
+        "A drawer-section that opens a tab panel must drop its top border (stray top-line guard)."
+    )
+    # The head itself must still carry a divider — guard against the over-broad
+    # removal that left panels with no separator under the title.
+    head = _declarations_for_selector(css, ".a-panel header")
+    assert head.get("border-bottom", "").startswith("1px"), "Panel head must keep its divider."
+
+
+def test_pending_request_strip_keeps_full_border() -> None:
+    declarations = _declarations_for_selector(_admin_css(), ".queue-requests")
+    assert declarations.get("border", "").startswith("1px solid"), (
+        "Pending listener requests are a bordered strip, not a list divider; keep all four sides."
+    )
+
+
+def test_scaletta_header_controls_stack_below_title() -> None:
+    css = _admin_css()
+    stacked = _declarations_for_selector(css, ".a-panel header.mmr-panel-head-stacked")
+
+    assert stacked.get("display") == "grid"
+    assert stacked.get("grid-template-columns") == "1fr"
+    assert 'class="mmr-panel-head mmr-panel-head-stacked"' in _read_admin_html()
+
+
+def test_live_console_accent_sits_inside_rounded_border() -> None:
+    """The gold console accent must not overwrite the real rounded border."""
+    css = _admin_css()
+    match = re.search(r"\.mmr-console::before\s*\{([^}]*)\}", css, re.DOTALL)
+    assert match, "The live console must keep its top accent pseudo-element."
+    declarations = {prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(match.group(1))}
+
+    assert declarations.get("top") == "1px"
+    assert declarations.get("left") == "1px"
+    assert declarations.get("right") == "1px"
+    assert declarations.get("pointer-events") == "none"
+
 
 def test_rotation_checkbox_visual_stays_compact_inside_hit_target() -> None:
     declarations = _declarations_for_selector(_admin_css(), ".pl-check")
@@ -536,6 +629,7 @@ def test_rotation_checkbox_visual_stays_compact_inside_hit_target() -> None:
     assert declarations.get("height") == "18px"
     assert declarations.get("min-width") == "18px"
     assert declarations.get("min-height") == "18px"
+    assert "transform" not in declarations
 
 
 def test_listener_request_buttons_have_44px_touch_targets() -> None:

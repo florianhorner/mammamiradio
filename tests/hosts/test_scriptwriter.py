@@ -20,6 +20,7 @@ from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, A
 from mammamiradio.hosts.scriptwriter import (
     CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
+    _banter_exchange_count,
     _build_system_prompt,
     _chaos_prompt_block,
     _host_expression_block,
@@ -385,6 +386,73 @@ async def test_write_banter_parses_valid_json(config, state):
     assert result[0][0].name == host_name
     assert result[0][1] == "Ciao a tutti!"
     assert result[1][1] == "Che bella giornata!"
+
+
+def test_banter_exchange_count_short_by_default_long_when_warranted():
+    short = _banter_exchange_count(warranted=False)
+    long = _banter_exchange_count(warranted=True)
+    assert short != long
+    # The default must stay the shorter count — guards against bumping the
+    # everyday banter back to the long form (the "always 90 seconds" complaint).
+    assert int(short.split("-")[1]) < int(long.split("-")[1])
+
+
+def _banter_user_prompt(mock_cls) -> str:
+    """Extract the user prompt sent to the mocked Anthropic client."""
+    create = mock_cls.return_value.messages.create
+    return create.call_args.kwargs["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_prompt_is_short_by_default(config, state):
+    # Hermetic: no warrant signals active (festival off, no directive/request),
+    # so this verifies the genuine everyday default regardless of ambient env.
+    config.party_mode = None
+    host_name = config.hosts[0].name
+    mock_cls = _mock_anthropic_response(json.dumps({"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None}))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+    prompt = _banter_user_prompt(mock_cls)
+    assert "2-3 exchanges" in prompt
+    assert "4-6 exchanges" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_prompt_stretches_for_ha_directive(config, state):
+    # A warranted moment (home event) earns the longer break. Festival off so the
+    # stretch is attributable to the directive, not ambient festival env.
+    config.party_mode = None
+    state.ha_pending_directive = "the kitchen light just came on"
+    host_name = config.hosts[0].name
+    mock_cls = _mock_anthropic_response(json.dumps({"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None}))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+    prompt = _banter_user_prompt(mock_cls)
+    assert "4-6 exchanges" in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_chaos_mode_ambient_stays_short(config, state):
+    # Regression: state.chaos_mode_active alone must not expand the exchange count.
+    # Only a per-break chaos_subtype (ChaosSubtype.URGENT_INTERRUPT etc.) warrants long.
+    config.party_mode = None
+    state.chaos_mode_active = True  # ambient Chaos Mode ON — no interrupt fired
+    host_name = config.hosts[0].name
+    mock_cls = _mock_anthropic_response(json.dumps({"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None}))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+    prompt = _banter_user_prompt(mock_cls)
+    assert "2-3 exchanges" in prompt
+    assert "4-6 exchanges" not in prompt
 
 
 @pytest.mark.asyncio

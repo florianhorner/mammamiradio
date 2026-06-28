@@ -44,3 +44,6 @@ configuration:
   ha_media_player_push:
     name: On-air media player push
     description: "On (default): the station shows up in Home Assistant as a media player automatically, so an add-on-only setup gets a tile out of the box. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."
+  guest_host:
+    name: Guest host
+    description: "On (default): the rotating guest host joins the line-up and drops in for occasional guest-star breaks. Turn this Off to keep the show to your regular hosts only. Takes effect after the add-on restarts."

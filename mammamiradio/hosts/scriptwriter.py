@@ -25,7 +25,7 @@ from typing import cast
 import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-from mammamiradio.core.config import StationConfig, resolve_model
+from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_model
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
@@ -114,7 +114,9 @@ _anthropic_block_expired_logged: bool = False
 _cached_system_prompt: str = ""
 _cached_prompt_key: str = ""
 _cached_system_prompt_hash: str = ""
-_LOCAL_BALLOON_GUEST_HOST = "Hans Günther"
+# Imported from config so the roster gate (MAMMAMIRADIO_GUEST_HOST) and the
+# prompt logic share one spelling of the name.
+_LOCAL_BALLOON_GUEST_HOST = GUEST_HOST_NAME
 
 
 @dataclass
@@ -982,7 +984,19 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
     return updated
 
 
-_BANTER_EXCHANGE_COUNT: str = "4-6"
+# Banter runs short by default — a quick beat between songs, not a monologue.
+# It only stretches to the longer count when the break is *warranted*: a Home
+# Assistant impossible-moment, an operator course change, a listener request, or
+# Festival Mode. Tying length to a real reason (rather than every break) keeps the
+# station tight and makes the occasional long break land as "this one mattered".
+_BANTER_EXCHANGE_COUNT: str = "2-3"
+_BANTER_EXCHANGE_COUNT_WARRANTED: str = "4-6"
+
+
+def _banter_exchange_count(*, warranted: bool) -> str:
+    """How many exchanges to ask for: the longer count only when warranted."""
+    return _BANTER_EXCHANGE_COUNT_WARRANTED if warranted else _BANTER_EXCHANGE_COUNT
+
 
 _MOOD_EXAMPLES: dict[str, str] = {
     "Serata cinema": "Example: 'La TV accesa, le luci basse — serata perfetta...'",
@@ -1619,7 +1633,18 @@ Make this the focus of this banter break. It happened just now — react natural
     "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}]{song_cues_schema}
   }}"""
 
-    prompt = f"""Write a short radio banter between the hosts. {_BANTER_EXCHANGE_COUNT} exchanges total.
+    # Stretch the break only when something warrants the extra airtime.
+    warranted_long = bool(
+        pending_directive
+        or course_change_block
+        or listener_request_block
+        or festival_block
+        or chaos_subtype is not None
+        or new_listener_block
+    )
+    exchange_count = _banter_exchange_count(warranted=warranted_long)
+
+    prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
 Just played: {recent if recent else "opening of the show"}
 Running jokes to optionally callback: {jokes if jokes else "none yet, you may seed one"}

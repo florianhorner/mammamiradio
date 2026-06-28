@@ -32,6 +32,12 @@ load_dotenv()
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
+# Canonical name of the local guest-host test balloon. Single source of truth —
+# scriptwriter imports this so the roster gate and the prompt logic can never
+# drift on the spelling. Disabled by dropping him from ``config.hosts`` at load
+# (see MAMMAMIRADIO_GUEST_HOST below); every downstream consumer is then clean.
+GUEST_HOST_NAME = "Hans Günther"
+
 _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("anthropic_api_key", "ANTHROPIC_API_KEY"),
     ("openai_api_key", "OPENAI_API_KEY"),
@@ -1526,6 +1532,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.party_mode = "festival"
     elif _festival_env in _FALSY:
         config.party_mode = None
+
+    # Guest-host off switch. Default ON (he stays on the roster). An explicit
+    # falsy value drops him from config.hosts before anything reads the roster,
+    # so the prompt, the system-prompt cache key, and voice validation are all
+    # clean with no per-call gating.
+    _guest_host_env = os.getenv("MAMMAMIRADIO_GUEST_HOST", "").strip().lower()
+    if _guest_host_env in _FALSY:
+        config.hosts = [h for h in config.hosts if h.name != GUEST_HOST_NAME]
+        config.brand.hosts = [h for h in config.brand.hosts if h.engine_host != GUEST_HOST_NAME]
 
     _ledger_env = os.getenv("MAMMAMIRADIO_LEDGER_ENABLED", "").strip().lower()
     if _ledger_env in _TRUTHY:
