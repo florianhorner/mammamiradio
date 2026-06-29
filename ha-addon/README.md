@@ -72,9 +72,9 @@ Without the HACS integration, direct `/stream` still works:
 
 ## Screenshots
 
-The dashboard gives you the station at a glance — now playing, up-next queue, controls, and setup prompts:
+The admin control room gives you the station at a glance: now playing, up-next queue, controls, and setup prompts:
 
-![Dashboard](../docs/screenshots/dashboard.png)
+![Admin control room](../docs/screenshots/admin.png)
 
 The listener page is a clean, mobile-friendly player for anyone on your network:
 

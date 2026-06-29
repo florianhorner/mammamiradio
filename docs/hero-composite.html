@@ -1,116 +1,136 @@
 <!--
-  Hero banner source template for docs/banner.png
+  Hero banner source template for docs/banner.png and docs/social-card.png
 
   Workflow to regenerate:
-  1. Generate a background image via ChatGPT Images (prompt below), save as docs/radio-hero-bg.png
+  1. Generate a warm "La Casa Ti Ascolta" smart-home room background via an image
+     generation tool and save it as docs/banner-bg.png.
   2. Serve this dir: python3 -m http.server 9191 (from docs/)
-  3. Screenshot at 1280x640: browse goto http://localhost:9191/hero-composite.html && browse viewport 1280x640 && browse screenshot banner.png
-  4. Crop to exact 1280x640 if needed
-  5. Delete radio-hero-bg.png (don't commit it, ~2.6MB)
+  3. Screenshot at 1280x640:
+     browse goto http://localhost:9191/hero-composite.html
+     browse viewport 1280x640
+     browse screenshot banner.png
+  4. Copy the final 1280x640 image to both docs/banner.png and
+     docs/social-card.png when the README hero and social preview should match.
+  5. Delete banner-bg.png before committing.
 
   Background image prompt:
-  "Wide cinematic banner, 1280x640, landscape. Vintage Italian tabletop radio receiver on dark
-  espresso-stained wood. Warm terracotta and brass tones, circular speaker grille, tuning dial,
-  small antenna. Shallow depth of field. Golden ambient light from left, late afternoon through
-  cafe window. Background fades to very dark brown/black (#14110F). Film grain. Espresso cup in
-  bokeh. No text. Left 40% darker/emptier for text overlay. Wes Anderson meets 1960s Italian radio."
+  "Wide cinematic banner, 1280x640 crop from a warm Home Assistant-native smart
+  home scene. A cozy Italian living room at evening, espresso dark wood, golden
+  ambient light, a tasteful radio/audio setup, subtle smart-home cues, lived-in
+  family warmth, soft depth of field, no text. Keep the left third dark and calm
+  for a typography overlay. The image should feel like the house is awake and
+  listening, not like a product render."
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<title>Mamma Mi Radio hero composite</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,700&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,400;1,700&family=Outfit:wght@300;400;600;700&display=swap');
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 
   body {
     width: 1280px;
     height: 640px;
     overflow: hidden;
     position: relative;
-    font-family: 'Outfit', system-ui, sans-serif;
+    background: #14110F;
+    font-family: "Outfit", system-ui, sans-serif;
   }
 
   .bg {
     position: absolute;
     inset: 0;
-    background: url('radio-hero-bg.png') center right / cover no-repeat;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 52%;
   }
 
-  .overlay-left {
+  .fade {
     position: absolute;
     inset: 0;
     background: linear-gradient(
       90deg,
-      rgba(20,17,15,0.92) 0%,
-      rgba(20,17,15,0.85) 25%,
-      rgba(20,17,15,0.55) 50%,
-      rgba(20,17,15,0.15) 70%,
-      transparent 85%
+      #14110F 0%,
+      #14110F 24%,
+      rgba(20, 17, 15, 0.84) 42%,
+      rgba(20, 17, 15, 0.34) 60%,
+      transparent 80%
     );
   }
 
-  .overlay-vignette {
+  .vig {
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      180deg,
-      rgba(20,17,15,0.4) 0%,
-      transparent 20%,
-      transparent 80%,
-      rgba(20,17,15,0.5) 100%
-    );
+    background: linear-gradient(180deg, transparent 72%, rgba(20, 17, 15, 0.5));
   }
 
-  .content {
+  body::before {
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
+    right: 0;
+    height: 1px;
+    z-index: 5;
+    background: linear-gradient(90deg, transparent, rgba(244, 208, 72, 0.28), transparent);
+  }
+
+  .overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
     bottom: 0;
-    width: 560px;
+    width: 660px;
+    z-index: 4;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 0 64px;
-    gap: 20px;
+    padding: 0 0 0 66px;
   }
 
   .on-air {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: 9px;
+    margin-bottom: 20px;
   }
 
   .on-air-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: #F4D048;
-    box-shadow: 0 0 8px rgba(244,208,72,0.7), 0 0 20px rgba(244,208,72,0.3);
+    box-shadow: 0 0 8px rgba(244, 208, 72, 0.75), 0 0 18px rgba(244, 208, 72, 0.35);
   }
 
   .on-air-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.25em;
+    font: 700 12px "Outfit", system-ui, sans-serif;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: rgba(244,208,72,0.7);
+    color: #F4D048;
   }
 
   .station-name {
-    font-family: 'Playfair Display', Georgia, serif;
+    font-family: "Playfair Display", Georgia, serif;
     font-style: italic;
     font-weight: 700;
-    font-size: 56px;
-    line-height: 1.05;
+    font-size: 58px;
+    line-height: 1.02;
+    letter-spacing: 0;
     color: #F5EDD8;
-    letter-spacing: -0.01em;
-    text-shadow: 0 2px 20px rgba(0,0,0,0.6);
+    margin: 0 0 18px;
+    white-space: nowrap;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 2px 24px rgba(0, 0, 0, 0.45);
   }
 
-  .station-name em {
+  .station-name .mi {
     color: #F4D048;
     font-style: italic;
   }
@@ -118,58 +138,57 @@
   .tricolor {
     display: flex;
     height: 3px;
-    width: 320px;
-    gap: 2px;
+    width: 280px;
     border-radius: 2px;
     overflow: hidden;
+    opacity: 0.9;
+    margin: 0 0 18px;
   }
-  .tricolor span { flex: 1; }
-  .tricolor .g { background: #009246; }
-  .tricolor .w { background: rgba(255,255,255,0.85); }
-  .tricolor .r { background: #CE2B37; }
+
+  .tricolor span {
+    flex: 1;
+  }
+
+  .tricolor .g {
+    background: #1A7A3E;
+  }
+
+  .tricolor .w {
+    background: rgba(245, 237, 216, 0.9);
+  }
+
+  .tricolor .r {
+    background: #B82C20;
+  }
 
   .tagline {
-    font-size: 15px;
-    font-weight: 400;
-    color: rgba(203,185,166,0.9);
-    line-height: 1.55;
-    max-width: 380px;
-    text-shadow: 0 1px 8px rgba(0,0,0,0.5);
+    font: 400 17px "Outfit", system-ui, sans-serif;
+    line-height: 1.4;
+    color: rgba(245, 237, 216, 0.85);
+    margin: 0;
   }
 
-  .badges {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 4px;
-  }
-
-  .badge {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: rgba(244,208,72,0.75);
-    background: rgba(244,208,72,0.08);
-    border: 1px solid rgba(244,208,72,0.2);
-    padding: 4px 10px;
-    border-radius: 20px;
-    backdrop-filter: blur(4px);
+  .descriptor {
+    font: 400 13px "Outfit", system-ui, sans-serif;
+    color: rgba(238, 225, 200, 0.6);
+    margin: 13px 0 0;
+    letter-spacing: 0.015em;
+    white-space: nowrap;
   }
 </style>
 </head>
 <body>
-  <div class="bg"></div>
-  <div class="overlay-left"></div>
-  <div class="overlay-vignette"></div>
+  <img class="bg" src="./banner-bg.png" alt="">
+  <div class="fade"></div>
+  <div class="vig"></div>
 
-  <div class="content">
+  <div class="overlay">
     <div class="on-air">
       <span class="on-air-dot"></span>
-      <span class="on-air-label">On Air</span>
+      <span class="on-air-label">On Air &middot; La Casa Ti Ascolta</span>
     </div>
 
-    <div class="station-name">Mamma<br><em>Mi</em> Radio</div>
+    <h1 class="station-name">Mamma <span class="mi">Mi</span> Radio</h1>
 
     <div class="tricolor">
       <span class="g"></span>
@@ -177,13 +196,8 @@
       <span class="r"></span>
     </div>
 
-    <p class="tagline">AI-powered Italian radio. Claude-written hosts, absurd ads, and the uncanny feeling that the radio knows who you are.</p>
-
-    <div class="badges">
-      <span class="badge">Self-hosted</span>
-      <span class="badge">Open Source</span>
-      <span class="badge">Home Assistant</span>
-    </div>
+    <p class="tagline">Two Italian hosts.<br>One very opinionated smart home.</p>
+    <p class="descriptor">Your own AI radio station, native to Home Assistant.</p>
   </div>
 </body>
 </html>
