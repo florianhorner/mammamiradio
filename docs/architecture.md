@@ -141,8 +141,9 @@ operator-toggleable **live** from the admin Engine Room On-Air Sound dial
 the chain on the next produced segment — no restart, no queue purge — so an operator
 can A/B the FM colouring against studio-clean on the live stream. A separate
 pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers +
-loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the same `_NORM_SEM` slot as
-`normalize()` so the extra encode respects the Pi 2-FFmpeg ceiling.
+loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the shared admission slot
+from `mammamiradio.audio.admission` so the extra encode respects the Pi 2-FFmpeg
+ceiling.
 
 The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
 prior audio in place and never raises, and emergency / bridge / rescue fills skip the

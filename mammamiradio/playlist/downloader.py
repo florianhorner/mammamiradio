@@ -16,7 +16,8 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
 
-from mammamiradio.audio.normalizer import _run_ffmpeg, ffmpeg_slot
+from mammamiradio.audio.admission import ffmpeg_slot
+from mammamiradio.audio.normalizer import _run_ffmpeg
 from mammamiradio.core.models import Track
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ def clear_rejected_cache_keys() -> None:
     _REJECTED_CACHE_KEYS.clear()
 
 
-def validate_download(filepath: Path) -> tuple[bool, str]:
+def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool, str]:
     """Quickly reject partial/corrupt downloads before expensive normalization."""
     min_size_bytes = 500 * 1024
     try:
@@ -97,7 +98,7 @@ def validate_download(filepath: Path) -> tuple[bool, str]:
 
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
     try:
-        with ffmpeg_slot():
+        with ffmpeg_slot(background=background):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return False, "ffprobe timed out"

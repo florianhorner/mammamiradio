@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.audio import audio_quality, normalizer
+from mammamiradio.audio import admission, audio_quality, normalizer
 from mammamiradio.core.models import SegmentType
 from mammamiradio.playlist import downloader
 
@@ -53,9 +53,17 @@ def _completed(cmd: list[str], *, text: bool = False) -> subprocess.CompletedPro
 
 
 def test_norm_sem_stays_bounded_semaphore_two():
+    assert normalizer._NORM_SEM is admission._NORM_SEM
     assert isinstance(normalizer._NORM_SEM, BoundedSemaphore)
     assert normalizer._NORM_SEM._initial_value == 2
     assert normalizer._NORM_SEM._value == 2
+
+
+def test_background_sem_stays_bounded_semaphore_one():
+    assert normalizer._BACKGROUND_SEM is admission._BACKGROUND_SEM
+    assert isinstance(normalizer._BACKGROUND_SEM, BoundedSemaphore)
+    assert normalizer._BACKGROUND_SEM._initial_value == 1
+    assert normalizer._BACKGROUND_SEM._value == 1
 
 
 def test_global_ffmpeg_admission_caps_non_rescue_paths(tmp_path, monkeypatch):
@@ -98,6 +106,74 @@ def test_global_ffmpeg_admission_caps_non_rescue_paths(tmp_path, monkeypatch):
         list(pool.map(lambda fn: fn(), calls))
 
     assert max_active <= 2
+
+
+def test_background_ffmpeg_does_not_block_foreground(monkeypatch):
+    background_started = threading.Event()
+    foreground_started = threading.Event()
+    release_background = threading.Event()
+
+    def fake_run(cmd, *args, **kwargs):
+        if "background" in cmd:
+            background_started.set()
+            assert release_background.wait(1)
+        if "foreground" in cmd:
+            foreground_started.set()
+        return _completed(list(cmd), text=bool(kwargs.get("text")))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        background = pool.submit(
+            normalizer._run_ffmpeg,
+            ["ffmpeg", "background"],
+            "background prefetch",
+            background=True,
+        )
+        assert background_started.wait(1)
+        foreground = pool.submit(normalizer._run_ffmpeg, ["ffmpeg", "foreground"], "next-to-air")
+        assert foreground_started.wait(0.2)
+        release_background.set()
+        foreground.result(timeout=1)
+        background.result(timeout=1)
+
+
+def test_background_ffmpeg_serializes_background_work(monkeypatch):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    starts: list[str] = []
+    lock = threading.Lock()
+
+    def fake_run(cmd, *args, **kwargs):
+        label = cmd[1]
+        with lock:
+            starts.append(label)
+        if label == "background-1":
+            first_started.set()
+            assert release_first.wait(1)
+        return _completed(list(cmd), text=bool(kwargs.get("text")))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(
+            normalizer._run_ffmpeg,
+            ["ffmpeg", "background-1"],
+            "background prefetch 1",
+            background=True,
+        )
+        assert first_started.wait(1)
+        second = pool.submit(
+            normalizer._run_ffmpeg,
+            ["ffmpeg", "background-2"],
+            "background prefetch 2",
+            background=True,
+        )
+        time.sleep(0.05)
+        assert starts == ["background-1"]
+        release_first.set()
+        first.result(timeout=1)
+        second.result(timeout=1)
+
+    assert starts == ["background-1", "background-2"]
 
 
 class _NonNestingSemaphore:
@@ -162,6 +238,35 @@ def test_rescue_ffmpeg_bypasses_full_gate_but_normal_helpers_do_not(tmp_path, mo
 
     thread.join(timeout=1)
     assert normal_started.is_set()
+
+
+def test_rescue_ffmpeg_serializes_rescue_work(monkeypatch):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    starts: list[str] = []
+    lock = threading.Lock()
+
+    def fake_run(cmd, *args, **kwargs):
+        label = cmd[1]
+        with lock:
+            starts.append(label)
+        if label == "rescue-1":
+            first_started.set()
+            assert release_first.wait(1)
+        return _completed(list(cmd), text=bool(kwargs.get("text")))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(normalizer._run_ffmpeg, ["ffmpeg", "rescue-1"], "rescue 1", rescue=True)
+        assert first_started.wait(1)
+        second = pool.submit(normalizer._run_ffmpeg, ["ffmpeg", "rescue-2"], "rescue 2", rescue=True)
+        time.sleep(0.05)
+        assert starts == ["rescue-1"]
+        release_first.set()
+        first.result(timeout=1)
+        second.result(timeout=1)
+
+    assert starts == ["rescue-1", "rescue-2"]
 
 
 def test_ordinary_silence_generation_stays_bounded(tmp_path, monkeypatch):

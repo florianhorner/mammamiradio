@@ -166,7 +166,7 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def fake_silence(path: Path, _duration: float) -> None:
+    def fake_silence(path: Path, _duration: float, **_kwargs) -> None:
         path.write_bytes(b"silence")
 
     with (
@@ -317,7 +317,7 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
 
     assert result is not None and result.cache_hit is True
     assert result.path == norm_cached
-    m_reconcile.assert_called_once_with(norm_cached)
+    m_reconcile.assert_called_once_with(norm_cached, background=False)
 
 
 def test_norm_cache_bridge_scrubs_foreign_artist():

@@ -891,6 +891,38 @@ async def test_error_recovery_uses_canned_banter(tmp_path):
     assert state.failed_segments == 0
 
 
+@pytest.mark.asyncio
+async def test_error_recovery_silence_generation_is_rescue(tmp_path):
+    """Generated error-recovery silence carries the admission bypass."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _fake_silence(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"silence")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(
+            f"{PRODUCER_MODULE}.download_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_silence) as mock_silence,
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    mock_silence.assert_called_once()
+    assert mock_silence.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("title") == "Brief silence"
+
+
 # ---------------------------------------------------------------------------
 # Gap 6 — _cast_voices fallback assigns ALL roles when no voices configured
 # ---------------------------------------------------------------------------
@@ -1003,6 +1035,33 @@ async def test_prefetch_next_cache_write_failure(tmp_path):
     ):
         # Should not raise despite OSError
         await _prefetch_next(state, config)
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_normalizes_as_background(tmp_path):
+    """_prefetch_next marks its ffprobe and normalization work as background admission."""
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    downloaded = tmp_path / "dl.mp3"
+    downloaded.write_bytes(b"download")
+
+    def _fake_normalize(src, dst, *args, **kwargs):
+        dst.write_bytes(b"normed audio")
+        return dst
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=downloaded),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")) as mock_validate,
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize) as mock_norm,
+    ):
+        await _prefetch_next(state, config)
+
+    assert mock_validate.call_args.kwargs["background"] is True
+    assert mock_norm.call_args.kwargs["background"] is True
 
 
 @pytest.mark.asyncio
@@ -1303,6 +1362,7 @@ async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_
 
     assert queued is True
     mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.path.exists()
