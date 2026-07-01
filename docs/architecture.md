@@ -91,6 +91,7 @@ always remains best-effort and never blocks or delays audio.
 - `MUSIC`
   - uses local `music/` files, then `yt-dlp` for chart tracks; when all candidates fail the audio quality gate, recycles the last-known-good music norm file, then drops the track and lets the playback rescue path handle the gap — silent audio is never queued
   - normalizes output before queueing
+  - after each music segment lands, launches a background prefetch that normalizes the predicted next track so it's already cached by the time the current one finishes (~3-4 min), avoiding the 75s Pi stall on queue drain. A running prefetch is left to finish rather than cancelled and replaced — cancelling can't stop its in-flight executor FFmpeg, which would keep holding the background admission slot (see [Egress FX pipeline](#egress-fx-pipeline-the-transmitter-applied-last)) while a replacement parks another thread behind it; the next music segment just retries with a fresh candidate
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
@@ -144,9 +145,12 @@ pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizer
 loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the shared admission slot
 from `mammamiradio.audio.admission` so the extra encode respects the Pi 2-FFmpeg
 ceiling. The admission gate caps gated call sites at 2 ordinary/background jobs plus
-1 rescue render; yt-dlp's own extract-audio ffmpeg runs outside the gate (wrapping the
-download would hold a slot across a network fetch), so a chart download can add one
-transient process on top of that ceiling.
+1 rescue render in the steady state; that rescue cap is best-effort, not hard — a
+wedged rescue render lets every subsequent rescue call proceed ungated too, so
+concurrent rescue jobs aren't bounded at 1 for the duration of the wedge (see
+`mammamiradio/audio/admission.py`). yt-dlp's own extract-audio ffmpeg runs outside
+the gate (wrapping the download would hold a slot across a network fetch), so a
+chart download can add one transient process on top of that ceiling.
 
 The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
 prior audio in place and never raises, and emergency / bridge / rescue fills skip the

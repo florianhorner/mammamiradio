@@ -265,6 +265,29 @@ def test_rescue_proceeds_ungated_after_acquire_timeout(monkeypatch):
     assert elapsed < 1.0
 
 
+def test_ffmpeg_slot_rescue_and_background_together_wins_as_rescue_and_warns(caplog):
+    """rescue=True must win over a simultaneous background=True (no legitimate
+    call site should produce this combination, so it's logged when it happens),
+    and the rescue lane must not touch _NORM_SEM/_BACKGROUND_SEM at all."""
+    assert admission._NORM_SEM.acquire(blocking=False)
+    assert admission._NORM_SEM.acquire(blocking=False)
+    assert admission._BACKGROUND_SEM.acquire(blocking=False)
+    try:
+        with (
+            caplog.at_level("WARNING", logger="mammamiradio.audio.admission"),
+            # If this treated background=True as controlling, it would block
+            # forever on the exhausted _NORM_SEM/_BACKGROUND_SEM above.
+            admission.ffmpeg_slot(rescue=True, background=True),
+        ):
+            pass
+    finally:
+        admission._NORM_SEM.release()
+        admission._NORM_SEM.release()
+        admission._BACKGROUND_SEM.release()
+
+    assert any("rescue=True and background=True" in record.message for record in caplog.records)
+
+
 def test_combined_admission_ceiling_stays_at_three(monkeypatch):
     """Foreground + background + rescue lanes together never exceed 3 concurrent
     ffmpeg runs — the gated worst case the Pi CPU budget is sized against."""

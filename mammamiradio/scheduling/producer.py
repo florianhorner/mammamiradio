@@ -1610,6 +1610,10 @@ async def run_producer(
                     )
                 )
             if _prefetch_task is not None and not _prefetch_task.done():
+                # Detaches the asyncio.Task wrapper only — it can't interrupt an
+                # in-flight executor ffmpeg (see the prefetch relaunch guard
+                # below), but on the pause path that's fine: the loop just
+                # avoids awaiting a stale task reference on resume.
                 _prefetch_task.cancel()
             _was_stopped = True
             try:

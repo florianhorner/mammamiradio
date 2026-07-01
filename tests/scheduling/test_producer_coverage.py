@@ -1202,6 +1202,73 @@ async def test_prefetch_next_cleans_partial_norm_cached_on_copy_failure(tmp_path
     assert track.cache_key in failed
 
 
+@pytest.mark.asyncio
+async def test_prefetch_task_not_relaunched_while_still_running():
+    """run_producer's loop must skip launching a second _prefetch_next task
+    while the first one is still in flight (not done()).
+
+    This is the actual behavior change the "prefetch lane" fix makes: the old
+    cancel-and-replace couldn't stop the in-flight executor ffmpeg (cancelling
+    an asyncio.Task only detaches the wrapper), which leaked a held background
+    admission slot on every mid-flight prefetch replacement. Regression guard
+    for producer.py's `_prefetch_task is None or _prefetch_task.done()` check.
+    """
+    state = _make_run_state()
+    config = _make_run_config()
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    never_done = asyncio.Event()
+
+    async def _blocking_prefetch(*_args, **_kwargs):
+        await never_done.wait()
+
+    prefetch_mock = AsyncMock(side_effect=_blocking_prefetch)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", prefetch_mock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}),
+    ):
+        # Two consecutive successful MUSIC segments land while the first
+        # prefetch task is still blocked on never_done — the second segment's
+        # completion must not launch a second prefetch task.
+        await _run_until_n_queued(queue, state, config, n=2, timeout=10.0)
+
+    assert prefetch_mock.call_count == 1, (
+        "A second prefetch task must not be launched while the first is still running"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prewarm_first_segment_renders_in_foreground_not_background(tmp_path):
+    """prewarm_first_segment pre-produces the instant-audio pre-roll track
+    before any listener connects; it must render in the foreground admission
+    lane (background=False, `_render_music_track`'s default), not the
+    background lane where prefetch/other background work could contend for
+    the single background slot and delay the pre-roll. Regression guard:
+    nothing else pins this default at the call site."""
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+
+    render_mock = AsyncMock(return_value=None)
+    with patch(f"{PRODUCER_MODULE}._render_music_track", render_mock):
+        await prewarm_first_segment(queue, state, config)
+
+    render_mock.assert_called_once()
+    assert render_mock.call_args.kwargs.get("background", False) is False
+
+
 # ---------------------------------------------------------------------------
 # Gap 8 — Drain guard: canned clip inserted when queue drains mid-playback
 # ---------------------------------------------------------------------------

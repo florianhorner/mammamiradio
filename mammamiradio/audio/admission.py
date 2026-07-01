@@ -12,12 +12,17 @@ logger = logging.getLogger(__name__)
 # Limit concurrent foreground + background ffmpeg/ffprobe runs across sync +
 # executor call sites. Background prefetch additionally takes _BACKGROUND_SEM so
 # it can use at most one of these two slots, leaving one slot for next-to-air
-# work. Rescue audio bypasses both gates but is capped at one concurrent render,
-# so the worst case across gated call sites is 2 ordinary/background ffmpeg jobs
-# + 1 rescue job. Known exception: yt-dlp's FFmpegExtractAudio postprocessor
-# spawns its own ffmpeg outside this gate (wrapping the download would hold a
-# slot across a network fetch), so a chart download can add one more transient
-# process on top of the gated ceiling.
+# work. Rescue audio bypasses both gates and is normally capped at one
+# concurrent render, so the steady-state worst case across gated call sites is
+# 2 ordinary/background ffmpeg jobs + 1 rescue job. That rescue cap is
+# best-effort, not hard: if a rescue render wedges past the 2s acquire
+# timeout below, every subsequent rescue call also times out and proceeds
+# ungated for as long as the wedge lasts (bounded only by the 180s ffmpeg
+# timeout), so concurrent rescue jobs during a wedge are not capped at 1.
+# Known exception: yt-dlp's FFmpegExtractAudio postprocessor spawns its own
+# ffmpeg outside this gate (wrapping the download would hold a slot across a
+# network fetch), so a chart download can add one more transient process on
+# top of the gated ceiling.
 _NORM_SEM = BoundedSemaphore(2)
 _BACKGROUND_SEM = BoundedSemaphore(1)
 _RESCUE_SEM = BoundedSemaphore(1)
