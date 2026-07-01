@@ -31,6 +31,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Segment scheduling (banter / ad / music)           | `mammamiradio/scheduling/scheduler.py`       |
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
+| Post-update cold-open campaign (release beat)      | `mammamiradio/release_campaign.py`           |
+| Post-restart music continuity spool                | `mammamiradio/restart_handoff.py`            |
 | Party mode toggle (Festival Mode, future themes)   | `mammamiradio/web/streamer.py` + `docs/party-mode-extension.md` |
 | HTTP routes / playback loop                        | `mammamiradio/web/streamer.py`               |
 | Admin auth (credentials, CSRF, trusted networks)   | `mammamiradio/web/auth.py`                   |
@@ -64,6 +66,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | HA addon packaging       | `tests/addon/`        |
 | Repo scripts / lifecycle | `tests/repo/`         |
 | CI workflow contract     | `tests/workflows/`    |
+| Package-root modules (e.g. `release_campaign.py`, `restart_handoff.py`) | `tests/test_*.py` |
 
 ## Docs
 
