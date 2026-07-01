@@ -302,7 +302,7 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=lambda p, *_a: Path(p).write_bytes(b"x")),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> silence rescue
     ):
         task = asyncio.create_task(run_producer(queue, state, config))

@@ -12,25 +12,11 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from threading import BoundedSemaphore
+
+from mammamiradio.audio.admission import ffmpeg_slot
 
 logger = logging.getLogger(__name__)
-
-# Limit concurrent ffmpeg/ffprobe runs across sync + executor call sites.
-_NORM_SEM = BoundedSemaphore(2)
-
-
-@contextmanager
-def ffmpeg_slot(*, rescue: bool = False) -> Iterator[None]:
-    """Reserve one global ffmpeg/ffprobe slot unless this is emergency audio."""
-    if rescue:
-        yield
-        return
-    with _NORM_SEM:
-        yield
 
 
 class ConcatDurationError(RuntimeError):
@@ -105,7 +91,7 @@ def humanize_norm_filename(name: str) -> str:
     return " ".join(words).title()
 
 
-def measure_lufs(input_path: Path) -> float | None:
+def measure_lufs(input_path: Path, *, background: bool = False) -> float | None:
     """Fast integrated loudness measurement via ebur128 (~2-5s on Pi, no upsample).
 
     Returns integrated LUFS value, or None if measurement fails.
@@ -122,7 +108,7 @@ def measure_lufs(input_path: Path) -> float | None:
     ]
     _t0 = time.perf_counter()
     try:
-        with ffmpeg_slot():
+        with ffmpeg_slot(background=background):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -184,7 +170,13 @@ AVAILABLE_SFX_TYPES: list[str] = [
 ]
 
 
-def _run_ffmpeg(cmd: list[str], description: str, *, rescue: bool = False) -> subprocess.CompletedProcess:
+def _run_ffmpeg(
+    cmd: list[str],
+    description: str,
+    *,
+    rescue: bool = False,
+    background: bool = False,
+) -> subprocess.CompletedProcess:
     """Run an ffmpeg command with stderr capture and logging on failure.
 
     Per-stage wall time is logged at DEBUG (set LOG_LEVEL=DEBUG for a soak) so the
@@ -192,10 +184,12 @@ def _run_ffmpeg(cmd: list[str], description: str, *, rescue: bool = False) -> su
     through here labelled by ``description`` (e.g. "normalize X", "LUFS reconcile",
     "mix voice with talk bed", "concat N files"). ``rescue=True`` is reserved for
     emergency audio call sites that must not wait behind normal work.
+    ``background=True`` is for prefetch work that may use only one of the two
+    ordinary ffmpeg slots.
     """
     _t0 = time.perf_counter()
     try:
-        with ffmpeg_slot(rescue=rescue):
+        with ffmpeg_slot(rescue=rescue, background=background):
             result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
         logger.error("ffmpeg timed out after %.0fs (%s)", _FFMPEG_TIMEOUT_SEC, description)
@@ -283,7 +277,7 @@ def configure_loudness_reconcile(
     _reconcile_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
 
 
-def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
+def _reconcile_lufs(path: Path, *, ad: bool = False, background: bool = False) -> bool:
     """Nudge a finished segment to the configured integrated-LUFS target.
 
     No-op unless reconciliation is configured. Measures the file (cheap ebur128)
@@ -305,7 +299,7 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     if cfg is None:
         return False
     target = cfg[1] if ad else cfg[0]
-    lufs = measure_lufs(path)
+    lufs = measure_lufs(path, background=background)
     if lufs is None:
         return False  # measurement failed — leave the file as produced
     # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
@@ -324,7 +318,7 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
         str(tmp),
     ]
     try:
-        _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}")
+        _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}", background=background)
         # Rename inside the try so a failed atomic replace (disk full, vanished
         # file) also leaves the original untouched — never raises.
         tmp.replace(path)
@@ -335,7 +329,7 @@ def _reconcile_lufs(path: Path, *, ad: bool = False) -> bool:
     return True
 
 
-def reconcile_cached_music(path: Path) -> None:
+def reconcile_cached_music(path: Path, *, background: bool = False) -> None:
     """Bring a CACHED music file to the configured target on a cache-hit play.
 
     A cache hit skips ``normalize()`` (and therefore the reconcile pass), so a norm
@@ -354,7 +348,7 @@ def reconcile_cached_music(path: Path) -> None:
     data = _load_sidecar(sidecar)
     if data.get("reconciled_lufs") == target:
         return  # already at the current target — instant hit, no measure
-    if not _reconcile_lufs(path):
+    if not _reconcile_lufs(path, background=background):
         return  # measure/re-encode failed — leave UNMARKED so the next hit retries
     data["reconciled_lufs"] = target
     try:
@@ -478,6 +472,7 @@ def normalize(
     *,
     loudnorm: bool = True,
     music_eq: bool = False,
+    background: bool = False,
 ) -> Path:
     """Re-encode an input file to the station's target loudness and format.
 
@@ -518,7 +513,7 @@ def normalize(
     # boundaries. measure_lufs takes ~2-5s on Pi vs 10-75s for a full loudnorm pass.
     # When music_eq is requested, we always re-encode (EQ requires a pass regardless).
     if loudnorm and not music_eq:
-        lufs = measure_lufs(input_path)
+        lufs = measure_lufs(input_path, background=background)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
             loudnorm = False  # fall through to the fast format-conversion path below
             logger.info("LUFS skip (%.1f LUFS, within tolerance): %s", lufs, input_path.name)
@@ -571,11 +566,11 @@ def normalize(
         "mp3",
         str(output_path),
     ]
-    _run_ffmpeg(cmd, f"normalize {input_path.name}")
+    _run_ffmpeg(cmd, f"normalize {input_path.name}", background=background)
     if is_final:
         # Final segment (incl. a fast-path-skipped one) — bring it to the configured
         # target; reconcile is a cheap no-op when already there.
-        _reconcile_lufs(output_path)
+        _reconcile_lufs(output_path, background=background)
     logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
     return output_path
 
@@ -723,7 +718,13 @@ def concat_files(
     return output_path
 
 
-def generate_tone(output_path: Path, freq_hz: float = 880, duration_sec: float = 0.5) -> Path:
+def generate_tone(
+    output_path: Path,
+    freq_hz: float = 880,
+    duration_sec: float = 0.5,
+    *,
+    rescue: bool = False,
+) -> Path:
     """Generate a sine tone with fade-in/out envelope (chime/ding sound)."""
     fade = min(0.15, duration_sec / 3)
     cmd = [
@@ -747,7 +748,7 @@ def generate_tone(output_path: Path, freq_hz: float = 880, duration_sec: float =
         "mp3",
         str(output_path),
     ]
-    _run_ffmpeg(cmd, f"tone {freq_hz}Hz")
+    _run_ffmpeg(cmd, f"tone {freq_hz}Hz", rescue=rescue)
     return output_path
 
 
@@ -1869,7 +1870,7 @@ def mix_oneshot_sfx(
     return output_path
 
 
-def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:
+def generate_silence(output_path: Path, duration_sec: float = 3.0, *, rescue: bool = False) -> Path:
     """Generate silent audio used for pauses and error recovery."""
     cmd = [
         "ffmpeg",
@@ -1888,5 +1889,5 @@ def generate_silence(output_path: Path, duration_sec: float = 3.0) -> Path:
         "mp3",
         str(output_path),
     ]
-    _run_ffmpeg(cmd, "generate silence")
+    _run_ffmpeg(cmd, "generate silence", rescue=rescue)
     return output_path

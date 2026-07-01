@@ -310,7 +310,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
     source_audio.write_bytes(b"fake audio")
     download_calls = 0
 
-    async def fake_download(track, cache_dir, music_dir=None):
+    async def fake_download(track, cache_dir, music_dir=None, **_kwargs):
         nonlocal download_calls
         download_calls += 1
         if download_calls == 1:
@@ -2766,10 +2766,13 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
     state.queued_segments = [{"id": "buffered", "type": "music"}]
 
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
-    with patch(f"{PRODUCER_MODULE}.generate_tone"):
+    with patch(f"{PRODUCER_MODULE}.generate_tone") as mock_tone:
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert queue.empty()  # buffered tail purged
     assert state.last_enqueued_type is None
     # The song file still exists, but nothing bleeds under the urgent banter.
     assert _adjacent_music_source(state) is None
+    # The interrupt bridge tone is emergency audio — it must take the rescue
+    # admission lane so it never queues behind routine ffmpeg work (#685-687).
+    assert mock_tone.call_args.kwargs.get("rescue") is True

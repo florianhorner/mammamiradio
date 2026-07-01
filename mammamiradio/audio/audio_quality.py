@@ -7,7 +7,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from mammamiradio.audio.normalizer import _FFMPEG_TIMEOUT_SEC, ffmpeg_slot
+from mammamiradio.audio.admission import ffmpeg_slot
+from mammamiradio.audio.normalizer import _FFMPEG_TIMEOUT_SEC
 from mammamiradio.core.models import SegmentType
 
 
