@@ -297,7 +297,8 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
+@pytest.mark.parametrize("background", [False, True])
+async def test_render_music_cache_hit_reconciles_loudness(tmp_path, background):
     """A normalization cache hit must still run the loudness reconcile pass on the
     cached file — otherwise a norm file produced before reconciliation aired at its
     old, quieter level ("some songs are just quieter"). Guards producer.py wiring."""
@@ -313,11 +314,11 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
         patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as m_reconcile,
     ):
-        result = await _render_music_track(track, config, temp_prefix="t", context="music")
+        result = await _render_music_track(track, config, temp_prefix="t", context="music", background=background)
 
     assert result is not None and result.cache_hit is True
     assert result.path == norm_cached
-    m_reconcile.assert_called_once_with(norm_cached, background=False)
+    m_reconcile.assert_called_once_with(norm_cached, background=background)
 
 
 def test_norm_cache_bridge_scrubs_foreign_artist():
