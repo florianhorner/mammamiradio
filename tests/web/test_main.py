@@ -310,8 +310,6 @@ def test_restart_handoff_admission_records_admitted_paths(tmp_path: Path):
 def test_restart_handoff_admission_falls_back_when_resolve_raises(tmp_path: Path):
     """A resolve() failure (e.g. symlink loop) must not break startup — the
     unresolved path is protected instead (INSTANT AUDIO: never fail the cold open)."""
-    from unittest.mock import MagicMock as _MM
-
     from mammamiradio.core.models import Segment, SegmentType, StationState
     from mammamiradio.main import _admit_restart_handoff
 
@@ -319,7 +317,7 @@ def test_restart_handoff_admission_falls_back_when_resolve_raises(tmp_path: Path
     state = StationState()
     config = MagicMock()
     config.cache_dir = tmp_path
-    bad_path = _MM(spec=Path)
+    bad_path = MagicMock(spec=Path)
     bad_path.resolve.side_effect = OSError("too many symlinks")
     handoff = Segment(type=SegmentType.MUSIC, path=bad_path, metadata={"title": "Artist - Song"})
 
