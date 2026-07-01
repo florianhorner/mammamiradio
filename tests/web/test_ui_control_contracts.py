@@ -29,6 +29,7 @@ import asyncio
 import re
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -579,6 +580,27 @@ class TestQueueRemoveEndpoint:
         assert resp.json() == {"ok": True, "removed": "Beta"}
         assert [item["label"] for item in app.state.station_state.queued_segments] == ["Alpha", "Gamma"]
         assert self._queue_titles(app) == ["Alpha", "Gamma"]
+
+    @pytest.mark.asyncio
+    async def test_remove_release_beat_segment_restores_campaign_attempt(self):
+        app = self._make_id_queue_app([("q-a", "Alpha"), ("q-b", "Release Beat"), ("q-c", "Gamma")])
+        release_segment = list(app.state.queue._queue)[1]
+        release_segment.metadata.update(
+            {
+                "release_beat_id": "beat-1",
+                "release_beat_attempt_id": "attempt-1",
+            }
+        )
+        app.state.station_state.release_campaign = MagicMock()
+        app.state.station_state.release_campaign.record_queue_discard.return_value = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/queue/remove", json={"id": "q-b"}, headers=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "removed": "Release Beat"}
+        app.state.station_state.release_campaign.record_queue_discard.assert_called_once_with(release_segment.metadata)
+        app.state.station_state.release_campaign.save_if_dirty.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_remove_by_id_after_head_consumed_removes_correct_segment(self):

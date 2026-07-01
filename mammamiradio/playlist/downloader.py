@@ -27,6 +27,7 @@ _CACHE_PROTECTED = {
     "playlist_source.json",
     "session_stopped.flag",
     "evening_ledger.json",
+    "release_campaign_ledger.json",
 }
 _TRUTHY = ("true", "1", "yes")
 

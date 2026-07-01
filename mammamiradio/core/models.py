@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.hosts.persona import PersonaStore
     from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
+    from mammamiradio.release_campaign import ReleaseCampaign
 
 
 PartyMode = Literal["festival"]
@@ -587,6 +588,16 @@ class StationState:
     # Verbal running-gag ledger — cross-domain banter callbacks; set by main.py.
     # In-memory only (session-ephemeral), so a restart correctly forgets gags.
     verbal_gag_ledger: VerbalGagLedger | None = None
+    # Release beat campaign state; persisted separately from the optional
+    # provenance ledger so post-update announcements still count when Show Memory
+    # is disabled.
+    release_campaign: ReleaseCampaign | None = None
+    # Best-effort background writes for the post-restart music handoff spool.
+    _restart_handoff_tasks: set[asyncio.Task[bool]] = field(default_factory=set)
+    # Resolved paths of restart-handoff segments admitted into the live queue at
+    # startup. The per-enqueue spool prune protects these so it can't delete a
+    # handoff file still queued for playback (dead air on the cold open).
+    restart_handoff_admitted_paths: set[Path] = field(default_factory=set)
     # Pending banter-seeded verbal gag {text, punch}, committed to the ledger by
     # the producer's banter success callback at QUEUE time (so a discarded banter
     # never plants a travelable gag whose setup never aired). Mirrors
@@ -791,6 +802,13 @@ class StationState:
                     "already_counted_in_produced": already_counted_in_produced,
                 }
             )
+            campaign = getattr(self, "release_campaign", None)
+            if campaign is not None:
+                try:
+                    if campaign.record_queue_discard(segment.metadata or {}):
+                        campaign.save_if_dirty()
+                except Exception:
+                    pass
         except Exception:
             pass
 

@@ -354,6 +354,46 @@ async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
+    """F3 (Scenario-3): a queued segment whose file has vanished — evicted by the
+    cache LRU or pruned by the restart-handoff spool while still queued — must be
+    skipped, not crash the playback loop. The next queued segment still airs."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+
+    missing = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "gone.mp3",  # never written -> FileNotFoundError on open
+        metadata={"title": "Vanished", "title_only": "Vanished", "artist": "Artist"},
+    )
+    good_path = tmp_path / "good.mp3"
+    good_path.write_bytes(b"x" * 4096)
+    good = Segment(
+        type=SegmentType.MUSIC,
+        path=good_path,
+        metadata={"title": "Real", "title_only": "Real", "artist": "Artist", "youtube_id": "yt_real"},
+    )
+    app.state.queue.put_nowait(missing)
+    app.state.queue.put_nowait(good)
+
+    with patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(60):
+                if persist.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            assert not task.done()  # loop survived the missing file (no crash)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    persist.assert_awaited_once()  # the valid segment aired after the skip
+    assert app.state.queue.qsize() == 0  # missing segment consumed, not left blocking
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200

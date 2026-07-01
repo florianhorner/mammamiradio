@@ -1323,6 +1323,30 @@ def test_purge_clears_queue_even_when_ephemeral_unlink_fails():
     bad_path.unlink.assert_called_once()
 
 
+def test_purge_restores_queued_release_beat_attempt():
+    q: asyncio.Queue = asyncio.Queue()
+    release_segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/release_banter.mp3"),
+        metadata={
+            "release_beat_id": "beat-1",
+            "release_beat_attempt_id": "attempt-1",
+            "queue_id": "q1",
+        },
+    )
+    q.put_nowait(release_segment)
+    state = StationState()
+    state.queued_segments = [{"id": "q1"}]
+    state.release_campaign = MagicMock()
+    state.release_campaign.record_queue_discard.return_value = True
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert count == 1
+    state.release_campaign.record_queue_discard.assert_called_once_with(release_segment.metadata)
+    state.release_campaign.save_if_dirty.assert_called_once()
+
+
 def test_purge_clears_queue_even_when_unlink_raises_non_oserror():
     # The unlink guard is broad (except Exception), so even a NON-OSError — e.g. a
     # malformed segment whose path raises AttributeError on .unlink — must not abort

@@ -79,6 +79,7 @@ from mammamiradio.playlist.downloader import (
 )
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
+from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
 from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
@@ -541,6 +542,93 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
         _set_last_music_file(source_path)
 
 
+def _release_campaign_should_force_first_banter(state: StationState) -> bool:
+    campaign = getattr(state, "release_campaign", None)
+    if campaign is None:
+        return False
+    ledger = getattr(campaign, "ledger", None)
+    if ledger is None or getattr(ledger, "aired_count", 0) > 0:
+        return False
+    if state.ha_pending_directive:
+        return False
+    try:
+        return bool(campaign.is_due())
+    except Exception:
+        logger.warning("Release campaign due check failed", exc_info=True)
+        return False
+
+
+def _release_beat_commit_from_banter(commit):
+    return getattr(commit, "release_beat", None)
+
+
+def _release_beat_metadata_from_commit(commit) -> dict:
+    release_commit = _release_beat_commit_from_banter(commit)
+    if release_commit is None:
+        return {}
+    try:
+        return release_commit.segment_metadata()
+    except Exception:
+        logger.warning("Release beat metadata extraction failed", exc_info=True)
+        return {}
+
+
+def _abandon_release_beat_commit(state: StationState, commit) -> None:
+    release_commit = _release_beat_commit_from_banter(commit)
+    if release_commit is None:
+        return
+    try:
+        release_commit.abandon(state)
+    except Exception:
+        logger.warning("Release beat attempt restore failed", exc_info=True)
+
+
+def _release_campaign_abandon_in_flight(state: StationState) -> None:
+    """Commit-free safety net: un-strand a begun-but-never-queued release beat.
+
+    Covers producer paths that raise after begin_attempt() but before enqueue
+    where no commit object survives (e.g. a sibling task failing inside the
+    transition+banter asyncio.gather). Only touches QUEUED_ATTEMPT.
+    """
+    campaign = getattr(state, "release_campaign", None)
+    if campaign is None:
+        return
+    try:
+        campaign.abandon_in_flight()
+    except Exception:
+        logger.warning("Release campaign in-flight abandon failed", exc_info=True)
+
+
+def _schedule_restart_handoff_spool(state: StationState, config: StationConfig, segment: Segment) -> None:
+    if segment.type is not SegmentType.MUSIC:
+        return
+    try:
+        candidate = RestartHandoffCandidate.from_segment(segment)
+    except Exception:
+        logger.debug("Restart handoff candidate creation failed", exc_info=True)
+        return
+    tasks = getattr(state, "_restart_handoff_tasks", None)
+    if tasks is None:
+        tasks = set()
+        state._restart_handoff_tasks = tasks
+    # Snapshot the still-admitted handoff files on the loop and protect them from
+    # the spool prune — the background write replaces the manifest with this one
+    # candidate, and the prune would otherwise delete startup-admitted files that
+    # are still sitting unplayed in the live queue (dead air on the cold open).
+    protected = frozenset(getattr(state, "restart_handoff_admitted_paths", None) or ())
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            try_write_restart_handoff_spool,
+            config.cache_dir,
+            [candidate],
+            blocklist=state.blocklist,
+            protected_paths=protected,
+        )
+    )
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 def _latest_music_file(tmp_dir: Path) -> Path | None:
     """Return the most recently written music_*.mp3, using cached path when available."""
     if _last_music_file and _last_music_file.exists():
@@ -893,6 +981,7 @@ async def _enqueue_with_egress(
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
     await queue.put(segment)
     _remember_enqueued(state, segment, pre_egress_path)
+    _schedule_restart_handoff_spool(state, config, segment)
     return True
 
 
@@ -1794,6 +1883,9 @@ async def run_producer(
             # The panel's "Triggered" row is suppressed once production.current shows
             # this kind building, so there is no duplicate row.
             logger.info("Forced trigger: %s (air-next=%s)", seg_type.value, is_operator_forced)
+        elif _release_campaign_should_force_first_banter(state):
+            seg_type = SegmentType.BANTER
+            logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
         segment: Segment | None = None
@@ -1805,6 +1897,7 @@ async def run_producer(
         # (stale_playlist) for honest waste telemetry (#397).
         generation_source_revision = state.source_revision
         success_callback: Callable[[], None] | None = None
+        banter_commit = None
         # Per-iteration reset of the cross-domain-callback "landed" flag. The
         # flash/ad branches also reset it before generating, but resetting here
         # too keeps it provably scoped to one segment — a stale True from a
@@ -2385,6 +2478,12 @@ async def run_producer(
                                 continue
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
+                            _abandon_release_beat_commit(state, listener_request_commit)
+                            # Commit-free net: on a transition+banter gather failure
+                            # the tuple never unpacks, so listener_request_commit is
+                            # None and the abandon above is a no-op. Restore any
+                            # begun-but-unqueued beat by ledger status.
+                            _release_campaign_abandon_in_flight(state)
                             continue
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
@@ -2409,6 +2508,7 @@ async def run_producer(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                         if canned is None:
+                            _abandon_release_beat_commit(state, listener_request_commit)
                             _record_generated_waste(
                                 state,
                                 SegmentType.BANTER,
@@ -2514,6 +2614,10 @@ async def run_producer(
                                 logger.debug("Humanity event skipped: %s", exc)
                                 humanity_out.unlink(missing_ok=True)
 
+                banter_commit = listener_request_commit
+                release_beat_metadata = {}
+                if canned is None and not impossible_tts:
+                    release_beat_metadata = _release_beat_metadata_from_commit(banter_commit)
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -2530,6 +2634,7 @@ async def run_producer(
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
                         "ledger_segment_id": _banter_attempt_id or None,
+                        **release_beat_metadata,
                     },
                     ephemeral=canned is None,
                 )
@@ -2546,12 +2651,17 @@ async def run_producer(
                     _cache_dir=config.cache_dir,
                     _pending_gag=state.pending_verbal_gag,
                     _vledger=state.verbal_gag_ledger,
+                    _segment=segment,
                 ) -> None:
                     state.after_banter()
                     if _is_new_listener:
                         state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
-                        _listener_request_commit.apply(state, config)
+                        _listener_request_commit.apply(
+                            state,
+                            config,
+                            queue_id=str(_segment.metadata.get("queue_id") or ""),
+                        )
                     if (
                         _used_generated_banter
                         and _first_home_context_moment_pending
@@ -3117,6 +3227,10 @@ async def run_producer(
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
+            # Commit-free: banter_commit may still be None here (e.g. a sibling
+            # task raised inside the transition+banter gather before the tuple
+            # unpacked), so restore any begun-but-unqueued beat by ledger status.
+            _release_campaign_abandon_in_flight(state)
             state.failed_segments += 1
             # Backoff on persistent failures to avoid CPU-burning tight loop
             consecutive = state.failed_segments
@@ -3206,6 +3320,7 @@ async def run_producer(
                     logger.info("Discarding stale %s segment after same-source playlist edit", seg_type.value)
                     stale_reason = GenerationWasteReason.STALE_PLAYLIST
                 state.record_discard(segment, reason=stale_reason)
+                _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
@@ -3213,6 +3328,7 @@ async def run_producer(
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
+                _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
@@ -3239,12 +3355,14 @@ async def run_producer(
                 if not await _enqueue_with_egress(
                     queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
                 ):
+                    _abandon_release_beat_commit(state, banter_commit)
                     continue
                 if "error" not in segment.metadata:
                     # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
                     prev_seg_type = segment.type
             else:
                 if not await _queue_segment(segment):
+                    _abandon_release_beat_commit(state, banter_commit)
                     continue
                 state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:

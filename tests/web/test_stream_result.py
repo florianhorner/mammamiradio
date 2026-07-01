@@ -63,6 +63,59 @@ def test_disabled_ledger_records_nothing():
     assert led.rows == []
 
 
+def test_release_campaign_runs_even_when_ledger_disabled():
+    class _Campaign:
+        def __init__(self):
+            self.calls = []
+            self.saved = False
+
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+            self.calls.append(
+                {
+                    "metadata": metadata,
+                    "bytes_sent": bytes_sent,
+                    "was_skipped": was_skipped,
+                    "listeners": listeners,
+                }
+            )
+
+        def save_if_dirty(self):
+            self.saved = True
+
+    led = _FakeLedger(enabled=False)
+    campaign = _Campaign()
+    state = SimpleNamespace(ledger=led, release_campaign=campaign)
+    _emit_stream_result(
+        state,
+        _segment({"release_beat_id": "beat-1"}),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=2,
+    )
+
+    assert led.rows == []
+    assert campaign.calls == [
+        {
+            "metadata": {"release_beat_id": "beat-1"},
+            "bytes_sent": 5000,
+            "was_skipped": False,
+            "listeners": 2,
+        }
+    ]
+    assert campaign.saved is True
+
+
+def test_release_campaign_failure_does_not_block_provenance():
+    class _BoomCampaign:
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+            raise RuntimeError("campaign disk gone")
+
+    led = _FakeLedger()
+    state = SimpleNamespace(ledger=led, release_campaign=_BoomCampaign())
+    _emit_stream_result(state, _segment({"ledger_segment_id": "seg-1"}), bytes_sent=10, was_skipped=False, listeners=1)
+    assert led.rows[0]["record"] == "stream_result"
+
+
 def test_no_ledger_is_safe():
     state = SimpleNamespace()  # no .ledger attribute at all
     _emit_stream_result(state, _segment({}), bytes_sent=10, was_skipped=False, listeners=1)

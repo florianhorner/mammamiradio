@@ -1585,28 +1585,38 @@ async def run_playback_loop(app) -> None:
             start_listeners = 0
             start_listeners = len(hub._listeners)
             skip_event.clear()
-            with open(segment.path, "rb") as f:
-                _skip_id3_and_xing_header(f)
-                while chunk := f.read(chunk_size):
-                    if skip_event.is_set():
-                        logger.info("Skipping current segment")
-                        was_skipped = True
-                        skip_event.clear()
-                        break
+            # A queued segment's file can vanish before it airs — evicted by the
+            # cache LRU, deleted externally, or pruned by the restart-handoff spool
+            # while still queued. Skip to the next segment instead of letting the
+            # OSError escape and kill the playback loop (dead air until restart).
+            # Scoped to OSError so non-IO errors keep their behavior; bytes_sent
+            # stays 0 so _emit_stream_result records an honest no-air outcome.
+            try:
+                with open(segment.path, "rb") as f:
+                    _skip_id3_and_xing_header(f)
+                    while chunk := f.read(chunk_size):
+                        if skip_event.is_set():
+                            logger.info("Skipping current segment")
+                            was_skipped = True
+                            skip_event.clear()
+                            break
 
-                    await hub.broadcast(chunk)
-                    bytes_sent += len(chunk)
+                        await hub.broadcast(chunk)
+                        bytes_sent += len(chunk)
 
-                    # Feed the clip ring buffer for "share WTF moment"
-                    clip_buf = getattr(app.state, "clip_ring_buffer", None)
-                    if clip_buf is not None:
-                        clip_buf.append(chunk)
+                        # Feed the clip ring buffer for "share WTF moment"
+                        clip_buf = getattr(app.state, "clip_ring_buffer", None)
+                        if clip_buf is not None:
+                            clip_buf.append(chunk)
 
-                    elapsed = time.monotonic() - send_start
-                    expected = bytes_sent / bytes_per_sec
-                    ahead = expected - elapsed
-                    if ahead > 0.005:
-                        await asyncio.sleep(ahead)
+                        elapsed = time.monotonic() - send_start
+                        expected = bytes_sent / bytes_per_sec
+                        ahead = expected - elapsed
+                        if ahead > 0.005:
+                            await asyncio.sleep(ahead)
+            except OSError as exc:
+                logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
+                was_skipped = True
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
             # already playing again) still captures it. Single extract at the
@@ -1648,8 +1658,10 @@ async def run_playback_loop(app) -> None:
                 task.add_done_callback(_persist_tasks.discard)
         finally:
             _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
-            if segment.ephemeral:
-                segment.path.unlink(missing_ok=True)
+            # Best-effort unlink: a raw unlink here can raise a non-missing OSError
+            # and escape the finally, killing the playback loop after we already
+            # decided to move on. Reuse the guarded helper used everywhere else.
+            _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
 
@@ -1658,8 +1670,9 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
     """Tier-3: record the TRUE aired outcome after the send loop.
 
     Fires from the (sync) playback loop's finally, so it captures partial and
-    failed sends too. Enabled-check first; never raises into the stream.
+    failed sends too. Never raises into the stream.
     """
+    _emit_release_campaign_result(state, segment, bytes_sent, was_skipped, listeners)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -1693,6 +1706,29 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
         )
     except Exception as exc:  # pragma: no cover - provenance must never break audio
         logger.debug("Provenance Tier-3 emit failed: %s", exc)
+
+
+def _emit_release_campaign_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Best-effort release campaign accounting, independent from Show Memory."""
+    campaign = getattr(state, "release_campaign", None)
+    if campaign is None:
+        return
+    try:
+        campaign.record_stream_result(
+            segment.metadata or {},
+            bytes_sent=bytes_sent,
+            was_skipped=was_skipped,
+            listeners=listeners,
+        )
+        # Persist synchronously: the ledger is one tiny object, guarded by _dirty
+        # so it writes only on a real change (once per segment, at the segment
+        # boundary — not per chunk). A threaded save raced this same loop-thread
+        # mutation and cleared _dirty after snapshotting, dropping airings; and it
+        # needed an undeclared state attribute. models.record_discard already
+        # saves synchronously here, so this matches the existing pattern.
+        campaign.save_if_dirty()
+    except Exception as exc:  # pragma: no cover - release accounting must never break audio
+        logger.debug("Release campaign stream-result hook failed: %s", exc)
 
 
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
