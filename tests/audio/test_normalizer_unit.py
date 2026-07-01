@@ -174,7 +174,7 @@ def test_run_ffmpeg_uses_global_ffmpeg_semaphore(mock_subprocess):
         return mock_subprocess[1]
 
     mock_run.side_effect = _assert_slot_held
-    with patch("mammamiradio.audio.normalizer._NORM_SEM", RecordingSem()):
+    with patch("mammamiradio.audio.admission._NORM_SEM", RecordingSem()):
         _run_ffmpeg(["ffmpeg", "-y"], "leaf gate")
 
     assert held["value"] is False

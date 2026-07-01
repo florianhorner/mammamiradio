@@ -143,7 +143,10 @@ can A/B the FM colouring against studio-clean on the live stream. A separate
 pass with no `loudnorm` in-graph keeps the psymodel SIGABRT surface (3 equalizers +
 loudnorm on ffmpeg 8.x / Pi aarch64) closed, and it holds the shared admission slot
 from `mammamiradio.audio.admission` so the extra encode respects the Pi 2-FFmpeg
-ceiling.
+ceiling. The admission gate caps gated call sites at 2 ordinary/background jobs plus
+1 rescue render; yt-dlp's own extract-audio ffmpeg runs outside the gate (wrapping the
+download would hold a slot across a network fetch), so a chart download can add one
+transient process on top of that ceiling.
 
 The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
 prior audio in place and never raises, and emergency / bridge / rescue fills skip the

@@ -310,7 +310,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
     source_audio.write_bytes(b"fake audio")
     download_calls = 0
 
-    async def fake_download(track, cache_dir, music_dir=None):
+    async def fake_download(track, cache_dir, music_dir=None, **_kwargs):
         nonlocal download_calls
         download_calls += 1
         if download_calls == 1:

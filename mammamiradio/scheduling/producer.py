@@ -236,7 +236,7 @@ async def _render_music_track(
     background: bool = False,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
-    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"), background=background)
     loop = asyncio.get_running_loop()
     validate_fn = partial(validate_download, audio_path, background=background)
     ok, reason = await loop.run_in_executor(None, validate_fn)
@@ -3272,9 +3272,17 @@ async def run_producer(
                 # #144/#146: Launch background normalization of the predicted next music track.
                 # By the time the current track finishes playing (~3-4 min), the next norm
                 # is already cached — avoids the 75-second Pi stall when the queue drains.
-                if segment.type == SegmentType.MUSIC and state.force_next is None and state.playlist:
-                    if _prefetch_task and not _prefetch_task.done():
-                        _prefetch_task.cancel()
+                # Let a running prefetch finish instead of cancel-and-replace:
+                # cancelling can't stop its in-flight executor ffmpeg, which keeps
+                # holding the background admission slot — a replacement would only
+                # park another shared executor thread behind it. The next music
+                # segment retries with a fresh candidate.
+                if (
+                    segment.type == SegmentType.MUSIC
+                    and state.force_next is None
+                    and state.playlist
+                    and (_prefetch_task is None or _prefetch_task.done())
+                ):
                     _prefetch_task = asyncio.create_task(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",

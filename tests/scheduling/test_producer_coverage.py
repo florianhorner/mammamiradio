@@ -414,6 +414,11 @@ def _fake_path(*_args, **_kwargs) -> Path:
     return Path("/tmp/mammamiradio_test/fake.mp3")
 
 
+def _fake_normalize(src, dst, *args, **kwargs):
+    dst.write_bytes(b"normed audio")
+    return dst
+
+
 async def _run_until_n_queued(
     queue: asyncio.Queue,
     state: StationState,
@@ -1024,9 +1029,6 @@ async def test_prefetch_next_cache_write_failure(tmp_path):
     norm_out = tmp_path / "norm_out.mp3"
     norm_out.write_bytes(b"normed audio")
 
-    def _fake_normalize(src, dst, *args, **kwargs):
-        dst.write_bytes(b"normed audio")
-
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"),
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
@@ -1048,10 +1050,6 @@ async def test_prefetch_next_normalizes_as_background(tmp_path):
     config.cache_dir = tmp_path
     downloaded = tmp_path / "dl.mp3"
     downloaded.write_bytes(b"download")
-
-    def _fake_normalize(src, dst, *args, **kwargs):
-        dst.write_bytes(b"normed audio")
-        return dst
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=downloaded),
@@ -1223,9 +1221,6 @@ async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
 
     real_audio = tmp_path / "music.mp3"
     real_audio.write_bytes(b"music audio" * 100)
-
-    def _fake_normalize(src, dst, *args, **kwargs):
-        dst.write_bytes(b"normed audio")
 
     # We want: first iteration produces one real MUSIC segment, then on the next
     # loop iteration (queue is empty again) the drain guard fires.

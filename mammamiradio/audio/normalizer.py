@@ -14,14 +14,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from mammamiradio.audio import admission as _admission
+from mammamiradio.audio.admission import ffmpeg_slot
 
 logger = logging.getLogger(__name__)
-
-_NORM_SEM = _admission._NORM_SEM
-_BACKGROUND_SEM = _admission._BACKGROUND_SEM
-_RESCUE_SEM = _admission._RESCUE_SEM
-ffmpeg_slot = _admission.ffmpeg_slot
 
 
 class ConcatDurationError(RuntimeError):

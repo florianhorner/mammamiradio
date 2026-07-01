@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-from mammamiradio.audio import normalizer
+from mammamiradio.audio import admission, normalizer
 from mammamiradio.audio.normalizer import (
     _broadcast_filter_chain,
     _mp3_output_args,
@@ -160,7 +160,7 @@ def test_broadcast_holds_norm_sem_during_pass():
     held = {}
 
     def _record(cmd, *_args, **_kwargs):
-        held["value"] = normalizer._NORM_SEM._value  # 2 when free, 1 while held
+        held["value"] = admission._NORM_SEM._value  # 2 when free, 1 while held
         return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
     with patch("mammamiradio.audio.normalizer.subprocess.run", side_effect=_record):
