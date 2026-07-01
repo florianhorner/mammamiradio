@@ -41,6 +41,7 @@ def _edge_manifest(
 ) -> str:
     return f"""
 [release_beat]
+enabled = true
 id = "{beat_id}"
 channel = "edge"
 build_sha = "{build_sha}"
@@ -56,6 +57,7 @@ copy = ["There is a crate in Studio B, and everyone is pretending that is normal
 def _stable_manifest(*, semver: str = "2.15.0") -> str:
     return f"""
 [release_beat]
+enabled = true
 id = "stable-{semver}-studio-crate"
 channel = "stable"
 semver = "{semver}"
@@ -146,6 +148,47 @@ def test_listener_unsafe_release_terms_fail_by_default(tmp_path: Path) -> None:
     assert "dependency" in result.stderr.lower()
 
 
+def test_listener_unsafe_release_terms_fail_lowercase(tmp_path: Path) -> None:
+    """UNSAFE_TERMS' pr/ci patterns must be case-insensitive like every sibling
+    entry — lowercase "pr fixes"/"ci pipeline" must be caught the same as
+    uppercase "PR"/"CI"."""
+    _write_pyproject(tmp_path)
+    _write(
+        tmp_path / MANIFEST,
+        _edge_manifest(facts='"this pr fixes our ci pipeline for the station."'),
+    )
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 1
+    assert "listener-unsafe term" in result.stderr
+    assert "pr" in result.stderr.lower()
+    assert "ci" in result.stderr.lower()
+
+
+def test_manifest_without_explicit_enabled_key_is_disabled(tmp_path: Path) -> None:
+    """A [release_beat] table with no `enabled` key must validate as disabled,
+    matching the runtime loader's default (ReleaseBeatManifest.enabled = False)
+    — not the validator's old, mismatched True default."""
+    _write_pyproject(tmp_path)
+    _write(
+        tmp_path / MANIFEST,
+        """
+[release_beat]
+id = "edge-4a15270-hans-guenther"
+channel = "edge"
+build_sha = "4a15270"
+facts = ["Hans Guenther can now wait in the studio hallway."]
+props = ["a human-sized crate labeled HANS GUENTHER"]
+""",
+    )
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 0
+    assert "disabled" in result.stdout
+
+
 def test_listener_safe_terms_must_be_explicit(tmp_path: Path) -> None:
     _write_pyproject(tmp_path)
     _write(
@@ -167,6 +210,7 @@ def test_facts_and_props_must_be_lists(tmp_path: Path) -> None:
         tmp_path / MANIFEST,
         """
 [release_beat]
+enabled = true
 id = "edge-4a15270-hans-guenther"
 channel = "edge"
 build_sha = "4a15270"

@@ -9,7 +9,7 @@
     "id": "release_beat_cold_open",
     "caller": "banter",
     "max_tokens": 1200,
-    "prompt": "Write a short Italian radio banter between Marco and Sofia. Use this release beat only if it can sound like in-world studio gossip: id edge-4a15270-hans, facts: guest host can be toggled, Hans Guenther is a new announcer, props: human-sized crate, brass music leaking out. Do not say software update or changelog. Return JSON: {\"lines\": [{\"host\": \"Marco|Sofia\", \"text\": \"...\"}], \"new_joke\": null, \"release_beat_used\": true}"
+    "prompt": "Write a short Italian radio banter between Marco and Sofia. Use this release beat only if it can sound like in-world studio gossip: id edge-4a15270-hans, facts: guest host can be toggled, Hans Guenther is a new announcer, props: human-sized crate, brass music leaking out. Do not say software update or changelog. Return JSON: {\"lines\": [{\"host\": \"Marco|Sofia\", \"text\": \"...\"}], \"new_joke\": null, \"release_beat_used\": false}"
   },
   {
     "id": "ad_creative_dialogue",

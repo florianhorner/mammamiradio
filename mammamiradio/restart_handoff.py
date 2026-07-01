@@ -511,8 +511,13 @@ def _entry_rejection_reason(
         return "empty_file"
     if stat.st_size != entry.size_bytes:
         return "size_mismatch"
-    if _sha256_file(path) != entry.sha256:
-        return "hash_mismatch"
+    try:
+        if _sha256_file(path) != entry.sha256:
+            return "hash_mismatch"
+    except OSError:
+        # File vanished/became unreadable between stat() and the hash read
+        # (concurrent prune, disk hiccup) — reject, never raise into startup.
+        return "missing_file"
     if _validated_duration(path, entry.duration_sec, duration_probe) is None:
         return "invalid_duration"
     return None

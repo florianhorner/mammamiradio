@@ -282,6 +282,22 @@ def test_admission_rejects_hash_mismatch(tmp_path):
     assert admission.accepted == ()
 
 
+def test_admission_rejects_when_hash_read_races_with_deletion(tmp_path):
+    """The file passes stat() but vanishes before the hash read (concurrent
+    prune, disk hiccup) — _sha256_file must be caught, not propagate into the
+    startup admission path."""
+    path = _write_spooled_file(tmp_path, data=b"original")
+    entry = _entry_for_path(tmp_path, path)
+
+    with patch("mammamiradio.restart_handoff._sha256_file", side_effect=OSError("vanished mid-read")):
+        admission = admit_restart_handoff_manifest(
+            tmp_path, RestartHandoffManifest(entries=(entry,), created_at=100.0), now=120.0, duration_probe=_duration
+        )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["missing_file"]
+    assert admission.accepted == ()
+
+
 def test_admission_rejects_size_mismatch(tmp_path):
     path = _write_spooled_file(tmp_path, data=b"original-bytes")
     entry = _entry_for_path(tmp_path, path)

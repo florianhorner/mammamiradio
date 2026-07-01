@@ -160,6 +160,72 @@ async def test_startup_wires_release_campaign_from_cache_dir():
 
 
 @pytest.mark.asyncio
+async def test_startup_survives_release_campaign_load_failure(tmp_path: Path):
+    """A corrupt/unreadable manifest or ledger must never abort startup (INSTANT
+    AUDIO) — startup falls back to a fully inert campaign instead of crashing."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.release_campaign import ReleaseCampaign
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch.object(ReleaseCampaign, "load", side_effect=RuntimeError("ledger corrupt")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.release_campaign is not None
+    assert app.state.station_state.release_campaign.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_startup_survives_restart_handoff_admission_failure(tmp_path: Path):
+    """An unexpected exception admitting restart-handoff entries must not abort
+    startup — the station boots without the cold-open bridge instead."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.admit_restart_handoff_entries", side_effect=RuntimeError("cache dir unreadable")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.queue.qsize() == 0
+
+
+@pytest.mark.asyncio
 async def test_startup_admits_restart_handoff_before_tasks(tmp_path: Path):
     """Safe restart handoff enters the real queue and shadow before prewarm starts."""
     from mammamiradio.core.models import Segment, SegmentType, Track

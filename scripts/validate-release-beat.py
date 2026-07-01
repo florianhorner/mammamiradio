@@ -40,8 +40,8 @@ UNSAFE_TERMS = {
     "dependency": re.compile(r"\bdependencies?\b|\bdependency\b", re.IGNORECASE),
     "github": re.compile(r"\bGitHub\b", re.IGNORECASE),
     "pull request": re.compile(r"\bpull requests?\b", re.IGNORECASE),
-    "pr": re.compile(r"\bPRs?\b"),
-    "ci": re.compile(r"\bCI\b"),
+    "pr": re.compile(r"\bPRs?\b", re.IGNORECASE),
+    "ci": re.compile(r"\bCI\b", re.IGNORECASE),
     "sha": re.compile(r"\bSHAs?\b", re.IGNORECASE),
     "semver": re.compile(r"\bsemver\b", re.IGNORECASE),
     "docker": re.compile(r"\bDocker\b", re.IGNORECASE),
@@ -315,7 +315,9 @@ def _load_manifest(manifest_path: Path) -> tuple[str, dict[str, Any] | None, lis
     if not isinstance(release_beat, dict):
         return ManifestState.ENABLED, None, ["manifest must contain a [release_beat] table"]
 
-    enabled = release_beat.get("enabled", True)
+    # Default matches the runtime loader (ReleaseBeatManifest.enabled: bool = False):
+    # a manifest with no explicit `enabled` key is inert everywhere, not just at runtime.
+    enabled = release_beat.get("enabled", False)
     if not isinstance(enabled, bool):
         return ManifestState.ENABLED, release_beat, ["release_beat.enabled must be true or false"]
     if not enabled:

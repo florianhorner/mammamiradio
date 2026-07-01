@@ -467,6 +467,12 @@ class ReleaseCampaign:
                 self.ledger._dirty = True
                 self._maybe_expire(current)
             return False
+        if self.ledger.status not in {QUEUED_ATTEMPT, AIRED_ATTEMPT}:
+            # No attempt pending (already cleared or never began) — a duplicate
+            # or replayed stream-result event for this beat must not reactivate
+            # or re-count an airing that already landed.
+            logger.debug("Ignoring release beat stream result with no pending attempt")
+            return False
         if attempt_id and self.ledger.attempt_id and attempt_id != self.ledger.attempt_id:
             logger.debug("Ignoring release beat stream result for stale attempt %s", attempt_id)
             return False

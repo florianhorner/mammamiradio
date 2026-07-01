@@ -34,7 +34,7 @@ from mammamiradio.playlist.playlist import (
     read_persisted_heading,
     read_persisted_source,
 )
-from mammamiradio.release_campaign import ReleaseCampaign
+from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
@@ -248,7 +248,18 @@ async def startup():
     # correctly forgets verbal gags), so unlike the evening ledger it is not
     # loaded from disk.
     verbal_gag_ledger = VerbalGagLedger()
-    release_campaign = ReleaseCampaign.load(config.cache_dir)
+    try:
+        release_campaign = ReleaseCampaign.load(config.cache_dir)
+    except Exception:
+        # A corrupt/unreadable manifest or ledger must never abort the boot
+        # (INSTANT AUDIO) — fall back to a fully inert campaign built with no
+        # file I/O of its own, so it can't raise the same way again.
+        logger.warning("Failed to load release campaign state; continuing without it", exc_info=True)
+        release_campaign = ReleaseCampaign(
+            config.cache_dir,
+            manifest=ReleaseBeatManifest.disabled(),
+            ledger=ReleaseCampaignLedger.fresh(""),
+        )
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
@@ -383,7 +394,12 @@ async def startup():
     app.state.ledger = ledger
     state.ledger = ledger
 
-    _admit_restart_handoff(queue, state, config)
+    try:
+        _admit_restart_handoff(queue, state, config)
+    except Exception:
+        # Best-effort cold-open bridge — a corrupt manifest or a TOCTOU race
+        # reading a spooled file must never abort startup (INSTANT AUDIO).
+        logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
     # Pre-produce music segments in the background so app startup is instant.
     # If a listener arrives before prewarm finishes, the producer's idle-resume
