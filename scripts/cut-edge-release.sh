@@ -141,6 +141,7 @@ fi
 # version: line points at the (possibly-behind) built SHA — do NOT cut from
 # $TARGET_FULL, that would drop newer edge metadata from the PR. Errors NOT swallowed.
 git checkout -B "$BRANCH" origin/main
+python3 scripts/validate-release-beat.py --channel edge --target-sha "$SHA"
 sed -i.bak "s/^version: .*/version: $SHA/" "$EDGE_CONFIG"
 rm -f "$EDGE_CONFIG.bak"
 git add "$EDGE_CONFIG"

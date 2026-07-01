@@ -6,6 +6,8 @@
 # Usage: bash scripts/check-release-invariants.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 PASS=0
 FAIL=0
 
@@ -85,6 +87,16 @@ if [ -x scripts/ha-green-launch-smoke.py ] && grep -q '^launch-smoke:' Makefile;
     ok "HA Green cold-launch smoke script and Make target are present"
 else
     fail "Missing executable scripts/ha-green-launch-smoke.py or Makefile launch-smoke target"
+fi
+
+# ── 5. Release beat source manifest ──────────────────────────────────────────
+echo ""
+echo "5. Release beat manifest"
+
+if python3 "$SCRIPT_DIR/validate-release-beat.py"; then
+    ok "release beat manifest is absent, disabled, or schema-valid"
+else
+    fail "release beat manifest validation failed"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

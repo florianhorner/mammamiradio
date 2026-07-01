@@ -6,6 +6,8 @@
 #        make pre-release
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
@@ -79,9 +81,19 @@ else
     fail "CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
 fi
 
-# ── 3. FFmpeg music_eq filter chain has exactly 3 equalizers ─────────────────
+# ── 3. Stable release beat target ─────────────────────────────────────────────
 echo ""
-echo "3. FFmpeg music_eq filter chain (normalizer.py)"
+echo "3. Release beat manifest"
+
+if python3 "$SCRIPT_DIR/validate-release-beat.py" --channel stable --semver "$ADDON_VER"; then
+    ok "release beat manifest matches stable release target ($ADDON_VER), is disabled, or is absent"
+else
+    fail "release beat manifest validation failed for stable release target $ADDON_VER"
+fi
+
+# ── 4. FFmpeg music_eq filter chain has exactly 3 equalizers ─────────────────
+echo ""
+echo "4. FFmpeg music_eq filter chain (normalizer.py)"
 # Count equalizer= lines inside the music_eq_chain assignment block.
 # MUST stay at 2: adding a 3rd triggers FFmpeg 8.x SIGABRT (psymodel.c:576) on Pi aarch64.
 EQ_COUNT=$(awk '/music_eq_chain = \(/,/^\s*\)/' mammamiradio/audio/normalizer.py | grep -c 'equalizer=' || true)
@@ -94,9 +106,9 @@ else
     fail "music_eq_chain has $EQ_COUNT equalizer filters, expected 2 — audio quality regression"
 fi
 
-# ── 4. Test: _pick_canned_clip returns None (empty container scenario) ────────
+# ── 5. Test: _pick_canned_clip returns None (empty container scenario) ────────
 echo ""
-echo "4. Test coverage — empty fallback scenario"
+echo "5. Test coverage — empty fallback scenario"
 
 CANNED_NONE=$(grep -rl '_pick_canned_clip.*return_value=None\|return_value=None.*_pick_canned_clip' tests/ 2>/dev/null | wc -l | tr -d ' ')
 
@@ -106,9 +118,9 @@ else
     fail "No test mocks _pick_canned_clip to return None — empty container silence is untested"
 fi
 
-# ── 5. Test: post-restart session_stopped scenario ───────────────────────────
+# ── 6. Test: post-restart session_stopped scenario ───────────────────────────
 echo ""
-echo "5. Test coverage — post-restart scenario"
+echo "6. Test coverage — post-restart scenario"
 
 RESTART_TEST=$(grep -rl 'session_stopped' tests/ 2>/dev/null | wc -l | tr -d ' ')
 
@@ -118,9 +130,9 @@ else
     fail "No test covers session_stopped — post-restart silence is untested"
 fi
 
-# ── 6. HA Green fallback performance gates ───────────────────────────────────
+# ── 7. HA Green fallback performance gates ───────────────────────────────────
 echo ""
-echo "6. HA Green fallback performance gates"
+echo "7. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
 if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
