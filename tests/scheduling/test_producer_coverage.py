@@ -1241,9 +1241,7 @@ async def test_prefetch_task_not_relaunched_while_still_running():
         # completion must not launch a second prefetch task.
         await _run_until_n_queued(queue, state, config, n=2, timeout=10.0)
 
-    assert prefetch_mock.call_count == 1, (
-        "A second prefetch task must not be launched while the first is still running"
-    )
+    assert prefetch_mock.call_count == 1, "A second prefetch task must not be launched while the first is still running"
 
 
 @pytest.mark.asyncio
