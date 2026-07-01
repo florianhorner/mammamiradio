@@ -41,9 +41,8 @@ def ffmpeg_slot(*, rescue: bool = False, background: bool = False) -> Iterator[N
     norm_sem = _maybe_normalizer_override("_NORM_SEM", _DEFAULT_NORM_SEM)
     if background:
         background_sem = _maybe_normalizer_override("_BACKGROUND_SEM", _DEFAULT_BACKGROUND_SEM)
-        with background_sem:
-            with norm_sem:
-                yield
+        with background_sem, norm_sem:
+            yield
         return
 
     with norm_sem:
