@@ -1609,12 +1609,14 @@ async def run_producer(
                         )
                     )
                 )
-            if _prefetch_task is not None and not _prefetch_task.done():
-                # Detaches the asyncio.Task wrapper only — it can't interrupt an
-                # in-flight executor ffmpeg (see the prefetch relaunch guard
-                # below), but on the pause path that's fine: the loop just
-                # avoids awaiting a stale task reference on resume.
-                _prefetch_task.cancel()
+            # Deliberately NOT cancelled: .cancel() only detaches the asyncio.Task
+            # wrapper, it can't interrupt the in-flight executor ffmpeg (same
+            # limitation the relaunch guard below is built around). Cancelling
+            # here would flip _prefetch_task.done() to True while the executor
+            # thread keeps running, so the relaunch guard would launch a SECOND
+            # prefetch on resume — the exact duplicate-background-work race this
+            # PR closes elsewhere. Left running, it finishes on its own (or is
+            # still in flight, in which case the guard correctly skips a relaunch).
             _was_stopped = True
             try:
                 await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)

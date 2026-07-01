@@ -173,7 +173,7 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no audio")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence) as mock_silence,
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
     ):
         await _run_until_status_queued(queue, state, config)
@@ -181,6 +181,9 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     queued = state.queued_segments[-1]
     assert queued["playlist_index"] == -1
     assert queued["source_kind"] == ""
+    # This empty-fallback silence is emergency audio — it must take the rescue
+    # admission lane so it never queues behind routine ffmpeg work (#685-687).
+    assert mock_silence.call_args.kwargs.get("rescue") is True
 
 
 @pytest.mark.asyncio

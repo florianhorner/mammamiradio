@@ -1241,7 +1241,18 @@ async def test_prefetch_task_not_relaunched_while_still_running():
         # completion must not launch a second prefetch task.
         await _run_until_n_queued(queue, state, config, n=2, timeout=10.0)
 
-    assert prefetch_mock.call_count == 1, "A second prefetch task must not be launched while the first is still running"
+        assert prefetch_mock.call_count == 1, (
+            "A second prefetch task must not be launched while the first is still running"
+        )
+
+        # _run_until_n_queued cancels run_producer's own task, but _prefetch_task
+        # is a sibling task it never awaits — cancelling the parent doesn't reach
+        # it. Release the block and let it finish here so it doesn't leak past
+        # this test as a pending task.
+        never_done.set()
+        pending = [t for t in asyncio.all_tasks() if t.get_name() == "prefetch-norm"]
+        for task in pending:
+            await asyncio.wait_for(task, timeout=1.0)
 
 
 @pytest.mark.asyncio
