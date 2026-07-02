@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from mammamiradio.restart_handoff import (
     admit_restart_handoff_entries,
     admit_restart_handoff_manifest,
     load_restart_handoff_manifest,
+    prune_stale_handoff_tmp_files,
     restart_handoff_dir,
     restart_handoff_manifest_path,
     try_write_restart_handoff_spool,
@@ -118,6 +121,76 @@ def test_write_spool_copies_hashes_publishes_manifest_and_admits(tmp_path):
     assert segment.ephemeral is False
     assert segment.metadata["audio_source"] == "restart_handoff"
     assert segment.metadata["title_only"] == "Song"
+
+
+def test_prune_stale_handoff_tmp_files_removes_only_old_scratch_files(tmp_path):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+
+    old_manifest_tmp = handoff_dir / ".manifest-old.tmp"
+    old_handoff_tmp = segments_dir / ".handoff-old.tmp"
+    recent_manifest_tmp = handoff_dir / ".manifest-recent.tmp"
+    recent_handoff_tmp = segments_dir / ".handoff-recent.tmp"
+    final_manifest = handoff_dir / "manifest.json"
+    final_segment = segments_dir / "abc123.mp3"
+    unrelated_tmp = handoff_dir / "handoff-old.tmp"
+    for path in (
+        old_manifest_tmp,
+        old_handoff_tmp,
+        recent_manifest_tmp,
+        recent_handoff_tmp,
+        final_manifest,
+        final_segment,
+        unrelated_tmp,
+    ):
+        path.write_bytes(b"data")
+    for path in (old_manifest_tmp, old_handoff_tmp, final_manifest, final_segment, unrelated_tmp):
+        os.utime(path, (old_mtime, old_mtime))
+
+    assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 2
+
+    assert not old_manifest_tmp.exists()
+    assert not old_handoff_tmp.exists()
+    assert recent_manifest_tmp.exists()
+    assert recent_handoff_tmp.exists()
+    assert final_manifest.exists()
+    assert final_segment.exists()
+    assert unrelated_tmp.exists()
+
+
+def test_prune_stale_handoff_tmp_files_tolerates_missing_dirs(tmp_path):
+    assert prune_stale_handoff_tmp_files(tmp_path) == 0
+
+    restart_handoff_dir(tmp_path).mkdir(parents=True)
+    assert prune_stale_handoff_tmp_files(tmp_path) == 0
+
+
+def test_prune_stale_handoff_tmp_files_logs_and_continues_on_oserror(tmp_path, caplog):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    good = handoff_dir / ".manifest-good.tmp"
+    bad = segments_dir / ".handoff-bad.tmp"
+    good.write_bytes(b"good")
+    bad.write_bytes(b"bad")
+    os.utime(good, (old_mtime, old_mtime))
+    os.utime(bad, (old_mtime, old_mtime))
+
+    original_unlink = Path.unlink
+
+    def _unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == bad:
+            raise OSError("permission denied")
+        original_unlink(path, missing_ok=missing_ok)
+
+    with patch.object(Path, "unlink", autospec=True, side_effect=_unlink):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 1
+
+    assert "Failed to prune restart handoff scratch file" in caplog.text
+    assert "permission denied" in caplog.text
 
 
 def test_write_spool_preserves_existing_manifest_when_no_candidates_are_accepted(tmp_path):

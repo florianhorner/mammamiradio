@@ -35,7 +35,7 @@ from mammamiradio.playlist.playlist import (
     read_persisted_source,
 )
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
-from mammamiradio.restart_handoff import admit_restart_handoff_entries
+from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -190,6 +190,9 @@ async def startup():
     pruned_tmp = prune_stale_tmp_files(config.tmp_dir)
     if pruned_tmp:
         logger.info("Temp cleanup: pruned %d stale render file(s)", pruned_tmp)
+    pruned_handoff_tmp = prune_stale_handoff_tmp_files(config.cache_dir)
+    if pruned_handoff_tmp:
+        logger.info("Restart handoff cleanup: pruned %d stale scratch file(s)", pruned_handoff_tmp)
 
     if config.homeassistant.enabled and config.ha_token and config.anthropic_api_key:
         logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")

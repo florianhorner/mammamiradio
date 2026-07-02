@@ -37,6 +37,9 @@ DEFAULT_MAX_ENTRIES = 3
 DEFAULT_MAX_ENTRY_AGE_SEC = 6 * 60 * 60
 
 _AUDIO_SUFFIX = ".mp3"
+_HANDOFF_TMP_PREFIX = ".handoff-"
+_MANIFEST_TMP_PREFIX = ".manifest-"
+_TMP_SUFFIX = ".tmp"
 _SPOOL_WRITE_LOCK = threading.Lock()
 _METADATA_BLOCK_FLAGS = frozenset(
     {
@@ -406,6 +409,21 @@ def try_write_restart_handoff_spool(
     return True
 
 
+def prune_stale_handoff_tmp_files(cache_dir: Path | str, max_age_hours: float = 6) -> int:
+    """Prune orphaned restart-handoff scratch files left by hard kills."""
+
+    cutoff = time.time() - max_age_hours * 3600
+    return _prune_stale_tmp_glob(
+        restart_handoff_dir(cache_dir),
+        f"{_MANIFEST_TMP_PREFIX}*{_TMP_SUFFIX}",
+        cutoff,
+    ) + _prune_stale_tmp_glob(
+        _segments_dir(cache_dir),
+        f"{_HANDOFF_TMP_PREFIX}*{_TMP_SUFFIX}",
+        cutoff,
+    )
+
+
 def _entry_from_candidate(
     cache_dir: Path | str,
     candidate: RestartHandoffCandidate,
@@ -526,7 +544,7 @@ def _entry_rejection_reason(
 def _publish_manifest(cache_dir: Path | str, manifest: RestartHandoffManifest) -> None:
     path = restart_handoff_manifest_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".manifest-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=_MANIFEST_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(manifest.to_dict(), fh, ensure_ascii=False, indent=2, sort_keys=True)
@@ -598,7 +616,7 @@ def _copy_and_hash(source: Path, segments_dir: Path, artist: str, title: str) ->
     segments_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     size = 0
-    fd, tmp_name = tempfile.mkstemp(dir=str(segments_dir), prefix=".handoff-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(segments_dir), prefix=_HANDOFF_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
         with source.open("rb") as src, os.fdopen(fd, "wb") as dst:
             while chunk := src.read(1024 * 1024):
@@ -619,6 +637,30 @@ def _copy_and_hash(source: Path, segments_dir: Path, artist: str, title: str) ->
 
 def _segments_dir(cache_dir: Path | str) -> Path:
     return restart_handoff_dir(cache_dir) / SEGMENTS_DIRNAME
+
+
+def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float) -> int:
+    if not directory.is_dir():
+        return 0
+    pruned = 0
+    try:
+        paths = list(directory.glob(pattern))
+    except OSError as exc:
+        logger.warning("Failed to scan restart handoff scratch files in %s: %s", directory, exc)
+        return 0
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            pruned += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to prune restart handoff scratch file %s: %s", path, exc)
+    return pruned
 
 
 def _relative_to_handoff(cache_dir: Path | str, path: Path) -> str:

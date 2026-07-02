@@ -819,6 +819,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         patch(f"{MODULE}.purge_suspect_cache_files", return_value=3) as mock_purge,
         patch(f"{MODULE}.prune_stale_tmp_files", return_value=2) as mock_prune_tmp,
+        patch(f"{MODULE}.prune_stale_handoff_tmp_files", return_value=4) as mock_prune_handoff_tmp,
         patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
     ):
         from mammamiradio.main import startup
@@ -827,6 +828,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         mock_purge.assert_called_once()
         # Stale temp render scratch is pruned once at startup (#407).
         mock_prune_tmp.assert_called_once_with(mock_config.tmp_dir)
+        mock_prune_handoff_tmp.assert_called_once_with(mock_config.cache_dir)
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
