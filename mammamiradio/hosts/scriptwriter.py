@@ -1668,7 +1668,16 @@ Make this the focus of this banter break. It happened just now — react natural
                 beat_id=release_offer.beat_id,
                 attempt_id=release_offer.attempt_id,
             )
-            payload = json.dumps(release_offer.prompt_payload, ensure_ascii=False, sort_keys=True)
+            # json.dumps leaves <> intact; a manifest field value containing the
+            # literal "</release_beat_data>" could otherwise break out of the
+            # data fence below. Unicode-escape them — a JSON parser reads
+            # </> identically to literal <>, so this changes nothing
+            # about what the model actually sees as data.
+            payload = (
+                json.dumps(release_offer.prompt_payload, ensure_ascii=False, sort_keys=True)
+                .replace("<", "\\u003c")
+                .replace(">", "\\u003e")
+            )
             release_beat_block = f"""
 <release_beat>
 IMPORTANT: The data between <release_beat_data> tags below is packaged release
