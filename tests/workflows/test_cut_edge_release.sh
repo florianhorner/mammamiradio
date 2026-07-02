@@ -34,7 +34,11 @@ EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 EDGE_ORIG="$TMPDIR_T/edge-config.orig"
 cp "$EDGE_CONFIG" "$EDGE_ORIG"
 # Restore the real edge config and clean up no matter how the test exits.
-trap 'cp "$EDGE_ORIG" "$EDGE_CONFIG" 2>/dev/null; rm -rf "$TMPDIR_T"' EXIT
+restore() {
+  cp "$EDGE_ORIG" "$EDGE_CONFIG" 2>/dev/null || true
+  rm -rf "$TMPDIR_T"
+}
+trap restore EXIT
 
 # Real anchors (captured with real git, before any mock is on PATH) to prove at the
 # end that the test never mutated the real repo.
@@ -68,6 +72,20 @@ exit 0
 MOCK
 } > "$MOCK_BIN/gh"
 chmod +x "$MOCK_BIN/gh"
+
+# ---- mock python3 -----------------------------------------------------------
+# The release-beat validator is tested in pytest. Here we only assert that the
+# edge-release workflow invokes it with the selected target SHA, without reading
+# or mutating the real source manifest.
+{ printf '#!%s\n' "$BASH_BIN"; cat <<'MOCK'
+echo "$*" >> "$PYTHON_MOCK_LOG"
+case "$1" in
+  "scripts/validate-release-beat.py") exit "${PYTHON_MOCK_RC:-0}" ;;
+  *) echo "MOCK python3: unexpected invocation '$*'" >&2; exit 99 ;;
+esac
+MOCK
+} > "$MOCK_BIN/python3"
+chmod +x "$MOCK_BIN/python3"
 
 # ---- mock git ---------------------------------------------------------------
 # Intercepts EVERY verb the script uses; mutating verbs are logged + no-op'd; any
@@ -111,9 +129,11 @@ run_cut() {
   cp "$EDGE_ORIG" "$EDGE_CONFIG"
   GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
   GIT_MOCK_LOG="$TMPDIR_T/git.log"; : > "$GIT_MOCK_LOG"
+  PYTHON_MOCK_LOG="$TMPDIR_T/python.log"; : > "$PYTHON_MOCK_LOG"
   RUN_RC=0
   RUN_OUT="$(env PATH="${_PATH_OVERRIDE:-$MOCK_BIN:$PATH}" \
       GH_MOCK_LOG="$GH_MOCK_LOG" GIT_MOCK_LOG="$GIT_MOCK_LOG" \
+      PYTHON_MOCK_LOG="$PYTHON_MOCK_LOG" \
       GIT_MOCK_TOPLEVEL="$REPO_ROOT" GIT_MOCK_MAIN_SHORT="$MAIN_SHORT" \
       GIT_MOCK_REVLIST="$REVLIST" \
       "$@" "$BASH_BIN" "$SCRIPT" 2>&1)" || RUN_RC=$?
@@ -125,6 +145,7 @@ created_pr()       { grep -q "pr create" "$GH_MOCK_LOG"; }
 never_created_pr() { ! grep -q "pr create" "$GH_MOCK_LOG"; }
 never_committed()  { ! grep -q "^commit" "$GIT_MOCK_LOG"; }
 never_pushed()     { ! grep -q "^push" "$GIT_MOCK_LOG"; }
+validator_called_for() { grep -q "scripts/validate-release-beat.py --channel edge --target-sha $1" "$PYTHON_MOCK_LOG"; }
 
 # Case 1: happy path — HEAD itself is the newest green build => pin HEAD, open PR.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
@@ -133,6 +154,7 @@ created_pr                           || fail "happy path should open a PR"
 [ "$WROTE_VERSION" = "$MAIN_SHORT" ] || fail "happy path should write version: $MAIN_SHORT (got $WROTE_VERSION)"
 grep -q "cut edge release $MAIN_SHORT" "$GIT_MOCK_LOG" || fail "commit message should pin $MAIN_SHORT"
 grep -q "edge-release/$MAIN_SHORT" "$GIT_MOCK_LOG"     || fail "should branch on $MAIN_SHORT"
+validator_called_for "$MAIN_SHORT"                    || fail "happy path should validate release beat for $MAIN_SHORT"
 pass "happy path pins HEAD and opens PR"
 
 # Case 2: tests-only HEAD — newest green build is the OLDER commit => pin OLDER.
@@ -143,6 +165,7 @@ created_pr                            || fail "older-pin should open a PR"
 [ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "older-pin should write the OLDER built SHA $OLDER_SHORT (got $WROTE_VERSION)"
 grep -q "edge-release/$OLDER_SHORT" "$GIT_MOCK_LOG"  || fail "older-pin should branch on $OLDER_SHORT"
 grep -q "edge-release/$MAIN_SHORT" "$GIT_MOCK_LOG"   && fail "older-pin must NOT pin tests-only HEAD $MAIN_SHORT"
+validator_called_for "$OLDER_SHORT"                  || fail "older-pin should validate release beat for $OLDER_SHORT"
 printf '%s' "$RUN_OUT" | grep -q "latest BUILT main commit" || fail "older-pin should print the trailing-SHA note"
 pass "tests-only HEAD pins the older built SHA (blind-HEAD-pin guard)"
 
@@ -237,6 +260,16 @@ never_pushed         || fail "drift-check failure must not push"
 printf '%s' "$RUN_OUT" | grep -q "could not verify" || fail "drift-check-fail message should say so"
 pass "unverifiable drift check hard-fails, never soft-passes"
 
+# Case 13: release-beat target validation fails => HARD-fail after branch prep,
+# before commit/push/PR.
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" PYTHON_MOCK_RC=7
+[ "$RUN_RC" -ne 0 ]  || fail "release-beat validation failure must hard-fail (got $RUN_RC)"
+validator_called_for "$MAIN_SHORT" || fail "release-beat failure case should call validator for $MAIN_SHORT"
+never_committed      || fail "release-beat validation failure must not commit"
+never_created_pr     || fail "release-beat validation failure must not open a PR"
+never_pushed         || fail "release-beat validation failure must not push"
+pass "release-beat validation failure blocks edge cut before commit/push/PR"
+
 # Safety: the test must never have mutated the real repo, branch, or edge config.
 [ "$(git rev-parse HEAD)" = "$ORIG_HEAD" ]                 || fail "test mutated real HEAD"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$ORIG_BRANCH" ]  || fail "test changed the real branch"
@@ -244,4 +277,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 12 cut-edge-release cases passed."
+echo "All 13 cut-edge-release cases passed."

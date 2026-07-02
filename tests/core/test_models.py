@@ -680,6 +680,45 @@ def test_record_discard_tracks_when_segment_was_already_counted_as_produced(tmp_
     assert state.discard_events[-1]["already_counted_in_produced"] is True
 
 
+def test_record_discard_survives_release_campaign_exception(tmp_path):
+    """record_queue_discard()/save_if_dirty() are wrapped in a bare `except
+    Exception: pass` — a raising campaign must not break the discard
+    bookkeeping that runs alongside it."""
+
+    class _BoomCampaign:
+        def record_queue_discard(self, metadata):
+            raise RuntimeError("ledger corrupt")
+
+    state = StationState(release_campaign=_BoomCampaign())
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=12.5)
+
+    state.record_discard(segment, reason="operator_purge", timestamp=100.0)
+
+    assert state.discarded_segments_total == 1
+    assert state.discard_events[-1]["reason"] == "operator_purge"
+
+
+def test_record_discard_survives_release_campaign_save_exception(tmp_path):
+    """Same guard, but the failure lands one call later: record_queue_discard()
+    succeeds and only save_if_dirty() raises — a separate code path from the
+    record_queue_discard()-raises case above."""
+
+    class _BoomOnSaveCampaign:
+        def record_queue_discard(self, metadata):
+            return True
+
+        def save_if_dirty(self):
+            raise RuntimeError("disk full")
+
+    state = StationState(release_campaign=_BoomOnSaveCampaign())
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=12.5)
+
+    state.record_discard(segment, reason="operator_purge", timestamp=100.0)
+
+    assert state.discarded_segments_total == 1
+    assert state.discard_events[-1]["reason"] == "operator_purge"
+
+
 def test_record_discard_tolerates_zero_duration_and_never_raises():
     state = StationState()
     bad_segment = Segment(type=SegmentType.MUSIC, path=Path("/tmp/x.mp3"), duration_sec=0.0)

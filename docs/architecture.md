@@ -29,7 +29,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 
 ## Startup flow
 
-`mammamiradio.main:startup()` does eight things:
+`mammamiradio.main:startup()` does nine things:
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
@@ -37,10 +37,29 @@ Charts / Jamendo / classic eras / local files / demo tracks
 4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
 5. Initializes the clip ring buffer for WTF clip sharing.
 6. Restores persisted `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or HA add-on `/data/options.json` without arming a first strike.
-7. Creates shared app state, then launches:
+7. Creates shared app state, then synchronously admits any safe `cache/restart_handoff/` music segments straight into the queue (see "Restart handoff spool" below) — before the background producer/playback tasks start, so a listener connecting right after an update can reach an already-normalized track instead of an empty queue.
+8. Launches:
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
-8. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
+9. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
+
+### Restart handoff spool
+
+`mammamiradio/restart_handoff.py` owns a small durable spool the producer writes to and startup reads from, purely to shorten the gap between an add-on update finishing and the first listener hearing live programming again:
+
+- After each music segment is queued, the producer (`scheduling/producer.py::_schedule_restart_handoff_spool`) best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a small `manifest.json` describing up to `DEFAULT_MAX_ENTRIES` (3) recent, already-normalized, non-ephemeral music tracks. Older/unreferenced spool files are pruned on each write; files still queued for playback this session are protected from that prune.
+- On the next boot, `main.py::_admit_restart_handoff` loads and validates the manifest (`admit_restart_handoff_entries`) — checking file existence, size, SHA-256, age (`DEFAULT_MAX_ENTRY_AGE_SEC`, 6h), and the operator blocklist — and enqueues whatever passes validation before the producer or playback loop has started. A corrupt, stale, or missing manifest is a silent no-op; the normal cold-start rescue ladder (see `docs/operations.md`) still applies underneath it.
+- Skipped entirely when `session_stopped` is set (the station was deliberately stopped, not just updated) so a stopped station doesn't quietly start playing again.
+- This is independent of, and does not replace, the norm-cache/demo-asset rescue ladder described in `docs/operations.md` — it is a *faster* first source when it has something to offer, not a new failure mode when it doesn't.
+
+### Release beat campaign
+
+`mammamiradio/release_campaign.py` turns an optional packaged `mammamiradio/assets/release/release_beat.toml` manifest into a bounded, listener-safe on-air announcement after an update:
+
+- The manifest ships disabled/absent by default — no file, or `enabled = false`, means the feature is a complete no-op and nothing changes. `scripts/validate-release-beat.py` validates its schema and listener-safe copy in CI (see `docs/runbooks/ha-addon.md` → "Release invariants gate").
+- When enabled, `ReleaseCampaign` (loaded once at startup, persisted to `cache/release_campaign_ledger.json`) offers the scriptwriter a release-beat prompt block on the first eligible banter break; `hosts/scriptwriter.py` decides whether it actually made it into the spoken lines (`release_beat_used`).
+- Delivery is only counted once the segment actually airs to a real, connected listener (`_emit_release_campaign_result` in `web/streamer.py`, reading the same Tier-3 stream-result hook the provenance ledger uses) — a queued-but-discarded or skipped segment does not spend one of the campaign's `max_airings`.
+- The campaign self-retires on its own budget (`max_airings`, default 5) or time window (`campaign_window_seconds`, default 72h), independent of whether Show Memory (the provenance ledger) is enabled.
 
 ### Heading overlay
 
@@ -566,6 +585,7 @@ This repo is biased toward "keep the station on air."
 - missing yt-dlp falls back to local files or demo tracks
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup
+- a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
 
@@ -587,6 +607,8 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
+| `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
+| `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |
 | `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
 | `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, style directives, Chaos/Festival mode blocks |
 | `mammamiradio/hosts/transitions.py` | Transition rewrite openers + anti-repeat stem/massage helpers |

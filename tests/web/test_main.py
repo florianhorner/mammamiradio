@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,6 +121,298 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "producer_task")
         assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
+
+
+@pytest.mark.asyncio
+async def test_startup_wires_release_campaign_from_cache_dir():
+    """Release campaign state is startup-owned and shared with streamer/producer."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = TEST_TMP
+    mock_config.cache_dir = TEST_CACHE
+
+    campaign = MagicMock()
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.ReleaseCampaign") as m_campaign,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        m_campaign.load.return_value = campaign
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_campaign.load.assert_called_once_with(TEST_CACHE)
+    assert app.state.station_state.release_campaign is campaign
+    assert app.state.release_campaign is campaign
+
+
+@pytest.mark.asyncio
+async def test_startup_survives_release_campaign_load_failure(tmp_path: Path):
+    """A corrupt/unreadable manifest or ledger must never abort startup (INSTANT
+    AUDIO) — startup falls back to a fully inert campaign instead of crashing."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.release_campaign import ReleaseCampaign
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch.object(ReleaseCampaign, "load", side_effect=RuntimeError("ledger corrupt")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.release_campaign is not None
+    assert app.state.station_state.release_campaign.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_startup_survives_restart_handoff_admission_failure(tmp_path: Path):
+    """An unexpected exception admitting restart-handoff entries must not abort
+    startup — the station boots without the cold-open bridge instead."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.admit_restart_handoff_entries", side_effect=RuntimeError("cache dir unreadable")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_startup_admits_restart_handoff_before_tasks(tmp_path: Path):
+    """Safe restart handoff enters the real queue and shadow before prewarm starts."""
+    from mammamiradio.core.models import Segment, SegmentType, Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    handoff = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "cache" / "restart_handoff" / "segments" / "song.mp3",
+        duration_sec=120.0,
+        metadata={"title": "Artist - Song", "source_kind": "restart_handoff"},
+        ephemeral=False,
+    )
+    handoff.path.parent.mkdir(parents=True, exist_ok=True)
+    handoff.path.write_bytes(b"audio")
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    prewarm_depths: list[int] = []
+
+    async def _prewarm(queue, state, config):
+        prewarm_depths.append(queue.qsize())
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit,
+        patch(f"{MODULE}.prewarm_first_segment", side_effect=_prewarm),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        m_admit.return_value.to_segments.return_value = [handoff]
+        m_admit.return_value.rejected = ()
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.prewarm_task
+
+    assert prewarm_depths and prewarm_depths[0] == 1
+    assert app.state.queue.qsize() == 1
+    assert app.state.station_state.queued_segments[0]["source_kind"] == "restart_handoff"
+    assert app.state.station_state.queued_segments[0]["id"] == handoff.metadata["queue_id"]
+    assert app.state.station_state.last_enqueued_type is SegmentType.MUSIC
+    assert app.state.station_state.last_music_file == handoff.path
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_restart_handoff_when_session_stopped(tmp_path: Path):
+    from mammamiradio.core.models import Segment, SegmentType, Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+    mock_config.cache_dir.mkdir(parents=True, exist_ok=True)
+    (mock_config.cache_dir / "session_stopped.flag").write_text("stopped")
+
+    handoff = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "song.mp3",
+        duration_sec=120.0,
+        metadata={"title": "Artist - Song"},
+        ephemeral=False,
+    )
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        m_admit.return_value.to_segments.return_value = [handoff]
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_admit.assert_not_called()
+    assert app.state.queue.qsize() == 0
+    assert app.state.station_state.session_stopped is True
+
+
+def test_restart_handoff_admission_stops_when_queue_is_full(tmp_path: Path):
+    from mammamiradio.core.models import Segment, SegmentType, StationState
+    from mammamiradio.main import _admit_restart_handoff
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "already.mp3"))
+    state = StationState()
+    config = MagicMock()
+    config.cache_dir = tmp_path
+    handoff = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "restart_handoff" / "segments" / "song.mp3",
+        metadata={"title": "Artist - Song"},
+    )
+
+    with patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit:
+        m_admit.return_value.to_segments.return_value = [handoff]
+        m_admit.return_value.rejected = ()
+        accepted = _admit_restart_handoff(queue, state, config)
+
+    assert accepted == 0
+    assert queue.qsize() == 1
+    assert state.queued_segments == []
+
+
+def test_restart_handoff_admission_records_admitted_paths(tmp_path: Path):
+    """F2: each queued handoff file's resolved path is recorded so the per-enqueue
+    spool prune can protect it — this is the exact snapshot the producer passes as
+    protected_paths."""
+    from mammamiradio.core.models import Segment, SegmentType, StationState
+    from mammamiradio.main import _admit_restart_handoff
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+    state = StationState()
+    config = MagicMock()
+    config.cache_dir = tmp_path
+    handoff = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "restart_handoff" / "segments" / "song.mp3",
+        metadata={"title": "Artist - Song"},
+    )
+
+    with patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit:
+        m_admit.return_value.to_segments.return_value = [handoff]
+        m_admit.return_value.rejected = ()
+        accepted = _admit_restart_handoff(queue, state, config)
+
+    assert accepted == 1
+    assert state.restart_handoff_admitted_paths == {handoff.path.resolve(strict=False)}
+
+
+def test_restart_handoff_admission_falls_back_when_resolve_raises(tmp_path: Path):
+    """A resolve() failure (e.g. symlink loop) must not break startup — the
+    unresolved path is protected instead (INSTANT AUDIO: never fail the cold open)."""
+    from mammamiradio.core.models import Segment, SegmentType, StationState
+    from mammamiradio.main import _admit_restart_handoff
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+    state = StationState()
+    config = MagicMock()
+    config.cache_dir = tmp_path
+    bad_path = MagicMock(spec=Path)
+    bad_path.resolve.side_effect = OSError("too many symlinks")
+    handoff = Segment(type=SegmentType.MUSIC, path=bad_path, metadata={"title": "Artist - Song"})
+
+    with patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit:
+        m_admit.return_value.to_segments.return_value = [handoff]
+        m_admit.return_value.rejected = ()
+        accepted = _admit_restart_handoff(queue, state, config)
+
+    assert accepted == 1
+    assert state.restart_handoff_admitted_paths == {bad_path}
+
+
+def test_restart_handoff_logs_when_only_rejected_segments_exist(tmp_path: Path, caplog):
+    from mammamiradio.core.models import StationState
+    from mammamiradio.main import _admit_restart_handoff
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    config = MagicMock()
+    config.cache_dir = tmp_path
+
+    caplog.set_level(logging.INFO, logger="mammamiradio")
+    with patch(f"{MODULE}.admit_restart_handoff_entries") as m_admit:
+        m_admit.return_value.to_segments.return_value = []
+        m_admit.return_value.rejected = ("blocked",)
+        accepted = _admit_restart_handoff(queue, state, config)
+
+    assert accepted == 0
+    assert "Restart handoff: no segments admitted (1 rejected)" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -722,6 +1015,82 @@ async def test_shutdown_cancels_background_tasks():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_cancels_restart_handoff_tasks():
+    """shutdown() also cancels in-flight restart-handoff spool writes (same
+    write-after-shutdown race as the background download tasks) so a spool
+    write can't still be touching disk once teardown proceeds."""
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import StationState
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    rh_task = AsyncMock()
+    rh_task.cancel = MagicMock()
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = StationState()
+    main_mod.app.state.station_state._restart_handoff_tasks = {rh_task}
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await main_mod.shutdown()
+
+    rh_task.cancel.assert_called_once()
+    _args, _kwargs = mock_gather.call_args
+    assert rh_task in _args
+    assert _kwargs.get("return_exceptions") is True
+
+    # Cleanup
+    main_mod.app.state.station_state._restart_handoff_tasks = set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_release_campaign():
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub", "background_tasks", "ledger"):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
+    main_mod.app.state.provider_verdict_task = None
+
+    campaign = MagicMock()
+    main_mod.app.state.release_campaign = campaign
+
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+
+    campaign.save_if_dirty.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_logs_release_campaign_flush_failure(caplog):
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+    for attr in ("producer_task", "prewarm_task", "playback_task", "stream_hub", "background_tasks", "ledger"):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
+    main_mod.app.state.provider_verdict_task = None
+
+    campaign = MagicMock()
+    campaign.save_if_dirty.side_effect = RuntimeError("disk full")
+    main_mod.app.state.release_campaign = campaign
+
+    caplog.set_level(logging.WARNING, logger=MODULE)
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+
+    campaign.save_if_dirty.assert_called_once()
+    assert "Failed to flush release campaign ledger during shutdown" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_startup_demo_fallback_on_fetch_exception(tmp_path: Path):
     """When fetch_startup_playlist raises, startup falls back to DEMO_TRACKS."""
     from mammamiradio.main import app, startup
@@ -1124,6 +1493,8 @@ async def test_shutdown_with_no_tasks_set():
         "stream_hub",
         "provider_verdict_task",
         "background_tasks",
+        "ledger",
+        "release_campaign",
     ):
         if hasattr(main_mod.app.state, attr):
             delattr(main_mod.app.state, attr)

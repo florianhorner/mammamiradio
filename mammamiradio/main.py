@@ -11,6 +11,7 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI
 
@@ -33,6 +34,8 @@ from mammamiradio.playlist.playlist import (
     read_persisted_heading,
     read_persisted_source,
 )
+from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
+from mammamiradio.restart_handoff import admit_restart_handoff_entries
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -90,6 +93,51 @@ def _clear_persisted_heading(config) -> None:
         (config.cache_dir / PERSISTED_HEADING_FILENAME).unlink(missing_ok=True)
     except OSError:
         logger.warning("Failed to clear persisted heading during startup", exc_info=True)
+
+
+def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) -> int:
+    """Synchronously admit safe handoff music before background tasks start."""
+    if state.session_stopped:
+        logger.info("Restart handoff: skipped because the station is stopped")
+        return 0
+    admission = admit_restart_handoff_entries(
+        config.cache_dir,
+        blocklist=state.blocklist,
+    )
+    accepted = 0
+    for segment in admission.to_segments(config.cache_dir):
+        if queue.full():
+            break
+        queue_id = uuid4().hex
+        segment.metadata["queue_id"] = queue_id
+        queue.put_nowait(segment)
+        # Protect this file from the per-enqueue spool prune while it is still
+        # queued — resolved to match how _prune_unreferenced_segments compares.
+        try:
+            state.restart_handoff_admitted_paths.add(segment.path.resolve(strict=False))
+        except OSError:
+            state.restart_handoff_admitted_paths.add(segment.path)
+        state.last_enqueued_type = segment.type
+        state.last_music_file = segment.path
+        state.queued_segments.append(
+            {
+                "id": queue_id,
+                "type": segment.type.value,
+                "label": segment.metadata.get("title", segment.type.value),
+                "spotify_id": segment.metadata.get("spotify_id", ""),
+                "reason": "Restored from safe restart handoff.",
+                "playlist_index": segment.metadata.get("playlist_index", -1),
+                "source_kind": segment.metadata.get("source_kind", ""),
+                "duration_sec": round(segment.duration_sec or 0, 1),
+            }
+        )
+        state.last_state_change_at = time.time()
+        accepted += 1
+    if accepted:
+        logger.info("Restart handoff: admitted %d safe music segment(s)", accepted)
+    elif admission.rejected:
+        logger.info("Restart handoff: no segments admitted (%d rejected)", len(admission.rejected))
+    return accepted
 
 
 @asynccontextmanager
@@ -200,6 +248,18 @@ async def startup():
     # correctly forgets verbal gags), so unlike the evening ledger it is not
     # loaded from disk.
     verbal_gag_ledger = VerbalGagLedger()
+    try:
+        release_campaign = ReleaseCampaign.load(config.cache_dir)
+    except Exception:
+        # A corrupt/unreadable manifest or ledger must never abort the boot
+        # (INSTANT AUDIO) — fall back to a fully inert campaign built with no
+        # file I/O of its own, so it can't raise the same way again.
+        logger.warning("Failed to load release campaign state; continuing without it", exc_info=True)
+        release_campaign = ReleaseCampaign(
+            config.cache_dir,
+            manifest=ReleaseBeatManifest.disabled(),
+            ledger=ReleaseCampaignLedger.fresh(""),
+        )
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
@@ -284,6 +344,7 @@ async def startup():
         persona_store=persona_store,
         evening_ledger=evening_ledger,
         verbal_gag_ledger=verbal_gag_ledger,
+        release_campaign=release_campaign,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
     )
@@ -313,6 +374,7 @@ async def startup():
     app.state.stream_hub = LiveStreamHub()
     app.state.stream_hub.bind_state(state)
     app.state.station_state = state
+    app.state.release_campaign = release_campaign
     app.state.config = config
     app.state.start_time = time.time()
 
@@ -331,6 +393,13 @@ async def startup():
     ledger.start()
     app.state.ledger = ledger
     state.ledger = ledger
+
+    try:
+        _admit_restart_handoff(queue, state, config)
+    except Exception:
+        # Best-effort cold-open bridge — a corrupt manifest or a TOCTOU race
+        # reading a spooled file must never abort startup (INSTANT AUDIO).
+        logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
     # Pre-produce music segments in the background so app startup is instant.
     # If a listener arrives before prewarm finishes, the producer's idle-resume
@@ -410,6 +479,14 @@ async def shutdown():
         for _bg in list(background_tasks):
             _bg.cancel()
             tasks_to_cancel.append(_bg)
+    # Same write-after-shutdown race as the downloads above: an in-flight
+    # restart-handoff spool write does file I/O via asyncio.to_thread and must
+    # not still be running once teardown proceeds.
+    restart_handoff_tasks = getattr(getattr(app.state, "station_state", None), "_restart_handoff_tasks", None)
+    if restart_handoff_tasks:
+        for _rh in list(restart_handoff_tasks):
+            _rh.cancel()
+            tasks_to_cancel.append(_rh)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
     if hasattr(app.state, "producer_task"):
@@ -424,6 +501,11 @@ async def shutdown():
     if getattr(app.state, "ledger", None) is not None:
         app.state.ledger.stop()
         app.state.ledger = None
+    if getattr(app.state, "release_campaign", None) is not None:
+        try:
+            await asyncio.to_thread(app.state.release_campaign.save_if_dirty)
+        except Exception:
+            logger.warning("Failed to flush release campaign ledger during shutdown", exc_info=True)
 
 
 if __name__ == "__main__":

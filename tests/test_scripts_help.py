@@ -23,6 +23,7 @@ SCRIPTS = [
 # interpreter rather than bash.
 PY_SCRIPTS = [
     "generate_welcome_clips.py",
+    "validate-release-beat.py",
 ]
 
 

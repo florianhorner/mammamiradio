@@ -354,6 +354,129 @@ async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
+    """F3 (Scenario-3): a queued segment whose file has vanished — evicted by the
+    cache LRU or pruned by the restart-handoff spool while still queued — must be
+    skipped, not crash the playback loop. The next queued segment still airs."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+
+    missing = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "gone.mp3",  # never written -> FileNotFoundError on open
+        metadata={"title": "Vanished", "title_only": "Vanished", "artist": "Artist"},
+    )
+    good_path = tmp_path / "good.mp3"
+    good_path.write_bytes(b"x" * 4096)
+    good = Segment(
+        type=SegmentType.MUSIC,
+        path=good_path,
+        metadata={"title": "Real", "title_only": "Real", "artist": "Artist", "youtube_id": "yt_real"},
+    )
+    app.state.queue.put_nowait(missing)
+    app.state.queue.put_nowait(good)
+
+    with patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(60):
+                if persist.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            assert not task.done()  # loop survived the missing file (no crash)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    persist.assert_awaited_once()  # the valid segment aired after the skip
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_skips_mid_read_oserror_and_survives(tmp_path):
+    """F3 covers the open()-time failure; this covers the read()-time failure —
+    the file opens fine (bytes_sent > 0 from earlier chunks) but a later
+    f.read(chunk_size) call raises. Must still skip and continue, not crash."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+
+    flaky_path = tmp_path / "flaky.mp3"
+    flaky_path.write_bytes(b"x" * (4096 * 3))
+    good_path = tmp_path / "good.mp3"
+    good_path.write_bytes(b"x" * 4096)
+    flaky = Segment(
+        type=SegmentType.MUSIC,
+        path=flaky_path,
+        metadata={"title": "Flaky", "title_only": "Flaky", "artist": "Artist"},
+    )
+    good = Segment(
+        type=SegmentType.MUSIC,
+        path=good_path,
+        metadata={"title": "Real", "title_only": "Real", "artist": "Artist", "youtube_id": "yt_real"},
+    )
+    app.state.queue.put_nowait(flaky)
+    app.state.queue.put_nowait(good)
+
+    real_open = open
+
+    class _FlakyReaderFile:
+        """Delegates to a real open()'d file but fails mid-stream.
+
+        The two header-peek reads inside _skip_id3_and_xing_header (read(10)
+        then read(4) on this non-MP3 fixture) must succeed normally; only the
+        SECOND main-loop chunk read raises, after the first chunk already
+        went through hub.broadcast() (so bytes_sent > 0 at failure time).
+        """
+
+        def __init__(self, path, mode):
+            self._f = real_open(path, mode)
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            self._f.close()
+            return False
+
+        def read(self, *args, **kwargs):
+            self._reads += 1
+            if self._reads == 4:  # 2 header-peek reads + 1 real chunk read, then fail
+                raise OSError("disk read failed mid-segment")
+            return self._f.read(*args, **kwargs)
+
+        def seek(self, *args, **kwargs):
+            return self._f.seek(*args, **kwargs)
+
+        def tell(self, *args, **kwargs):
+            return self._f.tell(*args, **kwargs)
+
+    def _open_side_effect(path, mode="rb", *args, **kwargs):
+        if str(path) == str(flaky_path):
+            return _FlakyReaderFile(path, mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    with (
+        patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist,
+        patch("builtins.open", side_effect=_open_side_effect),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(60):
+                if persist.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            assert not task.done()  # loop survived the mid-read OSError (no crash)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    persist.assert_awaited_once()  # the valid segment aired after the skip
+    assert app.state.queue.qsize() == 0  # missing segment consumed, not left blocking
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
