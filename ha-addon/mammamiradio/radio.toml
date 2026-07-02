@@ -411,7 +411,7 @@ category = "tourism"
 recurring = true
 [ads.brands.campaign]
 premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
-sonic_signature = "overblown_epic"
+sonic_signature = "sweep"
 format_pool = ["institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced with deeper, more dignified sincerity"
@@ -507,7 +507,7 @@ category = "services"
 recurring = true
 [ads.brands.campaign]
 premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."
-sonic_signature = "espresso_hiss+ding"
+sonic_signature = "register_hit+ding"
 format_pool = ["institutional_psa", "classic_pitch", "duo_scene"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una tazzina più piccola."
@@ -519,7 +519,7 @@ category = "tech"
 recurring = true
 [ads.brands.campaign]
 premise = "Una sveglia che non si limita a suonare: passa dalla suoneria alla vendetta personale, con metodi di risveglio sempre più mirati."
-sonic_signature = "alarm_beep+startup_synth"
+sonic_signature = "hotline_beep+startup_synth"
 format_pool = ["classic_pitch", "duo_scene", "institutional_psa"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e implacabile."
@@ -531,7 +531,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Un ascensore condominiale che fa il terapeuta, il cronista di gossip e il testimone municipale, con la memoria di ogni silenzio imbarazzante."
-sonic_signature = "ding+cheap_synth_romance"
+sonic_signature = "ding+ice_clink"
 format_pool = ["duo_scene", "testimonial", "institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso le parti di qualcuno."
@@ -543,7 +543,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Un tappeto del soggiorno che ricorda feste, macchie e bugie, e vende il proprio silenzio con il tono di un testimone in tribunale."
-sonic_signature = "dust_hit+suspicious_jazz"
+sonic_signature = "register_hit+mandolin_sting"
 format_pool = ["testimonial", "duo_scene", "late_night_whisper"]
 spokesperson = "witness"
 escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più per tacere."
@@ -579,7 +579,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Lo stesso frigorifero del Frigo Severo, sempre Tuttoegal AG, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
-sonic_signature = "startup_synth+tarantella_pop"
+sonic_signature = "startup_synth+mandolin_sting"
 format_pool = ["duo_scene"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."
