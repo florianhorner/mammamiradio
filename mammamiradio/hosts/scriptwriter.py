@@ -2332,7 +2332,7 @@ RULES:
 - Open HARD. The first beat should grab attention immediately.
 - You may interleave sound effect cues and environment cues between voice lines.
 - Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
-- Available SFX types: {sfx_types}
+- Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or environment name above, never invent new ones: {sfx_types}
 - ALL text must be in {config.station.language}.
 - You may reference what the hosts said, what other ads claimed, or current music.
 
