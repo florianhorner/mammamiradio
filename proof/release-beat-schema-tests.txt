@@ -1,0 +1,9 @@
+$ pytest tests/ (fleet lane: single-source-of-truth-for-the-release-b, run florianhorner-fleet-single-source-of-truth-for-the-release-b-1782980953)
+
+................................................................ [100%]
+
+3635 passed, 2 skipped, 19 deselected, 1 warning in 69.92s (0:01:09)
+EXITCODE=0
+
+ruff check . : clean
+mypy mammamiradio/ tests/ : clean
