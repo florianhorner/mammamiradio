@@ -234,11 +234,13 @@ async def _render_music_track(
     temp_prefix: str,
     context: str,
     cache_write_required: bool = False,
+    background: bool = False,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
-    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"))
+    audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"), background=background)
     loop = asyncio.get_running_loop()
-    ok, reason = await loop.run_in_executor(None, validate_download, audio_path)
+    validate_fn = partial(validate_download, audio_path, background=background)
+    ok, reason = await loop.run_in_executor(None, validate_fn)
     if not ok:
         reject_cached_download(config.cache_dir, track.cache_key, reason)
         logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
@@ -251,11 +253,12 @@ async def _render_music_track(
         # before reconciliation existed would air at its old level. Reconcile it on
         # hit (off the event loop) so every song lands at the target; skipped once
         # the sidecar marks it done, so steady-state cache hits stay instant.
-        await loop.run_in_executor(None, reconcile_cached_music, norm_cached)
+        reconcile_fn = partial(reconcile_cached_music, norm_cached, background=background)
+        await loop.run_in_executor(None, reconcile_fn)
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
-    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True)
+    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True, background=background)
     await loop.run_in_executor(None, _norm_fn)
     try:
         await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
@@ -324,7 +327,7 @@ async def _queue_drain_recovery_bridge(
     tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
     logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
     try:
-        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0)
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
     except Exception:
         logger.exception("Emergency tone bridge generation failed")
         return False
@@ -1179,6 +1182,7 @@ async def _prefetch_next(
             temp_prefix="prefetch",
             context="prefetch",
             cache_write_required=True,
+            background=True,
         )
         if rendered is None:
             logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
@@ -1393,7 +1397,7 @@ async def _fire_interrupt(
         tmp_dir.mkdir(parents=True, exist_ok=True)
         bridge_path = tmp_dir / f"interrupt_bridge_{uuid4().hex[:8]}.mp3"
         try:
-            await asyncio.to_thread(generate_tone, bridge_path, 1046.5, 0.75)
+            await asyncio.to_thread(generate_tone, bridge_path, 1046.5, 0.75, rescue=True)
             state.interrupt_slot = bridge_path
             state.interrupt_slot_ephemeral = True
         except Exception:
@@ -1694,8 +1698,14 @@ async def run_producer(
                         )
                     )
                 )
-            if _prefetch_task is not None and not _prefetch_task.done():
-                _prefetch_task.cancel()
+            # Deliberately NOT cancelled: .cancel() only detaches the asyncio.Task
+            # wrapper, it can't interrupt the in-flight executor ffmpeg (same
+            # limitation the relaunch guard below is built around). Cancelling
+            # here would flip _prefetch_task.done() to True while the executor
+            # thread keeps running, so the relaunch guard would launch a SECOND
+            # prefetch on resume — the exact duplicate-background-work race this
+            # PR closes elsewhere. Left running, it finishes on its own (or is
+            # still in flight, in which case the guard correctly skips a relaunch).
             _was_stopped = True
             try:
                 await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)
@@ -3259,7 +3269,7 @@ async def run_producer(
                 silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
                 try:
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, generate_silence, silence_path, 5.0)
+                    await loop.run_in_executor(None, partial(generate_silence, silence_path, 5.0, rescue=True))
                 except Exception as silence_err:
                     logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
                     await asyncio.sleep(0.5)
@@ -3386,9 +3396,17 @@ async def run_producer(
                 # #144/#146: Launch background normalization of the predicted next music track.
                 # By the time the current track finishes playing (~3-4 min), the next norm
                 # is already cached — avoids the 75-second Pi stall when the queue drains.
-                if segment.type == SegmentType.MUSIC and state.force_next is None and state.playlist:
-                    if _prefetch_task and not _prefetch_task.done():
-                        _prefetch_task.cancel()
+                # Let a running prefetch finish instead of cancel-and-replace:
+                # cancelling can't stop its in-flight executor ffmpeg, which keeps
+                # holding the background admission slot — a replacement would only
+                # park another shared executor thread behind it. The next music
+                # segment retries with a fresh candidate.
+                if (
+                    segment.type == SegmentType.MUSIC
+                    and state.force_next is None
+                    and state.playlist
+                    and (_prefetch_task is None or _prefetch_task.done())
+                ):
                     _prefetch_task = asyncio.create_task(
                         _prefetch_next(state, config, _prefetch_failed_keys),
                         name="prefetch-norm",

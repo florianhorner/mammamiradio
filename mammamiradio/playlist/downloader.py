@@ -11,12 +11,14 @@ import shutil
 import subprocess
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
 
-from mammamiradio.audio.normalizer import _run_ffmpeg, ffmpeg_slot
+from mammamiradio.audio.admission import ffmpeg_slot
+from mammamiradio.audio.normalizer import _run_ffmpeg
 from mammamiradio.core.models import Track
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,7 @@ def clear_rejected_cache_keys() -> None:
     _REJECTED_CACHE_KEYS.clear()
 
 
-def validate_download(filepath: Path) -> tuple[bool, str]:
+def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool, str]:
     """Quickly reject partial/corrupt downloads before expensive normalization."""
     min_size_bytes = 500 * 1024
     try:
@@ -98,7 +100,7 @@ def validate_download(filepath: Path) -> tuple[bool, str]:
 
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(filepath)]
     try:
-        with ffmpeg_slot():
+        with ffmpeg_slot(background=background):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return False, "ffprobe timed out"
@@ -274,7 +276,7 @@ def _find_demo_asset(track: Track) -> Path | None:
     return None
 
 
-def _generate_silence(track: Track, out_path: Path) -> Path:
+def _generate_silence(track: Track, out_path: Path, *, background: bool = False) -> Path:
     """Generate silence as last-resort fallback (no sine wave tone)."""
     # Keep fallback audio above the producer's minimum music-duration gate so
     # demo/degraded boot can still fill the queue instead of looping forever.
@@ -296,7 +298,7 @@ def _generate_silence(track: Track, out_path: Path) -> Path:
         "mp3",
         str(out_path),
     ]
-    _run_ffmpeg(cmd, f"silence for {track.display}")
+    _run_ffmpeg(cmd, f"silence for {track.display}", background=background)
     logger.info("Generated silence placeholder for: %s", track.display)
     return out_path
 
@@ -389,7 +391,7 @@ def _validate_direct_url(url: str) -> None:
         raise ValueError(f"direct_url host {host!r} is not *.jamendo.com")
 
 
-def _download_direct_url(url: str, out_path: Path, timeout: int = 10) -> Path:
+def _download_direct_url(url: str, out_path: Path, timeout: int = 10, *, background: bool = False) -> Path:
     """Download a direct MP3 URL into the cache atomically, with SSRF guard."""
     _validate_direct_url(url)
     tmp_path = out_path.parent / f"{out_path.stem}.{uuid.uuid4().hex}.tmp"
@@ -401,7 +403,7 @@ def _download_direct_url(url: str, out_path: Path, timeout: int = 10) -> Path:
         tmp_path.unlink(missing_ok=True)
         raise RuntimeError(f"direct-url fetch failed: {exc}") from exc
 
-    ok, reason = validate_download(out_path)
+    ok, reason = validate_download(out_path, background=background)
     if not ok:
         logger.warning("Direct URL download failed validation for %s: %s", out_path.name, reason)
         out_path.unlink(missing_ok=True)
@@ -453,7 +455,7 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
     return None
 
 
-def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:
     """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
     existing = _resolve_cached_or_local(track, cache_dir, music_dir)
     if existing is not None:
@@ -464,7 +466,7 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     if track.direct_url:
         out_path = cache_dir / f"{track.cache_key}.mp3"
         try:
-            return _download_direct_url(track.direct_url, out_path)
+            return _download_direct_url(track.direct_url, out_path, background=background)
         except Exception as e:
             logger.warning("Direct URL download failed for %s: %s", track.display, e)
             if track.source == "jamendo":
@@ -487,7 +489,7 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     # on the next iteration or the next boot — it will always be regenerated rather than
     # being served as a "Cache hit" that loops through the quality gate forever.
     silence_path = cache_dir / f"_silence_{track.cache_key}.mp3"
-    return _generate_silence(track, silence_path)
+    return _generate_silence(track, silence_path, background=background)
 
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
@@ -566,11 +568,14 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
         return []
 
 
-async def download_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
+async def download_track(
+    track: Track, cache_dir: Path, music_dir: Path | None = None, *, background: bool = False
+) -> Path:
     """Run the synchronous download fallback chain off the event loop."""
     loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path("music")
-    return await loop.run_in_executor(None, _download_sync, track, cache_dir, _music_dir)
+    download_fn = partial(_download_sync, track, cache_dir, _music_dir, background=background)
+    return await loop.run_in_executor(None, download_fn)
 
 
 async def download_external_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:

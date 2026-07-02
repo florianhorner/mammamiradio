@@ -166,14 +166,14 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def fake_silence(path: Path, _duration: float) -> None:
+    def fake_silence(path: Path, _duration: float, **_kwargs) -> None:
         path.write_bytes(b"silence")
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no audio")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence) as mock_silence,
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
     ):
         await _run_until_status_queued(queue, state, config)
@@ -181,6 +181,9 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     queued = state.queued_segments[-1]
     assert queued["playlist_index"] == -1
     assert queued["source_kind"] == ""
+    # This empty-fallback silence is emergency audio — it must take the rescue
+    # admission lane so it never queues behind routine ffmpeg work (#685-687).
+    assert mock_silence.call_args.kwargs.get("rescue") is True
 
 
 @pytest.mark.asyncio
@@ -297,7 +300,8 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
+@pytest.mark.parametrize("background", [False, True])
+async def test_render_music_cache_hit_reconciles_loudness(tmp_path, background):
     """A normalization cache hit must still run the loudness reconcile pass on the
     cached file — otherwise a norm file produced before reconciliation aired at its
     old, quieter level ("some songs are just quieter"). Guards producer.py wiring."""
@@ -313,11 +317,11 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path):
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
         patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as m_reconcile,
     ):
-        result = await _render_music_track(track, config, temp_prefix="t", context="music")
+        result = await _render_music_track(track, config, temp_prefix="t", context="music", background=background)
 
     assert result is not None and result.cache_hit is True
     assert result.path == norm_cached
-    m_reconcile.assert_called_once_with(norm_cached)
+    m_reconcile.assert_called_once_with(norm_cached, background=background)
 
 
 def test_norm_cache_bridge_scrubs_foreign_artist():
