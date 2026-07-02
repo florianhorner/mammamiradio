@@ -2356,6 +2356,35 @@ async def test_write_ad_prompt_includes_campaign_and_home_context(config, state)
     assert "<home_state_data>" in prompt
 
 
+@pytest.mark.asyncio
+async def test_write_ad_prompt_forbids_music_bed_as_sfx(config, state):
+    """The sfx line must warn against reusing the music bed/environment name.
+
+    Production logs showed the LLM emitting sfx cues like "cheap_synth_romance"
+    and "suspicious_jazz" — real SONIC_MUSIC_BEDS names, not SFX types — because
+    the prompt listed both vocabularies without distinguishing them. The prompt
+    must explicitly rule that out.
+    """
+    brand = AdBrand(name="TestBrand", tagline="Test", category="tech")
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "parts": [{"type": "voice", "text": "Compra adesso", "role": "hammer"}],
+            "mood": "upbeat",
+            "summary": "Test ad",
+        }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        await write_ad(brand, voices, state, config)
+
+    prompt = captured["prompt"]
+    assert "never the music bed or environment name" in prompt
+    assert "never invent new ones" in prompt
+
+
 # --- Signature ad system tests ---
 
 
