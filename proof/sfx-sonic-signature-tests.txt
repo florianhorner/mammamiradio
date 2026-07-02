@@ -1,0 +1,28 @@
+PR: fix ad/brand-jingle sound effects falling back to a generic chime
+
+Scope (code): mammamiradio/hosts/scriptwriter.py, radio.toml,
+ha-addon/mammamiradio/radio.toml.
+Tests: tests/hosts/test_scriptwriter.py, tests/core/test_config.py.
+Docs: CHANGELOG.md.
+
+Local verification (2026-07-03), run on the branch state at commit 731c43cf:
+
+1. Lint — clean.
+   `ruff check .` -> All checks passed!
+   `ruff format --check .` -> 246 files already formatted
+
+2. Type check — clean.
+   `mypy mammamiradio/ tests/` -> Success: no issues found in 219 source files
+
+3. Tests — full suite green.
+   `pytest tests/` -> 3631 passed, 2 skipped, 19 deselected in 65s
+
+4. Addon validation — clean.
+   `scripts/validate-addon.sh` -> All checks passed. Safe to push.
+   (includes 6b. radio.toml sync: ha-addon/mammamiradio/radio.toml matches root radio.toml)
+
+5. Release invariants — clean.
+   `scripts/check-release-invariants.sh` -> Passed: 8  Failed: 0
+
+6. Changelog lint — clean.
+   `scripts/check-changelog-lint.sh` -> Changelog lint clean.
