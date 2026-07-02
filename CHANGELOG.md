@@ -23,6 +23,10 @@ The current version source of truth is `pyproject.toml`.
 - **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Clear pool) moves to a separate Pool row below.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 
+### Refactored
+
+- Release-beat manifest schema constants now live in one shared module used by both the runtime campaign loader and the release validator.
+
 ### Fixed
 
 - **Background audio prep can no longer crowd out the next thing to air.** Prefetch and other background FFmpeg work now leave capacity for foreground renders, while emergency bridge audio gets its own tightly bounded priority path so recovery tones and silence fillers do not wait behind routine processing.

@@ -20,16 +20,17 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only on Python < 3.1
 
 DEFAULT_MANIFEST = Path("mammamiradio/assets/release/release_beat.toml")
 DEFAULT_PYPROJECT = Path("pyproject.toml")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-VALID_CHANNELS = {"edge", "stable"}
-VALID_PRIORITIES = {"low", "normal", "high"}
-
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{5,120}$")
-SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
-SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+from mammamiradio.core.release_beat_schema import (  # noqa: E402
+    ALLOWED_KEYS,
+    ID_RE,
+    SEMVER_RE,
+    SHA_RE,
+    VALID_CHANNELS,
+    VALID_PRIORITIES,
 )
 
 # These are release-engineering words, not on-air words. A manifest may opt into
@@ -45,21 +46,6 @@ UNSAFE_TERMS = {
     "sha": re.compile(r"\bSHAs?\b", re.IGNORECASE),
     "semver": re.compile(r"\bsemver\b", re.IGNORECASE),
     "docker": re.compile(r"\bDocker\b", re.IGNORECASE),
-}
-
-ALLOWED_KEYS = {
-    "enabled",
-    "schema",
-    "id",
-    "channel",
-    "build_sha",
-    "semver",
-    "priority",
-    "facts",
-    "props",
-    "avoid",
-    "copy",
-    "listener_safe_terms",
 }
 
 
@@ -190,6 +176,25 @@ def _validate_text_list(
                 errors.append(f"release_beat.{field}[{index}] contains listener-unsafe term(s): " + ", ".join(terms))
 
 
+def _validate_scalar_text(
+    release_beat: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    safe_terms: set[str],
+) -> None:
+    """Listener-safety-scan a free-text scalar field that reaches the on-air prompt."""
+    value = release_beat.get(field)
+    if value is None:
+        return
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"release_beat.{field} must be a non-empty string")
+        return
+    terms = _unsafe_terms(value, safe_terms)
+    if terms:
+        errors.append(f"release_beat.{field} contains listener-unsafe term(s): " + ", ".join(terms))
+
+
 def _sha_matches(manifest_sha: str, target_sha: str) -> bool:
     manifest = manifest_sha.lower()
     target = target_sha.lower()
@@ -285,6 +290,10 @@ def _validate_enabled_manifest(
         scan_listener_safe=False,
         safe_terms=safe_terms,
     )
+    # title and copy_guidance are free-text runtime fields forwarded into the
+    # on-air host prompt, so they get the same listener-safety scan as copy.
+    for scalar_field in ("title", "copy_guidance"):
+        _validate_scalar_text(release_beat, scalar_field, errors, safe_terms=safe_terms)
 
     if target_channel is not None and channel != target_channel:
         errors.append(f"release_beat.channel must be {target_channel!r} for this release gate (got {channel!r})")
