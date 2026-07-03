@@ -111,12 +111,37 @@ fi
 echo "3. Options contract"
 OPTIONS_KEYS=$(sed -n '/^options:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^[[:space:]]+[[:alnum:]_]+:' | awk -F: '{print $1}' | tr -d ' ')
 SCHEMA_KEYS=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | grep -E '^[[:space:]]+[[:alnum:]_]+:' | awk -F: '{print $1}' | tr -d ' ')
-if [ "$OPTIONS_KEYS" = "$SCHEMA_KEYS" ]; then
-    pass "options and schema key order match"
-else
-    fail "options and schema key order differ"
+FILTERED_SCHEMA_KEYS=$(for key in $SCHEMA_KEYS; do
+    if printf '%s\n' "$OPTIONS_KEYS" | grep -qx "$key"; then
+        echo "$key"
+    fi
+done)
+OPTIONS_ONLY=""
+for key in $OPTIONS_KEYS; do
+    if ! printf '%s\n' "$SCHEMA_KEYS" | grep -qx "$key"; then
+        OPTIONS_ONLY="$OPTIONS_ONLY $key"
+    fi
+done
+REQUIRED_SCHEMA_ONLY=""
+for key in $SCHEMA_KEYS; do
+    if ! printf '%s\n' "$OPTIONS_KEYS" | grep -qx "$key"; then
+        schema_type=$(sed -n '/^schema:/,/^[^ ]/p' ha-addon/mammamiradio/config.yaml | awk -F: -v key="$key" '$1 ~ "^[[:space:]]+" key "$" {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
+        case "$schema_type" in
+            *\?) ;;
+            *) REQUIRED_SCHEMA_ONLY="$REQUIRED_SCHEMA_ONLY $key" ;;
+        esac
+    fi
+done
+if [ -n "$OPTIONS_ONLY" ]; then
+    fail "Options keys missing from schema:$OPTIONS_ONLY"
+elif [ "$FILTERED_SCHEMA_KEYS" != "$OPTIONS_KEYS" ]; then
+    fail "options keys must follow schema order"
     echo "    options: $(echo "$OPTIONS_KEYS" | tr '\n' ' ')"
     echo "    schema:  $(echo "$SCHEMA_KEYS" | tr '\n' ' ')"
+elif [ -n "$REQUIRED_SCHEMA_ONLY" ]; then
+    fail "Schema-only keys must be optional:$REQUIRED_SCHEMA_ONLY"
+else
+    pass "options keys follow schema order; schema-only keys are optional"
 fi
 
 MISSING=""
@@ -316,6 +341,7 @@ else
     pass "No COPY to /data/ (persistent volume safe)"
 fi
 
+# shellcheck disable=SC2016  # Match literal Dockerfile ARG references.
 for label in 'io.hass.version="${BUILD_VERSION}"' 'io.hass.type="app"' 'io.hass.arch="${BUILD_ARCH}"'; do
     if grep -Fq "$label" ha-addon/mammamiradio/Dockerfile; then
         pass "Dockerfile label: $label"
@@ -326,6 +352,7 @@ done
 
 # No bare eval 2>&1 in run.sh (subshell captures like SYNC_MSG="$(...2>&1)" are safe)
 # Collapse continuation lines, then reject 2>&1 that is NOT inside a $() capture.
+# shellcheck disable=SC2016  # The grep patterns intentionally match literal command substitutions.
 UNSAFE_2_1=$(awk '/\\$/{buf=buf $0; next} {if(buf){print buf $0; buf=""} else print}' \
     ha-addon/mammamiradio/rootfs/run.sh | grep '2>&1' | grep -v '"\$(' | grep -v "'\$(" || true)
 if [ -n "$UNSAFE_2_1" ]; then

@@ -18,6 +18,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **The Home Assistant add-on Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. Jamendo and legacy provider-key fields move behind Home Assistant's own optional configuration disclosure for new installs and installs where those saved keys are absent; existing installs that already saved blank legacy fields may still show them until those saved options are cleared.
 - **Scaletta is now the first tab in the admin panel.** The live queue opens by default — Diretta (pacing controls) moves one position right.
 - **Banter is shorter by default.** Hosts now keep most breaks to a quick beat between songs instead of talking at length every time. Longer breaks are saved for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode — so the occasional long break lands as "this one mattered".
 - **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Clear pool) moves to a separate Pool row below.

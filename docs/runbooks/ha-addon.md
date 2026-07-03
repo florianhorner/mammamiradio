@@ -109,39 +109,43 @@ When you add an option to the HA addon configuration UI, you must update THREE f
 
 | File | What to add |
 |------|-------------|
-| `ha-addon/mammamiradio/config.yaml` | Option in `options:` + type in `schema:` |
+| `ha-addon/mammamiradio/config.yaml` | Type in `schema:` + an `options:` default only when the field should be visible by default |
 | `ha-addon/mammamiradio/rootfs/run.sh` | Key in the Python extraction loop |
 | `ha-addon/mammamiradio/translations/en.yaml` | Human-readable name + description |
 
-CI validates that every schema key appears in run.sh. If you add to config.yaml but forget run.sh, the build fails.
+The `schema:` block drives field order in Home Assistant's Configuration tab. A field may be intentionally omitted from `options:` only when its schema type is optional (`str?`, `password?`, etc.); Home Assistant then hides it behind its "Show unused optional configuration options" disclosure for new installs or installs where the key is absent from saved options. Existing installs that already saved a blank legacy key may still show that key until the saved option is cleared.
+
+CI validates that every `options:` key appears in `schema:` in the same relative order, every schema-only key is optional, and every schema key appears in run.sh. If you add to config.yaml but forget run.sh, the build fails.
 
 Current config options:
 
 | Option | Schema type | Env var |
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
-| `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` |
-| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` legacy fallback; prefer `/config/secrets.env` |
-| `openai_api_key` | `password?` | `OPENAI_API_KEY` legacy fallback; prefer `/config/secrets.env` |
-| `azure_speech_key` | `password?` | `AZURE_SPEECH_KEY` legacy fallback; prefer `/config/secrets.env` |
-| `azure_speech_region` | `str?` | `AZURE_SPEECH_REGION` legacy fallback; prefer `/config/secrets.env` |
-| `elevenlabs_api_key` | `password?` | `ELEVENLABS_API_KEY` legacy fallback; prefer `/config/secrets.env` |
-| `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
+| `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
+| `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
 | `admin_token` | `password?` | `ADMIN_TOKEN` (blank => add-on trusts the LAN, no token required) |
 | `super_italian_mode` | `bool?` | `MAMMAMIRADIO_SUPER_ITALIAN` |
 | `chaos_mode_active` | `bool?` | `MAMMAMIRADIO_CHAOS_MODE` |
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 | `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
-| `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
+| `guest_host` | `bool?` | `MAMMAMIRADIO_GUEST_HOST` |
+| `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
+| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
+| `openai_api_key` | `password?` | `OPENAI_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_key` | `password?` | `AZURE_SPEECH_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
+| `azure_speech_region` | `str?` | `AZURE_SPEECH_REGION` advanced legacy fallback; prefer `/config/secrets.env` |
+| `elevenlabs_api_key` | `password?` | `ELEVENLABS_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
 **Provider secrets.** The five AI/TTS provider credentials are file-first in add-on mode:
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
 `ELEVENLABS_API_KEY` should live in `/config/secrets.env`. Non-empty file values win over legacy
-Configuration-tab values per key. `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN` remain Supervisor options
-in this phase. `/config/secrets.env` is plaintext in the add-on config storage, not Home Assistant
+Configuration-tab values per key. The provider fields and `JAMENDO_CLIENT_ID` remain available as
+advanced optional Supervisor options; `ADMIN_TOKEN` remains visible because leaving it blank means
+the add-on trusts the local network. `/config/secrets.env` is plaintext in the add-on config storage, not Home Assistant
 `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
@@ -165,7 +169,7 @@ to `MODEL_PRICES` in `web/streamer.py`.
 
 The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). To add a new non-provider option:
 
-1. Add to `options:` and `schema:` in `config.yaml` in the same order
+1. Add to `schema:` in `config.yaml`; also add to `options:` in the same relative order only if it should be visible by default
 2. Add a translation entry in `translations/en.yaml`
 3. Add the run.sh export, either in the tuple loop for direct UPPER_CASE keys or as an explicit mapping for app-specific env vars
 4. Read it in `config.py` via `os.getenv("MY_OPTION", "default")`

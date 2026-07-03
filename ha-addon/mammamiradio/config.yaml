@@ -26,41 +26,35 @@ map:
   - addon_config:rw
 options:
   station_name: "Mamma Mi Radio"
-  jamendo_client_id: ""
-  anthropic_api_key: ""
-  openai_api_key: ""
-  azure_speech_key: ""
-  azure_speech_region: ""
-  elevenlabs_api_key: ""
-  quality_profile: "balanced"
   enable_home_assistant: true
+  ha_media_player_push: true
+  quality_profile: "balanced"
   admin_token: ""
   super_italian_mode: false
   chaos_mode_active: false
   festival_mode: false
   broadcast_chain: false
-  ha_media_player_push: true
   guest_host: true
   songs_between_banter: 2
   songs_between_ads: 4
   ad_spots_per_break: 2
 schema:
   station_name: str?
+  enable_home_assistant: bool?
+  ha_media_player_push: bool?
+  quality_profile: list(premium|balanced|economy)?
+  admin_token: password?
+  super_italian_mode: bool?
+  chaos_mode_active: bool?
+  festival_mode: bool?
+  broadcast_chain: bool?
+  guest_host: bool?
+  songs_between_banter: int(2,60)?
+  songs_between_ads: int(1,60)?
+  ad_spots_per_break: int(1,5)?
   jamendo_client_id: password?
   anthropic_api_key: password?
   openai_api_key: password?
   azure_speech_key: password?
   azure_speech_region: str?
   elevenlabs_api_key: password?
-  quality_profile: list(premium|balanced|economy)?
-  enable_home_assistant: bool?
-  admin_token: password?
-  super_italian_mode: bool?
-  chaos_mode_active: bool?
-  festival_mode: bool?
-  broadcast_chain: bool?
-  ha_media_player_push: bool?
-  guest_host: bool?
-  songs_between_banter: int(2,60)?
-  songs_between_ads: int(1,60)?
-  ad_spots_per_break: int(1,5)?
