@@ -80,7 +80,7 @@ def test_persisted_heading_corrupt_returns_none(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_startup_drops_persisted_heading_when_restore_adds_no_new_tracks(tmp_path):
+async def test_startup_retags_persisted_heading_when_restore_matches_existing_track(tmp_path):
     config = load_config(TOML_PATH)
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path / "tmp"
@@ -128,10 +128,12 @@ async def test_startup_drops_persisted_heading_when_restore_adds_no_new_tracks(t
         await main_module.app.state.playback_task
 
     state = main_module.app.state.station_state
-    assert state.heading is None
+    assert state.heading is not None
+    assert state.heading.id == heading.id
+    assert state.heading.selection_budget == 1
     assert state.playlist == [base_track]
-    assert state.playlist[0].heading_id == ""
-    assert read_persisted_heading(tmp_path) is None
+    assert state.playlist[0].heading_id == heading.id
+    assert read_persisted_heading(tmp_path) is not None
 
 
 @pytest.mark.asyncio

@@ -347,7 +347,11 @@ body[data-stopped="true"] .btn-util {
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
 .direction-row .quick-add-label { flex-shrink: 0; }
-.direction-row .search-input { min-width: 220px; min-height: 36px; padding: 7px 12px; font-size: 14px; }
+.direction-row .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
+.direction-row .btn-direction { min-height: 44px; padding: 10px 16px; }
+.direction-row .btn-direction.loading,
+.direction-row .btn-direction:disabled,
+.direction-row .search-input:disabled { opacity: 0.65; pointer-events: none; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -1756,8 +1760,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="direction-row" id="directionControls">
           <label class="quick-add-label" for="directionInput">Direction:</label>
-          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Music direction" onkeydown="if(event.key==='Enter')setDirectionText(document.getElementById('directionBtn'))">
-          <button type="button" class="btn btn-chip" id="directionBtn" onclick="setDirectionText(this)">Steer</button>
+          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Steer</button>
         </div>
         <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
           <span>Course: <b>Auto rotation</b></span>
@@ -3188,12 +3192,21 @@ async function setHeading(kind,el){
   toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
   await refreshFast();
 }
+let _directionPending=false;
+function handleDirectionKey(event){
+  if(event.key!=='Enter' || event.repeat || event.isComposing)return;
+  event.preventDefault();
+  setDirectionText(document.getElementById('directionBtn'));
+}
 async function setDirectionText(el){
+  if(_directionPending)return;
   const input=document.getElementById('directionInput');
   const text=(input?.value||'').trim();
   if(!text){toast('Type a direction and try again.');return;}
   flash(el);
-  if(el){el.classList.add('loading');el.textContent='Steering...';}
+  _directionPending=true;
+  if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Steering...';}
   try{
     const r=await api('POST','/api/direction',{text});
     if(!r.ok){
@@ -3208,7 +3221,9 @@ async function setDirectionText(el){
   }catch(_){
     toast(offlineMsg());
   }finally{
-    if(el){el.classList.remove('loading');el.textContent='Steer';}
+    _directionPending=false;
+    if(input){input.disabled=false;input.removeAttribute('aria-busy');}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Steer';}
   }
 }
 async function clearHeading(el){

@@ -8,6 +8,7 @@ import random
 import re
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -491,6 +492,8 @@ class StationState:
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     heading: Heading | None = None
+    heading_revision: int = 0
+    heading_persist_callback: Callable[[Heading], None] | None = None
     heading_pending_announcement: str = ""
     heading_announced_id: str = ""
     # What the listener is hearing RIGHT NOW
@@ -889,6 +892,7 @@ class StationState:
         self.force_next = None
         self.operator_force_pending = None
         self.heading = None
+        self.heading_revision += 1
         self.heading_pending_announcement = ""
         self.heading_announced_id = ""
 
@@ -1142,6 +1146,7 @@ class StationState:
         self.played_tracks.append(track)
         self.current_track = track
         heading = self.heading
+        spent_heading: Heading | None = None
         if (
             heading is not None
             and heading.id
@@ -1149,6 +1154,13 @@ class StationState:
             and heading.selection_budget > heading.selection_spent
         ):
             heading.selection_spent += 1
+            spent_heading = heading
+        if spent_heading is not None and self.heading_persist_callback is not None:
+            try:
+                self.heading_persist_callback(spent_heading)
+            except Exception:
+                # Persistence is best-effort; audio admission already succeeded.
+                pass
         self.songs_since_banter += 1
         self.songs_since_ad += 1
         self.songs_since_news += 1

@@ -269,6 +269,23 @@ class TestBanNowPlayingEndpoint:
         assert "doBanNowPlaying(this)" in html
         assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
 
+    def test_admin_direction_control_has_busy_and_keyboard_guards(self):
+        html = ADMIN_HTML.read_text()
+        handler = _admin_function_block("setDirectionText")
+        key_handler = _admin_function_block("handleDirectionKey")
+        assert 'id="directionInput"' in html
+        assert 'aria-label="Direction"' in html
+        assert 'class="btn btn-util btn-direction"' in html
+        assert "font-size: 16px" in html
+        assert "min-height: 44px" in html
+        assert "let _directionPending=false" in html
+        assert "if(_directionPending)return" in handler
+        assert "input.disabled=true" in handler
+        assert "el.disabled=true" in handler
+        assert "aria-busy" in handler
+        assert "event.repeat" in key_handler
+        assert "event.isComposing" in key_handler
+
 
 # ---------------------------------------------------------------------------
 # Stop endpoint

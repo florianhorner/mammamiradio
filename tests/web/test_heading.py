@@ -322,8 +322,135 @@ async def test_direction_queues_resolved_targets_without_pin(tmp_path):
     assert state.pinned_track is None
     assert state.force_next is None
     assert state.heading is not None
+    assert state.heading.selection_budget == 1
     direction_tracks = [track for track in state.playlist if track.heading_id == state.heading.id]
     assert [(track.artist, track.title) for track in direction_tracks] == [("Lucio Battisti", "Il mio canto libero")]
+
+
+@pytest.mark.asyncio
+async def test_direction_download_failure_leaves_no_active_heading_and_can_retry(tmp_path):
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    expansion = DirectionExpansion(
+        label="Sunday morning Italian",
+        targets=[DirectionTarget("Lucio Battisti", "Il mio canto libero")],
+        source="curated",
+    )
+    meta = {
+        "title": "Il mio canto libero",
+        "artist": "Lucio Battisti",
+        "duration_ms": 180_000,
+        "youtube_id": "abc12345678",
+    }
+
+    with (
+        patch("mammamiradio.web.streamer.expand_direction", return_value=expansion) as expand_direction,
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[meta]),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("yt-dlp failed"),
+        ),
+    ):
+        async with _client(app) as client:
+            first = await client.post("/api/direction", json={"text": "sunday morning italian"})
+            second = await client.post("/api/direction", json={"text": "sunday morning italian"})
+
+    assert first.json()["ok"] is False
+    assert second.json()["ok"] is False
+    assert first.json().get("idempotent") is None
+    assert second.json().get("idempotent") is None
+    assert expand_direction.call_count == 2
+    assert app.state.station_state.heading is None
+    assert [track.title for track in app.state.station_state.playlist] == ["Base"]
+    assert read_persisted_heading(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_slow_direction_does_not_override_later_back_to_auto(tmp_path):
+    app = _make_app(tmp_path, tracks=[_track("Toxic", "Britney Spears", "base")])
+    app.state.config.allow_ytdlp = False
+    app.state.station_state.heading = Heading("old", "classic://italian/80s", "Anni '80", 1.0, "operator")
+    expansion = DirectionExpansion(
+        label="2000s female vocals",
+        targets=[DirectionTarget("Britney Spears", "Toxic")],
+        source="llm",
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_expand_direction(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return expansion
+
+    with patch("mammamiradio.web.streamer.expand_direction", side_effect=slow_expand_direction):
+        async with _client(app) as client:
+            pending = asyncio.create_task(client.post("/api/direction", json={"text": "2000s female vocals"}))
+            await started.wait()
+            clear = await client.post("/api/heading/clear")
+            release.set()
+            direction = await pending
+
+    assert clear.json()["ok"] is True
+    assert direction.json()["ok"] is False
+    assert direction.json()["stale"] is True
+    assert app.state.station_state.heading is None
+    assert read_persisted_heading(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_download_drops_when_heading_changes_before_commit(tmp_path):
+    from mammamiradio.web.streamer import _download_direction_track
+
+    app = _make_app(tmp_path)
+    old_heading = Heading("h-old", "direction://old", "Old", 1.0, "operator")
+    app.state.station_state.heading = old_heading
+    revision = app.state.station_state.source_revision
+    track = _track("Toxic", "Britney Spears", "yt", youtube_id="abc12345678")
+    app.state.station_state.heading = Heading("h-new", "direction://new", "New", 2.0, "operator")
+
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock):
+        status = await _download_direction_track(track, app.state, revision, old_heading.id)
+
+    assert status == "dropped"
+    assert track not in app.state.station_state.playlist
+
+
+@pytest.mark.asyncio
+async def test_direction_download_drops_when_source_switches_before_commit(tmp_path):
+    from mammamiradio.web.streamer import _download_direction_track
+
+    app = _make_app(tmp_path)
+    heading = Heading("h-old", "direction://old", "Old", 1.0, "operator")
+    app.state.station_state.heading = heading
+    revision = app.state.station_state.source_revision
+    app.state.station_state.source_revision += 1
+    track = _track("Toxic", "Britney Spears", "yt", youtube_id="abc12345678")
+
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock):
+        status = await _download_direction_track(track, app.state, revision, heading.id)
+
+    assert status == "dropped"
+    assert track not in app.state.station_state.playlist
+
+
+@pytest.mark.asyncio
+async def test_direction_download_refuses_track_banned_after_submit(tmp_path):
+    from mammamiradio.web.streamer import _download_direction_track
+
+    app = _make_app(tmp_path)
+    heading = Heading("h-old", "direction://old", "Old", 1.0, "operator")
+    app.state.station_state.heading = heading
+    app.state.station_state.blocklist = {("britney spears", "toxic"): {"display": "Britney Spears - Toxic"}}
+    revision = app.state.station_state.source_revision
+    track = _track("Toxic", "Britney Spears", "yt", youtube_id="abc12345678")
+
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock):
+        status = await _download_direction_track(track, app.state, revision, heading.id)
+
+    assert status == "banned"
+    assert track not in app.state.station_state.playlist
 
 
 @pytest.mark.asyncio

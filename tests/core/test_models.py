@@ -318,6 +318,50 @@ def test_after_music_spends_heading_budget_only_for_matching_track():
     assert heading.selection_spent == 1
 
 
+def test_after_music_persists_heading_budget_spend():
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    persisted: list[Heading] = []
+    state = StationState(heading=heading, heading_persist_callback=persisted.append)
+
+    state.after_music(tagged)
+
+    assert heading.selection_spent == 1
+    assert persisted == [heading]
+
+
+def test_after_music_heading_persist_callback_failure_is_non_fatal():
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+
+    def fail_persist(_heading: Heading) -> None:
+        raise OSError("disk full")
+
+    state = StationState(heading=heading, heading_persist_callback=fail_persist)
+
+    state.after_music(tagged)
+
+    assert state.current_track is tagged
+    assert heading.selection_spent == 1
+    assert state.songs_since_banter == 1
+
+
 def test_on_stream_segment_counts_canned_clips():
     """Canned banter clips are counted at stream time for shareware trial."""
     state = StationState()

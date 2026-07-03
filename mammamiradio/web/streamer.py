@@ -3828,7 +3828,7 @@ async def _download_direction_track(
     app_state: Any,
     originating_source_revision: int,
     heading_id: str,
-) -> None:
+) -> str:
     """Download a direction target and add it to rotation if the heading is still active."""
     state = app_state.station_state
     try:
@@ -3844,14 +3844,43 @@ async def _download_direction_track(
         raise
     except Exception:
         logger.warning("Direction download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
-        return
+        return "failed"
 
     if status == "queued":
         logger.info("Added direction track to rotation: %s (yt:%s)", track.display, track.youtube_id)
+        heading = state.heading
+        if heading is not None and heading.id == heading_id:
+            updated_budget = _heading_selection_budget(_heading_playlist_track_count(state, heading_id))
+            if updated_budget > heading.selection_budget:
+                heading.selection_budget = updated_budget
+                try:
+                    await asyncio.to_thread(write_persisted_heading, app_state.config.cache_dir, heading)
+                except Exception:
+                    logger.warning("Failed to persist direction heading after download landed", exc_info=True)
     elif status == "banned":
         logger.info("Direction track refused because it is blocklisted: %s", track.display)
     else:
         logger.info("Direction track skipped after %s: %s", status, track.display)
+    return status
+
+
+async def _await_first_direction_commit(download_tasks: list[asyncio.Task[str]]) -> tuple[int, list[asyncio.Task[str]]]:
+    """Wait until one direction download commits, or all attempted downloads fail."""
+    pending = set(download_tasks)
+    committed = 0
+    while pending and committed == 0:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            try:
+                status = task.result()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Direction download task failed unexpectedly", exc_info=True)
+                status = "failed"
+            if status == "queued":
+                committed += 1
+    return committed, list(pending)
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
@@ -3894,6 +3923,35 @@ def _heading_selection_budget(track_count: int) -> int:
     return max(0, min(HEADING_FRONT_INSERT_LIMIT, int(track_count or 0)))
 
 
+def _heading_playlist_track_count(state: StationState, heading_id: str) -> int:
+    if not heading_id:
+        return 0
+    return sum(1 for track in state.playlist if track.heading_id == heading_id)
+
+
+def _set_active_heading(state: StationState, heading: Heading) -> None:
+    state.heading = heading
+    state.heading_revision += 1
+    state.heading_pending_announcement = ""
+    state.heading_announced_id = ""
+
+
+def _clear_active_heading(state: StationState) -> None:
+    state.heading = None
+    state.heading_revision += 1
+    state.heading_pending_announcement = ""
+    state.heading_announced_id = ""
+
+
+def _stale_heading_response(state: StationState) -> dict:
+    return {
+        "ok": False,
+        "stale": True,
+        "message": "The course changed while we were searching - use the current course or try again.",
+        "heading": _serialize_heading(state.heading),
+    }
+
+
 async def _set_direction_text(request: Request, text: str):
     """Apply a free-text operator direction as a heading-backed music block."""
     safe_text = normalize_direction_text(text)
@@ -3906,7 +3964,12 @@ async def _set_direction_text(request: Request, text: str):
     config = request.app.state.config
     state = request.app.state.station_state
     seed = f"direction://{safe_text.casefold()}"
-    if state.heading is not None and state.heading.seed == seed:
+    requested_heading_revision = state.heading_revision
+    if (
+        state.heading is not None
+        and state.heading.seed == seed
+        and _heading_playlist_track_count(state, state.heading.id) > 0
+    ):
         _record_heading_ledger(
             request,
             requested_seed=seed,
@@ -3951,7 +4014,11 @@ async def _set_direction_text(request: Request, text: str):
     retagged_existing = 0
     persisted = True
     async with source_switch_lock:
-        if state.heading is not None and state.heading.seed == seed:
+        if (
+            state.heading is not None
+            and state.heading.seed == seed
+            and _heading_playlist_track_count(state, state.heading.id) > 0
+        ):
             return {
                 "ok": True,
                 "added": 0,
@@ -3961,6 +4028,8 @@ async def _set_direction_text(request: Request, text: str):
                 "message": "Already steering there.",
                 "heading": _serialize_heading(state.heading),
             }
+        if state.heading_revision != requested_heading_revision:
+            return _stale_heading_response(state)
 
         existing_tracks = find_existing_direction_tracks(state.playlist, expansion.targets)
         existing_keys = {normalized_track_key(track) for track in state.playlist}
@@ -3994,7 +4063,7 @@ async def _set_direction_text(request: Request, text: str):
             label=expansion.label,
             set_at=time.time(),
             set_by="operator",
-            selection_budget=_heading_selection_budget(track_count),
+            selection_budget=_heading_selection_budget(len(existing_tracks)),
             targets=expansion.target_dicts,
         )
         for track in existing_tracks:
@@ -4005,9 +4074,7 @@ async def _set_direction_text(request: Request, text: str):
             track.heading_id = heading.id
         if retagged_existing:
             state.playlist_revision += 1
-        state.heading = heading
-        state.heading_pending_announcement = ""
-        state.heading_announced_id = ""
+        _set_active_heading(state, heading)
         originating_source_revision = state.source_revision
 
         try:
@@ -4016,11 +4083,43 @@ async def _set_direction_text(request: Request, text: str):
             logger.warning("Failed to persist direction heading; live heading remains active", exc_info=True)
             persisted = False
 
-    for track in download_tracks:
-        dl_task = asyncio.create_task(
-            _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
-        )
-        _register_background_task(request.app.state, dl_task)
+    committed_downloads = 0
+    if download_tracks:
+        if existing_tracks:
+            for track in download_tracks:
+                dl_task = asyncio.create_task(
+                    _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
+                )
+                _register_background_task(request.app.state, dl_task)
+        else:
+            dl_tasks = [
+                asyncio.create_task(
+                    _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
+                )
+                for track in download_tracks
+            ]
+            committed_downloads, pending_tasks = await _await_first_direction_commit(dl_tasks)
+            if committed_downloads == 0:
+                async with source_switch_lock:
+                    if state.heading is not None and state.heading.id == heading.id:
+                        _clear_active_heading(state)
+                        persisted = _delete_persisted_heading(config.cache_dir)
+                _record_heading_ledger(
+                    request,
+                    requested_seed=seed,
+                    added_count=0,
+                    zero_result=True,
+                    persisted=persisted,
+                    source="direction_set",
+                )
+                return {
+                    "ok": False,
+                    "added": 0,
+                    "queued_downloads": 0,
+                    "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+                }
+            for task in pending_tasks:
+                _register_background_task(request.app.state, task)
 
     _record_heading_ledger(
         request,
@@ -4032,7 +4131,7 @@ async def _set_direction_text(request: Request, text: str):
     )
     return {
         "ok": True,
-        "added": len(download_tracks),
+        "added": len(download_tracks) if existing_tracks else committed_downloads,
         "retagged_existing": retagged_existing,
         "queued_downloads": len(download_tracks),
         "expansion_source": expansion.source,
@@ -4188,9 +4287,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 }
 
             state.playlist_revision += 1
-            state.heading = heading
-            state.heading_pending_announcement = ""
-            state.heading_announced_id = ""
+            _set_active_heading(state, heading)
 
             persisted = True
             try:
@@ -4237,9 +4334,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
         state.playlist[0:0] = front
         state.playlist.extend(rest)
         state.playlist_revision += 1
-        state.heading = heading
-        state.heading_pending_announcement = ""
-        state.heading_announced_id = ""
+        _set_active_heading(state, heading)
 
         persisted = True
         try:
@@ -4280,9 +4375,7 @@ async def clear_heading(request: Request, _: None = Depends(require_admin_access
     source_switch_lock = request.app.state.source_switch_lock
     async with source_switch_lock:
         previous_seed = state.heading.seed if state.heading is not None else ""
-        state.heading = None
-        state.heading_pending_announcement = ""
-        state.heading_announced_id = ""
+        _clear_active_heading(state)
         persisted = _delete_persisted_heading(config.cache_dir)
     _record_heading_ledger(
         request,
