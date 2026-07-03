@@ -205,6 +205,9 @@ class Heading:
     set_at: float
     set_by: str
     announced: bool = False
+    selection_budget: int = 0
+    selection_spent: int = 0
+    targets: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -1100,6 +1103,12 @@ class StationState:
 
             candidates = [max(pool, key=_staleness)]
 
+        heading = self.heading
+        if heading is not None and heading.id and heading.selection_budget > heading.selection_spent:
+            heading_candidates = [t for t in candidates if t.heading_id == heading.id]
+            if heading_candidates:
+                candidates = heading_candidates
+
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         weights: list[float] = []
         for track in candidates:
@@ -1132,6 +1141,14 @@ class StationState:
         """Advance state after successfully queuing a music segment."""
         self.played_tracks.append(track)
         self.current_track = track
+        heading = self.heading
+        if (
+            heading is not None
+            and heading.id
+            and track.heading_id == heading.id
+            and heading.selection_budget > heading.selection_spent
+        ):
+            heading.selection_spent += 1
         self.songs_since_banter += 1
         self.songs_since_ad += 1
         self.songs_since_news += 1

@@ -72,6 +72,13 @@ base playlist:
   live pool, tags newly blended tracks with the active `Heading.id`, and bumps
   `playlist_revision` once. A zero-result import returns warm operator copy and
   does not arm narration.
+- `POST /api/direction {"text": "2000s female vocals"}` (also accepted as
+  `/api/heading` with `text`) expands operator text into concrete `{artist,title}`
+  targets, searches yt-dlp metadata, and starts audio downloads in background via
+  the same `_commit_external_download` boundary used by listener/admin external
+  songs. It never pins, purges, or blocks the live queue. Existing matching tracks
+  are retagged immediately; resolved new targets join rotation only if the source
+  revision and active heading still match when the download finishes.
 - `POST /api/heading/clear` is manual Back to auto. It clears `StationState.heading`
   and deletes `cache/heading.json`; already blended tracks remain in rotation and
   age out naturally. There is no purge and no audio interruption.
@@ -80,23 +87,28 @@ base playlist:
   loaded base.
 
 `cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
-corrupt/missing tolerant and return no heading rather than failing boot. After the
-startup base playlist is fetched and blocklisted, startup re-fetches the persisted
-heading seed, re-tags matching tracks, and blends any new heading tracks into the
-pool. If that boot fetch fails, returns no playable tracks, or adds no new tracks
-after dedupe, startup deletes `heading.json` and continues in auto mode.
+corrupt/missing tolerant and return no heading rather than failing boot. Seed
+headings persist the seed; text directions persist concrete targets plus the
+selection budget. After the startup base playlist is fetched and blocklisted,
+startup re-fetches the seed source or re-searches the persisted targets, re-tags
+matching tracks, and blends any new heading tracks into the pool. If that boot
+fetch/search fails, returns no playable tracks, or adds no new tracks after dedupe,
+startup deletes `heading.json` and continues in auto mode.
 
-Narration is selection-driven, not button-driven. `StationState.select_next_track()`
-arms `heading_pending_announcement` only when the producer accepts a track tagged
-with the active heading id for airing. The next host break consumes that dedicated
-slot at prompt-build into a mood-noticing block; it does not reuse or overwrite
-`ha_pending_directive`. The host observes that someone asked for, or is in the mood
-for, the selected era rather than claiming the station is currently playing it or
-returning there. Because the line asserts a request, not present playlist state, it
-is intentionally allowed to air even if Back to auto or another heading lands while
-the banter is rendering. Consuming the notice marks `heading.announced` and persists
-that flag best-effort so restarts do not redundantly re-notice. The music turn
-always remains best-effort and never blocks or delays audio.
+Narration and stickiness are selection-driven, not button-driven.
+`StationState.select_next_track()` first applies the normal diversity filters and
+then, while the active heading has remaining budget, prefers eligible tracks tagged
+with that heading id. If no tagged track is eligible, the existing fallback ladder
+still returns normal music. `heading_pending_announcement` is armed only when the
+producer accepts a tagged track for airing. The next host break consumes that
+dedicated slot at prompt-build into a mood-noticing block; it does not reuse or
+overwrite `ha_pending_directive`. The host observes that someone asked for, or is
+in the mood for, the selected direction rather than claiming the station is
+currently playing it. Because the line asserts a request, not present playlist
+state, it is intentionally allowed to air even if Back to auto or another heading
+lands while the banter is rendering. Consuming the notice marks `heading.announced`
+and persists that flag best-effort so restarts do not redundantly re-notice. The
+music turn always remains best-effort and never blocks or delays audio.
 
 ## Segment production
 
@@ -553,6 +565,9 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` |
 | `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
+| `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
+| `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
+| `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |

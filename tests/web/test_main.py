@@ -1619,6 +1619,49 @@ async def test_startup_clears_heading_when_restore_yields_no_tracks(tmp_path: Pa
     assert app.state.station_state.heading is None
 
 
+@pytest.mark.asyncio
+async def test_startup_restores_direction_heading_targets(tmp_path: Path):
+    """A persisted text direction rehydrates from concrete targets, not an era source URL."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://2000s female vocals",
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    base_tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+    direction_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(base_tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.resolve_direction_tracks_sync", return_value=[direction_track]) as resolve_direction,
+        patch(f"{MODULE}.load_explicit_source") as load_explicit,
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    resolve_direction.assert_called_once()
+    load_explicit.assert_not_called()
+    m_clear.assert_not_called()
+    state = app.state.station_state
+    assert state.heading == heading
+    assert state.heading.selection_budget == 1
+    assert state.playlist[0].heading_id == heading.id
+    assert state.playlist[0].title == "Toxic"
+
+
 def test_clear_persisted_heading_swallows_oserror():
     """_clear_persisted_heading never raises into startup when the unlink fails."""
     from mammamiradio.main import _clear_persisted_heading

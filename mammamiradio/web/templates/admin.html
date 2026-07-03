@@ -345,6 +345,9 @@ body[data-stopped="true"] .btn-util {
 
 /* ── PLAYLIST / SEARCH ── */
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
+.direction-row .quick-add-label { flex-shrink: 0; }
+.direction-row .search-input { min-width: 220px; min-height: 36px; padding: 7px 12px; font-size: 14px; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -1103,8 +1106,8 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-content { padding: 16px 16px; }
   .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
   .lg-row .ts { font-size: 9px; }
-  .search-row { flex-direction: column; }
-  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row, .direction-row { flex-direction: column; align-items: stretch; }
+  .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
   /* 481-768px = two-pane desktop column. Keep action buttons on the track
@@ -1750,6 +1753,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
           <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
+        </div>
+        <div class="direction-row" id="directionControls">
+          <label class="quick-add-label" for="directionInput">Direction:</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Music direction" onkeydown="if(event.key==='Enter')setDirectionText(document.getElementById('directionBtn'))">
+          <button type="button" class="btn btn-chip" id="directionBtn" onclick="setDirectionText(this)">Steer</button>
         </div>
         <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
           <span>Course: <b>Auto rotation</b></span>
@@ -3179,6 +3187,29 @@ async function setHeading(kind,el){
   }
   toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
   await refreshFast();
+}
+async function setDirectionText(el){
+  const input=document.getElementById('directionInput');
+  const text=(input?.value||'').trim();
+  if(!text){toast('Type a direction and try again.');return;}
+  flash(el);
+  if(el){el.classList.add('loading');el.textContent='Steering...';}
+  try{
+    const r=await api('POST','/api/direction',{text});
+    if(!r.ok){
+      toast(r.message||wayOut('shape that set'));
+      return;
+    }
+    const label=r.heading?.label||text;
+    const count=Number(r.retagged_existing||0)+Number(r.queued_downloads||0);
+    toast(r.idempotent?`${label} is already steering.`:`${label} is steering${count?` (${count} songs)`:''}.`);
+    if(input)input.value='';
+    await refreshFast();
+  }catch(_){
+    toast(offlineMsg());
+  }finally{
+    if(el){el.classList.remove('loading');el.textContent='Steer';}
+  }
 }
 async function clearHeading(el){
   flash(el);

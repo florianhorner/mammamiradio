@@ -23,6 +23,7 @@ from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
+from mammamiradio.playlist.direction import resolve_direction_tracks_sync, target_dicts_to_targets
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
@@ -297,10 +298,14 @@ async def startup():
     persisted_heading = read_persisted_heading(config.cache_dir)
     if persisted_heading is not None:
         try:
-            heading_tracks, _heading_source = load_explicit_source(
-                config,
-                PlaylistSource(kind="url", url=persisted_heading.seed),
-            )
+            if persisted_heading.targets:
+                heading_targets = target_dicts_to_targets(persisted_heading.targets)
+                heading_tracks = resolve_direction_tracks_sync(heading_targets)
+            else:
+                heading_tracks, _heading_source = load_explicit_source(
+                    config,
+                    PlaylistSource(kind="url", url=persisted_heading.seed),
+                )
             heading_tracks = filter_blocklisted(heading_tracks, blocklist)
         except Exception as exc:
             logger.warning("Persisted heading restore failed; returning to auto: %s", exc)
@@ -326,6 +331,8 @@ async def startup():
                     _clear_persisted_heading(config)
                     persisted_heading = None
                 else:
+                    if persisted_heading.selection_budget <= 0:
+                        persisted_heading.selection_budget = min(5, len(blended_heading_tracks))
                     tracks = blended_heading_tracks[:5] + tracks + blended_heading_tracks[5:]
                     logger.info(
                         "Restored heading %s with %d fetched track(s), %d blended",

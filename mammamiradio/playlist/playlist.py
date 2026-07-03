@@ -616,6 +616,16 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
         label = str(payload.get("label", "")).strip()
         if not heading_id or not seed or not label:
             return None
+        targets: list[dict[str, str]] = []
+        raw_targets = payload.get("targets", [])
+        if isinstance(raw_targets, list):
+            for raw_target in raw_targets:
+                if not isinstance(raw_target, dict):
+                    continue
+                artist = str(raw_target.get("artist", "")).strip()
+                title = str(raw_target.get("title", "")).strip()
+                if artist and title:
+                    targets.append({"artist": artist, "title": title})
         return Heading(
             id=heading_id,
             seed=seed,
@@ -623,6 +633,9 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
             set_at=float(payload.get("set_at", 0.0) or 0.0),
             set_by=str(payload.get("set_by", "")),
             announced=bool(payload.get("announced", False)),
+            selection_budget=max(0, int(payload.get("selection_budget", 0) or 0)),
+            selection_spent=max(0, int(payload.get("selection_spent", 0) or 0)),
+            targets=targets,
         )
     except (TypeError, ValueError):
         logger.warning("Persisted heading has invalid fields: %s", path)
@@ -639,6 +652,13 @@ def write_persisted_heading(cache_dir: Path, heading: Heading) -> None:
         "set_at": heading.set_at,
         "set_by": heading.set_by,
         "announced": heading.announced,
+        "selection_budget": max(0, int(heading.selection_budget or 0)),
+        "selection_spent": max(0, int(heading.selection_spent or 0)),
+        "targets": [
+            {"artist": str(target.get("artist", "")).strip(), "title": str(target.get("title", "")).strip()}
+            for target in heading.targets
+            if str(target.get("artist", "")).strip() and str(target.get("title", "")).strip()
+        ],
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))

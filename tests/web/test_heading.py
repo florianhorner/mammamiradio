@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.playlist.direction import DirectionExpansion, DirectionTarget
 from mammamiradio.playlist.playlist import read_persisted_heading, write_persisted_heading
 from mammamiradio.web.streamer import LiveStreamHub, router
 
@@ -249,3 +250,90 @@ async def test_heading_malformed_body_returns_422_not_500(tmp_path):
         assert body["error"]  # a human message with a way out
     # a malformed request must not arm a heading
     assert app.state.station_state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_direction_sets_existing_track_heading_and_persists(tmp_path):
+    existing = _track("Toxic", "Britney Spears", "base")
+    app = _make_app(tmp_path, tracks=[existing])
+    app.state.config.allow_ytdlp = False
+    expansion = DirectionExpansion(
+        label="2000s female vocals",
+        targets=[DirectionTarget("Britney Spears", "Toxic")],
+        source="llm",
+    )
+
+    with patch("mammamiradio.web.streamer.expand_direction", return_value=expansion):
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "2000s female vocals"})
+            status = await client.get("/status")
+
+    body = resp.json()
+    state = app.state.station_state
+    assert resp.status_code == 200
+    assert body["ok"] is True
+    assert body["retagged_existing"] == 1
+    assert body["queued_downloads"] == 0
+    assert state.heading is not None
+    assert existing.heading_id == state.heading.id
+    assert state.heading.selection_budget == 1
+    assert state.heading.targets == [{"artist": "Britney Spears", "title": "Toxic"}]
+    assert read_persisted_heading(tmp_path) == state.heading
+    assert status.json()["heading"]["label"] == "2000s female vocals"
+    assert status.json()["heading"]["selection_remaining"] == 1
+
+
+@pytest.mark.asyncio
+async def test_direction_queues_resolved_targets_without_pin(tmp_path):
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    expansion = DirectionExpansion(
+        label="Sunday morning Italian",
+        targets=[DirectionTarget("Lucio Battisti", "Il mio canto libero")],
+        source="curated",
+    )
+    meta = {
+        "title": "Il mio canto libero",
+        "artist": "Lucio Battisti",
+        "duration_ms": 180_000,
+        "youtube_id": "abc12345678",
+        "album_art": "https://img.example/battisti.jpg",
+    }
+
+    with (
+        patch("mammamiradio.web.streamer.expand_direction", return_value=expansion),
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[meta]),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "sunday morning italian"})
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    body = resp.json()
+    state = app.state.station_state
+    assert body["ok"] is True
+    assert body["queued_downloads"] == 1
+    assert state.pinned_track is None
+    assert state.force_next is None
+    assert state.heading is not None
+    direction_tracks = [track for track in state.playlist if track.heading_id == state.heading.id]
+    assert [(track.artist, track.title) for track in direction_tracks] == [("Lucio Battisti", "Il mio canto libero")]
+
+
+@pytest.mark.asyncio
+async def test_direction_empty_text_returns_422_without_state(tmp_path):
+    app = _make_app(tmp_path)
+
+    async with _client(app) as client:
+        resp = await client.post("/api/direction", json={"text": "   "})
+
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert app.state.station_state.heading is None
+    assert read_persisted_heading(tmp_path) is None

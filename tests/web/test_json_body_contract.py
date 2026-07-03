@@ -170,6 +170,7 @@ JSON_BODY_WRITE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/playlist/move"),
     ("POST", "/api/playlist/add-external"),
     ("POST", "/api/playlist/add"),
+    ("POST", "/api/direction"),
     ("POST", "/api/heading"),
     ("POST", "/api/playlist/enrich"),
     ("POST", "/api/playlist/load"),
