@@ -47,6 +47,12 @@ _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 _ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
 
+PACING_BOUNDS: dict[str, tuple[int, int]] = {
+    "songs_between_banter": (2, 60),
+    "songs_between_ads": (1, 60),
+    "ad_spots_per_break": (1, 5),
+}
+
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
 # fallbacks) references this so the name cannot drift the way "Radio MammaMia",
@@ -116,7 +122,7 @@ class PacingSection:
 
     songs_between_banter: int = 2
     songs_between_ads: int = 4
-    ad_spots_per_break: int = 1
+    ad_spots_per_break: int = 2
     lookahead_segments: int = 4
 
 
@@ -946,6 +952,20 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
+    # Pacing (mirrors the toggles above): map persisted /data/options.json values
+    # to env for the non-run.sh add-on boot path. run.sh normally exports these
+    # first, and the `not os.getenv` guard keeps that export authoritative; the
+    # load-time override loop clamps to range, so no clamp is needed here. bool is
+    # excluded because it is an int subclass.
+    for opt_key, env_key in (
+        ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+        ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+        ("ad_spots_per_break", "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ):
+        pv = options.get(opt_key)
+        if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
+            os.environ[env_key] = str(pv)
+
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
@@ -1174,20 +1194,14 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
-    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
-    # config-load and the admin runtime path enforce the same valid range.
-    if config.pacing.songs_between_banter < 2:
-        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
-    if config.pacing.songs_between_banter > 60:
-        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
-    if config.pacing.songs_between_ads < 1:
-        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
-    if config.pacing.songs_between_ads > 60:
-        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
-    if config.pacing.ad_spots_per_break < 1:
-        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
-    if config.pacing.ad_spots_per_break > 5:
-        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
+    # Bounds are shared with env-load clamping and PATCH /api/pacing so the
+    # accepted range cannot drift between boot and live admin changes.
+    for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
+        _value = getattr(config.pacing, _pacing_attr)
+        if _value < _lo:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be >= {_lo}"))
+        if _value > _hi:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
     if config.pacing.lookahead_segments < 1:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
@@ -1550,6 +1564,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
     if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
         config.ledger_retention_days = int(_ledger_retention)
+
+    # Env overrides for pacing (HA addon pacing options -> MAMMAMIRADIO_PACING_*
+    # via run.sh; also the admin slider persistence path writing standalone .env).
+    # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
+    # stale or hand-edited env can never brick boot — audio continuity wins over a
+    # strict reject (INSTANT AUDIO).
+    for _pacing_env, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "ad_spots_per_break"),
+    ):
+        _pacing_raw = os.getenv(_pacing_env, "").strip()
+        if not _pacing_raw:
+            continue
+        try:
+            _pacing_val = int(_pacing_raw)
+        except ValueError:
+            continue
+        _lo, _hi = PACING_BOUNDS[_pacing_attr]
+        setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
 
     # Quality dial: pick the active model profile (premium|balanced|economy).
     # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its

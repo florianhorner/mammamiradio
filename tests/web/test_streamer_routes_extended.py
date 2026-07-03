@@ -30,6 +30,21 @@ def _basic_auth_header(username: str = "admin", password: str = "secret") -> dic
     return {"Authorization": f"Basic {token}"}
 
 
+@pytest.fixture(autouse=True)
+def _no_real_dotenv_writes():
+    """Keep route tests off the developer's real .env.
+
+    The pacing clamp/mutation tests run standalone (is_addon=False), so a valid
+    PATCH now reaches ``_save_dotenv`` and would write a real .env. No-op it by
+    default. Tests that assert ON persistence (the pacing-persistence tests, the
+    credentials tests) nest their own ``with patch(...)`` which shadows this.
+    Only ``_save_dotenv`` is guarded — ``_save_addon_option`` is left real so the
+    add-on-mode tests that exercise its file write still work.
+    """
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        yield
+
+
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -3347,6 +3362,117 @@ async def test_patch_pacing_rejects_invalid_json_without_mutating_config(content
     assert app.state.config.pacing.ad_spots_per_break == 3
 
 
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_standalone_all_keys_atomically():
+    """Standalone: a full save writes every present key in ONE _save_dotenv call."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/pacing",
+                json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+            )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    save_dotenv.assert_called_once_with(
+        {
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER": "3",
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS": "6",
+            "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK": "2",
+        }
+    )
+    assert app.state.config.pacing.songs_between_banter == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_addon_one_atomic_batch_write():
+    """Addon: pacing persists to /data/options.json via ONE batch write, not .env.
+
+    The single grouped write is what prevents partial-persist drift — three
+    single-key writes could half-update options.json if one failed midway.
+    """
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option_batch") as save_batch,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/pacing",
+                json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+            )
+    assert resp.status_code == 200
+    save_batch.assert_called_once_with({"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2})
+    save_dotenv.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_only_present_keys():
+    """A partial save persists only the field(s) sent, not the untouched ones."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_ads": 8})
+    assert resp.status_code == 200
+    save_dotenv.assert_called_once_with({"MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS": "8"})
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_clamped_value_not_raw():
+    """An out-of-range input persists the CLAMPED value, so the saved value and the
+    live value are always identical — they can't drift on a bad input."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 0, "ad_spots_per_break": 99})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_banter"] == 2
+    assert resp.json()["ad_spots_per_break"] == 5
+    # The PERSISTED value is the clamped one, not the raw 0 / 99.
+    save_dotenv.assert_called_once_with(
+        {
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER": "2",
+            "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK": "5",
+        }
+    )
+    assert app.state.config.pacing.songs_between_banter == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persist_failure_standalone_leaves_live_untouched():
+    """Standalone persist failure -> 500 and live config unchanged (persist-first).
+
+    A failed write must not move the live value, so it can never disagree with
+    what survives the restart.
+    """
+    app = _make_test_app(is_addon=False)
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 9})
+    assert resp.status_code == 500
+    assert resp.json()["ok"] is False
+    assert app.state.config.pacing.songs_between_banter == 4
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persist_failure_addon_leaves_live_untouched():
+    """Addon persist failure -> 500 and live config unchanged (no options.json drift)."""
+    app = _make_test_app(is_addon=True)
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_addon_option_batch", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"ad_spots_per_break": 5})
+    assert resp.status_code == 500
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
 # ---------------------------------------------------------------------------
 # Credentials endpoint
 # ---------------------------------------------------------------------------
@@ -3645,6 +3771,30 @@ def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
 
     options = _json.loads(options_file.read_text())
     assert options == {"super_italian_mode": True}
+
+
+def test_save_addon_option_batch_preserves_other_keys_and_writes_all(tmp_path):
+    """The atomic batch write lands every pacing key in one pass AND leaves
+    unrelated options intact — the property that prevents partial-persist drift.
+    (The route test mocks the helper, so this is the only check of the real write.)"""
+    from mammamiradio.web.persistence import _save_addon_option_batch
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text('{"super_italian_mode": true, "quality_profile": "premium"}')
+
+    with patch("mammamiradio.web.persistence.Path") as mock_path:
+        mock_path.return_value = options_file
+        _save_addon_option_batch({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3})
+
+    import json as _json
+
+    options = _json.loads(options_file.read_text())
+    assert options["songs_between_banter"] == 5
+    assert options["songs_between_ads"] == 9
+    assert options["ad_spots_per_break"] == 3
+    # Pre-existing unrelated options survived the write.
+    assert options["super_italian_mode"] is True
+    assert options["quality_profile"] == "premium"
 
 
 # ---------------------------------------------------------------------------

@@ -762,6 +762,74 @@ def test_apply_addon_options_super_italian_preset_env_wins(monkeypatch, tmp_path
         os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
 
 
+def test_pacing_env_override_applies(monkeypatch):
+    """MAMMAMIRADIO_PACING_* env values set config.pacing at load (the addon
+    run.sh export path and the standalone .env slider-persist path)."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "5")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "9")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "3")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == 5
+    assert config.pacing.songs_between_ads == 9
+    assert config.pacing.ad_spots_per_break == 3
+
+
+def test_pacing_env_override_wins_over_toml(monkeypatch):
+    """The persisted pacing env overrides whatever radio.toml [pacing] set —
+    this is what makes a slider save survive a restart."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    baseline = load_config(str(toml_path)).pacing.songs_between_banter
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", str(baseline + 3))
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == baseline + 3
+
+
+def test_pacing_env_override_clamps_out_of_range(monkeypatch):
+    """An out-of-range persisted env is clamped, never brick-boots (INSTANT AUDIO)."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "9999")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "0")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == 60
+    assert config.pacing.ad_spots_per_break == 1
+
+
+def test_pacing_env_override_ignores_non_int(monkeypatch):
+    """A non-integer pacing env is ignored, falling back to the toml/default value."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    baseline = load_config(str(toml_path)).pacing.songs_between_ads
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "not-a-number")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_ads == baseline
+
+
+def test_apply_addon_options_maps_pacing(monkeypatch, tmp_path):
+    """/data/options.json pacing reaches env via _apply_addon_options (the
+    non-run.sh add-on boot path), consistent with the other toggle keys."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3}))
+    keys = (
+        "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER",
+        "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS",
+        "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK",
+    )
+    for k in keys:
+        monkeypatch.delenv(k, raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ["MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"] == "5"
+        assert os.environ["MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"] == "9"
+        assert os.environ["MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"] == "3"
+    finally:
+        for k in keys:
+            os.environ.pop(k, None)
+
+
 def test_apply_addon_options_no_override(monkeypatch, tmp_path):
     """Existing env vars should not be overridden by options.json."""
     options = {"anthropic_api_key": "from_options"}
