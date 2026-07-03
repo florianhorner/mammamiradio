@@ -242,6 +242,24 @@ def test_parser_skips_empty_keys():
     assert "OPENAI_API_KEY" not in exports
 
 
+def test_parser_hidden_optional_keys_can_be_absent_or_blank():
+    """Schema-only legacy fields must be quiet when unset, but still export when explicitly saved."""
+    hidden_optional_env = {
+        "jamendo_client_id": "JAMENDO_CLIENT_ID",
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "openai_api_key": "OPENAI_API_KEY",
+        "azure_speech_key": "AZURE_SPEECH_KEY",
+        "azure_speech_region": "AZURE_SPEECH_REGION",
+        "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+    }
+    for options in ({}, dict.fromkeys(hidden_optional_env, "")):
+        rc, stdout, _ = _run_parser(options)
+        assert rc == 0
+        exports = _parse_exports(stdout)
+        for env_key in hidden_optional_env.values():
+            assert env_key not in exports
+
+
 def test_parser_ha_enabled_json_true():
     """JSON boolean true must produce 'export HA_ENABLED=true' — not crash with NameError."""
     rc, stdout, stderr = _run_parser({"enable_home_assistant": True})
@@ -374,6 +392,33 @@ def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
         assert re.search(r"(?m)^  ha_media_player_push: true$", body), (
             f"{config} must default new installs to On so an add-on-only setup gets a media_player tile out of the box"
         )
+
+
+def test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visible():
+    hidden_optional = (
+        "jamendo_client_id",
+        "anthropic_api_key",
+        "openai_api_key",
+        "azure_speech_key",
+        "azure_speech_region",
+        "elevenlabs_api_key",
+    )
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        body = config.read_text()
+        options_block = re.search(r"(?ms)^options:\n(.*?)(?=^schema:)", body)
+        schema_block = re.search(r"(?ms)^schema:\n(.*)", body)
+        assert options_block, f"{config} must define options"
+        assert schema_block, f"{config} must define schema"
+        assert re.search(r"(?m)^  admin_token: \"\"$", options_block.group(1)), (
+            f"{config} must keep admin_token visible because blank means trusting the LAN"
+        )
+        for key in hidden_optional:
+            assert not re.search(rf"(?m)^  {key}:", options_block.group(1)), (
+                f"{config} should hide {key} behind HA's unused optional fields disclosure"
+            )
+            assert re.search(rf"(?m)^  {key}: .*\?$", schema_block.group(1)), (
+                f"{config} must keep {key} as an optional schema key"
+            )
 
 
 def test_parser_corrupt_json_still_reads_secrets_env():

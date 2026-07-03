@@ -11,6 +11,7 @@
 
 ### Changed
 
+- **The Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. Jamendo and legacy provider-key fields move behind Home Assistant's optional configuration disclosure for new installs and installs where those saved keys are absent; existing installs that already saved blank legacy fields may still show them until those saved options are cleared.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 - **Banter is shorter by default.** Hosts keep most breaks to a quick beat between songs, saving longer breaks for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode.
 
