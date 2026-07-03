@@ -16,14 +16,18 @@ catch both parse errors AND wrong output — without needing a shell or Docker.
 
 from __future__ import annotations
 
+import http.server
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 from pathlib import Path
+from typing import ClassVar
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SH = REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh"
@@ -31,7 +35,12 @@ STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
 EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
-def _extract_python_snippet(options_file: Path, provider_file: Path | None = None) -> str:
+def _extract_python_snippet(
+    options_file: Path,
+    provider_file: Path | None = None,
+    supervisor_api: str = "http://127.0.0.1:1",
+    recovery_marker: Path | None = None,
+) -> str:
     """Extract the Python body from the python3 -c "..." block in run.sh,
     substituting the real options and secrets file paths."""
     src = RUN_SH.read_text()
@@ -39,28 +48,60 @@ def _extract_python_snippet(options_file: Path, provider_file: Path | None = Non
     blocks = re.findall(r'python3 -c "\n(.*?)\n" 2>', src, re.DOTALL)
     assert len(blocks) == 1, "run.sh must keep one merged python3 -c parser block"
     raw = blocks[0]
-    # The shell uses $OPTIONS_FILE and $SECRETS_FILE inside the script — substitute them
+    # The shell uses $OPTIONS_FILE, $SECRETS_FILE, $SUPERVISOR_API, and
+    # $RECOVERY_MARKER_FILE inside the script — substitute them. The default
+    # API target is a closed local port so a test that accidentally reaches
+    # recovery fails fast and soft. The default marker path lives beside
+    # options.json and does not exist by default, so recovery is attempted
+    # unless a test deliberately points at a pre-existing marker.
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
     provider_path = provider_file or (options_file.parent / "missing-secrets.env")
     raw = raw.replace("$SECRETS_FILE", str(provider_path))
+    raw = raw.replace("$SUPERVISOR_API", supervisor_api)
+    marker_path = recovery_marker or (options_file.parent / "recovery-marker-not-set")
+    raw = raw.replace("$RECOVERY_MARKER_FILE", str(marker_path))
     # Shell escapes single-quotes as '\'' inside double-quoted strings; undo that
     raw = raw.replace("\\'", "'")
     return textwrap.dedent(raw)
 
 
-def _run_parser(options: dict, provider_env_text: str | None = None) -> tuple[int, str, str]:
+def _scrubbed_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Subprocess env with Supervisor tokens removed so ambient credentials on a
+    dev machine can never flip the parser into its recovery path mid-test."""
+    env = {k: v for k, v in os.environ.items() if k not in ("SUPERVISOR_TOKEN", "HASSIO_TOKEN")}
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _run_parser(
+    options: dict,
+    provider_env_text: str | None = None,
+    *,
+    supervisor_api: str | None = None,
+    env: dict[str, str] | None = None,
+    keep_dir: Path | None = None,
+    recovery_marker: Path | None = None,
+) -> tuple[int, str, str]:
     """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
     with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir) / "options.json"
-        provider_path = Path(tmp_dir) / "secrets.env"
+        base = keep_dir or Path(tmp_dir)
+        tmp_path = base / "options.json"
+        provider_path = base / "secrets.env"
         tmp_path.write_text(json.dumps(options))
         if provider_env_text is not None:
             _write_provider_fixture(provider_path, provider_env_text)
-        snippet = _extract_python_snippet(tmp_path, provider_path)
+        snippet = _extract_python_snippet(
+            tmp_path,
+            provider_path,
+            supervisor_api=supervisor_api or "http://127.0.0.1:1",
+            recovery_marker=recovery_marker,
+        )
         result = subprocess.run(
             [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
+            env=_scrubbed_env(env),
         )
         return result.returncode, result.stdout, result.stderr
 
@@ -395,8 +436,13 @@ def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
 
 
 def test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visible():
-    hidden_optional = (
-        "jamendo_client_id",
+    # jamendo_client_id stays a real, settable schema-only field (hidden behind
+    # HA's disclosure, not a secret leak concern). The five provider keys are
+    # fully removed from schema (see test_addon_schema_has_no_provider_secret_fields
+    # in test_repo_scripts.py) — a schema-only field is still a valid Supervisor
+    # option, so hiding it from the UI would not have closed the #688 leak.
+    hidden_optional = ("jamendo_client_id",)
+    removed_entirely = (
         "anthropic_api_key",
         "openai_api_key",
         "azure_speech_key",
@@ -418,6 +464,12 @@ def test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visib
             )
             assert re.search(rf"(?m)^  {key}: .*\?$", schema_block.group(1)), (
                 f"{config} must keep {key} as an optional schema key"
+            )
+        for key in removed_entirely:
+            assert not re.search(rf"(?m)^  {key}:", options_block.group(1)), f"{config} must not have {key} in options"
+            assert not re.search(rf"(?m)^  {key}:", schema_block.group(1)), (
+                f"{config} must not have {key} in schema at all — a schema-only "
+                "field is still a settable, persisted Supervisor option"
             )
 
 
@@ -455,3 +507,168 @@ def test_parser_no_double_quotes_in_fstring_shell_context():
         "shell double-quoted string mangle the Python code (NameError: true). "
         'Use: ha_val = ...; print("export HA_ENABLED=" + ha_val)'
     )
+
+
+# ---------------------------------------------------------------------------
+# Supervisor-store recovery (legacy provider keys after the schema removal)
+# ---------------------------------------------------------------------------
+
+
+class _SupervisorStub(http.server.BaseHTTPRequestHandler):
+    """Minimal /addons/self/info endpoint returning canned stored options."""
+
+    stored_options: ClassVar[dict] = {}
+    seen_auth: ClassVar[list[str]] = []
+
+    def do_GET(self):
+        type(self).seen_auth.append(self.headers.get("Authorization", ""))
+        body = json.dumps({"result": "ok", "data": {"options": type(self).stored_options}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):  # silence request logging
+        pass
+
+
+def _with_supervisor_stub(stored_options: dict):
+    server = http.server.HTTPServer(("127.0.0.1", 0), _SupervisorStub)
+    _SupervisorStub.stored_options = stored_options
+    _SupervisorStub.seen_auth = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_parser_recovers_legacy_keys_from_supervisor_store_and_persists():
+    """Supervisor strips schema-removed keys from options.json on start; the
+    parser must recover them from the Supervisor API and persist to secrets.env."""
+    server, api = _with_supervisor_stub(
+        {
+            "anthropic_api_key": "sk-ant-store",
+            "openai_api_key": "sk-oai-store",
+            "azure_speech_key": "az-store",
+            "azure_speech_region": "westeurope",
+            "elevenlabs_api_key": "el-store",
+            "station_name": "X",
+        }
+    )
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            rc, stdout, _ = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+            )
+            assert rc == 0
+            exports = _parse_exports(stdout)
+            assert exports["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert exports["OPENAI_API_KEY"] == "sk-oai-store"
+            assert exports["AZURE_SPEECH_KEY"] == "az-store"
+            assert exports["AZURE_SPEECH_REGION"] == "westeurope"
+            assert exports["ELEVENLABS_API_KEY"] == "el-store"
+            assert _SupervisorStub.seen_auth == ["Bearer tok-123"]
+            secrets_path = base / "secrets.env"
+            assert secrets_path.exists(), "recovered keys must be persisted to secrets.env"
+            assert (secrets_path.stat().st_mode & 0o777) == 0o600
+            persisted = secrets_path.read_text()
+            assert "ANTHROPIC_API_KEY=sk-ant-store" in persisted
+            assert "ELEVENLABS_API_KEY=el-store" in persisted
+            # Second boot: every key is now file-backed, so no API call is
+            # made at all (the default API target is a closed port — a call
+            # would surface as a warning).
+            rc2, stdout2, _ = _run_parser(
+                {"station_name": "X"},
+                persisted,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+            )
+            assert rc2 == 0
+            exports2 = _parse_exports(stdout2)
+            assert exports2["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert exports2["ELEVENLABS_API_KEY"] == "el-store"
+            assert "could not check Supervisor" not in stdout2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_secrets_env_wins_over_supervisor_store():
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-stale-store"})
+    try:
+        rc, stdout, _ = _run_parser(
+            {},
+            "ANTHROPIC_API_KEY=sk-ant-file\n",
+            supervisor_api=api,
+            env={"SUPERVISOR_TOKEN": "tok-123"},
+        )
+        assert rc == 0
+        assert _parse_exports(stdout)["ANTHROPIC_API_KEY"] == "sk-ant-file"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_recovery_skipped_without_supervisor_token():
+    """No token (standalone-ish runs, tests) means no API call at all."""
+    rc, stdout, _ = _run_parser({"station_name": "X"})
+    assert rc == 0
+    assert "could not check Supervisor" not in stdout
+    assert "ANTHROPIC_API_KEY" not in stdout
+
+
+def test_parser_recovery_failure_is_soft():
+    """Unreachable Supervisor API degrades to a warning, never a boot failure."""
+    rc, stdout, _ = _run_parser(
+        {"station_name": "X"},
+        env={"SUPERVISOR_TOKEN": "tok-123"},
+    )
+    assert rc == 0
+    assert "could not check Supervisor for legacy provider keys" in stdout
+    exports = _parse_exports(stdout)
+    assert exports.get("STATION_NAME") == "X", "options must still export after recovery failure"
+
+
+def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
+    """A successful Supervisor check must not repeat on later boots, even if
+    some keys stay unrecovered (genuinely never configured) — otherwise every
+    boot of an install missing one provider pays the Supervisor round trip
+    forever. A failed/unreachable check must NOT set the marker (covered by
+    test_parser_recovery_failure_is_soft implicitly retrying)."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            marker = base / "recovery-marker"
+            rc, stdout, _ = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+            assert rc == 0
+            assert _parse_exports(stdout)["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert marker.exists(), "a successful Supervisor check must write the marker"
+            assert len(_SupervisorStub.seen_auth) == 1
+
+            # Second boot: openai/azure/elevenlabs are still missing (never in
+            # the store), so without the marker this would hit Supervisor
+            # again. The live stub is still running and would answer — proves
+            # the skip is the marker, not an unreachable server.
+            rc2, stdout2, _ = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+            assert rc2 == 0
+            assert "could not check Supervisor" not in stdout2
+            assert len(_SupervisorStub.seen_auth) == 1, "second boot must not re-hit Supervisor"
+    finally:
+        server.shutdown()
+        server.server_close()

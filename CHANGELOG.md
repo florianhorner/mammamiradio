@@ -18,7 +18,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
-- **The Home Assistant add-on Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. Jamendo and legacy provider-key fields move behind Home Assistant's own optional configuration disclosure for new installs and installs where those saved keys are absent; existing installs that already saved blank legacy fields may still show them until those saved options are cleared.
+- **The Home Assistant add-on Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. The Jamendo client ID moves behind Home Assistant's own optional configuration disclosure for new installs and installs where the saved key is absent; existing installs that already saved a blank value may still show it until that saved option is cleared.
 - **Scaletta is now the first tab in the admin panel.** The live queue opens by default — Diretta (pacing controls) moves one position right.
 - **Banter is shorter by default.** Hosts now keep most breaks to a quick beat between songs instead of talking at length every time. Longer breaks are saved for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode — so the occasional long break lands as "this one mattered".
 - **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Clear pool) moves to a separate Pool row below.
@@ -40,8 +40,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Security
 
+- **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-- **Home Assistant add-on provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
 
 ## [2.14.1] - 2026-06-21
 

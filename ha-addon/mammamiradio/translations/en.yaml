@@ -41,18 +41,3 @@ configuration:
   jamendo_client_id:
     name: Jamendo Client ID (Advanced)
     description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
-  anthropic_api_key:
-    name: Anthropic API Key (Advanced)
-    description: "Legacy fallback field. Prefer ANTHROPIC_API_KEY in /config/secrets.env; non-empty file values win. Unlocks Claude AI hosts for generated banter and ads."
-  openai_api_key:
-    name: OpenAI API Key (Advanced)
-    description: "Legacy fallback field. Prefer OPENAI_API_KEY in /config/secrets.env; non-empty file values win. Enables OpenAI host voices and script fallback."
-  azure_speech_key:
-    name: Azure Speech Key (Advanced)
-    description: "Legacy fallback field. Prefer AZURE_SPEECH_KEY in /config/secrets.env; non-empty file values win. Enables official Azure Speech voices with Azure Speech Region."
-  azure_speech_region:
-    name: Azure Speech Region (Advanced)
-    description: "Legacy fallback field. Prefer AZURE_SPEECH_REGION in /config/secrets.env; non-empty file values win. Azure Speech resource region, such as westeurope or eastus."
-  elevenlabs_api_key:
-    name: ElevenLabs API Key (Advanced)
-    description: "Legacy fallback field. Prefer ELEVENLABS_API_KEY in /config/secrets.env; non-empty file values win. Enables custom ElevenLabs character voices."
