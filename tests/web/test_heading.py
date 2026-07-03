@@ -464,3 +464,107 @@ async def test_direction_empty_text_returns_422_without_state(tmp_path):
     assert resp.json()["ok"] is False
     assert app.state.station_state.heading is None
     assert read_persisted_heading(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path):
+    """Existing match keeps the course live; a failed new download surfaces a notice
+    and is NOT counted as an aired song (added = confirmed only)."""
+    existing = _track("Toxic", "Britney Spears", "base")
+    app = _make_app(tmp_path, tracks=[existing])
+    app.state.config.allow_ytdlp = True
+    expansion = DirectionExpansion(
+        label="2000s pop",
+        targets=[DirectionTarget("Britney Spears", "Toxic"), DirectionTarget("Fergie", "Glamorous")],
+        source="llm",
+    )
+    new_track = _track("Glamorous", "Fergie", "yt", youtube_id="ferg1234567")
+
+    with (
+        patch("mammamiradio.web.streamer.expand_direction", return_value=expansion),
+        patch(
+            "mammamiradio.web.streamer._resolve_direction_tracks_for_route",
+            new_callable=AsyncMock,
+            return_value=[new_track],
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("yt-dlp failed"),
+        ),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "2000s pop"})
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    body = resp.json()
+    state = app.state.station_state
+    assert body["ok"] is True
+    assert body["retagged_existing"] == 1
+    assert body["added"] == 1  # only the confirmed existing track
+    assert body["committed_downloads"] == 0
+    assert body["queued_downloads"] == 1
+    assert body["pending_downloads"] == 1
+    assert state.heading is not None  # course stays live on its existing track
+    assert existing.heading_id == state.heading.id
+    reasons = [n.get("reason") for n in state.external_add_notices]
+    assert "download_failed" in reasons
+
+
+@pytest.mark.asyncio
+async def test_direction_submit_idempotent_even_before_tracks_land(tmp_path):
+    """A duplicate submit while the first course's downloads are still in flight
+    (zero tracks tagged yet) is a no-op, never a second competing course."""
+    app = _make_app(tmp_path, tracks=[_track("Base", "Base Artist", "base")])
+    seed = "direction://2000s female vocals"
+    inflight = Heading(
+        "h-inflight",
+        seed,
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    app.state.station_state.heading = inflight  # active, but nothing tagged yet
+    expansion = DirectionExpansion(
+        label="2000s female vocals",
+        targets=[DirectionTarget("Britney Spears", "Toxic")],
+        source="llm",
+    )
+
+    with patch("mammamiradio.web.streamer.expand_direction", return_value=expansion) as mock_expand:
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "2000s female vocals"})
+
+    body = resp.json()
+    state = app.state.station_state
+    assert body["ok"] is True
+    assert body["idempotent"] is True
+    assert state.heading is inflight  # unchanged — no competing heading created
+    assert state.heading.id == "h-inflight"
+    mock_expand.assert_not_called()  # short-circuits before the expensive expansion
+
+
+def test_serialize_heading_resolving_before_tracks_tagged(tmp_path):
+    """A restored/in-flight text direction reads as `resolving` until a track lands."""
+    from mammamiradio.web.streamer import _serialize_heading
+
+    state = StationState(playlist=[_track("Base", "Base Artist", "base")])
+    heading = Heading(
+        "h1", "direction://x", "X", 1.0, "operator", selection_budget=2, targets=[{"artist": "A", "title": "B"}]
+    )
+    state.heading = heading
+
+    data = _serialize_heading(heading, state)
+    assert data["tagged_count"] == 0
+    assert data["resolving"] is True
+
+    state.playlist[0].heading_id = heading.id
+    data2 = _serialize_heading(heading, state)
+    assert data2["tagged_count"] == 1
+    assert data2["resolving"] is False
+
+    # No state passed -> no resolving/tagged_count fields (back-compat callers).
+    assert "resolving" not in _serialize_heading(heading)

@@ -89,11 +89,20 @@ base playlist:
 `cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
 corrupt/missing tolerant and return no heading rather than failing boot. Seed
 headings persist the seed; text directions persist concrete targets plus the
-selection budget. After the startup base playlist is fetched and blocklisted,
-startup re-fetches the seed source or re-searches the persisted targets, re-tags
-matching tracks, and blends any new heading tracks into the pool. If that boot
-fetch/search fails, returns no playable tracks, or adds no new tracks after dedupe,
-startup deletes `heading.json` and continues in auto mode.
+selection budget. Restore splits by kind to honor INSTANT AUDIO: a **seed** heading
+still restores synchronously during startup (re-fetch the source, re-tag matching
+tracks, blend new ones; on empty/failure it deletes `heading.json` and continues in
+auto). A **text direction** does NOT re-search yt-dlp on the boot path — startup
+re-tags any target already present in the freshly-fetched pool and marks the course
+active immediately, then defers the network target re-search + downloads to a
+background task (`_restore_direction_targets_background`) dispatched *after* the
+producer/playback tasks start, so a slow search can never delay first audio. Until
+that background resolve lands its first track, the course reports `resolving` (the
+admin banner shows "finding songs…"); if the background resolve yields no playable
+track, it clears the heading back to auto and deletes `heading.json`. Persisted-
+heading writes (budget growth as tracks land, spend as they air) are serialized
+under `source_switch_lock` with a fresh identity re-check, so a write racing a "Back
+to auto" can't resurrect a just-cleared course on the next restart.
 
 Narration and stickiness are selection-driven, not button-driven.
 `StationState.select_next_track()` first applies the normal diversity filters and

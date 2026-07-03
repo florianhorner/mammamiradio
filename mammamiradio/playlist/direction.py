@@ -19,6 +19,10 @@ MAX_DIRECTION_TEXT_CHARS = 120
 MAX_DIRECTION_TARGETS = 10
 DEFAULT_DIRECTION_TARGETS = 8
 MIN_DIRECTION_TARGETS = 4
+# Overall wall-clock ceiling for resolving a target set to tracks (concurrent
+# yt-dlp searches). Bounds the background restore so a stalled search can't leave
+# a restored course 'resolving' indefinitely.
+RESOLVE_DIRECTION_TIMEOUT_SECONDS = 45
 
 
 @dataclass(frozen=True)
@@ -290,4 +294,41 @@ def resolve_direction_tracks_sync(
 async def resolve_direction_tracks(
     targets: list[DirectionTarget], *, max_targets: int = DEFAULT_DIRECTION_TARGETS
 ) -> list[Track]:
-    return await asyncio.to_thread(resolve_direction_tracks_sync, targets, max_targets=max_targets)
+    """Resolve targets to tracks concurrently and best-effort, bounded by an overall
+    timeout. Each per-target yt-dlp search runs off the event loop via
+    ``asyncio.to_thread``; used by the post-restart background restore, so it must
+    never hang (a stalled search would leave the course 'resolving' forever)."""
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata
+
+    bounded = targets[: max(1, max_targets)]
+
+    async def _resolve_one(target: DirectionTarget) -> Track | None:
+        try:
+            metadata = await asyncio.to_thread(search_ytdlp_metadata, target.query, 1)
+        except Exception:
+            logger.debug("Direction target search failed for %s", target.query, exc_info=True)
+            return None
+        if not metadata:
+            return None
+        return track_from_direction_search(target, metadata[0])
+
+    try:
+        resolved = await asyncio.wait_for(
+            asyncio.gather(*[_resolve_one(target) for target in bounded], return_exceptions=True),
+            timeout=RESOLVE_DIRECTION_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.warning("Direction target resolution timed out/failed", exc_info=True)
+        return []
+
+    tracks: list[Track] = []
+    seen: set[tuple[str, str]] = set()
+    for item in resolved:
+        if not isinstance(item, Track):
+            continue
+        key = normalized_track_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        tracks.append(item)
+    return tracks

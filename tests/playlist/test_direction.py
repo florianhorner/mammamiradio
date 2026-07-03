@@ -8,6 +8,7 @@ from mammamiradio.playlist.direction import (
     DirectionTarget,
     expand_direction,
     normalize_direction_text,
+    resolve_direction_tracks,
     resolve_direction_tracks_sync,
 )
 
@@ -86,3 +87,35 @@ def test_resolve_direction_tracks_sync_uses_canonical_target_artist_title(monkey
     assert tracks[0].artist == "Lucio Battisti"
     assert tracks[0].title == "Il mio canto libero"
     assert tracks[0].youtube_id == "abc12345678"
+
+
+@pytest.mark.asyncio
+async def test_resolve_direction_tracks_concurrent_dedupes(monkeypatch):
+    """The async (background-restore) resolver searches targets concurrently, keeps
+    the canonical target artist/title, and dedupes by normalized key."""
+    ids = {
+        "Artist One Song One": "aaaaaaaaaaa",
+        "Artist Two Song Two": "bbbbbbbbbbb",
+    }
+
+    def fake_search(query: str, max_results: int):
+        return [{"youtube_id": ids[query], "title": query, "artist": "Uploader", "duration_ms": 120_000}]
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+
+    targets = [DirectionTarget("Artist One", "Song One"), DirectionTarget("Artist Two", "Song Two")]
+    tracks = await resolve_direction_tracks(targets)
+
+    assert {(t.artist, t.title) for t in tracks} == {("Artist One", "Song One"), ("Artist Two", "Song Two")}
+
+
+@pytest.mark.asyncio
+async def test_resolve_direction_tracks_returns_empty_on_search_error(monkeypatch):
+    def boom(query: str, max_results: int):
+        raise RuntimeError("yt-dlp exploded")
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", boom)
+
+    tracks = await resolve_direction_tracks([DirectionTarget("Artist", "Song")])
+
+    assert tracks == []

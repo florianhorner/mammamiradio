@@ -2091,6 +2091,9 @@ async def test_startup_heading_persist_callback_writes_in_background(tmp_path: P
         from mammamiradio.main import app, startup
 
         await startup()
+        # after_music fires the callback with the live active heading; the callback
+        # only persists when it still matches state.heading (identity re-check).
+        app.state.station_state.heading = heading
         app.state.station_state.heading_persist_callback(heading)
         tasks = list(getattr(app.state, "background_tasks", set()))
         if tasks:
@@ -2120,12 +2123,46 @@ async def test_startup_heading_persist_callback_logs_failure(tmp_path: Path, cap
         from mammamiradio.main import app, startup
 
         await startup()
+        app.state.station_state.heading = heading
         app.state.station_state.heading_persist_callback(heading)
         tasks = list(getattr(app.state, "background_tasks", set()))
         if tasks:
             await asyncio.gather(*tasks)
 
     assert "Failed to persist heading update" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_heading_persist_callback_skips_when_course_cleared(tmp_path: Path):
+    """A budget-spend persist racing a Back-to-auto must not resurrect the cleared course."""
+    from mammamiradio.core.models import Heading, Track
+    from mammamiradio.playlist.playlist import read_persisted_heading
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=None),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        # Operator hit "Back to auto" before the fire-and-forget write ran, so the
+        # live heading no longer matches the one the callback captured.
+        app.state.station_state.heading = None
+        app.state.station_state.heading_persist_callback(heading)
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    assert read_persisted_heading(mock_config.cache_dir) is None
 
 
 def test_clear_persisted_heading_swallows_oserror():

@@ -47,7 +47,9 @@ from mammamiradio.web.listener_requests import router as listener_requests_route
 from mammamiradio.web.streamer import (
     CLIP_MAX_SEGMENT_SECONDS,
     LiveStreamHub,
+    _clear_active_heading,
     _download_direction_track,
+    _heading_selection_budget,
     _register_background_task,
     _session_stopped_flag,
     router,
@@ -141,10 +143,7 @@ async def _restore_direction_targets_background(app_state, heading_id: str, raw_
             playable_count = sum(1 for track in state.playlist if track.heading_id == heading_id)
             if playable_count == 0:
                 logger.warning("Persisted direction restored no playable tracks; returning to auto")
-                state.heading = None
-                state.heading_revision += 1
-                state.heading_pending_announcement = ""
-                state.heading_announced_id = ""
+                _clear_active_heading(state)
                 _clear_persisted_heading(app_state.config)
     except Exception:
         logger.warning("Persisted direction background restore failed", exc_info=True)
@@ -403,7 +402,9 @@ async def startup():
                     persisted_heading = None
                 else:
                     if persisted_heading.selection_budget <= 0:
-                        persisted_heading.selection_budget = min(5, restored_count or len(pending_direction_targets))
+                        persisted_heading.selection_budget = _heading_selection_budget(
+                            restored_count or len(pending_direction_targets)
+                        )
                     tracks = blended_heading_tracks[:5] + tracks + blended_heading_tracks[5:]
                     logger.info(
                         "Restored heading %s with %d fetched track(s), %d blended, %d retagged",
@@ -462,8 +463,16 @@ async def startup():
 
     def _persist_heading_update(heading) -> None:
         async def _write_heading() -> None:
+            # Serialize against clear_heading/source switches and re-check identity
+            # under the lock: after_music fires this off the hot path, so without
+            # the lock a write could land AFTER a "Back to auto" deleted heading.json
+            # and resurrect the just-cleared course on the next restart.
             try:
-                await asyncio.to_thread(write_persisted_heading, config.cache_dir, heading)
+                async with app.state.source_switch_lock:
+                    current = state.heading
+                    if current is None or current.id != heading.id:
+                        return
+                    await asyncio.to_thread(write_persisted_heading, config.cache_dir, current)
             except Exception:
                 logger.warning("Failed to persist heading update", exc_info=True)
 

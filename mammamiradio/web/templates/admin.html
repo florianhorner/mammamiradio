@@ -2190,7 +2190,7 @@ function nowTypeStatus(type){
   return{cls:`segment-inline segment-${sKey}`,ariaLabel:`segment: ${sText}`,title:`segment: ${sText}`,text:segmentBadge(typeKey)};
 }
 
-async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(_base+p,o)).json()}
+async function api(m,p,b,timeoutMs){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);let _t=null;if(timeoutMs){const c=new AbortController();o.signal=c.signal;_t=setTimeout(()=>c.abort(),timeoutMs);}try{return(await fetch(_base+p,o)).json()}finally{if(_t)clearTimeout(_t);}}
 
 // ── Clock ──
 function updateClock(){
@@ -3208,14 +3208,27 @@ async function setDirectionText(el){
   if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
   if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Steering...';}
   try{
-    const r=await api('POST','/api/direction',{text});
+    // 60s client-side ceiling so a hung request can't leave the control stuck
+    // on "Steering..." forever with no way out — it rejects into catch below.
+    const r=await api('POST','/api/direction',{text},60000);
     if(!r.ok){
       toast(r.message||wayOut('shape that set'));
       return;
     }
     const label=r.heading?.label||text;
-    const count=Number(r.retagged_existing||0)+Number(r.queued_downloads||0);
-    toast(r.idempotent?`${label} is already steering.`:`${label} is steering${count?` (${count} songs)`:''}.`);
+    if(r.idempotent){
+      toast(`${label} is already steering.`);
+    }else{
+      // Only count songs actually confirmed in rotation; anything still
+      // downloading is shown as "finding" rather than counted as aired.
+      const confirmed=Number(r.added||0);
+      const pending=Number(r.pending_downloads||0);
+      let detail='';
+      if(confirmed&&pending)detail=` (${confirmed} song${confirmed===1?'':'s'}, finding ${pending} more…)`;
+      else if(confirmed)detail=` (${confirmed} song${confirmed===1?'':'s'})`;
+      else if(pending)detail=' (finding songs…)';
+      toast(`${label} is steering${detail}.`);
+    }
     if(input)input.value='';
     await refreshFast();
   }catch(_){
@@ -3239,9 +3252,14 @@ function updateHeadingBanner(st){
   if(banner){
     const active=!!heading.active;
     banner.dataset.active=active?'true':'false';
-    banner.innerHTML=active
-      ? `<span>Course: <b>${esc(heading.label||'On course')}</b></span>`
-      : '<span>Course: <b>Auto rotation</b></span>';
+    if(active){
+      // A restored/just-set text direction can be active before its songs have
+      // been found yet — say so plainly instead of claiming it's already steering.
+      const resolving=!!heading.resolving;
+      banner.innerHTML=`<span>Course: <b>${esc(heading.label||'On course')}</b>${resolving?' — finding songs…':''}</span>`;
+    }else{
+      banner.innerHTML='<span>Course: <b>Auto rotation</b></span>';
+    }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
     const d=_HEADING_DISPATCH[btn.dataset.headingKind];

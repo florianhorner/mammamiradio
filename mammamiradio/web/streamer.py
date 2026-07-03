@@ -117,6 +117,13 @@ logger = logging.getLogger(__name__)
 _search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-search")
 atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 
+# Dedicated pool for the direction target metadata fan-out (up to
+# MAX_DIRECTION_TARGETS searches at once). Isolated from _search_executor so a
+# direction that fans out many searches can't head-of-line-block the operator's
+# interactive /api/search on the shared pool.
+_direction_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="direction-search")
+atexit.register(_direction_search_executor.shutdown, wait=False, cancel_futures=True)
+
 router = APIRouter()
 
 # TODO: split — this god module is a postal address, not a destination.
@@ -293,7 +300,18 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
 # message rather than silently starving the station (leadership #1 + #5). A single
 # per-row removal is never rejected — the operator asked for that one song gone.
 MIN_ROTATION_AFTER_BAN = 5
+# How many blended heading tracks get spliced to the front of the queue.
 HEADING_FRONT_INSERT_LIMIT = 5
+# How many upcoming picks a course biases toward its tagged tracks. Kept separate
+# from HEADING_FRONT_INSERT_LIMIT (a different concern) and sized to cover a full
+# text-direction target set (up to MAX_DIRECTION_TARGETS) so a direction that
+# resolves 8-10 songs biases all of them, not just the first 5.
+HEADING_SELECTION_BUDGET_LIMIT = 10
+# Wall-clock budget an all-new direction waits for its first track to actually
+# land before it either confirms success or (if every download failed) rolls the
+# course back to auto. On timeout the downloads keep going in the background and
+# the course stays live — audio continuity wins (leadership #2).
+DIRECTION_COMMIT_WAIT_SECONDS = 45
 HEADING_SEEDS = {
     "classic://italian/70s": "Anni '70",
     "classic://italian/80s": "Anni '80",
@@ -1121,10 +1139,10 @@ def _serialize_source(source: PlaylistSource | None) -> dict | None:
     }
 
 
-def _serialize_heading(heading: Heading | None) -> dict:
+def _serialize_heading(heading: Heading | None, state: StationState | None = None) -> dict:
     if heading is None:
         return {"active": False, "id": "", "seed": "", "label": ""}
-    return {
+    data = {
         "active": True,
         "id": heading.id,
         "seed": heading.seed,
@@ -1136,6 +1154,16 @@ def _serialize_heading(heading: Heading | None) -> dict:
         "selection_remaining": max(0, heading.selection_budget - heading.selection_spent),
         "target_count": len(heading.targets),
     }
+    # When state is available, report how many rotation tracks actually carry this
+    # course yet. A text direction restored at boot (or mid-resolve) has targets
+    # but zero tagged tracks until its background search/download lands — surface
+    # that as `resolving` so the admin banner can say "finding songs…" instead of
+    # claiming the course is already steering (honesty; leadership #5).
+    if state is not None:
+        tagged = _heading_playlist_track_count(state, heading.id)
+        data["tagged_count"] = tagged
+        data["resolving"] = tagged == 0 and len(heading.targets) > 0
+    return data
 
 
 def _serialize_brand(brand) -> dict:
@@ -3793,7 +3821,7 @@ async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) ->
 
     async def _search_one(target: DirectionTarget) -> Track | None:
         try:
-            results = await loop.run_in_executor(_search_executor, search_ytdlp_metadata, target.query, 1)
+            results = await loop.run_in_executor(_direction_search_executor, search_ytdlp_metadata, target.query, 1)
         except Exception:
             logger.debug("Direction metadata search failed for %s", target.query, exc_info=True)
             return None
@@ -3823,6 +3851,18 @@ async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) ->
     return tracks
 
 
+def _record_direction_notice(state: StationState, track: Any, *, ok: bool, reason: str) -> None:
+    """Surface a direction-download outcome to the admin UI, mirroring the admin
+    queue-from-search notice path (`_download_admin_external_track`). Best-effort —
+    a notice failure never affects whether the track actually aired."""
+    try:
+        state.external_add_notices.append(
+            {"display": getattr(track, "display", ""), "ok": ok, "reason": reason, "ts": time.time()}
+        )
+    except Exception:
+        logger.debug("Failed to record direction notice", exc_info=True)
+
+
 async def _download_direction_track(
     track: Track,
     app_state: Any,
@@ -3844,23 +3884,32 @@ async def _download_direction_track(
         raise
     except Exception:
         logger.warning("Direction download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
+        _record_direction_notice(state, track, ok=False, reason="download_failed")
         return "failed"
 
     if status == "queued":
         logger.info("Added direction track to rotation: %s (yt:%s)", track.display, track.youtube_id)
-        heading = state.heading
-        if heading is not None and heading.id == heading_id:
-            updated_budget = _heading_selection_budget(_heading_playlist_track_count(state, heading_id))
-            if updated_budget > heading.selection_budget:
-                heading.selection_budget = updated_budget
-                try:
-                    await asyncio.to_thread(write_persisted_heading, app_state.config.cache_dir, heading)
-                except Exception:
-                    logger.warning("Failed to persist direction heading after download landed", exc_info=True)
+        # Grow the course's selection budget to cover the newly landed track.
+        # Serialize the read-modify-write AND the persist under source_switch_lock
+        # with a fresh identity re-check so a "Back to auto" (which deletes
+        # heading.json under the same lock) racing this write can't be undone by a
+        # stale write that resurrects the just-cleared course on the next restart.
+        async with app_state.source_switch_lock:
+            heading = state.heading
+            if heading is not None and heading.id == heading_id:
+                updated_budget = _heading_selection_budget(_heading_playlist_track_count(state, heading_id))
+                if updated_budget > heading.selection_budget:
+                    heading.selection_budget = updated_budget
+                    try:
+                        await asyncio.to_thread(write_persisted_heading, app_state.config.cache_dir, heading)
+                    except Exception:
+                        logger.warning("Failed to persist direction heading after download landed", exc_info=True)
     elif status == "banned":
         logger.info("Direction track refused because it is blocklisted: %s", track.display)
+        _record_direction_notice(state, track, ok=False, reason="banned")
     else:
         logger.info("Direction track skipped after %s: %s", status, track.display)
+        _record_direction_notice(state, track, ok=False, reason="source_changed")
     return status
 
 
@@ -3920,7 +3969,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 
 
 def _heading_selection_budget(track_count: int) -> int:
-    return max(0, min(HEADING_FRONT_INSERT_LIMIT, int(track_count or 0)))
+    return max(0, min(HEADING_SELECTION_BUDGET_LIMIT, int(track_count or 0)))
 
 
 def _heading_playlist_track_count(state: StationState, heading_id: str) -> int:
@@ -3948,7 +3997,34 @@ def _stale_heading_response(state: StationState) -> dict:
         "ok": False,
         "stale": True,
         "message": "The course changed while we were searching - use the current course or try again.",
-        "heading": _serialize_heading(state.heading),
+        "heading": _serialize_heading(state.heading, state),
+    }
+
+
+def _direction_idempotent_response(request: Request, state: StationState) -> dict:
+    """Shared 'already steering there' reply for a duplicate direction submit.
+
+    Records the operator-action ledger row (so BOTH the pre-lock and the in-lock
+    idempotency checkpoints leave an audit trail — the in-lock one previously did
+    not) and returns the identical response shape from one place so they can't
+    drift."""
+    _record_heading_ledger(
+        request,
+        requested_seed=state.heading.seed if state.heading is not None else "",
+        added_count=0,
+        zero_result=False,
+        persisted=True,
+        source="direction_set",
+    )
+    return {
+        "ok": True,
+        "added": 0,
+        "skipped_existing": 0,
+        "queued_downloads": 0,
+        "committed_downloads": 0,
+        "idempotent": True,
+        "message": "Already steering there.",
+        "heading": _serialize_heading(state.heading, state),
     }
 
 
@@ -3965,28 +4041,13 @@ async def _set_direction_text(request: Request, text: str):
     state = request.app.state.station_state
     seed = f"direction://{safe_text.casefold()}"
     requested_heading_revision = state.heading_revision
-    if (
-        state.heading is not None
-        and state.heading.seed == seed
-        and _heading_playlist_track_count(state, state.heading.id) > 0
-    ):
-        _record_heading_ledger(
-            request,
-            requested_seed=seed,
-            added_count=0,
-            zero_result=False,
-            persisted=True,
-            source="direction_set",
-        )
-        return {
-            "ok": True,
-            "added": 0,
-            "skipped_existing": 0,
-            "queued_downloads": 0,
-            "idempotent": True,
-            "message": "Already steering there.",
-            "heading": _serialize_heading(state.heading),
-        }
+    # Idempotent on course identity (seed), NOT on how many tracks have landed:
+    # a duplicate submit while the first request's downloads are still in flight
+    # must be a no-op, never a second competing course that drops the first's
+    # downloads. A genuinely failed direction clears the heading to None, so a
+    # retry after failure still falls through here and re-runs.
+    if state.heading is not None and state.heading.seed == seed:
+        return _direction_idempotent_response(request, state)
 
     expansion = await expand_direction(safe_text, config, state)
     if not expansion.targets:
@@ -4014,20 +4075,8 @@ async def _set_direction_text(request: Request, text: str):
     retagged_existing = 0
     persisted = True
     async with source_switch_lock:
-        if (
-            state.heading is not None
-            and state.heading.seed == seed
-            and _heading_playlist_track_count(state, state.heading.id) > 0
-        ):
-            return {
-                "ok": True,
-                "added": 0,
-                "skipped_existing": 0,
-                "queued_downloads": 0,
-                "idempotent": True,
-                "message": "Already steering there.",
-                "heading": _serialize_heading(state.heading),
-            }
+        if state.heading is not None and state.heading.seed == seed:
+            return _direction_idempotent_response(request, state)
         if state.heading_revision != requested_heading_revision:
             return _stale_heading_response(state)
 
@@ -4083,23 +4132,37 @@ async def _set_direction_text(request: Request, text: str):
             logger.warning("Failed to persist direction heading; live heading remains active", exc_info=True)
             persisted = False
 
+    # Register every download up-front so a cancelled request (client disconnect)
+    # or a shutdown can still find and cancel them — an in-flight download must
+    # never outlive teardown unregistered (it would write to state after teardown
+    # begins). This holds for BOTH the mixed and all-new branches below.
+    dl_tasks = [
+        asyncio.create_task(
+            _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
+        )
+        for track in download_tracks
+    ]
+    for dl_task in dl_tasks:
+        _register_background_task(request.app.state, dl_task)
+
     committed_downloads = 0
-    if download_tracks:
-        if existing_tracks:
-            for track in download_tracks:
-                dl_task = asyncio.create_task(
-                    _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
-                )
-                _register_background_task(request.app.state, dl_task)
+    still_downloading = False
+    # When the course already has playable existing tracks it is live immediately;
+    # downloads fill in behind it and any failures surface via operator notices. An
+    # all-new course has nothing to play yet, so wait (bounded) for at least one
+    # track to actually land before claiming success — but never block audio: on
+    # timeout the downloads keep running in the background and the course stays up.
+    if dl_tasks and not existing_tracks:
+        try:
+            committed_downloads, _still_pending = await asyncio.wait_for(
+                _await_first_direction_commit(dl_tasks), timeout=DIRECTION_COMMIT_WAIT_SECONDS
+            )
+        except TimeoutError:
+            still_downloading = True
         else:
-            dl_tasks = [
-                asyncio.create_task(
-                    _download_direction_track(track, request.app.state, originating_source_revision, heading.id)
-                )
-                for track in download_tracks
-            ]
-            committed_downloads, pending_tasks = await _await_first_direction_commit(dl_tasks)
             if committed_downloads == 0:
+                # Every download failed — roll the course back to auto rather than
+                # leave an empty course claiming to steer.
                 async with source_switch_lock:
                     if state.heading is not None and state.heading.id == heading.id:
                         _clear_active_heading(state)
@@ -4118,9 +4181,12 @@ async def _set_direction_text(request: Request, text: str):
                     "queued_downloads": 0,
                     "message": "Couldn't pull that vibe right now - give it a moment and try again.",
                 }
-            for task in pending_tasks:
-                _register_background_task(request.app.state, task)
 
+    # Confirmed = tracks already in rotation (retagged existing) + downloads that
+    # actually landed. Anything still downloading is reported separately so the UI
+    # never counts an unconfirmed download as an aired song.
+    confirmed = retagged_existing + committed_downloads
+    pending_downloads = len(download_tracks) - committed_downloads
     _record_heading_ledger(
         request,
         requested_seed=seed,
@@ -4131,12 +4197,15 @@ async def _set_direction_text(request: Request, text: str):
     )
     return {
         "ok": True,
-        "added": len(download_tracks) if existing_tracks else committed_downloads,
+        "added": confirmed,
         "retagged_existing": retagged_existing,
+        "committed_downloads": committed_downloads,
         "queued_downloads": len(download_tracks),
+        "pending_downloads": pending_downloads,
+        "still_downloading": still_downloading,
         "expansion_source": expansion.source,
         "persisted": persisted,
-        "heading": _serialize_heading(heading),
+        "heading": _serialize_heading(heading, state),
         "targets": expansion.target_dicts,
         "tracks": [_serialize_track(track) for track in (existing_tracks + download_tracks)[:20]],
     }
@@ -4634,7 +4703,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),
-        "heading": _serialize_heading(state.heading),
+        "heading": _serialize_heading(state.heading, state),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
         "session_stopped": state.session_stopped,
