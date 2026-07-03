@@ -129,6 +129,23 @@ print('export MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH=' + mpp_val)
 guest_host = opts.get('guest_host', True)
 gh_val = 'true' if guest_host else 'false'
 print('export MAMMAMIRADIO_GUEST_HOST=' + gh_val)
+# Pacing sliders. Only export when the operator actually set a value (addon
+# config, or the admin slider persisting into /data/options.json) so an unset
+# option leaves radio.toml's default in charge. A non-int value is skipped, not
+# fatal, so one bad key can't drop every export.
+for _pace_opt, _pace_env in (
+    ('songs_between_banter', 'MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER'),
+    ('songs_between_ads', 'MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS'),
+    ('ad_spots_per_break', 'MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK'),
+):
+    _pace_val = opts.get(_pace_opt)
+    if _pace_val is None:
+        continue
+    try:
+        _pace_int = int(_pace_val)
+    except (TypeError, ValueError):
+        continue
+    print('export ' + _pace_env + '=' + shlex.quote(str(_pace_int)))
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null

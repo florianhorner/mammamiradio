@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- **Your pacing settings now stick.** The Diretta sliders in the admin panel — songs between host breaks, songs between ad breaks, and ads per break — used to reset to their defaults after a restart. They are now saved and restored, and the three values also appear on the add-on Configuration screen. If a save can't be written the panel says so and leaves the current setting untouched instead of half-applying it.
 - **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.
 - **"Clear pool" now actually empties the rotation.** The clear-pool button in the Rotazione tab used to fail with an error; it now clears the whole pool, and the song that's already playing finishes first so there is no dead air.
 - **Admin panel visual cleanups.** The "Shuffle" button shows its proper icon, the host personality sliders fill as a clean thin track instead of a tall colour block, the doubled hairline under section headers is now a single rule, and the gold accent on the live console runs cleanly into its rounded corners.

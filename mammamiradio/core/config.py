@@ -946,6 +946,20 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
+    # Pacing (mirrors the toggles above): map persisted /data/options.json values
+    # to env for the non-run.sh add-on boot path. run.sh normally exports these
+    # first, and the `not os.getenv` guard keeps that export authoritative; the
+    # load-time override loop clamps to range, so no clamp is needed here. bool is
+    # excluded because it is an int subclass.
+    for opt_key, env_key in (
+        ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+        ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+        ("ad_spots_per_break", "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ):
+        pv = options.get(opt_key)
+        if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
+            os.environ[env_key] = str(pv)
+
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
@@ -1550,6 +1564,25 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
     if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
         config.ledger_retention_days = int(_ledger_retention)
+
+    # Env overrides for pacing (HA addon pacing options -> MAMMAMIRADIO_PACING_*
+    # via run.sh; also the admin slider persistence path writing standalone .env).
+    # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
+    # stale or hand-edited env can never brick boot — audio continuity wins over a
+    # strict reject (INSTANT AUDIO).
+    for _pacing_env, _lo, _hi, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", 2, 60, "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", 1, 60, "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", 1, 5, "ad_spots_per_break"),
+    ):
+        _pacing_raw = os.getenv(_pacing_env, "").strip()
+        if not _pacing_raw:
+            continue
+        try:
+            _pacing_val = int(_pacing_raw)
+        except ValueError:
+            continue
+        setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
 
     # Quality dial: pick the active model profile (premium|balanced|economy).
     # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its

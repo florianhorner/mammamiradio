@@ -89,6 +89,7 @@ from mammamiradio.web.persistence import (
     _apply_live_credentials,
     _sanitize_credential_value,
     _save_addon_option,
+    _save_addon_option_batch,
     _save_addon_options,
     _save_dotenv,
 )
@@ -2742,9 +2743,30 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
     }
 
 
+_pacing_lock = asyncio.Lock()
+
+# admin pacing field -> (clamp low, clamp high, env var). Bounds match _validate()
+# in core/config.py so the live value, the persisted value, and a restart-loaded
+# value can never disagree on what is in-range.
+_PACING_FIELDS: tuple[tuple[str, int, int, str], ...] = (
+    ("songs_between_banter", 2, 60, "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+    ("songs_between_ads", 1, 60, "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+    ("ad_spots_per_break", 1, 5, "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+)
+
+
 @router.patch("/api/pacing")
 async def update_pacing(request: Request, _: None = Depends(require_admin_access)):
-    """Update pacing settings in real-time."""
+    """Update pacing settings live and persist them.
+
+    Persist FIRST, mutate SECOND (matches the super-italian / chaos / quality /
+    broadcast-chain toggles): every present pacing key is written in ONE atomic
+    store — /data/options.json on HA addons, .env on standalone — before any
+    live mutation. If the write fails we return 500 and leave both live config
+    and durable config untouched, so a failed save can never leave the two
+    disagreeing after a restart. The admin UI reverts the slider and shows a
+    human "couldn't save" message on the 500.
+    """
     config = request.app.state.config
     body, error = await read_json_object(request)
     if error is not None:
@@ -2764,16 +2786,42 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
                 return int(text)
         raise HTTPException(status_code=400, detail=f"{field} must be an integer")
 
-    songs_between_banter = _parse_pacing_int("songs_between_banter")
-    songs_between_ads = _parse_pacing_int("songs_between_ads")
-    ad_spots_per_break = _parse_pacing_int("ad_spots_per_break")
+    # Parse + clamp every present field up front, so a malformed value raises a
+    # 400 before anything is persisted or mutated (no partial write).
+    clamped: dict[str, int] = {}
+    for attr, lo, hi, _env_key in _PACING_FIELDS:
+        if attr in body:
+            clamped[attr] = max(lo, min(hi, _parse_pacing_int(attr) or 0))
 
-    if "songs_between_banter" in body:
-        config.pacing.songs_between_banter = max(2, min(60, songs_between_banter or 0))
-    if "songs_between_ads" in body:
-        config.pacing.songs_between_ads = max(1, min(60, songs_between_ads or 0))
-    if "ad_spots_per_break" in body:
-        config.pacing.ad_spots_per_break = max(1, min(5, ad_spots_per_break or 0))
+    if clamped:
+        env_updates = {env_key: str(clamped[attr]) for attr, _lo, _hi, env_key in _PACING_FIELDS if attr in clamped}
+        loop = asyncio.get_running_loop()
+        async with _pacing_lock:
+            old_values = {attr: getattr(config.pacing, attr) for attr in clamped}
+            # Persist FIRST as one atomic multi-key write. On failure leave live
+            # config AND durable config untouched — no partial drift. `clamped` is
+            # already {attr: int}, the exact /data/options.json keys.
+            try:
+                if config.is_addon:
+                    await loop.run_in_executor(None, _save_addon_option_batch, clamped)
+                else:
+                    await loop.run_in_executor(None, _save_dotenv, env_updates)
+            except Exception:
+                logger.error("Failed to persist pacing settings", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"ok": False, "error": "failed to persist pacing settings"},
+                )
+            for attr, value in clamped.items():
+                setattr(config.pacing, attr, value)
+            # No os.environ write: config.pacing is the live source of truth and
+            # the persisted .env / options.json is the restart source (dotenv and
+            # run.sh repopulate the env at boot). Setting it live would only leak
+            # MAMMAMIRADIO_PACING_* into any later in-process config reload.
+        for attr, new_value in clamped.items():
+            if new_value != old_values[attr]:
+                _record_operator_action(request, f"pacing_{attr}", old_values[attr], new_value)
+
     return {
         "ok": True,
         "songs_between_banter": config.pacing.songs_between_banter,

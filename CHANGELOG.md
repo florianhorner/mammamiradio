@@ -25,6 +25,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Your pacing settings now stick.** The Diretta sliders — how many songs between host breaks, how many between ad breaks, and how many ads per break — used to snap back to their defaults whenever the station restarted. A change you make is now saved and comes back exactly as you left it, and if a save ever can't be written the panel says so and leaves the current setting untouched instead of half-applying it. In the Home Assistant add-on the three values are also on the Configuration screen.
 - **Background audio prep can no longer crowd out the next thing to air.** Prefetch and other background FFmpeg work now leave capacity for foreground renders, while emergency bridge audio gets its own tightly bounded priority path so recovery tones and silence fillers do not wait behind routine processing.
 - **The admin panel no longer scrolls sideways on phones.** On some phone browsers the producer desk could run off the right edge — the now-playing line, the live-work feed, and the section tabs were cut off and a stray sideways scrollbar appeared. The page now holds the screen width at every size, text stays at its intended size instead of being blown up, and the section tabs wrap cleanly instead of spilling past the edge.
 - **Rotazione track buttons now lay out right at every width.** In the two-pane desktop column (~700px) Next and Ban stay inline on the track line instead of wrapping below it; on a real phone they drop to a stacked row with full-size touch targets.
