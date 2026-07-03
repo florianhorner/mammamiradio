@@ -47,6 +47,12 @@ _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 _ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
 
+PACING_BOUNDS: dict[str, tuple[int, int]] = {
+    "songs_between_banter": (2, 60),
+    "songs_between_ads": (1, 60),
+    "ad_spots_per_break": (1, 5),
+}
+
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
 # fallbacks) references this so the name cannot drift the way "Radio MammaMia",
@@ -116,7 +122,7 @@ class PacingSection:
 
     songs_between_banter: int = 2
     songs_between_ads: int = 4
-    ad_spots_per_break: int = 1
+    ad_spots_per_break: int = 2
     lookahead_segments: int = 4
 
 
@@ -1188,20 +1194,14 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
-    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
-    # config-load and the admin runtime path enforce the same valid range.
-    if config.pacing.songs_between_banter < 2:
-        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
-    if config.pacing.songs_between_banter > 60:
-        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
-    if config.pacing.songs_between_ads < 1:
-        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
-    if config.pacing.songs_between_ads > 60:
-        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
-    if config.pacing.ad_spots_per_break < 1:
-        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
-    if config.pacing.ad_spots_per_break > 5:
-        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
+    # Bounds are shared with env-load clamping and PATCH /api/pacing so the
+    # accepted range cannot drift between boot and live admin changes.
+    for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
+        _value = getattr(config.pacing, _pacing_attr)
+        if _value < _lo:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be >= {_lo}"))
+        if _value > _hi:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
     if config.pacing.lookahead_segments < 1:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
@@ -1570,10 +1570,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
     # stale or hand-edited env can never brick boot — audio continuity wins over a
     # strict reject (INSTANT AUDIO).
-    for _pacing_env, _lo, _hi, _pacing_attr in (
-        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", 2, 60, "songs_between_banter"),
-        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", 1, 60, "songs_between_ads"),
-        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", 1, 5, "ad_spots_per_break"),
+    for _pacing_env, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "ad_spots_per_break"),
     ):
         _pacing_raw = os.getenv(_pacing_env, "").strip()
         if not _pacing_raw:
@@ -1582,6 +1582,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             _pacing_val = int(_pacing_raw)
         except ValueError:
             continue
+        _lo, _hi = PACING_BOUNDS[_pacing_attr]
         setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
 
     # Quality dial: pick the active model profile (premium|balanced|economy).

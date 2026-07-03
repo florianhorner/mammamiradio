@@ -27,6 +27,7 @@ from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_no
 from mammamiradio.audio.normalizer import configure_broadcast_chain, humanize_norm_filename, load_track_metadata
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
+from mammamiradio.core.config import PACING_BOUNDS
 from mammamiradio.core.models import (
     ChaosSubtype,
     GenerationWasteReason,
@@ -2745,13 +2746,12 @@ async def get_pacing(request: Request, _: None = Depends(require_admin_access)):
 
 _pacing_lock = asyncio.Lock()
 
-# admin pacing field -> (clamp low, clamp high, env var). Bounds match _validate()
-# in core/config.py so the live value, the persisted value, and a restart-loaded
-# value can never disagree on what is in-range.
+# admin pacing field -> (clamp low, clamp high, env var). Bounds come from
+# core/config.py so live admin changes and restart-loaded values cannot drift.
 _PACING_FIELDS: tuple[tuple[str, int, int, str], ...] = (
-    ("songs_between_banter", 2, 60, "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
-    ("songs_between_ads", 1, 60, "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
-    ("ad_spots_per_break", 1, 5, "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ("songs_between_banter", *PACING_BOUNDS["songs_between_banter"], "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+    ("songs_between_ads", *PACING_BOUNDS["songs_between_ads"], "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+    ("ad_spots_per_break", *PACING_BOUNDS["ad_spots_per_break"], "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
 )
 
 
