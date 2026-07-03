@@ -116,6 +116,20 @@ def test_ha_mood_ttl_seconds_env_non_integer_ignored(monkeypatch):
     assert config.homeassistant.mood_ttl_seconds == 90.0
 
 
+def test_ha_mood_ttl_seconds_env_infinite_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "inf")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_llm_env_garbage_warns_and_keeps_default(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "ture")
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.core.config"):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+    assert "Ignoring MAMMAMIRADIO_HA_MOOD_LLM='ture'" in caplog.text
+
+
 def test_ha_mood_llm_warns_when_enabled_without_anthropic_key(monkeypatch, caplog):
     monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")

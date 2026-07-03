@@ -983,6 +983,16 @@ def test_load_config_rejects_non_positive_mood_ttl_seconds(tmp_path):
         load_config(str(custom_path))
 
 
+def test_load_config_rejects_non_bool_mood_llm_enabled(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("mood_llm_enabled = false", 'mood_llm_enabled = "yes"')
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.mood_llm_enabled must be true or false"):
+        load_config(str(custom_path))
+
+
 def test_load_config_rejects_invalid_timer_interrupt_urgency_and_cooldown(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = (

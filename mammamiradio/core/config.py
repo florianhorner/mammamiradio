@@ -1271,6 +1271,29 @@ def _validate(config: StationConfig) -> None:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
 
 
+def _env_positive_float(name: str) -> float | None:
+    """Parse a positive finite float from an env var; warn and return None on invalid.
+
+    Shared by the `[homeassistant]` numeric env overrides so the
+    parse/validate/warn behavior can't drift between knobs.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not a number)", name, raw)
+        return None
+    if math.isfinite(value) and value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
+
+
 def load_config(path: str = "radio.toml") -> StationConfig:
     """Load ``radio.toml`` plus environment overrides into a validated config."""
     addon_mode = _is_addon()
@@ -1392,42 +1415,23 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["mood_llm_enabled"] = True
     elif _ha_mood_llm_env in _FALSY:
         ha_raw["mood_llm_enabled"] = False
-    # Env override for the HA context refresh budget. Reject non-float / non-positive
-    # values (keep the toml/default) rather than letting a typo disable the deadline.
-    _ha_timeout_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "").strip()
-    if _ha_timeout_env:
-        import logging as _ha_logging
+    elif _ha_mood_llm_env:
+        # A typo ("ture") must not silently leave the experiment off while the
+        # operator believes it is on.
+        import logging as _mood_logging
 
-        _ha_log = _ha_logging.getLogger(__name__)
-        try:
-            _ha_timeout_val = float(_ha_timeout_env)
-        except ValueError:
-            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (not a number)", _ha_timeout_env)
-        else:
-            if math.isfinite(_ha_timeout_val) and _ha_timeout_val > 0:
-                ha_raw["context_refresh_timeout"] = _ha_timeout_val
-            else:
-                _ha_log.warning(
-                    "Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (must be a finite number > 0)",
-                    _ha_timeout_env,
-                )
-    _ha_mood_ttl_env = os.getenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "").strip()
-    if _ha_mood_ttl_env:
-        import logging as _ha_logging
-
-        _ha_log = _ha_logging.getLogger(__name__)
-        try:
-            _ha_mood_ttl_val = float(_ha_mood_ttl_env)
-        except ValueError:
-            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_MOOD_TTL_SECONDS=%r (not a number)", _ha_mood_ttl_env)
-        else:
-            if math.isfinite(_ha_mood_ttl_val) and _ha_mood_ttl_val > 0:
-                ha_raw["mood_ttl_seconds"] = _ha_mood_ttl_val
-            else:
-                _ha_log.warning(
-                    "Ignoring MAMMAMIRADIO_HA_MOOD_TTL_SECONDS=%r (must be a finite number > 0)",
-                    _ha_mood_ttl_env,
-                )
+        _mood_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_MOOD_LLM=%r (use true/1/yes or false/0/no)",
+            _ha_mood_llm_env,
+        )
+    # Env overrides for positive-float HA knobs. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable them.
+    _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
+    if _ctx_override is not None:
+        ha_raw["context_refresh_timeout"] = _ctx_override
+    _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
+    if _mood_ttl_override is not None:
+        ha_raw["mood_ttl_seconds"] = _mood_ttl_override
     # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
     timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
     timer_interrupts = [

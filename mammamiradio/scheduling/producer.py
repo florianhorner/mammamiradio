@@ -1942,7 +1942,15 @@ async def run_producer(
             # segment production (INSTANT AUDIO). The state-copy below then runs on
             # whatever HomeContext we end up with — fresh, stale, or empty.
             ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
-            mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
+            # Fail-soft: the scene namer is a mood garnish, and this block runs
+            # OUTSIDE the segment-render try below — an exception here would
+            # kill the producer task itself (INSTANT AUDIO). Same posture as
+            # the schedule_label_generation wrap further down.
+            try:
+                mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
+            except Exception:
+                logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
+                mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = mood_it
