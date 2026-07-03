@@ -705,7 +705,129 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
 
     assert result.returncode != 0
-    assert "options and schema key order differ" in result.stdout
+    assert "options keys must follow schema order" in result.stdout
+
+
+def test_validate_addon_allows_optional_schema_only_keys(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "stage: stable",
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  station_name: "Test"',
+                '  quality_profile: "balanced"',
+                "schema:",
+                "  station_name: str?",
+                "  quality_profile: list(premium|balanced|economy)?",
+                "  legacy_api_key: password?",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/rootfs/run.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'export MAMMAMIRADIO_PORT="8000"',
+                "station_name=${station_name:-}",
+                "quality_profile=${quality_profile:-}",
+                "legacy_api_key=${legacy_api_key:-}",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
+        "\n".join(
+            [
+                "configuration:",
+                "  station_name: key",
+                "  quality_profile: key",
+                "  legacy_api_key: key",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "options keys follow schema order; schema-only keys are optional" in result.stdout
+
+
+def test_validate_addon_rejects_required_schema_only_keys(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "stage: stable",
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  station_name: "Test"',
+                "schema:",
+                "  station_name: str?",
+                "  hidden_required: str",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/rootfs/run.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'export MAMMAMIRADIO_PORT="8000"',
+                "station_name=${station_name:-}",
+                "hidden_required=${hidden_required:-}",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
+        "\n".join(
+            [
+                "configuration:",
+                "  station_name: key",
+                "  hidden_required: key",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "Schema-only keys must be optional: hidden_required" in result.stdout
 
 
 def test_validate_addon_falls_back_when_dotvenv_python_is_broken(tmp_path: Path) -> None:
