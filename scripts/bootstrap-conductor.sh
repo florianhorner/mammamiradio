@@ -51,6 +51,11 @@ then
   exit 1
 fi
 
+if ! python -m pip --version >/dev/null 2>&1; then
+  echo ".venv has no pip (likely created by a tool that skips seeding it, e.g. 'uv venv'). Bootstrapping pip via ensurepip..."
+  python -m ensurepip --upgrade
+fi
+
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e . pytest
 
