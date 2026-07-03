@@ -85,6 +85,36 @@ def test_ha_context_refresh_timeout_env_infinite_ignored(monkeypatch):
     assert config.homeassistant.context_refresh_timeout == 2.0
 
 
+def test_ha_mood_llm_env_enable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is True
+
+
+def test_ha_mood_llm_env_disable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "false")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+
+
+def test_ha_mood_ttl_seconds_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "45")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 45
+
+
+def test_ha_mood_ttl_seconds_env_non_positive_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "0")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_ttl_seconds_env_non_integer_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "soon")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
 def test_ha_auto_enable_with_token_and_url(monkeypatch):
     """HA should auto-enable when both token and URL are present."""
     monkeypatch.setenv("HA_TOKEN", "test-token")

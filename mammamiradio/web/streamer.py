@@ -3062,8 +3062,8 @@ _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 # (Edge-tts is free and never counted), so this never bills a silent fallback.
 TTS_BLENDED_RATE = 0.00002
 
-COST_BREAKDOWN_CATEGORY_ORDER = ("script_banter", "script_transition", "script_ads", "tts")
-LLM_COST_BREAKDOWN_CATEGORIES = ("script_banter", "script_transition", "script_ads")
+COST_BREAKDOWN_CATEGORY_ORDER = ("script_banter", "script_transition", "script_ads", "script_home_mood", "tts")
+LLM_COST_BREAKDOWN_CATEGORIES = ("script_banter", "script_transition", "script_ads", "script_home_mood")
 
 
 def _model_token_cost(model_id: str, toks: dict) -> tuple[float, bool]:

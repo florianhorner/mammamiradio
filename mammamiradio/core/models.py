@@ -24,8 +24,13 @@ if TYPE_CHECKING:
 
 
 PartyMode = Literal["festival"]
-CostCategory = Literal["script_banter", "script_transition", "script_ads", "tts"]
-LLM_COST_CATEGORIES: tuple[CostCategory, ...] = ("script_banter", "script_transition", "script_ads")
+CostCategory = Literal["script_banter", "script_transition", "script_ads", "script_home_mood", "tts"]
+LLM_COST_CATEGORIES: tuple[CostCategory, ...] = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+)
 TTS_COST_CATEGORY: CostCategory = "tts"
 
 

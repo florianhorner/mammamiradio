@@ -498,12 +498,16 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context) as mock_fetch,
+        patch(f"{MODULE}.resolve_home_mood", return_value=("Scena LLM", "LLM scene")) as mock_resolve_mood,
     ):
         await _run_until_queued(queue, state, config)
 
     mock_fetch.assert_called_once()
+    mock_resolve_mood.assert_called_once_with(config, state, mock_context)
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    assert state.ha_home_mood == "Scena LLM"
+    assert state.ha_home_mood_en == "LLM scene"
     assert state.ha_scored_entities[0]["label"] == "Coffee machine"
     assert state.ha_denylist_hits == {"privacy:person": 1}
     assert state.ha_context_entity_count == 1

@@ -67,6 +67,7 @@ from mammamiradio.home.ha_context import (
     get_cached_home_context,
     push_state_to_ha,
 )
+from mammamiradio.home.scene_namer import resolve_home_mood
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
@@ -1941,11 +1942,12 @@ async def run_producer(
             # segment production (INSTANT AUDIO). The state-copy below then runs on
             # whatever HomeContext we end up with — fresh, stale, or empty.
             ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
+            mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
-            state.ha_home_mood = ha_cache.mood
+            state.ha_home_mood = mood_it
             state.ha_weather_arc = ha_cache.weather_arc
-            state.ha_home_mood_en = ha_cache.mood_en
+            state.ha_home_mood_en = mood_en
             state.ha_weather_arc_en = ha_cache.weather_arc_en
             state.ha_events_summary_en = ha_cache.events_summary_en
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
