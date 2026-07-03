@@ -1,0 +1,47 @@
+PR: fix(restart-handoff): prune orphaned .tmp scratch files on startup
+
+Scope (code): mammamiradio/restart_handoff.py, mammamiradio/main.py.
+Docs: CLAUDE.md, docs/architecture.md, CHANGELOG.md, ha-addon/mammamiradio/CHANGELOG.md.
+Tests: tests/test_restart_handoff.py, tests/web/test_main.py.
+
+Review passes performed (this branch, head 89deb512):
+1. 10-agent adversarial code review (xhigh effort) on the original commit.
+   Top finding: uncaught RuntimeError on a symlink loop crashes startup
+   (Path.resolve(strict=False) raises RuntimeError, not OSError, on a
+   symlink loop; verified directly against the project's Python 3.11.15
+   venv). Fixed in d982126e.
+2. /plan-eng-review (4-section interactive review: architecture, code
+   quality, tests, performance) plus a Codex cross-model outside-voice
+   pass. Findings resolved in-session: max_age_hours input validation,
+   a per-directory backlog cap with oldest-first eviction, a CHANGELOG
+   wording fix, a TOCTOU regression test. One item deferred to its own
+   PR (path-containment-check consolidation across 4 call sites, and
+   duplicate prune-loop logic vs playlist/downloader.py) tracked at
+   https://github.com/florianhorner/mammamiradio/issues/738.
+3. /ship pre-landing review: checklist pass (0 findings) + 4 specialist
+   subagents (testing, maintainability, security, performance) + a red
+   team pass. Testing specialist caught a stale comment (the backlog cap
+   is per-directory, not shared) -- fixed. Red team caught a doc-sync gap
+   (CLAUDE.md/architecture.md didn't document the new startup step even
+   though CHANGELOG.md did) -- fixed.
+4. /ship adversarial review (always-on): Claude adversarial subagent
+   (fresh context, found nothing new, "Ship as-is" -- explicitly ruled
+   out path traversal, TOCTOU, and the symlink race as non-exploitable
+   given unlink()'s no-follow POSIX semantics) + Codex adversarial exec
+   + Codex structured review [P2]. Both Codex passes and two specialists
+   independently converged on: the per-pass unlink cap didn't bound the
+   raw glob() enumeration/sort cost itself. Fixed in 89deb512 with a
+   separate, much larger hard ceiling on enumeration.
+
+Net: every CRITICAL-severity finding across all passes was fixed in this
+branch. The one deferred item is a pure internal consolidation refactor
+with no user-visible behavior change, filed as its own issue per this
+repo's Scope Discipline rule (real refactor, different risk profile per
+call site, doesn't belong bundled into a bug-fix PR).
+
+Full local verification (head 89deb512):
+- pytest tests/ -q: 3644 passed, 2 skipped, 19 deselected
+- ruff check . / ruff format --check .: clean
+- mypy mammamiradio/ tests/: clean
+- scripts/check-changelog-lint.sh: clean
+- scripts/check-release-invariants.sh: 8/8 passed
