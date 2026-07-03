@@ -53,8 +53,3 @@ schema:
   songs_between_ads: int(1,60)?
   ad_spots_per_break: int(1,5)?
   jamendo_client_id: password?
-  anthropic_api_key: password?
-  openai_api_key: password?
-  azure_speech_key: password?
-  azure_speech_region: str?
-  elevenlabs_api_key: password?

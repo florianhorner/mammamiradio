@@ -131,22 +131,26 @@ Current config options:
 | `festival_mode` | `bool?` | `MAMMAMIRADIO_FESTIVAL_MODE` |
 | `broadcast_chain` | `bool?` | `MAMMAMIRADIO_BROADCAST_CHAIN` (On-Air Sound; default off — studio-clean, set true to opt into the FM colouring) |
 | `guest_host` | `bool?` | `MAMMAMIRADIO_GUEST_HOST` |
+| `songs_between_banter` | `int(2,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER` |
+| `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
+| `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
-| `anthropic_api_key` | `password?` | `ANTHROPIC_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
-| `openai_api_key` | `password?` | `OPENAI_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
-| `azure_speech_key` | `password?` | `AZURE_SPEECH_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
-| `azure_speech_region` | `str?` | `AZURE_SPEECH_REGION` advanced legacy fallback; prefer `/config/secrets.env` |
-| `elevenlabs_api_key` | `password?` | `ELEVENLABS_API_KEY` advanced legacy fallback; prefer `/config/secrets.env` |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
-**Provider secrets.** The five AI/TTS provider credentials are file-first in add-on mode:
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
-`ELEVENLABS_API_KEY` should live in `/config/secrets.env`. Non-empty file values win over legacy
-Configuration-tab values per key. The provider fields and `JAMENDO_CLIENT_ID` remain available as
-advanced optional Supervisor options; `ADMIN_TOKEN` remains visible because leaving it blank means
-the add-on trusts the local network. `/config/secrets.env` is plaintext in the add-on config storage, not Home Assistant
-`/config/secrets.yaml`; anyone with host/add-on config access can read it.
+**Provider secrets.** The five AI/TTS provider credentials live in `/config/secrets.env` in add-on
+mode: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
+`ELEVENLABS_API_KEY`. They are no longer add-on schema fields at all (unlike `JAMENDO_CLIENT_ID`,
+which stays as an advanced optional Supervisor option), so a fresh install never exposes them to
+`ha addons info`. Upgraded installs keep their keys through a one-time boot recovery: Supervisor
+strips schema-removed keys from `/data/options.json` when it starts the add-on, so `run.sh` fetches
+the values still held in Supervisor's stored settings via the Supervisor API
+(`GET $SUPERVISOR_API/addons/self/info`, token-authenticated, 5s timeout, best-effort) and persists
+them into `secrets.env` — every later boot is file-first. The stored copies remain visible to
+`ha addons info` until the operator opens the add-on Configuration tab and saves once (which
+replaces stored settings with only the current fields). `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN`
+remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config storage, not
+Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
 whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,
@@ -185,7 +189,7 @@ the tile.
 
 ## Secrets: password type
 
-Secrets that remain in the Supervisor schema use `password` type (not `str`). This masks them in the HA UI. The AI/TTS provider fields still use `password?` as legacy fallbacks, but new provider credentials should be stored in `/config/secrets.env` instead.
+Secrets that remain in the Supervisor schema use `password` type (not `str`). This masks them in the HA UI. The AI/TTS provider fields were removed from the schema entirely — provider credentials belong in `/config/secrets.env`, never in Supervisor options.
 
 ```yaml
 schema:

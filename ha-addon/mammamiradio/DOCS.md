@@ -14,9 +14,17 @@ Add: `https://github.com/florianhorner/mammamiradio`
 Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
 `ANTHROPIC_API_KEY` (recommended for AI banter and ads), `OPENAI_API_KEY` (script fallback and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
-`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). The legacy
-Configuration-tab provider fields still work as per-key fallbacks, but new provider secrets should go
-in `/config/secrets.env`.
+`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
+longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
+the add-on's stored settings and moved into `/config/secrets.env` automatically the first time the
+updated add-on starts.
+
+Because provider keys are no longer add-on options, a fresh install never puts them where
+`ha addons info <slug>` can print them. An install upgraded from an older version may still carry
+previously saved key values in Home Assistant's stored add-on settings; opening the add-on's
+Configuration tab and pressing Save once replaces the stored settings with only the current fields,
+clearing the old key values. When sharing diagnostics, redact the options block:
+`ha addons info <slug> --raw-json | jq 'del(.data.options)'`.
 
 `secrets.env` accepts `KEY=VALUE` lines, optional `export KEY=VALUE`, whitespace around keys or
 values, single or double quoted values, values containing `=`, UTF-8 BOM, and CRLF endings. Full-line
@@ -168,8 +176,10 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
   |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
   |
-  +-- /data/options.json (HA UI; legacy provider fallback + non-provider options)
-  |     Legacy provider fields are used only when the same /config/secrets.env key is blank or missing.
+  +-- /data/options.json (HA UI options; provider fields are not in the schema anymore)
+  |     Supervisor drops schema-removed keys from this file on start; provider keys
+  |     saved by older versions are recovered once via the Supervisor API
+  |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
   |     HA_ENABLED (from enable_home_assistant)
