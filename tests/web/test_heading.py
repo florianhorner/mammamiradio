@@ -568,3 +568,83 @@ def test_serialize_heading_resolving_before_tracks_tagged(tmp_path):
 
     # No state passed -> no resolving/tagged_count fields (back-compat callers).
     assert "resolving" not in _serialize_heading(heading)
+
+
+@pytest.mark.asyncio
+async def test_direction_all_new_timeout_keeps_course_and_still_downloading(tmp_path, monkeypatch):
+    """When the first-commit wait times out, the course stays live and the response
+    reports it's still downloading (never blocks, never rolls back — leadership #2/#5)."""
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    expansion = DirectionExpansion(
+        label="Sunday morning Italian",
+        targets=[DirectionTarget("Lucio Battisti", "Il mio canto libero")],
+        source="curated",
+    )
+    new_track = _track("Il mio canto libero", "Lucio Battisti", "yt", youtube_id="btti1234567")
+
+    async def _slow_first_commit(_tasks):
+        await asyncio.sleep(10)
+        return 0, []
+
+    monkeypatch.setattr("mammamiradio.web.streamer.DIRECTION_COMMIT_WAIT_SECONDS", 0.05)
+
+    with (
+        patch("mammamiradio.web.streamer.expand_direction", return_value=expansion),
+        patch(
+            "mammamiradio.web.streamer._resolve_direction_tracks_for_route",
+            new_callable=AsyncMock,
+            return_value=[new_track],
+        ),
+        patch("mammamiradio.web.streamer._await_first_direction_commit", side_effect=_slow_first_commit),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "sunday morning italian"})
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    body = resp.json()
+    state = app.state.station_state
+    assert body["ok"] is True
+    assert body["still_downloading"] is True
+    assert body["committed_downloads"] == 0
+    assert state.heading is not None  # course stays live, not rolled back on timeout
+
+
+@pytest.mark.asyncio
+async def test_download_direction_track_grows_budget_and_persists(tmp_path):
+    """A landed direction download grows the course's selection budget to cover it
+    and re-persists, so the downloaded songs actually get selection bias."""
+    from mammamiradio.web.streamer import _download_direction_track
+
+    app = _make_app(tmp_path, tracks=[])
+    heading = Heading(
+        "h-grow",
+        "direction://x",
+        "X",
+        1.0,
+        "operator",
+        selection_budget=0,
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    app.state.station_state.heading = heading
+    write_persisted_heading(tmp_path, heading)  # persisted at budget 0
+    revision = app.state.station_state.source_revision
+    track = _track("Toxic", "Britney Spears", "yt", youtube_id="txc12345678")
+    track.heading_id = heading.id  # the caller tags download tracks before dispatch
+
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock):
+        status = await _download_direction_track(track, app.state, revision, heading.id)
+
+    assert status == "queued"
+    assert track in app.state.station_state.playlist
+    assert heading.selection_budget == 1  # grew from 0 to cover the landed track
+    restored = read_persisted_heading(tmp_path)
+    assert restored is not None
+    assert restored.selection_budget == 1

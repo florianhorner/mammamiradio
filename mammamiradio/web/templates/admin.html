@@ -3231,8 +3231,16 @@ async function setDirectionText(el){
     }
     if(input)input.value='';
     await refreshFast();
-  }catch(_){
-    toast(offlineMsg());
+  }catch(e){
+    // The 60s client ceiling can fire while the station is still finding songs —
+    // that's not an outage. Refresh so the Course banner shows the real state
+    // instead of claiming we couldn't reach the studio.
+    if(e&&e.name==='AbortError'){
+      toast('Still finding songs — check the course banner in a moment.');
+      try{await refreshFast();}catch(_){}
+    }else{
+      toast(offlineMsg());
+    }
   }finally{
     _directionPending=false;
     if(input){input.disabled=false;input.removeAttribute('aria-busy');}
