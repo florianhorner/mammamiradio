@@ -203,6 +203,28 @@ def test_prune_stale_handoff_tmp_files_cap_applies_per_directory(tmp_path):
         assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 6
 
 
+def test_prune_stale_handoff_tmp_files_bounds_raw_glob_enumeration(tmp_path, caplog):
+    # The prune cap alone only limits unlink() calls — without a separate
+    # ceiling on the raw glob() enumeration, a truly pathological backlog
+    # could still cost unbounded scan/stat time before the prune cap ever
+    # gets a chance to apply. Verify enumeration itself stops early.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    handoff_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    for i in range(6):
+        path = handoff_dir / f".manifest-{i}.tmp"
+        path.write_bytes(b"data")
+        os.utime(path, (old_mtime - i, old_mtime - i))
+
+    with (
+        patch("mammamiradio.restart_handoff._MAX_SCRATCH_GLOB_CANDIDATES", 4),
+        patch("mammamiradio.restart_handoff._MAX_SCRATCH_PRUNE_PER_PASS", 100),
+    ):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 4
+
+    assert "exceeded 4 raw candidates" in caplog.text
+
+
 def test_prune_stale_handoff_tmp_files_tolerates_missing_dirs(tmp_path):
     assert prune_stale_handoff_tmp_files(tmp_path) == 0
 

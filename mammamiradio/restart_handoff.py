@@ -46,6 +46,11 @@ _MANIFEST_TMP_PREFIX = ".manifest-"
 # excess is picked up on a later boot (this cleanup runs every startup, not
 # just once).
 _MAX_SCRATCH_PRUNE_PER_PASS = 500
+# Hard ceiling on raw glob() enumeration itself, independent of the prune cap
+# above. Without this, an extreme backlog (far beyond what the prune cap
+# anticipates) would still make `list(directory.glob(...))` an unbounded
+# memory/IO cost before the prune cap ever gets a chance to apply.
+_MAX_SCRATCH_GLOB_CANDIDATES = 5000
 _TMP_SUFFIX = ".tmp"
 _SPOOL_WRITE_LOCK = threading.Lock()
 _METADATA_BLOCK_FLAGS = frozenset(
@@ -694,13 +699,31 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
         return 0
     pruned = 0
     try:
-        # Not unit-tested: simulating a glob()-time OSError (e.g. a permission
-        # change mid-scan) isn't portable across CI environments (chmod tricks
-        # don't reproduce reliably when tests run as root).
-        paths = list(directory.glob(pattern))
+        # Bounded at the enumeration itself, not just after the fact: a plain
+        # list(directory.glob(pattern)) would materialize (and, below, stat-sort)
+        # every match before _MAX_SCRATCH_PRUNE_PER_PASS ever gets a chance to
+        # apply, so a truly pathological backlog could still cost unbounded
+        # scan time/memory even though unlink() calls stay capped.
+        # Not unit-tested past the cap: simulating a glob()-time OSError (e.g. a
+        # permission change mid-scan) isn't portable across CI environments
+        # (chmod tricks don't reproduce reliably when tests run as root).
+        paths: list[Path] = []
+        overflowed = False
+        for candidate in directory.glob(pattern):
+            if len(paths) >= _MAX_SCRATCH_GLOB_CANDIDATES:
+                overflowed = True
+                break
+            paths.append(candidate)
     except OSError as exc:
         logger.warning("Failed to scan restart handoff scratch files in %s: %s", directory, exc)
         return 0
+    if overflowed:
+        logger.warning(
+            "Restart handoff scratch cleanup in %s exceeded %d raw candidates; "
+            "stopped scanning early (remainder is picked up on a future boot)",
+            directory,
+            _MAX_SCRATCH_GLOB_CANDIDATES,
+        )
     if len(paths) > _MAX_SCRATCH_PRUNE_PER_PASS:
         logger.warning(
             "Restart handoff scratch cleanup in %s found %d candidates; capping this pass at %d "
