@@ -40,8 +40,11 @@ _AUDIO_SUFFIX = ".mp3"
 _HANDOFF_TMP_PREFIX = ".handoff-"
 _MANIFEST_TMP_PREFIX = ".manifest-"
 # Bounds worst-case synchronous startup work if a pre-fix crash loop left an
-# unusually large backlog of orphaned scratch files. Any excess is picked up
-# on a later boot (this cleanup runs every startup, not just once).
+# unusually large backlog of orphaned scratch files. Applied independently per
+# directory (manifest-tmp and segments-tmp each get their own budget), so the
+# real combined ceiling per boot is 2x this value, not this value alone. Any
+# excess is picked up on a later boot (this cleanup runs every startup, not
+# just once).
 _MAX_SCRATCH_PRUNE_PER_PASS = 500
 _TMP_SUFFIX = ".tmp"
 _SPOOL_WRITE_LOCK = threading.Lock()

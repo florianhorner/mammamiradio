@@ -184,6 +184,25 @@ def test_prune_stale_handoff_tmp_files_caps_pass_and_prefers_oldest(tmp_path, ca
     assert "capping this pass at 3" in caplog.text
 
 
+def test_prune_stale_handoff_tmp_files_cap_applies_per_directory(tmp_path):
+    # The cap is applied independently inside each _prune_stale_tmp_glob call
+    # (manifest-tmp dir, segments-tmp dir), so the real combined ceiling per
+    # boot is 2x the constant, not the constant itself — verify the pruned
+    # total reflects both directories' caps, not one shared budget.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    for base, prefix in ((handoff_dir, ".manifest-"), (segments_dir, ".handoff-")):
+        for i in range(4):
+            path = base / f"{prefix}{i}.tmp"
+            path.write_bytes(b"data")
+            os.utime(path, (old_mtime - i, old_mtime - i))
+
+    with patch("mammamiradio.restart_handoff._MAX_SCRATCH_PRUNE_PER_PASS", 3):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 6
+
+
 def test_prune_stale_handoff_tmp_files_tolerates_missing_dirs(tmp_path):
     assert prune_stale_handoff_tmp_files(tmp_path) == 0
 
