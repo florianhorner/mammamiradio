@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from mammamiradio.core.config import GUEST_HOST_NAME, load_config, resolve_model
@@ -83,6 +84,64 @@ def test_ha_context_refresh_timeout_env_infinite_ignored(monkeypatch):
     monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "inf")
     config = load_config(TOML_PATH)
     assert config.homeassistant.context_refresh_timeout == 2.0
+
+
+def test_ha_mood_llm_env_enable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is True
+
+
+def test_ha_mood_llm_env_disable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "false")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+
+
+def test_ha_mood_ttl_seconds_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "45")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 45
+
+
+def test_ha_mood_ttl_seconds_env_non_positive_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "0")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_ttl_seconds_env_non_integer_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "soon")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_ttl_seconds_env_infinite_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "inf")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_llm_env_garbage_warns_and_keeps_default(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "ture")
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.core.config"):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+    assert "Ignoring MAMMAMIRADIO_HA_MOOD_LLM='ture'" in caplog.text
+
+
+def test_ha_mood_llm_warns_when_enabled_without_anthropic_key(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.core.config"):
+        config = load_config(TOML_PATH)
+
+    assert config.homeassistant.mood_llm_enabled is True
+    assert config.openai_api_key == "sk-openai-test"
+    assert config.anthropic_api_key == ""
+    assert "Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY" in caplog.text
 
 
 def test_ha_auto_enable_with_token_and_url(monkeypatch):

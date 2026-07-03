@@ -318,5 +318,11 @@ async def test_status_surfaces_fixed_key_cost_breakdown():
     assert resp.status_code == 200
     breakdown = resp.json()["consumption"]["cost_breakdown"]
     assert breakdown["available"] is True
-    assert set(breakdown["categories"]) == {"script_banter", "script_transition", "script_ads", "tts"}
+    assert set(breakdown["categories"]) == {
+        "script_banter",
+        "script_transition",
+        "script_ads",
+        "script_home_mood",
+        "tts",
+    }
     assert breakdown["categories"]["tts"]["characters"] == 300

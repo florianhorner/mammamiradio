@@ -183,6 +183,7 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "news_flash": "creative",
     "ad": "creative",
     "transition": "fast",
+    "home_mood": "fast",
 }
 _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "premium": {
@@ -414,6 +415,10 @@ class HomeAssistantSection:
     # the one-time cold registry/weather warm-up gets a longer budget in the
     # producer (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
     context_refresh_timeout: float = 2.0
+    # Experimental LLM scene-namer for the home mood. The heuristic ladder stays
+    # the always-instant fallback and the default remains off.
+    mood_llm_enabled: bool = False
+    mood_ttl_seconds: float = 90.0
     timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
@@ -1214,6 +1219,16 @@ def _validate(config: StationConfig) -> None:
         or _ctx_timeout <= 0
     ):
         errors.append(_err("homeassistant.context_refresh_timeout", "must be a positive number"))
+    if not isinstance(config.homeassistant.mood_llm_enabled, bool):
+        errors.append(_err("homeassistant.mood_llm_enabled", "must be true or false"))
+    _mood_ttl = config.homeassistant.mood_ttl_seconds
+    if (
+        isinstance(_mood_ttl, bool)
+        or not isinstance(_mood_ttl, int | float)
+        or not math.isfinite(_mood_ttl)
+        or _mood_ttl <= 0
+    ):
+        errors.append(_err("homeassistant.mood_ttl_seconds", "must be a positive number"))
     _allowed_urgencies = {"pissed", "urgent", "gentle"}
     for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
         if timer_cfg.cooldown < 1:
@@ -1253,6 +1268,8 @@ def _validate(config: StationConfig) -> None:
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
+        log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
@@ -1266,6 +1283,29 @@ def _validate(config: StationConfig) -> None:
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
+
+
+def _env_positive_float(name: str) -> float | None:
+    """Parse a positive finite float from an env var; warn and return None on invalid.
+
+    Shared by the `[homeassistant]` numeric env overrides so the
+    parse/validate/warn behavior can't drift between knobs.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not a number)", name, raw)
+        return None
+    if math.isfinite(value) and value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
 
 
 def load_config(path: str = "radio.toml") -> StationConfig:
@@ -1384,25 +1424,28 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
-    # Env override for the HA context refresh budget. Reject non-float / non-positive
-    # values (keep the toml/default) rather than letting a typo disable the deadline.
-    _ha_timeout_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "").strip()
-    if _ha_timeout_env:
-        import logging as _ha_logging
+    _ha_mood_llm_env = os.getenv("MAMMAMIRADIO_HA_MOOD_LLM", "").strip().lower()
+    if _ha_mood_llm_env in _TRUTHY:
+        ha_raw["mood_llm_enabled"] = True
+    elif _ha_mood_llm_env in _FALSY:
+        ha_raw["mood_llm_enabled"] = False
+    elif _ha_mood_llm_env:
+        # A typo ("ture") must not silently leave the experiment off while the
+        # operator believes it is on.
+        import logging as _mood_logging
 
-        _ha_log = _ha_logging.getLogger(__name__)
-        try:
-            _ha_timeout_val = float(_ha_timeout_env)
-        except ValueError:
-            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (not a number)", _ha_timeout_env)
-        else:
-            if math.isfinite(_ha_timeout_val) and _ha_timeout_val > 0:
-                ha_raw["context_refresh_timeout"] = _ha_timeout_val
-            else:
-                _ha_log.warning(
-                    "Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (must be a finite number > 0)",
-                    _ha_timeout_env,
-                )
+        _mood_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_MOOD_LLM=%r (use true/1/yes or false/0/no)",
+            _ha_mood_llm_env,
+        )
+    # Env overrides for positive-float HA knobs. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable them.
+    _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
+    if _ctx_override is not None:
+        ha_raw["context_refresh_timeout"] = _ctx_override
+    _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
+    if _mood_ttl_override is not None:
+        ha_raw["mood_ttl_seconds"] = _mood_ttl_override
     # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
     timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
     timer_interrupts = [
