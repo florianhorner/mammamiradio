@@ -695,6 +695,13 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
         logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
         return 0
 
+    if directory.is_symlink() and not directory.exists():
+        logger.warning(
+            "Failed to resolve restart handoff scratch cleanup dir %s: symlink target unavailable",
+            directory,
+        )
+        return 0
+
     if not directory.is_dir():
         return 0
     pruned = 0
