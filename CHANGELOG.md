@@ -25,7 +25,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **Restart handoff scratch files no longer build up after a hard kill.** On startup the station now clears stale restart-handoff `.tmp` files left behind by an interrupted add-on update, while keeping the published manifest and finished music handoff files intact.
+- **Restart handoff scratch files no longer build up after a hard kill.** On startup the station now prunes stale restart-handoff `.tmp` files left behind by an interrupted add-on update, while keeping the published manifest and finished music handoff files intact.
 - **Background audio prep can no longer crowd out the next thing to air.** Prefetch and other background FFmpeg work now leave capacity for foreground renders, while emergency bridge audio gets its own tightly bounded priority path so recovery tones and silence fillers do not wait behind routine processing.
 - **The admin panel no longer scrolls sideways on phones.** On some phone browsers the producer desk could run off the right edge — the now-playing line, the live-work feed, and the section tabs were cut off and a stray sideways scrollbar appeared. The page now holds the screen width at every size, text stays at its intended size instead of being blown up, and the section tabs wrap cleanly instead of spilling past the edge.
 - **Rotazione track buttons now lay out right at every width.** In the two-pane desktop column (~700px) Next and Ban stay inline on the track line instead of wrapping below it; on a real phone they drop to a stacked row with full-size touch targets.
