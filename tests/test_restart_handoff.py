@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from mammamiradio.restart_handoff import (
     admit_restart_handoff_entries,
     admit_restart_handoff_manifest,
     load_restart_handoff_manifest,
+    prune_stale_handoff_tmp_files,
     restart_handoff_dir,
     restart_handoff_manifest_path,
     try_write_restart_handoff_spool,
@@ -118,6 +121,262 @@ def test_write_spool_copies_hashes_publishes_manifest_and_admits(tmp_path):
     assert segment.ephemeral is False
     assert segment.metadata["audio_source"] == "restart_handoff"
     assert segment.metadata["title_only"] == "Song"
+
+
+def test_prune_stale_handoff_tmp_files_removes_only_old_scratch_files(tmp_path):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+
+    old_manifest_tmp = handoff_dir / ".manifest-old.tmp"
+    old_handoff_tmp = segments_dir / ".handoff-old.tmp"
+    recent_manifest_tmp = handoff_dir / ".manifest-recent.tmp"
+    recent_handoff_tmp = segments_dir / ".handoff-recent.tmp"
+    final_manifest = handoff_dir / "manifest.json"
+    final_segment = segments_dir / "abc123.mp3"
+    unrelated_tmp = handoff_dir / "handoff-old.tmp"
+    for path in (
+        old_manifest_tmp,
+        old_handoff_tmp,
+        recent_manifest_tmp,
+        recent_handoff_tmp,
+        final_manifest,
+        final_segment,
+        unrelated_tmp,
+    ):
+        path.write_bytes(b"data")
+    for path in (old_manifest_tmp, old_handoff_tmp, final_manifest, final_segment, unrelated_tmp):
+        os.utime(path, (old_mtime, old_mtime))
+
+    assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 2
+
+    assert not old_manifest_tmp.exists()
+    assert not old_handoff_tmp.exists()
+    assert recent_manifest_tmp.exists()
+    assert recent_handoff_tmp.exists()
+    assert final_manifest.exists()
+    assert final_segment.exists()
+    assert unrelated_tmp.exists()
+
+
+def test_prune_stale_handoff_tmp_files_caps_pass_and_prefers_oldest(tmp_path, caplog):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    handoff_dir.mkdir(parents=True)
+    now = time.time()
+    # 5 candidates, cap patched to 3: the 3 oldest must be pruned, the 2
+    # newest of the batch must survive for a future boot's pass.
+    paths_oldest_first = []
+    for i in range(5):
+        path = handoff_dir / f".manifest-{i}.tmp"
+        path.write_bytes(b"data")
+        mtime = now - (7 * 3600) - (5 - i)  # all older than the 6h cutoff, strictly increasing
+        os.utime(path, (mtime, mtime))
+        paths_oldest_first.append(path)
+
+    with patch("mammamiradio.restart_handoff._MAX_SCRATCH_PRUNE_PER_PASS", 3):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 3
+
+    for path in paths_oldest_first[:3]:
+        assert not path.exists()
+    for path in paths_oldest_first[3:]:
+        assert path.exists()
+    assert "capping this pass at 3" in caplog.text
+
+
+def test_prune_stale_handoff_tmp_files_cap_applies_per_directory(tmp_path):
+    # The cap is applied independently inside each _prune_stale_tmp_glob call
+    # (manifest-tmp dir, segments-tmp dir), so the real combined ceiling per
+    # boot is 2x the constant, not the constant itself — verify the pruned
+    # total reflects both directories' caps, not one shared budget.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    for base, prefix in ((handoff_dir, ".manifest-"), (segments_dir, ".handoff-")):
+        for i in range(4):
+            path = base / f"{prefix}{i}.tmp"
+            path.write_bytes(b"data")
+            os.utime(path, (old_mtime - i, old_mtime - i))
+
+    with patch("mammamiradio.restart_handoff._MAX_SCRATCH_PRUNE_PER_PASS", 3):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 6
+
+
+def test_prune_stale_handoff_tmp_files_bounds_raw_glob_enumeration(tmp_path, caplog):
+    # The prune cap alone only limits unlink() calls — without a separate
+    # ceiling on the raw glob() enumeration, a truly pathological backlog
+    # could still cost unbounded scan/stat time before the prune cap ever
+    # gets a chance to apply. Verify enumeration itself stops early.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    handoff_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    for i in range(6):
+        path = handoff_dir / f".manifest-{i}.tmp"
+        path.write_bytes(b"data")
+        os.utime(path, (old_mtime - i, old_mtime - i))
+
+    with (
+        patch("mammamiradio.restart_handoff._MAX_SCRATCH_GLOB_CANDIDATES", 4),
+        patch("mammamiradio.restart_handoff._MAX_SCRATCH_PRUNE_PER_PASS", 100),
+    ):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 4
+
+    assert "exceeded 4 raw candidates" in caplog.text
+
+
+def test_prune_stale_handoff_tmp_files_tolerates_missing_dirs(tmp_path):
+    assert prune_stale_handoff_tmp_files(tmp_path) == 0
+
+    restart_handoff_dir(tmp_path).mkdir(parents=True)
+    assert prune_stale_handoff_tmp_files(tmp_path) == 0
+
+
+def test_prune_stale_handoff_tmp_files_rejects_nonpositive_max_age(tmp_path, caplog):
+    # max_age_hours<=0 would compute a cutoff at/after "now", pruning
+    # everything including a tmp file from a write in progress. Must no-op.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    handoff_dir.mkdir(parents=True)
+    brand_new = handoff_dir / ".manifest-brand-new.tmp"
+    brand_new.write_bytes(b"fresh")
+
+    for bad_age in (0, -1, -0.5, float("nan"), float("-inf")):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=bad_age) == 0
+
+    assert brand_new.exists()
+    assert "max_age_hours must be positive" in caplog.text
+
+
+def test_prune_stale_handoff_tmp_files_logs_and_continues_on_oserror(tmp_path, caplog):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    good = handoff_dir / ".manifest-good.tmp"
+    bad = segments_dir / ".handoff-bad.tmp"
+    good.write_bytes(b"good")
+    bad.write_bytes(b"bad")
+    os.utime(good, (old_mtime, old_mtime))
+    os.utime(bad, (old_mtime, old_mtime))
+
+    original_unlink = Path.unlink
+
+    def _unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == bad:
+            raise OSError("permission denied")
+        original_unlink(path, missing_ok=missing_ok)
+
+    with patch.object(Path, "unlink", autospec=True, side_effect=_unlink):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 1
+
+    assert "Failed to prune restart handoff scratch file" in caplog.text
+    assert "permission denied" in caplog.text
+
+
+def test_prune_stale_handoff_tmp_files_tolerates_file_vanishing_mid_loop(tmp_path):
+    # TOCTOU: a file matched by glob() can vanish (concurrent cleanup, another
+    # process) before stat()/unlink() runs on it. Must skip, not raise.
+    handoff_dir = restart_handoff_dir(tmp_path)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    old_mtime = time.time() - 7 * 3600
+    vanished = handoff_dir / ".manifest-vanished.tmp"
+    survivor = segments_dir / ".handoff-survivor.tmp"
+    vanished.write_bytes(b"gone")
+    survivor.write_bytes(b"here")
+    os.utime(vanished, (old_mtime, old_mtime))
+    os.utime(survivor, (old_mtime, old_mtime))
+
+    original_stat = Path.stat
+
+    def _stat(path: Path, *, follow_symlinks: bool = True):
+        if path == vanished:
+            raise FileNotFoundError("vanished mid-loop")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    with patch.object(Path, "stat", autospec=True, side_effect=_stat):
+        assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 1
+
+    assert not survivor.exists()
+
+
+def test_prune_stale_handoff_tmp_files_skips_handoff_dir_symlink_outside_cache(tmp_path):
+    cache_dir = tmp_path / "cache"
+    outside_dir = tmp_path / "outside"
+    cache_dir.mkdir()
+    outside_dir.mkdir()
+    victim = outside_dir / ".manifest-victim.tmp"
+    victim.write_bytes(b"outside")
+    old_mtime = time.time() - 7 * 3600
+    os.utime(victim, (old_mtime, old_mtime))
+    restart_handoff_dir(cache_dir).symlink_to(outside_dir, target_is_directory=True)
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert victim.exists()
+
+
+def test_prune_stale_handoff_tmp_files_skips_segments_dir_symlink_outside_cache(tmp_path):
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    outside_dir = tmp_path / "outside-segments"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    victim = outside_dir / ".handoff-victim.tmp"
+    victim.write_bytes(b"outside")
+    old_mtime = time.time() - 7 * 3600
+    os.utime(victim, (old_mtime, old_mtime))
+    (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert victim.exists()
+
+
+def test_prune_stale_handoff_tmp_files_skips_symlinked_scratch_file(tmp_path):
+    handoff_dir = restart_handoff_dir(tmp_path)
+    outside_dir = tmp_path / "outside"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    victim = outside_dir / "victim.tmp"
+    victim.write_bytes(b"outside")
+    scratch_link = handoff_dir / ".manifest-link.tmp"
+    scratch_link.symlink_to(victim)
+    old_mtime = time.time() - 7 * 3600
+    os.utime(victim, (old_mtime, old_mtime))
+
+    assert prune_stale_handoff_tmp_files(tmp_path, max_age_hours=6) == 0
+
+    assert scratch_link.exists()
+    assert victim.exists()
+
+
+def test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_cache_dir(tmp_path):
+    # Path.resolve(strict=False) raises RuntimeError (not OSError) on a symlink
+    # loop. This must degrade to a no-op, never crash the caller (main.py's
+    # startup() calls this with no surrounding try/except).
+    loop_a = tmp_path / "loop_a"
+    loop_b = tmp_path / "loop_b"
+    loop_a.symlink_to(loop_b)
+    loop_b.symlink_to(loop_a)
+
+    assert prune_stale_handoff_tmp_files(loop_a, max_age_hours=6) == 0
+
+
+def test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_handoff_dir(tmp_path, caplog):
+    # Same RuntimeError hazard, but the loop is one level down: cache_dir
+    # itself resolves fine, only cache_dir/restart_handoff loops.
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    loop_a = cache_dir / "loop_a"
+    loop_b = cache_dir / "loop_b"
+    loop_a.symlink_to(loop_b)
+    loop_b.symlink_to(loop_a)
+    restart_handoff_dir(cache_dir).symlink_to(loop_a)
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
 
 
 def test_write_spool_preserves_existing_manifest_when_no_candidates_are_accepted(tmp_path):

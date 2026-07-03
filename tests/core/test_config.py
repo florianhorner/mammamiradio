@@ -50,6 +50,35 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
+def test_radio_toml_brand_sonic_signatures_use_real_sfx_types():
+    """Every campaign sonic_signature component must be a real AVAILABLE_SFX_TYPES entry.
+
+    generate_brand_motif() (mammamiradio/audio/normalizer.py) splits sonic_signature
+    on "+" and renders each component via generate_sfx(). A component that isn't a
+    real SFX type (or a music-bed/environment name mistakenly reused here) silently
+    falls back to a generic chime for every airing of that brand's jingle — this is
+    exactly how "dust_hit", "espresso_hiss", "cheap_synth_romance" etc. shipped
+    unnoticed in radio.toml and produced repeated "Unknown SFX type" warnings on a
+    live station. Guards both the root radio.toml and its byte-for-byte HA addon
+    copy (they're synced; see test_addon_radio_sync.py).
+    """
+    from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
+
+    for rel_path in ("radio.toml", "ha-addon/mammamiradio/radio.toml"):
+        toml_path = Path(__file__).resolve().parents[2] / rel_path
+        config = load_config(str(toml_path))
+        for brand in config.ads.brands:
+            if not brand.campaign or not brand.campaign.sonic_signature:
+                continue
+            for component in brand.campaign.sonic_signature.split("+"):
+                component = component.strip()
+                assert component in AVAILABLE_SFX_TYPES, (
+                    f"{rel_path}: brand '{brand.name}' sonic_signature component "
+                    f"'{component}' is not in AVAILABLE_SFX_TYPES — it will silently "
+                    f"fall back to a generic chime"
+                )
+
+
 def test_load_config_parses_per_host_voice_settings():
     """Marco carries an ElevenLabs clarity override (stability); a host without a
     voice_settings table defaults to {} so its synthesis uses the house tuning."""

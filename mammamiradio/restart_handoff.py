@@ -37,6 +37,21 @@ DEFAULT_MAX_ENTRIES = 3
 DEFAULT_MAX_ENTRY_AGE_SEC = 6 * 60 * 60
 
 _AUDIO_SUFFIX = ".mp3"
+_HANDOFF_TMP_PREFIX = ".handoff-"
+_MANIFEST_TMP_PREFIX = ".manifest-"
+# Bounds worst-case synchronous startup work if a pre-fix crash loop left an
+# unusually large backlog of orphaned scratch files. Applied independently per
+# directory (manifest-tmp and segments-tmp each get their own budget), so the
+# real combined ceiling per boot is 2x this value, not this value alone. Any
+# excess is picked up on a later boot (this cleanup runs every startup, not
+# just once).
+_MAX_SCRATCH_PRUNE_PER_PASS = 500
+# Hard ceiling on raw glob() enumeration itself, independent of the prune cap
+# above. Without this, an extreme backlog (far beyond what the prune cap
+# anticipates) would still make `list(directory.glob(...))` an unbounded
+# memory/IO cost before the prune cap ever gets a chance to apply.
+_MAX_SCRATCH_GLOB_CANDIDATES = 5000
+_TMP_SUFFIX = ".tmp"
 _SPOOL_WRITE_LOCK = threading.Lock()
 _METADATA_BLOCK_FLAGS = frozenset(
     {
@@ -406,6 +421,39 @@ def try_write_restart_handoff_spool(
     return True
 
 
+def prune_stale_handoff_tmp_files(cache_dir: Path | str, max_age_hours: float = 6) -> int:
+    """Prune orphaned restart-handoff scratch files left by hard kills."""
+
+    if not math.isfinite(max_age_hours) or max_age_hours <= 0:
+        # A zero/negative/NaN age would prune everything (including a tmp file
+        # from a write in progress) instead of only true orphans. Fail safe by
+        # pruning nothing rather than pruning everything.
+        logger.warning(
+            "Ignoring restart handoff scratch cleanup: max_age_hours must be positive, got %r",
+            max_age_hours,
+        )
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    try:
+        cache_root = Path(cache_dir).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
+        # loop. Startup cleanup must never crash the app over a broken cache dir.
+        logger.warning("Failed to resolve restart handoff cache dir for scratch cleanup: %s", exc)
+        return 0
+    return _prune_stale_tmp_glob(
+        restart_handoff_dir(cache_dir),
+        f"{_MANIFEST_TMP_PREFIX}*{_TMP_SUFFIX}",
+        cutoff,
+        cache_root=cache_root,
+    ) + _prune_stale_tmp_glob(
+        _segments_dir(cache_dir),
+        f"{_HANDOFF_TMP_PREFIX}*{_TMP_SUFFIX}",
+        cutoff,
+        cache_root=cache_root,
+    )
+
+
 def _entry_from_candidate(
     cache_dir: Path | str,
     candidate: RestartHandoffCandidate,
@@ -526,7 +574,7 @@ def _entry_rejection_reason(
 def _publish_manifest(cache_dir: Path | str, manifest: RestartHandoffManifest) -> None:
     path = restart_handoff_manifest_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".manifest-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=_MANIFEST_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(manifest.to_dict(), fh, ensure_ascii=False, indent=2, sort_keys=True)
@@ -598,7 +646,7 @@ def _copy_and_hash(source: Path, segments_dir: Path, artist: str, title: str) ->
     segments_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     size = 0
-    fd, tmp_name = tempfile.mkstemp(dir=str(segments_dir), prefix=".handoff-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(segments_dir), prefix=_HANDOFF_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
         with source.open("rb") as src, os.fdopen(fd, "wb") as dst:
             while chunk := src.read(1024 * 1024):
@@ -619,6 +667,87 @@ def _copy_and_hash(source: Path, segments_dir: Path, artist: str, title: str) ->
 
 def _segments_dir(cache_dir: Path | str) -> Path:
     return restart_handoff_dir(cache_dir) / SEGMENTS_DIRNAME
+
+
+def _safe_mtime_for_sort(path: Path) -> float:
+    """mtime for cap-sorting only; a vanished/unreadable file sorts first (oldest) so the
+    per-file loop's own FileNotFoundError/OSError handling still gets a chance at it."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache_root: Path) -> int:
+    try:
+        resolved_dir = directory.resolve(strict=False)
+        resolved_dir.relative_to(cache_root)
+    except ValueError:
+        logger.warning(
+            "Skipping restart handoff scratch cleanup outside cache dir: %s -> %s",
+            directory,
+            resolved_dir,
+        )
+        return 0
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
+        # loop. Startup cleanup must never crash the app over a broken cache dir.
+        logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
+        return 0
+
+    if not directory.is_dir():
+        return 0
+    pruned = 0
+    try:
+        # Bounded at the enumeration itself, not just after the fact: a plain
+        # list(directory.glob(pattern)) would materialize (and, below, stat-sort)
+        # every match before _MAX_SCRATCH_PRUNE_PER_PASS ever gets a chance to
+        # apply, so a truly pathological backlog could still cost unbounded
+        # scan time/memory even though unlink() calls stay capped.
+        # Not unit-tested past the cap: simulating a glob()-time OSError (e.g. a
+        # permission change mid-scan) isn't portable across CI environments
+        # (chmod tricks don't reproduce reliably when tests run as root).
+        paths: list[Path] = []
+        overflowed = False
+        for candidate in directory.glob(pattern):
+            if len(paths) >= _MAX_SCRATCH_GLOB_CANDIDATES:
+                overflowed = True
+                break
+            paths.append(candidate)
+    except OSError as exc:
+        logger.warning("Failed to scan restart handoff scratch files in %s: %s", directory, exc)
+        return 0
+    if overflowed:
+        logger.warning(
+            "Restart handoff scratch cleanup in %s exceeded %d raw candidates; "
+            "stopped scanning early (remainder is picked up on a future boot)",
+            directory,
+            _MAX_SCRATCH_GLOB_CANDIDATES,
+        )
+    if len(paths) > _MAX_SCRATCH_PRUNE_PER_PASS:
+        logger.warning(
+            "Restart handoff scratch cleanup in %s found %d candidates; capping this pass at %d "
+            "(oldest first — the remainder is picked up on a future boot)",
+            directory,
+            len(paths),
+            _MAX_SCRATCH_PRUNE_PER_PASS,
+        )
+        paths = sorted(paths, key=_safe_mtime_for_sort)[:_MAX_SCRATCH_PRUNE_PER_PASS]
+    for path in paths:
+        try:
+            if path.is_symlink():
+                continue
+            if not path.is_file():
+                continue
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            pruned += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to prune restart handoff scratch file %s: %s", path, exc)
+    return pruned
 
 
 def _relative_to_handoff(cache_dir: Path | str, path: Path) -> str:
