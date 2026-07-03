@@ -1,0 +1,64 @@
+# issue-688 phase-2 schema removal — test evidence (2026-07-03T18:47:00Z, rebased onto origin/main incl. #742/#739)
+
+This PR was rebased onto origin/main after two other PRs merged into the same
+region of the add-on config: #742 ("declutter configuration options" — hides
+schema-only optional fields from the visible Configuration tab, kept the 5
+provider fields in `schema:`) and #739 (new pacing-slider options). #742 does
+not close #688: a schema-only field is still a real, settable Supervisor
+option, so `ha addons info` still prints it once an operator sets a value.
+This branch keeps #742's declutter and #739's pacing fields, and removes the
+5 provider fields from `schema:` entirely (not just from the visible
+`options:` defaults) — the only way to guarantee they never reach Supervisor's
+persisted options or diagnostics output. One of #742's own regression tests
+(`test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visible`)
+asserted the 5 provider fields stay schema-present; it's updated to assert
+`jamendo_client_id` stays schema-only-hidden while the 5 provider fields are
+absent from schema and options entirely.
+
+CodeRabbit review on #741 flagged three findings, all fixed:
+- Major/security: the recovered-secrets temp file (tempfile.mkstemp) leaked on
+  disk if os.fdopen/os.chmod/os.replace raised after mkstemp succeeded — now
+  wrapped in try/except with os.unlink on any failure, re-raised so the outer
+  warning still fires.
+- Minor: the Supervisor recovery call was not actually one-time — it retried
+  on every boot for any install still missing one or more provider keys
+  (common: most installs don't configure all 5 providers). Added
+  RECOVERY_MARKER_FILE (/data/.provider_recovery_checked, overridable via
+  $RECOVERY_MARKER_FILE for tests), written only after a *successful*
+  Supervisor response — a network failure/timeout does NOT set it, so a
+  transient failure keeps retrying on later boots instead of permanently
+  losing the recovery chance (a stricter, safer version of CodeRabbit's
+  "mark after any attempt" suggestion). New test
+  test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing
+  proves a second boot does not re-hit a still-live stub server.
+- Minor/test-only: the Supervisor stub HTTPServer in tests leaked a listening
+  socket fd (server.shutdown() stops the loop but not the socket) — added
+  server.server_close() at both call sites.
+
+$ .venv/bin/python -m pytest tests/ -q --timeout 300 --deselect tests/test_restart_handoff.py::test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_handoff_dir
+3669 passed, 2 skipped, 20 deselected in 73.50s
+(deselected symlink-loop test fails identically on a clean origin/main tree — local macOS/Py3.14 environment, tracked in issue #738, unrelated to this change)
+
+$ .venv/bin/python -m pytest tests/repo/test_run_sh_options_parser.py tests/repo/test_repo_scripts.py -q
+82 passed, incl. 5 Supervisor-recovery tests (4 original + the new one-time-marker test), the schema guard test, and the updated #742 disclosure test
+
+$ .venv/bin/ruff check . && .venv/bin/ruff format --check .
+All checks passed! / 246 files already formatted
+
+$ .venv/bin/mypy mammamiradio/ tests/
+Success: no issues found in 219 source files
+
+$ shellcheck ha-addon/mammamiradio/rootfs/run.sh tests/workflows/test_validate_addon_edge.sh
+clean (rc=0)
+
+$ ./scripts/validate-addon.sh
+All checks passed. (options/schema/translations parity incl. edge)
+
+$ bash tests/workflows/test_validate_addon_edge.sh
+All validate-addon edge-block scenarios passed.
+
+$ bash scripts/check-release-invariants.sh
+Passed: 8  Failed: 0
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.

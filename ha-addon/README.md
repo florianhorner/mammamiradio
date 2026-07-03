@@ -29,8 +29,6 @@ After installing, go to the add-on's **Configuration** tab:
 
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
 - **Jamendo Client ID** (optional): Enables CC-licensed music from Jamendo. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com). Leave empty to use other available music sources.
-- **Provider secrets** (recommended): Put AI/TTS credentials in `/config/secrets.env` inside the add-on config folder. Supported keys are `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY`. Non-empty file values win over the legacy Configuration-tab fields per key.
-- **Legacy provider fields** (optional): The Configuration tab still accepts Anthropic, OpenAI, Azure Speech, and ElevenLabs keys as a compatibility fallback. Avoid new provider keys there if you do not want them stored in Supervisor options.
 - **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
@@ -39,6 +37,10 @@ After installing, go to the add-on's **Configuration** tab:
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
 - **On-air media player push**: On by default — the station appears in Home Assistant as a media player automatically. Turn it off if you install the HACS integration (which provides a controllable media player and would otherwise fight this push); the station's sensors keep working either way.
+
+### Provider keys (not in the Configuration tab)
+
+AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder — save them from the admin setup panel, which writes the file for you, or create it by hand. Supported keys are `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY`. Keys saved through the old Configuration-tab fields by earlier versions move into the secrets file automatically the first time the updated add-on starts; non-empty file values win per key.
 
 ## Usage
 

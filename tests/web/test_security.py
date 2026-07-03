@@ -120,3 +120,29 @@ class TestSaveDotenv:
         _save_dotenv({"KEY": "val"})
         content = (tmp_path / ".env").read_text()
         assert content.endswith("\n")
+
+    def test_concurrent_writes_preserve_all_keys(self, tmp_path, monkeypatch):
+        """Concurrent saves of DIFFERENT keys must not lose updates. Each admin
+        toggle endpoint holds its OWN asyncio lock, so the only thing serializing
+        the shared .env read-modify-write is _DOTENV_LOCK inside _save_dotenv. A
+        Barrier maximizes contention; with the lock every key survives, without it
+        some writes clobber each other. Deterministic, not timing-based."""
+        import threading
+
+        monkeypatch.chdir(tmp_path)
+        keys = [f"KEY_{i}" for i in range(16)]
+        barrier = threading.Barrier(len(keys))
+
+        def _writer(k):
+            barrier.wait()
+            _save_dotenv({k: "v"})
+
+        threads = [threading.Thread(target=_writer, args=(k,)) for k in keys]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        content = (tmp_path / ".env").read_text()
+        for k in keys:
+            assert f'{k}="v"' in content, f"{k} lost — concurrent .env write dropped it"
