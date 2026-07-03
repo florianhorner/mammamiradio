@@ -186,7 +186,7 @@ The producer must continue copying `summary` / `events_summary` / `mood` / `weat
 
 ### Phase C — Mood + scenes by LLM (1 PR, decision point)
 
-- Add an experimental LLM scene-namer over the L4-budgeted set, cached for `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (default target: 90s) to keep latency and cost bounded.
+- Add an experimental LLM scene-namer over the L4-budgeted set, refreshed at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (default target: 90s) to keep latency and cost bounded. The last scene keeps airing while a refresh runs (stale-while-revalidate with a bounded staleness cap) — mood consumers are minutes apart at default pacing, so a scene that dies exactly at its TTL would be paid for on every segment yet almost never heard.
 - Gate it behind `MAMMAMIRADIO_HA_MOOD_LLM` (`false` by default). When disabled, missing a usable LLM key, timed out, rejected, or returning an unusable name, `classify_home_mood` remains the authoritative heuristic ladder.
 - Preserve the existing `ha_home_mood` / `ha_home_mood_en` propagation contract so `scriptwriter.py`, `/status`, and `/public-status` do not need a prompt or API shape change.
 - Track the LLM call under the `script_home_mood` cost category so Motore can show "Home mood" separately from host scripts.

@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 MAX_SCENE_LENGTH = 60
 MAX_SCENE_ENTITIES = 12
+# Stale-while-revalidate ceiling: mood consumers (banter/ad/news) run minutes
+# apart at default pacing, so a scene that stopped being served the moment its
+# TTL expired would almost never air — every segment would pay for a refresh
+# and read the ladder anyway. Past its TTL the last scene keeps airing while a
+# refresh runs, but never beyond this cap (a home can change a lot in 15 min).
+STALE_SCENE_MAX_SECONDS = 900.0
 
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -105,8 +111,17 @@ def resolve_home_mood(config: StationConfig, state: StationState, ha_cache: Home
         return ladder
     ttl = float(getattr(ha_cfg, "mood_ttl_seconds", 90.0) or 90.0)
     now = _mono_now()
-    if _scene_cache is not None and now - _scene_cache.generated_at < ttl:
-        return _scene_cache.mood_it, _scene_cache.mood_en
+    if _scene_cache is not None:
+        age = now - _scene_cache.generated_at
+        if age < ttl:
+            return _scene_cache.mood_it, _scene_cache.mood_en
+        _schedule_generation(config, state, scored[:MAX_SCENE_ENTITIES], ttl=ttl, now=now)
+        if age < STALE_SCENE_MAX_SECONDS:
+            # Stale-while-revalidate: keep airing the paid scene while the
+            # refresh runs so the LLM mood is actually heard between
+            # minutes-apart consumer segments.
+            return _scene_cache.mood_it, _scene_cache.mood_en
+        return ladder
     _schedule_generation(config, state, scored[:MAX_SCENE_ENTITIES], ttl=ttl, now=now)
     return ladder
 

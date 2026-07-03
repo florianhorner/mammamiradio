@@ -110,7 +110,7 @@ async def test_resolve_returns_ladder_immediately_then_cached_generated_scene(co
 
 
 @pytest.mark.asyncio
-async def test_fresh_generated_cache_does_not_call_until_ttl_expires(config, state, monkeypatch):
+async def test_ttl_gates_refresh_and_serves_stale_while_revalidating(config, state, monkeypatch):
     from mammamiradio.home import scene_namer
 
     now = 1_000.0
@@ -147,7 +147,46 @@ async def test_fresh_generated_cache_does_not_call_until_ttl_expires(config, sta
     await asyncio.sleep(0)
     assert calls == 1
 
+    # Past the TTL but under the staleness cap: the paid scene keeps airing
+    # while the refresh runs in the background (stale-while-revalidate).
     now += 31.0
+    assert scene_namer.resolve_home_mood(config, state, _home_context(mood="Serata cinema")) == (
+        "Scena generata uno",
+        "Generated scene uno",
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert calls == 2
+    assert scene_namer.resolve_home_mood(config, state, _home_context(mood="Serata cinema")) == (
+        "Scena generata due",
+        "Generated scene due",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_scene_beyond_cap_falls_back_to_ladder(config, state, monkeypatch):
+    from mammamiradio.home import scene_namer
+
+    now = 1_000.0
+    calls = 0
+
+    numerals = {1: "uno", 2: "due"}
+
+    async def _call(_config, _scored, *, local_hour, model):
+        nonlocal calls
+        calls += 1
+        word = numerals[calls]
+        return _response(f'{{"mood_it":"Scena generata {word}","mood_en":"Generated scene {word}"}}')
+
+    monkeypatch.setattr(scene_namer, "_mono_now", lambda: now)
+    monkeypatch.setattr(scene_namer, "_call_anthropic_scene", _call)
+
+    scene_namer.resolve_home_mood(config, state, _home_context(mood="Musica in casa"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    now += scene_namer.STALE_SCENE_MAX_SECONDS + 1.0
     assert scene_namer.resolve_home_mood(config, state, _home_context(mood="Serata cinema")) == (
         "Serata cinema",
         "Music at home",
