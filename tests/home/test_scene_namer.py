@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -240,6 +241,8 @@ async def test_generation_failure_gates_immediate_retry(config, state, monkeypat
         "not json",
         '{"mood_it":"light.kitchen","mood_en":"Kitchen"}',
         '{"mood_it":"Serata {debug}","mood_en":"Debug night"}',
+        '{"mood_it":true,"mood_en":"Kitchen"}',
+        '{"mood_it":"Casa sk-ant-12345678901234567890","mood_en":"Token night"}',
     ],
 )
 async def test_invalid_llm_payload_keeps_ladder(config, state, monkeypatch, payload):
@@ -271,3 +274,45 @@ async def test_invalid_llm_payload_keeps_ladder(config, state, monkeypatch, payl
         "input": 13,
         "output": 5,
     }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_scene_client_is_closed(config, monkeypatch):
+    from mammamiradio.home import scene_namer
+
+    closed = False
+    calls: list[dict] = []
+
+    class _FakeMessages:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            return _response('{"mood_it":"La cucina si accende","mood_en":"Kitchen waking up"}')
+
+    class _FakeAnthropic:
+        def __init__(self, *, api_key):
+            assert api_key == "sk-ant-test"
+            self.messages = _FakeMessages()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            nonlocal closed
+            closed = True
+
+        def with_options(self, **kwargs):
+            assert kwargs == {"timeout": 45.0}
+            return self
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(AsyncAnthropic=_FakeAnthropic))
+
+    response = await scene_namer._call_anthropic_scene(
+        config,
+        (_entity(),),
+        local_hour=21,
+        model="claude-test",
+    )
+
+    assert closed is True
+    assert response.content[0].text == '{"mood_it":"La cucina si accende","mood_en":"Kitchen waking up"}'
+    assert calls[0]["model"] == "claude-test"

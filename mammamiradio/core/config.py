@@ -1254,6 +1254,8 @@ def _validate(config: StationConfig) -> None:
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
+        log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:

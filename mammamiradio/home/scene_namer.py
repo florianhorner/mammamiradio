@@ -31,8 +31,8 @@ MAX_SCENE_ENTITIES = 12
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,}$")
-_HEX_TOKEN_RE = re.compile(r"^[a-fA-F0-9]{32,}$")
+_TOKEN_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{10,}|[A-Za-z0-9_-]{20,})\b")
+_HEX_TOKEN_RE = re.compile(r"\b[a-fA-F0-9]{32,}\b")
 _PROMPT_INJECTION_RE = re.compile(r"(ignore previous|disregard|system override|forget your|</?home_state_data)", re.I)
 
 
@@ -142,13 +142,13 @@ async def _call_anthropic_scene(
         "scene name, 2-6 words, not a sentence, and must not include entity IDs.\n\n"
         + json.dumps({"local_hour": local_hour, "home_state": lines}, ensure_ascii=False, sort_keys=True)
     )
-    client = AsyncAnthropic(api_key=config.anthropic_api_key)
-    return await client.with_options(timeout=45.0).messages.create(
-        model=model,
-        max_tokens=200,
-        system="You create safe, concise scene names from home-state summaries.",
-        messages=[{"role": "user", "content": prompt}],
-    )
+    async with AsyncAnthropic(api_key=config.anthropic_api_key) as client:
+        return await client.with_options(timeout=45.0).messages.create(
+            model=model,
+            max_tokens=200,
+            system="You create safe, concise scene names from home-state summaries.",
+            messages=[{"role": "user", "content": prompt}],
+        )
 
 
 def _parse_scene_payload(text: str, scored: tuple[ScoredEntity, ...]) -> tuple[str, str] | None:
@@ -163,16 +163,21 @@ def _parse_scene_payload(text: str, scored: tuple[ScoredEntity, ...]) -> tuple[s
         return None
     if not isinstance(data, dict):
         return None
-    mood_it = _clean_scene(data.get("mood_it"))
-    mood_en = _clean_scene(data.get("mood_en"))
+    raw_mood_it = data.get("mood_it")
+    raw_mood_en = data.get("mood_en")
+    if not isinstance(raw_mood_it, str) or not isinstance(raw_mood_en, str):
+        logger.warning("HA scene naming returned non-string scene fields; keeping heuristic mood")
+        return None
+    mood_it = _clean_scene(raw_mood_it)
+    mood_en = _clean_scene(raw_mood_en)
     if not (_validate_scene(mood_it, scored) and _validate_scene(mood_en, scored)):
         logger.warning("HA scene naming returned unsafe scene; keeping heuristic mood")
         return None
     return mood_it, mood_en
 
 
-def _clean_scene(value: object) -> str:
-    text = str(value or "").strip()
+def _clean_scene(value: str) -> str:
+    text = value.strip()
     text = _CONTROL_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -188,7 +193,7 @@ def _validate_scene(scene: str, scored: tuple[ScoredEntity, ...]) -> bool:
         return False
     if _PROMPT_INJECTION_RE.search(scene):
         return False
-    if _IP_RE.search(scene) or _EMAIL_RE.search(scene) or _TOKEN_RE.fullmatch(scene) or _HEX_TOKEN_RE.fullmatch(scene):
+    if _IP_RE.search(scene) or _EMAIL_RE.search(scene) or _TOKEN_RE.search(scene) or _HEX_TOKEN_RE.search(scene):
         return False
     lowered = scene.lower()
     for entity in scored:
