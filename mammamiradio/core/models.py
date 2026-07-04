@@ -473,6 +473,7 @@ class StationState:
     songs_since_news: int = 0
     segments_since_station_id: int = 0
     segments_since_time_check: int = 0
+    guest_host_banter_cooldown_remaining: int = 0
     running_jokes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
     recent_transition_texts: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     current_track: Track | None = None
