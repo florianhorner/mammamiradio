@@ -7,6 +7,9 @@ both language modes so the guest is never described to the LLM without a brief).
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import pytest
 
 from mammamiradio.core.config import load_config
@@ -167,6 +170,18 @@ def test_guest_config_style_caps_coffee_instead_of_defining_him(config):
     hans = next(h for h in config.hosts if h.name == _LOCAL_BALLOON_GUEST_HOST)
     assert "coffee jokes are occasional, never his default bit" in hans.style
     assert "thimble-sized espressos" not in hans.style
+
+
+def test_root_and_addon_guest_config_styles_stay_in_sync():
+    def hans_style(path: str) -> str:
+        data = tomllib.loads(Path(path).read_text())
+        return next(host["style"] for host in data["hosts"] if host["name"] == _LOCAL_BALLOON_GUEST_HOST)
+
+    root_style = hans_style("radio.toml")
+    addon_style = hans_style("ha-addon/mammamiradio/radio.toml")
+    assert root_style == addon_style
+    assert "coffee jokes are occasional, never his default bit" in addon_style
+    assert "thimble-sized espressos" not in addon_style
 
 
 def test_regular_pairing_survives_guest_in_roster(config):

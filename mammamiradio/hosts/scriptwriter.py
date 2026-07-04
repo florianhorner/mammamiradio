@@ -119,6 +119,8 @@ _cached_system_prompt_hash: str = ""
 # prompt logic share one spelling of the name.
 _LOCAL_BALLOON_GUEST_HOST = GUEST_HOST_NAME
 _LOCAL_BALLOON_GUEST_HOST_CI = _LOCAL_BALLOON_GUEST_HOST.casefold()
+_LOCAL_BALLOON_GUEST_HOST_FIRST_CI = _LOCAL_BALLOON_GUEST_HOST.split()[0].casefold()
+_HOST_TAG_STRIP_CHARS = " \t\r\n\"'`“”‘’:："
 _GUEST_HOST_CAMEO_PROBABILITY = 1 / 6
 _GUEST_HOST_CAMEO_COOLDOWN_BREAKS = 1
 
@@ -374,9 +376,19 @@ def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
     return regular or hosts
 
 
+def _normalize_host_tag(name: str) -> str:
+    return name.strip(_HOST_TAG_STRIP_CHARS).casefold()
+
+
 def _is_local_guest_host_name(name: str) -> bool:
     """Return true only for the configured guest host's exact name, case-insensitive."""
-    return name.strip().casefold() == _LOCAL_BALLOON_GUEST_HOST_CI
+    return _normalize_host_tag(name) == _LOCAL_BALLOON_GUEST_HOST_CI
+
+
+def _is_local_guest_host_tag(name: str) -> bool:
+    """Return true for raw model tags that are attempts to speak as the guest."""
+    tag = _normalize_host_tag(name)
+    return tag in {_LOCAL_BALLOON_GUEST_HOST_CI, _LOCAL_BALLOON_GUEST_HOST_FIRST_CI}
 
 
 def _guest_host_regulars(config: StationConfig) -> list[HostPersonality]:
@@ -1838,13 +1850,17 @@ Return JSON:
         str_line_idx = 0
         accepted_guest_host_line = False
         regular_host_line_count = 0
+        dropped_guest_host_line = False
         # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
         for line in raw_lines:
             if isinstance(line, dict):
                 raw_name = str(line.get("host", "")).strip()
-                host = host_names.get(raw_name) or host_names_ci.get(raw_name.casefold(), fallback_hosts[0])
+                raw_guest_host_tag = _is_local_guest_host_tag(raw_name)
+                host = host_names.get(raw_name) or host_names_ci.get(_normalize_host_tag(raw_name), fallback_hosts[0])
+                if raw_guest_host_tag:
+                    host = host_names_ci.get(_LOCAL_BALLOON_GUEST_HOST_CI, host)
                 raw_text = line.get("text", "")
                 # Only real strings are airable. A null/list/dict text would otherwise
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
@@ -1858,15 +1874,17 @@ Return JSON:
                 # two-host banter instead of crashing to stock copy.
                 host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
+                raw_guest_host_tag = False
             else:
                 continue
             if not text.strip():
                 continue
             if isinstance(line, str):
                 str_line_idx += 1
-            if _is_local_guest_host_name(host.name):
+            if raw_guest_host_tag or _is_local_guest_host_name(host.name):
                 if not guest_host_invited or accepted_guest_host_line:
                     logger.warning("Dropped gated guest-host banter line: %r", text[:60])
+                    dropped_guest_host_line = True
                     continue
                 accepted_guest_host_line = True
             else:
@@ -1878,6 +1896,8 @@ Return JSON:
             raise ValueError("banter response contained no usable lines")
         if accepted_guest_host_line and regular_host_line_count == 0:
             raise ValueError("banter response contained no regular host lines")
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate")
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
         deduped: list[tuple[HostPersonality, str]] = []
@@ -1889,9 +1909,18 @@ Return JSON:
         result = deduped
         deduped_has_guest_host_line = any(_is_local_guest_host_name(host.name) for host, _ in result)
         deduped_has_regular_host_line = any(not _is_local_guest_host_name(host.name) for host, _ in result)
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate after dedup")
         if accepted_guest_host_line and not deduped_has_regular_host_line:
             raise ValueError("banter response contained no regular host lines after dedup")
         if deduped_has_guest_host_line:
+            guest_host_index = next(idx for idx, (host, _) in enumerate(result) if _is_local_guest_host_name(host.name))
+            has_regular_before = any(not _is_local_guest_host_name(host.name) for host, _ in result[:guest_host_index])
+            has_regular_after = any(
+                not _is_local_guest_host_name(host.name) for host, _ in result[guest_host_index + 1 :]
+            )
+            if not (has_regular_before and has_regular_after):
+                raise ValueError("banter response did not frame guest-host line as a cameo")
             guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
@@ -1973,7 +2002,7 @@ Return JSON:
         hosts = _regular_hosts(config)
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
-        if config.station.language == "it":
+        if config.super_italian_mode and config.station.language == "it":
             # Pre-written short exchanges — sound like real radio, not a shutdown line
             _fallback_pools = [
                 [

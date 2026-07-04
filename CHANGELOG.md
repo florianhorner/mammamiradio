@@ -28,6 +28,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Hans Günther now stays a cameo instead of taking over a host break.** The station recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange instead of airing a one-line leftover. When the cameo is allowed, a regular host must set him up and take the break back afterward.
 - **Your pacing settings now stick.** The Diretta sliders — how many songs between host breaks, how many between ad breaks, and how many ads per break — used to snap back to their defaults whenever the station restarted. A change you make is now saved and comes back exactly as you left it, and if a save ever can't be written the panel says so and leaves the current setting untouched instead of half-applying it. In the Home Assistant add-on the three values are also on the Configuration screen.
 - **Restart handoff scratch files no longer build up after a hard kill.** On startup the station now prunes stale restart-handoff `.tmp` files left behind by an interrupted add-on update, while keeping the published manifest and finished music handoff files intact.
 - **Background audio prep can no longer crowd out the next thing to air.** Prefetch and other background FFmpeg work now leave capacity for foreground renders, while emergency bridge audio gets its own tightly bounded priority path so recovery tones and silence fillers do not wait behind routine processing.
