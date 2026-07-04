@@ -87,10 +87,45 @@ _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
 # output. This small residual buffer covers minimal-reasoning + JSON framing
 # without inflating every short fallback into a multi-thousand-token request.
 _OPENAI_REASONING_HEADROOM = 512
+# A max_tokens-truncated response is a budget problem, not a provider-health
+# problem: retry once with a larger budget before falling back to the other
+# provider. One retry, not unbounded — the stock-copy ladder stays the floor.
+_ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR = 1.75
+_ANTHROPIC_MAX_TOKENS_RETRY_LIMIT = 1
+# Wall-clock ceiling across ALL escalation retries of one generation. Only the
+# escalations are skipped past the deadline — the base OpenAI fallback (and the
+# terminal stock copy) always run, so the existing rescue ladder never shrinks.
+_SCRIPT_TOTAL_DEADLINE = 180.0
 # Serializes Anthropic attempts so concurrent async tasks can't all race past
 # the block check and issue parallel 401 floods before the first failure trips
 # the circuit. Created lazily inside the running event loop.
 _anthropic_attempt_lock: asyncio.Lock | None = None
+
+
+def _attempt_timeout(max_tokens: int) -> float:
+    """Per-attempt wall clock scaled to the requested budget.
+
+    Live logs show opus emits ~50-70 tok/s including overhead: 1200 tokens fits
+    45s, but 2400 needs ~90s and an escalated 4200 would die by TimeoutError
+    inside a fixed 45s — the escalation retry would be dead on arrival."""
+    return max(45.0, min(120.0, 45.0 * max_tokens / 1200))
+
+
+def _warn_budget_pressure(output_tokens: object, budget: object, caller: str | None) -> None:
+    """Tripwire: the next output-contract growth spurt should announce itself in
+    logs while generations still succeed, before it becomes an on-air truncation
+    (600 tokens truncated pre-2.8.0, 1200 truncated 2026-07). Best-effort
+    telemetry: a non-numeric usage value must never raise into generation."""
+    if not isinstance(output_tokens, int) or not isinstance(budget, int):
+        return
+    if budget > 0 and output_tokens >= 0.8 * budget:
+        logger.warning(
+            "Script output used %d/%d tokens (>=80%%) for caller=%s — budget pressure, consider raising",
+            output_tokens,
+            budget,
+            caller,
+        )
+
 
 _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "banter": "script_banter",
@@ -463,6 +498,12 @@ async def _generate_json_response(
     system_prompt = _get_system_prompt(config)
     fallback_reason = "anthropic_absent"
     cost_category = _script_cost_category(caller)
+    # Escalation retries (Anthropic and OpenAI) stop past this wall-clock
+    # deadline; the base fallback ladder below is never deadline-gated.
+    deadline = time.monotonic() + _SCRIPT_TOTAL_DEADLINE
+    # The OpenAI visible-output floor. Stays at the caller's budget unless
+    # Anthropic exhausted its escalated retries on truncation.
+    final_anthropic_max_tokens = max_tokens
 
     if config.anthropic_api_key:
         now = time.time()
@@ -492,24 +533,34 @@ async def _generate_json_response(
                 max(1, int(_anthropic_auth_blocked_until - now)),
             )
         else:
-            async with _get_anthropic_attempt_lock():
-                # Re-check inside the lock: a sibling task may have just 401'd and
-                # set the block while we were waiting to acquire.
-                now = time.time()
-                block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
-                blocked_now = (
-                    _anthropic_auth_blocked_key == config.anthropic_api_key
-                    and now < _anthropic_auth_blocked_until
-                    and block_applies_to_model
-                )
-                if blocked_now:
-                    state.anthropic_disabled_until = _anthropic_auth_blocked_until
-                    if not config.openai_api_key:
-                        raise RuntimeError(
-                            f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
-                        )
-                    fallback_reason = _anthropic_blocked_fallback_reason()
-                else:
+            # Escalation retry loop. The loop sits OUTSIDE the lock so each
+            # attempt acquires it freshly — a long retry must not hold the
+            # 401-flood serialization lock across two generations (the
+            # concurrent write_transition on the fast path interleaves between
+            # attempts). Only a max_tokens truncation iterates; every other
+            # outcome exits the loop explicitly (break / raise / return).
+            current_max_tokens = max_tokens
+            truncated_prior_attempt = False
+            for attempt in range(_ANTHROPIC_MAX_TOKENS_RETRY_LIMIT + 1):
+                async with _get_anthropic_attempt_lock():
+                    # Re-check inside the lock: a sibling task may have just 401'd and
+                    # set the block while we were waiting to acquire (or between our
+                    # attempts).
+                    now = time.time()
+                    block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
+                    blocked_now = (
+                        _anthropic_auth_blocked_key == config.anthropic_api_key
+                        and now < _anthropic_auth_blocked_until
+                        and block_applies_to_model
+                    )
+                    if blocked_now:
+                        state.anthropic_disabled_until = _anthropic_auth_blocked_until
+                        if not config.openai_api_key:
+                            raise RuntimeError(
+                                f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
+                            )
+                        fallback_reason = _anthropic_blocked_fallback_reason()
+                        break
                     block_expired = (
                         _anthropic_auth_blocked_key == config.anthropic_api_key and now >= _anthropic_auth_blocked_until
                     )
@@ -521,27 +572,32 @@ async def _generate_json_response(
                         _anthropic_block_expired_logged = True
                     _t_anthropic = time.perf_counter()
                     _anthropic_stop_reason: str | None = None
+                    _anthropic_in = _anthropic_out = 0
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
                             client.messages.create(
                                 model=model,
-                                max_tokens=max_tokens,
+                                max_tokens=current_max_tokens,
                                 system=system_prompt,
                                 messages=[{"role": "user", "content": prompt}],
                             ),
-                            timeout=45.0,
+                            timeout=_attempt_timeout(current_max_tokens),
                         )
                         # Read stop_reason before indexing content: a max_tokens cut can
                         # return an empty content list, which would raise IndexError below
                         # and lose the truncation signal if captured after.
                         _anthropic_stop_reason = getattr(resp, "stop_reason", None)
-                        _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             _anthropic_in = resp.usage.input_tokens
                             _anthropic_out = resp.usage.output_tokens
                             state.record_llm_usage(cost_category, model, _anthropic_in, _anthropic_out)
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+                        # Receipt of a response proves provider HEALTH (auth, quota,
+                        # availability) — clear the circuit here, before parse. A
+                        # truncated-but-received response is a budget problem, not a
+                        # provider problem; clearing post-parse would let it pin
+                        # healthy-Anthropic traffic onto OpenAI.
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
                         clears_current_block = not _anthropic_auth_blocked_key or (
@@ -555,6 +611,13 @@ async def _generate_json_response(
                             _anthropic_blocked_model = ""
                             _anthropic_block_expired_logged = False
                         parsed = json.loads(_strip_fences(raw))
+                        if truncated_prior_attempt:
+                            logger.info(
+                                "Anthropic escalation retry succeeded (max_tokens=%d, caller=%s)",
+                                current_max_tokens,
+                                caller,
+                            )
+                        _warn_budget_pressure(_anthropic_out, current_max_tokens, caller)
                         provider_event = state.update_runtime_provider(
                             "script_provider",
                             current_provider="anthropic",
@@ -595,10 +658,16 @@ async def _generate_json_response(
                         # fails to parse (JSONDecodeError) or an empty content list that
                         # fails to index (IndexError). Label both honestly so the ledger
                         # measures truncation frequency instead of hiding it behind a
-                        # generic exception name. Behaviour is unchanged — we still fall
-                        # back to OpenAI; only the telemetry/log reason differs.
+                        # generic exception name.
                         _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
                             exc, json.JSONDecodeError | IndexError
+                        )
+                        # Decide the retry BEFORE the no-OpenAI-key raise below can fire:
+                        # an Anthropic-only install must still get its escalated retry.
+                        will_retry = (
+                            _max_tokens_truncated
+                            and attempt < _ANTHROPIC_MAX_TOKENS_RETRY_LIMIT
+                            and time.monotonic() < deadline
                         )
                         _emit_llm_call(
                             state=state,
@@ -612,15 +681,30 @@ async def _generate_json_response(
                             raw_output=None,
                             ok=False,
                             fallback_reason=(
-                                "anthropic_max_tokens_truncated"
+                                "anthropic_max_tokens_truncated_retrying"
+                                if will_retry
+                                else "anthropic_max_tokens_truncated"
                                 if _max_tokens_truncated
                                 else f"anthropic_{type(exc).__name__}"
                             ),
-                            input_tokens=0,
-                            output_tokens=0,
+                            # Real per-attempt spend: record_llm_usage above already
+                            # billed these tokens, so this row must not claim 0/0.
+                            input_tokens=_anthropic_in,
+                            output_tokens=_anthropic_out,
                             duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
-                            openai_fallback=True,
+                            openai_fallback=not will_retry,
                         )
+                        if will_retry:
+                            escalated = round(current_max_tokens * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+                            logger.warning(
+                                "Anthropic truncated at max_tokens=%d; retrying with escalated budget %d (caller=%s)",
+                                current_max_tokens,
+                                escalated,
+                                caller,
+                            )
+                            current_max_tokens = escalated
+                            truncated_prior_attempt = True
+                            continue
                         if _is_anthropic_auth_error(exc):
                             _trip_anthropic_circuit_and_fallback(
                                 exc,
@@ -675,6 +759,12 @@ async def _generate_json_response(
                             else:
                                 fallback_reason = "anthropic_exception"
                                 logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                        break
+            if fallback_reason == "anthropic_max_tokens_truncated":
+                # Truncation-exhausted: the OpenAI fallback inherits the LAST
+                # (escalated) budget as its visible-output floor — the original
+                # small floor is how the live incident's second half happened.
+                final_anthropic_max_tokens = current_max_tokens
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
@@ -686,44 +776,118 @@ async def _generate_json_response(
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
-    # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and require
-    # `max_completion_tokens`. Sending the old name silently broke the entire
-    # OpenAI fallback whenever Anthropic was unavailable.
-    openai_kwargs = dict(
-        model=openai_model,
-        max_completion_tokens=max_tokens + _OPENAI_REASONING_HEADROOM,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-    )
-
-    def _call_openai():
-        try:
-            # "minimal" reasoning keeps these short snippets from spending the
-            # completion cap on hidden reasoning tokens (which would starve the
-            # visible JSON) while keeping the request — and its TPM footprint —
-            # small and low-latency.
-            return client.chat.completions.create(reasoning_effort="minimal", **openai_kwargs)
-        except Exception as exc:
-            # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
-            # that rejects `reasoning_effort` with a 400. Retry once without it
-            # rather than re-introducing the total-failure mode this path fixes.
-            if "reasoning_effort" not in str(exc):
-                raise
-            return client.chat.completions.create(**openai_kwargs)
-
-    t_start = time.perf_counter()
-    resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
-    latency_ms = int((time.perf_counter() - t_start) * 1000)
+    # Visible-output floor for the fallback: when Anthropic exhausted its
+    # escalated retries on truncation, the same long content is coming here —
+    # the original small floor is how the live incident's second half happened
+    # (gpt-5.5 returned an EMPTY completion, reasoning tokens starving the
+    # visible JSON). The raised TPM reservation is confined to that path.
+    visible_budget = final_anthropic_max_tokens
+    raw = ""
+    finish_reason: str | None = None
+    latency_ms = 0
     prompt_tokens = 0
     completion_tokens = 0
-    if getattr(resp, "usage", None):
-        prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
-        completion_tokens = getattr(resp.usage, "completion_tokens", 0)
-        state.record_llm_usage(cost_category, openai_model, prompt_tokens, completion_tokens)
-    raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
+    for oa_attempt in range(2):  # base attempt + at most one escalated retry
+        # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and require
+        # `max_completion_tokens`. Sending the old name silently broke the entire
+        # OpenAI fallback whenever Anthropic was unavailable. Rebuilt fresh per
+        # attempt — never mutated — and the headroom is re-added once per build,
+        # so an escalation can't compound it.
+        oa_timeout = _attempt_timeout(visible_budget + _OPENAI_REASONING_HEADROOM)
+        openai_kwargs = dict(
+            model=openai_model,
+            max_completion_tokens=visible_budget + _OPENAI_REASONING_HEADROOM,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            # SDK-level timeout: asyncio.wait_for around run_in_executor abandons
+            # (does not cancel) the sync SDK thread — the HTTP-layer timeout is
+            # what actually stops a runaway request from billing unrecorded tokens.
+            timeout=oa_timeout,
+        )
+
+        def _call_openai(kwargs=openai_kwargs):
+            try:
+                # "minimal" reasoning keeps these short snippets from spending the
+                # completion cap on hidden reasoning tokens (which would starve the
+                # visible JSON) while keeping the request — and its TPM footprint —
+                # small and low-latency.
+                return client.chat.completions.create(reasoning_effort="minimal", **kwargs)
+            except Exception as exc:
+                # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
+                # that rejects `reasoning_effort` with a 400. Retry once without it
+                # rather than re-introducing the total-failure mode this path fixes.
+                if "reasoning_effort" not in str(exc):
+                    raise
+                return client.chat.completions.create(**kwargs)
+
+        t_start = time.perf_counter()
+        resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
+        latency_ms = int((time.perf_counter() - t_start) * 1000)
+        prompt_tokens = 0
+        completion_tokens = 0
+        if getattr(resp, "usage", None):
+            prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
+            completion_tokens = getattr(resp.usage, "completion_tokens", 0)
+            state.record_llm_usage(cost_category, openai_model, prompt_tokens, completion_tokens)
+        choice = resp.choices[0]  # type: ignore[attr-defined]
+        raw = (choice.message.content or "").strip()
+        finish_reason = getattr(choice, "finish_reason", None)
+        # Retry gate for the OTHER half of the live incident: a completion cut at
+        # the cap (`finish_reason == "length"`, reasoning tokens included) or a
+        # genuinely empty one gets ONE escalated retry. An empty completion WITH
+        # finish_reason == "stop" is a refusal/filter outcome a bigger budget
+        # cannot fix — that raises below, exactly as before.
+        needs_bigger_budget = finish_reason == "length" or (not raw and finish_reason != "stop")
+        if needs_bigger_budget and oa_attempt == 0 and time.monotonic() < deadline:
+            logger.info(
+                "openai_script_call",
+                extra={
+                    "event": "openai_script_call",
+                    "model": openai_model,
+                    "caller": caller,
+                    "fallback_reason": fallback_reason,
+                    "latency_ms": latency_ms,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "json_ok": False,
+                    "finish_reason": finish_reason,
+                    "raw_preview": raw[:500],
+                },
+            )
+            # Attempt-failure reason stays separate from the provider-level
+            # fallback_reason so provider-switch telemetry keeps carrying the
+            # Anthropic-side reason (e.g. anthropic_max_tokens_truncated).
+            _emit_llm_call(
+                state=state,
+                config=config,
+                caller=caller,
+                role=role,
+                spot_index=spot_index,
+                provider="openai",
+                model=openai_model,
+                prompt=prompt,
+                raw_output=raw,
+                ok=False,
+                fallback_reason="openai_empty_or_length",
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                duration_ms=latency_ms,
+                openai_fallback=fallback_reason != "anthropic_absent",
+            )
+            escalated_budget = round(visible_budget * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+            logger.warning(
+                "OpenAI returned %s at max_completion_tokens=%d; retrying with escalated budget %d (caller=%s)",
+                finish_reason or "empty content",
+                visible_budget + _OPENAI_REASONING_HEADROOM,
+                escalated_budget + _OPENAI_REASONING_HEADROOM,
+                caller,
+            )
+            visible_budget = escalated_budget
+            continue
+        break
     try:
         parsed = json.loads(_strip_fences(raw))
     except json.JSONDecodeError:
@@ -759,6 +923,7 @@ async def _generate_json_response(
             openai_fallback=fallback_reason != "anthropic_absent",
         )
         raise
+    _warn_budget_pressure(completion_tokens, visible_budget + _OPENAI_REASONING_HEADROOM, caller)
     logger.info(
         "openai_script_call",
         extra={
@@ -1034,6 +1199,11 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 # station tight and makes the occasional long break land as "this one mattered".
 _BANTER_EXCHANGE_COUNT: str = "2-3"
 _BANTER_EXCHANGE_COUNT_WARRANTED: str = "4-6"
+# Raised from 1200 (600 pre-2.8.0) after live truncation recurred 2026-07: the
+# demanded OUTPUT contract grew (warranted 4-6 exchanges + persona_updates +
+# song_cues + new_joke + release_beat). Paired with the escalation retry in
+# _generate_json_response — not a standalone fix.
+_BANTER_MAX_TOKENS = 2400
 
 
 def _banter_exchange_count(*, warranted: bool) -> str:
@@ -1747,7 +1917,7 @@ Return JSON:
             config=config,
             state=state,
             model=resolve_model(config.models, "banter", "anthropic"),
-            max_tokens=1200,
+            max_tokens=_BANTER_MAX_TOKENS,
             caller="banter",
         )
 
