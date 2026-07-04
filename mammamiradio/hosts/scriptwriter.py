@@ -153,6 +153,11 @@ _cached_system_prompt_hash: str = ""
 # Imported from config so the roster gate (MAMMAMIRADIO_GUEST_HOST) and the
 # prompt logic share one spelling of the name.
 _LOCAL_BALLOON_GUEST_HOST = GUEST_HOST_NAME
+_LOCAL_BALLOON_GUEST_HOST_CI = _LOCAL_BALLOON_GUEST_HOST.casefold()
+_LOCAL_BALLOON_GUEST_HOST_FIRST_CI = _LOCAL_BALLOON_GUEST_HOST.split()[0].casefold()
+_HOST_TAG_STRIP_CHARS = " \t\r\n\"'`“”‘’:："
+_GUEST_HOST_CAMEO_PROBABILITY = 1 / 6
+_GUEST_HOST_CAMEO_COOLDOWN_BREAKS = 1
 
 
 @dataclass
@@ -243,12 +248,28 @@ class ReleaseBeatBanterCommit:
 
 
 @dataclass
+class GuestHostBanterCooldownCommit:
+    """Deferred guest-host cooldown update, applied only after generated banter queues."""
+
+    invited_guest: bool = False
+    decrement_existing: bool = False
+
+    def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
+        del config, queue_id
+        if self.invited_guest:
+            state.guest_host_banter_cooldown_remaining = _GUEST_HOST_CAMEO_COOLDOWN_BREAKS
+        elif self.decrement_existing:
+            state.guest_host_banter_cooldown_remaining = max(0, state.guest_host_banter_cooldown_remaining - 1)
+
+
+@dataclass
 class BanterCommit:
     """Deferred banter state updates, applied only after banter queues."""
 
     listener_request: ListenerRequestCommit | None = None
     heading_announcement: HeadingAnnouncementCommit | None = None
     release_beat: ReleaseBeatBanterCommit | None = None
+    guest_host_cooldown: GuestHostBanterCooldownCommit | None = None
 
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
         if self.listener_request is not None:
@@ -257,19 +278,23 @@ class BanterCommit:
             self.heading_announcement.apply(state, config)
         if self.release_beat is not None:
             self.release_beat.apply(state, config, queue_id=queue_id)
+        if self.guest_host_cooldown is not None:
+            self.guest_host_cooldown.apply(state, config, queue_id=queue_id)
 
 
 def _banter_commit(
     listener_request: ListenerRequestCommit | None,
     heading_announcement: HeadingAnnouncementCommit | None,
     release_beat: ReleaseBeatBanterCommit | None = None,
+    guest_host_cooldown: GuestHostBanterCooldownCommit | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
-    if heading_announcement is None and release_beat is None:
+    if heading_announcement is None and release_beat is None and guest_host_cooldown is None:
         return listener_request
     return BanterCommit(
         listener_request=listener_request,
         heading_announcement=heading_announcement,
         release_beat=release_beat,
+        guest_host_cooldown=guest_host_cooldown,
     )
 
 
@@ -389,6 +414,42 @@ def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
     hosts = list(config.hosts)
     regular = [h for h in hosts if h.name != _LOCAL_BALLOON_GUEST_HOST]
     return regular or hosts
+
+
+def _normalize_host_tag(name: str) -> str:
+    return name.strip(_HOST_TAG_STRIP_CHARS).casefold()
+
+
+def _is_local_guest_host_name(name: str) -> bool:
+    """Return true only for the configured guest host's exact name, case-insensitive."""
+    return _normalize_host_tag(name) == _LOCAL_BALLOON_GUEST_HOST_CI
+
+
+def _is_local_guest_host_tag(name: str) -> bool:
+    """Return true for raw model tags that are attempts to speak as the guest."""
+    tag = _normalize_host_tag(name)
+    return tag in {_LOCAL_BALLOON_GUEST_HOST_CI, _LOCAL_BALLOON_GUEST_HOST_FIRST_CI}
+
+
+def _guest_host_regulars(config: StationConfig) -> list[HostPersonality]:
+    """Regular hosts available to carry an exchange when the guest exists."""
+    if not any(_is_local_guest_host_name(h.name) for h in config.hosts):
+        return []
+    regulars = _regular_hosts(config)
+    if any(_is_local_guest_host_name(h.name) for h in regulars):
+        return []
+    return regulars
+
+
+def _host_names_text(hosts: list[HostPersonality]) -> str:
+    names = [h.name for h in hosts]
+    if not names:
+        return "the regular hosts"
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])}, and {names[-1]}"
 
 
 def reset_provider_backoff() -> None:
@@ -1377,19 +1438,14 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     """
     if not any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
         return ""
-    regulars = _regular_hosts(config)
+    regulars = _guest_host_regulars(config)
     # Only-guest roster: _regular_hosts falls back to the full list, so the guest
     # shows up among the "regulars". With no real regular hosts to play off, guest
     # framing ("hand the floor back to Hans Günther") would point him at himself —
     # emit nothing and let him host as the sole voice.
-    if any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in regulars):
+    if not regulars:
         return ""
-    regular_host_names = [h.name for h in regulars]
-    regular_hosts_text = (
-        f"{regular_host_names[0]} and {regular_host_names[1]}"
-        if len(regular_host_names) >= 2
-        else regular_host_names[0]
-    )
+    regular_hosts_text = _host_names_text(regulars)
     station_conversation_lang = "Italian" if super_italian else "Italian/English"
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
@@ -1400,8 +1456,8 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
         "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
         "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
         "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
-        "'geh weida col caffè', 'des is ned normale', 'a bissl troppo piccolo', "
-        "'wia schee questa radio', 'des is fei a Witz', 'passt wie Arsch auf Eimer'. "
+        "'des is ned normale', 'wia schee questa radio', 'des is fei a Witz', "
+        "'passt wie Arsch auf Eimer'. "
         "Prefer one phraselet in a Hans line, "
         "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
         "Italian banter. No German monologues. Full German is rare and only works as an "
@@ -1413,12 +1469,12 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
         "roasting or misunderstanding the flavor without formally translating every line. "
         "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
         "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
-        "Hans Günther is a GUEST STAR, not "
-        "a co-host: when he is on, he bursts in for a few loud lines and then hands "
-        f"the floor back to {regular_hosts_text} — unmistakably present, never carrying the "
-        "whole exchange. He has the fewest lines of the three, but he is not silent. "
-        'Always tag his lines with the exact host name "Hans Günther" (never just '
-        '"Hans") so they attribute to him, not to an Italian host.'
+        "Hans Günther is a GUEST STAR, not a co-host: he is available only when a "
+        "specific banter prompt explicitly opens the guest-host gate. When the gate "
+        "is closed, he stays off-mic and the regular hosts carry the exchange. "
+        "When invited, he makes one short interruption and hands the floor back to "
+        f"{regular_hosts_text}. Tag that invited line with the exact host name "
+        '"Hans Günther" (never just "Hans") so it attributes to him, not to an Italian host.'
     )
 
 
@@ -1634,7 +1690,7 @@ async def write_banter(
             logger.warning("Failed to bump song cue usage", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
-    host_names_ci = {h.name.lower(): h for h in config.hosts}
+    host_names_ci = {h.name.casefold(): h for h in config.hosts}
 
     # Home Assistant context — hosts may casually reference home state
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
@@ -1902,6 +1958,42 @@ beat in the lines you wrote. Otherwise set it false.
     "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}]{song_cues_schema}
   }}"""
 
+    guest_host_block = ""
+    guest_host_invited = False
+    guest_host_cooldown_commit: GuestHostBanterCooldownCommit | None = None
+    guest_regulars = _guest_host_regulars(config)
+    guest_gate_eligible = bool(guest_regulars) and not any(
+        (
+            chaos_subtype is not None,
+            bool(pending_directive),
+            bool(course_change_block),
+            bool(listener_request_block),
+            bool(release_beat_block),
+            bool(new_listener_block),
+        )
+    )
+    if guest_regulars:
+        regular_hosts_text = _host_names_text(guest_regulars)
+        if guest_gate_eligible:
+            if state.guest_host_banter_cooldown_remaining > 0:
+                guest_host_cooldown_commit = GuestHostBanterCooldownCommit(decrement_existing=True)
+            else:
+                guest_host_invited = random.random() < _GUEST_HOST_CAMEO_PROBABILITY
+        if guest_host_invited:
+            guest_host_block = f"""
+GUEST HOST CAMEO:
+- This break MAY include Hans Günther once.
+- Hans Günther may have at most one short interruption, tagged exactly as "Hans Günther".
+- {regular_hosts_text} carry the exchange before and after him.
+- If there is no natural interruption, leave Hans Günther out.
+"""
+        else:
+            guest_host_block = f"""
+GUEST HOST GATE:
+- This break is CLOSED to Hans Günther. Use only the regular hosts: {regular_hosts_text}.
+- Do not return any line tagged "Hans Günther"; he is off-mic for this break.
+"""
+
     # Stretch the break only when something warrants the extra airtime.
     warranted_long = bool(
         pending_directive
@@ -1922,7 +2014,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{persona_update_schema}}}"""
 
@@ -1941,13 +2033,19 @@ Return JSON:
         if not isinstance(raw_lines, list):
             raw_lines = []
         str_line_idx = 0
+        accepted_guest_host_line = False
+        regular_host_line_count = 0
+        dropped_guest_host_line = False
         # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
         for line in raw_lines:
             if isinstance(line, dict):
-                raw_name = str(line.get("host", ""))
-                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), fallback_hosts[0])
+                raw_name = str(line.get("host", "")).strip()
+                raw_guest_host_tag = _is_local_guest_host_tag(raw_name)
+                host = host_names.get(raw_name) or host_names_ci.get(_normalize_host_tag(raw_name), fallback_hosts[0])
+                if raw_guest_host_tag:
+                    host = host_names_ci.get(_LOCAL_BALLOON_GUEST_HOST_CI, host)
                 raw_text = line.get("text", "")
                 # Only real strings are airable. A null/list/dict text would otherwise
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
@@ -1961,17 +2059,30 @@ Return JSON:
                 # two-host banter instead of crashing to stock copy.
                 host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
+                raw_guest_host_tag = False
             else:
                 continue
             if not text.strip():
                 continue
             if isinstance(line, str):
                 str_line_idx += 1
+            if raw_guest_host_tag or _is_local_guest_host_name(host.name):
+                if not guest_host_invited or accepted_guest_host_line:
+                    logger.warning("Dropped gated guest-host banter line: %r", text[:60])
+                    dropped_guest_host_line = True
+                    continue
+                accepted_guest_host_line = True
+            else:
+                regular_host_line_count += 1
             result.append((host, text))
 
         # Genuinely unusable shape (no airable lines) → fall to stock copy via except.
         if not result:
             raise ValueError("banter response contained no usable lines")
+        if accepted_guest_host_line and regular_host_line_count == 0:
+            raise ValueError("banter response contained no regular host lines")
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate")
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
         deduped: list[tuple[HostPersonality, str]] = []
@@ -1981,6 +2092,21 @@ Return JSON:
                 continue
             deduped.append(entry)
         result = deduped
+        deduped_has_guest_host_line = any(_is_local_guest_host_name(host.name) for host, _ in result)
+        deduped_has_regular_host_line = any(not _is_local_guest_host_name(host.name) for host, _ in result)
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate after dedup")
+        if accepted_guest_host_line and not deduped_has_regular_host_line:
+            raise ValueError("banter response contained no regular host lines after dedup")
+        if deduped_has_guest_host_line:
+            guest_host_index = next(idx for idx, (host, _) in enumerate(result) if _is_local_guest_host_name(host.name))
+            has_regular_before = any(not _is_local_guest_host_name(host.name) for host, _ in result[:guest_host_index])
+            has_regular_after = any(
+                not _is_local_guest_host_name(host.name) for host, _ in result[guest_host_index + 1 :]
+            )
+            if not (has_regular_before and has_regular_after):
+                raise ValueError("banter response did not frame guest-host line as a cameo")
+            guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
@@ -2034,7 +2160,12 @@ Return JSON:
             release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
 
         logger.info("Generated banter: %d lines", len(result))
-        return result, _banter_commit(listener_request_commit, heading_announcement_commit, release_beat_commit)
+        return result, _banter_commit(
+            listener_request_commit,
+            heading_announcement_commit,
+            release_beat_commit,
+            guest_host_cooldown_commit,
+        )
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
@@ -2056,7 +2187,7 @@ Return JSON:
         hosts = _regular_hosts(config)
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
-        if config.station.language == "it":
+        if config.super_italian_mode and config.station.language == "it":
             # Pre-written short exchanges — sound like real radio, not a shutdown line
             _fallback_pools = [
                 [
