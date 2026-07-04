@@ -18,6 +18,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
 from mammamiradio.hosts.scriptwriter import (
+    _LOCAL_BALLOON_GUEST_HOST,
     CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
     _banter_exchange_count,
@@ -27,6 +28,7 @@ from mammamiradio.hosts.scriptwriter import (
     _massage_transition_text,
     _personality_modifier,
     _plan_listener_request_block,
+    _regular_hosts,
     write_ad,
     write_banter,
     write_news_flash,
@@ -404,6 +406,278 @@ def _banter_user_prompt(mock_cls) -> str:
 
 
 @pytest.mark.asyncio
+async def test_write_banter_closed_guest_gate_prompt_and_parser_drop(config, state):
+    regular_host = _regular_hosts(config)[0]
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Servus, sono entrato."},
+                {"host": regular_host.name, "text": "No, restiamo noi."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    prompt = _banter_user_prompt(mock_cls)
+    assert "GUEST HOST GATE" in prompt
+    assert "This break is CLOSED to Hans Günther" in prompt
+    assert 'Do not return any line tagged "Hans Günther"' in prompt
+    assert [(host.name, text) for host, text in result] == [(regular_host.name, "No, restiamo noi.")]
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_open_guest_gate_accepts_one_hans_line_and_arms_cooldown(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "Restiamo in onda."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Passt scho, ragazzi."},
+                {"host": regulars[1].name, "text": "E torniamo subito noi."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config)
+
+    prompt = _banter_user_prompt(mock_cls)
+    assert "GUEST HOST CAMEO" in prompt
+    assert 'at most one short interruption, tagged exactly as "Hans Günther"' in prompt
+    assert [host.name for host, _ in result] == [regulars[0].name, _LOCAL_BALLOON_GUEST_HOST, regulars[1].name]
+    assert state.guest_host_banter_cooldown_remaining == 0
+    assert commit is not None
+    commit.apply(state, config, queue_id="banter-test")
+    assert state.guest_host_banter_cooldown_remaining == 1
+
+
+@pytest.mark.asyncio
+async def test_write_banter_cooldown_closes_next_eligible_break_and_decrements_on_commit(config, state):
+    state.guest_host_banter_cooldown_remaining = 1
+    regular_host = _regular_hosts(config)[0]
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Ancora io."},
+                {"host": regular_host.name, "text": "No, pausa chiusa."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert "GUEST HOST GATE" in _banter_user_prompt(mock_cls)
+    assert [(host.name, text) for host, text in result] == [(regular_host.name, "No, pausa chiusa.")]
+    assert state.guest_host_banter_cooldown_remaining == 1
+    assert commit is not None
+    commit.apply(state, config, queue_id="banter-test")
+    assert state.guest_host_banter_cooldown_remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_write_banter_open_guest_gate_caps_multiple_hans_lines(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "Prima noi."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Des is ned normale."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Troppa presenza."},
+                {"host": regulars[1].name, "text": "E chiudiamo noi."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [host.name for host, _ in result].count(_LOCAL_BALLOON_GUEST_HOST) == 1
+    assert [text for _, text in result] == ["Prima noi.", "Des is ned normale.", "E chiudiamo noi."]
+    assert commit is not None
+    commit.apply(state, config, queue_id="banter-test")
+    assert state.guest_host_banter_cooldown_remaining == 1
+
+
+@pytest.mark.asyncio
+async def test_write_banter_guest_cooldown_not_armed_when_hans_deduped_out(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "Stessa battuta."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Stessa battuta."},
+                {"host": regulars[1].name, "text": "E andiamo avanti."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [(host.name, text) for host, text in result] == [
+        (regulars[0].name, "Stessa battuta."),
+        (regulars[1].name, "E andiamo avanti."),
+    ]
+    assert commit is None
+    assert state.guest_host_banter_cooldown_remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_write_banter_guest_gate_handles_case_insensitive_hans_tags(config, state):
+    regular_host = _regular_hosts(config)[0]
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": " hans günther ", "text": "Lowercase should still be gated."},
+                {"host": regular_host.name, "text": "Solo i regolari."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [(host.name, text) for host, text in result] == [(regular_host.name, "Solo i regolari.")]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(config, state):
+    regular_host = _regular_hosts(config)[0]
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": "Hans Günther ", "text": "Spaced tag accepted when gate opens."},
+                {"host": regular_host.name, "text": "Poi rientriamo noi."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [host.name for host, _ in result] == [_LOCAL_BALLOON_GUEST_HOST, regular_host.name]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_hans_only_response_falls_back_to_regular_hosts(config, state):
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Solo Hans uno."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Solo Hans due."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert len(result) >= 2
+    assert all(host in _regular_hosts(config) for host, _ in result)
+    assert all(host.name != _LOCAL_BALLOON_GUEST_HOST for host, _ in result)
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(config, state):
+    regular_host = _regular_hosts(config)[0]
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Nuovo ascoltatore, entro io."},
+                {"host": regular_host.name, "text": "No, lo salutiamo noi."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config, is_new_listener=True)
+
+    prompt = _banter_user_prompt(mock_cls)
+    assert "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!" in prompt
+    assert "GUEST HOST GATE" in prompt
+    assert [(host.name, text) for host, text in result] == [(regular_host.name, "No, lo salutiamo noi.")]
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_guest_cooldown_not_decremented_on_generation_fallback(config, state):
+    state.guest_host_banter_cooldown_remaining = 1
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert len(result) >= 2
+    assert commit is None
+    assert state.guest_host_banter_cooldown_remaining == 1
+
+
+@pytest.mark.asyncio
 async def test_write_banter_prompt_is_short_by_default(config, state):
     # Hermetic: no warrant signals active (festival off, no directive/request),
     # so this verifies the genuine everyday default regardless of ambient env.
@@ -647,10 +921,12 @@ async def test_write_banter_handles_string_shaped_lines(config, state):
 
     assert len(result) == 3
     assert [text for _, text in result] == ["Ciao a tutti!", "Che ridere!", "Restate con noi!"]
+    regular_hosts = _regular_hosts(config)
     for host, _ in result:
-        assert host in config.hosts
+        assert host in regular_hosts
+        assert host.name != _LOCAL_BALLOON_GUEST_HOST
     # With two or more hosts, string lines alternate so it reads as a real exchange.
-    if len(config.hosts) >= 2:
+    if len(regular_hosts) >= 2:
         assert result[0][0] is not result[1][0]
 
 

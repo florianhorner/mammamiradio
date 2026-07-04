@@ -128,7 +128,7 @@ voice = "ybmyeTxbWSNXKmSrvUCk"  # Bavarian guest voice (ElevenLabs)
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"  # least-bad: config rejects non-IT edge voices → Italian-accented German on fallback
 voice_settings = { stability = 0.35, style = 0.55 }  # ↓stability = more boisterous, ↑style = more character (house default 0.42/0.45)
-style = "a Bavarian guest in his mid-twenties — Munich tech-scene sharp, fast and funny, Italian-first on air but unmistakably Bavarian in rhythm, swagger, and short pronounceable Boarisch phraselets rather than isolated particles; warm, a little chaotic, ribs the Italian hosts for their thimble-sized espressos and their uptight seriousness, brings Wiesn energy without the lederhosen cliché — more 'startup guy who grew up in Giesing' than oompah beer-tent uncle; a guest, never a regular: he bursts in, fills the studio, and is gone again"
+style = "a Bavarian guest in his mid-twenties — Munich tech-scene sharp, fast and funny, Italian-first on air but unmistakably Bavarian in rhythm, swagger, and short pronounceable Boarisch phraselets rather than isolated particles; warm, a little chaotic, ribs the Italian hosts for their precision, drama, and uptight seriousness, brings Wiesn energy without the lederhosen cliché — more 'startup guy who grew up in Giesing' than oompah beer-tent uncle; coffee jokes are occasional, never his default bit; a guest, never a regular: he bursts in, fills the studio, and is gone again"
 [hosts.personality]
 energy = 92
 chaos = 65

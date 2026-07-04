@@ -113,6 +113,8 @@ def test_guest_directive_present_in_both_modes(config):
         prompt = _build_system_prompt(config)
         assert "GUEST HOST — Hans Günther" in prompt
         assert "GUEST STAR" in prompt
+        assert "available only when a specific banter prompt explicitly opens the guest-host gate" in prompt
+        assert "he is not silent" not in prompt
 
 
 def test_guest_directive_language_clause_tracks_mode(config):
@@ -145,6 +147,26 @@ def test_guest_directive_names_regular_hosts(config):
     ]
     directive = _guest_host_directive(config, super_italian=False)
     assert "Giulia and Marco" in directive
+
+
+def test_guest_directive_no_longer_seeds_coffee_as_default_bit(config):
+    """Rare Hans cameos should not all collapse into the same tiny-cup joke."""
+    config.hosts = [
+        _host("Giulia"),
+        _host("Marco"),
+        _host(_LOCAL_BALLOON_GUEST_HOST, energy=92),
+    ]
+    directive = _guest_host_directive(config, super_italian=False)
+    assert "thimble" not in directive
+    assert "tiny-cup" not in directive
+    assert "geh weida col caffè" not in directive
+    assert "a bissl troppo piccolo" not in directive
+
+
+def test_guest_config_style_caps_coffee_instead_of_defining_him(config):
+    hans = next(h for h in config.hosts if h.name == _LOCAL_BALLOON_GUEST_HOST)
+    assert "coffee jokes are occasional, never his default bit" in hans.style
+    assert "thimble-sized espressos" not in hans.style
 
 
 def test_regular_pairing_survives_guest_in_roster(config):
