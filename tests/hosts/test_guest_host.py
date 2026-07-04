@@ -124,9 +124,9 @@ def test_guest_directive_language_clause_tracks_mode(config):
     ]
     off = _guest_host_directive(config, super_italian=False)
     on = _guest_host_directive(config, super_italian=True)
-    assert "keep the station conversation Italian/English" in off
+    assert "keep the station conversation mostly English with Italian colour" in off
     assert "keep the station conversation Italian;" in on
-    assert "keep the station conversation Italian/English" not in on
+    assert "keep the station conversation mostly English with Italian colour" not in on
 
 
 def test_guest_directive_empty_when_only_guest(config):

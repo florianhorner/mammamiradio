@@ -11,6 +11,7 @@ import mammamiradio.hosts.scriptwriter as scriptwriter_module
 from mammamiradio.core.config import load_config, resolve_model
 from mammamiradio.core.models import (
     ChaosSubtype,
+    Heading,
     HostPersonality,
     SegmentType,
     StationState,
@@ -3042,8 +3043,9 @@ async def test_write_news_flash_english_station_uses_english_weather_arc(config,
     # English arc is grounded; the Italian arc never reaches the prompt.
     assert "heavy rain" in prompt
     assert "pioggia battente" not in prompt
-    # Framing is delivered in the station language, not hardcoded Italian.
-    assert "delivered in en" in prompt
+    # Framing language is governed by the shared RULES mode rule now — the
+    # category description no longer carries its own per-clause override.
+    assert "delivered in en" not in prompt
 
 
 @pytest.mark.asyncio
@@ -3968,3 +3970,126 @@ async def test_write_banter_omits_running_gag_block_when_empty(config, state):
     assert "STASERA:" not in prompt
     assert "RUNNING GAG:" not in prompt
     assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Language-mode policy: every LLM speech surface carries the shared mode rule
+# (Super Italian ON = full Italian; OFF = roughly 70% English / 30% Italian).
+# ---------------------------------------------------------------------------
+
+_LANG_MODE_CASES = [
+    (True, "ALL text in Italian.", "Roughly 70% English"),
+    (False, "Roughly 70% English / 30% Italian", "ALL text in Italian."),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("super_italian", "expected", "forbidden"), _LANG_MODE_CASES)
+async def test_news_flash_prompt_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
+    """The news RULES list follows the station language mode instead of overriding it."""
+    config.super_italian_mode = super_italian
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Notizia assurda ma sicura."},
+    ) as mock_generate:
+        await write_news_flash(state, config, category="breaking")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert expected in prompt
+    assert forbidden not in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("super_italian", "expected"),
+    [(True, "ALL text in Italian."), (False, "Roughly 70% English / 30% Italian")],
+)
+async def test_weather_flash_language_governed_by_mode_rule_only(config, state, super_italian, expected):
+    """The weather category description carries no language clause of its own — it
+    used to say "delivered in it" and contradicted the mode rule in the same prompt."""
+    config.super_italian_mode = super_italian
+    state.ha_weather_arc = "Meteo: sereno, 25C."
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "Sole fuori, caos in studio."},
+    ) as mock_generate:
+        await write_news_flash(state, config, category="weather")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "delivered in" not in prompt
+    assert expected in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("super_italian", "expected", "forbidden"), _LANG_MODE_CASES)
+async def test_transition_prompt_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
+    """Transition voiceovers follow the station language mode like every other segment."""
+    config.super_italian_mode = super_italian
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": "—e dai— si va avanti."},
+    ) as mock_generate:
+        await write_transition(state, config, next_segment="banter")
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert expected in prompt
+    assert forbidden not in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("super_italian", "expected", "forbidden"), _LANG_MODE_CASES)
+async def test_ad_prompt_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
+    """Ad spots follow the station language mode — no more all-Italian ads inside an
+    English-led normal-mode show."""
+    config.super_italian_mode = super_italian
+    brand = AdBrand(name="TestBrand", tagline="Il meglio del meglio", category="food")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Comprate ora!"}],
+            "mood": "upbeat",
+            "summary": "Un test",
+        },
+    ) as mock_generate:
+        await write_ad(brand, voices, state, config)
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert expected in prompt
+    assert forbidden not in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("super_italian", "expected", "forbidden"), _LANG_MODE_CASES)
+async def test_course_change_block_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
+    """The heading-announcement notice inherits the shared mode rule (it used to
+    carry its own hand-rolled language line)."""
+    config.super_italian_mode = super_italian
+    host_name = config.hosts[0].name
+    state.heading = Heading(
+        id="heading-80s",
+        seed="classic://italian/80s",
+        label="Anni '80",
+        set_at=1.0,
+        set_by="operator",
+    )
+    state.heading_pending_announcement = "Anni '80"
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.write_persisted_heading"),
+    ):
+        await write_banter(state, config)
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "COURSE CHANGE:" in prompt
+    assert expected in prompt
+    assert forbidden not in prompt

@@ -11,6 +11,7 @@
 
 ### Changed
 
+- **The two language modes now do what they say.** With Super Italian Mode on, the hosts speak fully in Italian — no more English asides slipping through. In the default mode, the hosts now speak about 70% English with real Italian moments — including whole Italian sentences — and news flashes and ads follow the same mix rather than staying all-Italian inside an English-led show.
 - **The Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. The Jamendo client ID moves behind Home Assistant's optional configuration disclosure for new installs and installs where the saved key is absent; existing installs that already saved a blank value may still show it until that saved option is cleared.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 - **Banter is shorter by default.** Hosts keep most breaks to a quick beat between songs, saving longer breaks for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode.

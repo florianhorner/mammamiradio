@@ -62,6 +62,8 @@ from mammamiradio.hosts.prompt_world import (
     CHAOS_SUBTYPE_BLOCKS,
     COURSE_CHANGE_MOOD_NOTICE_TEMPLATE,
     FESTIVAL_MODE_BLOCK,
+    language_mode_directive,
+    language_mode_rule,
 )
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
@@ -1358,7 +1360,8 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     code-switch modes so the guest is governed consistently — without it he is listed
     among the hosts but given no guest framing, and the LLM treats him as a regular
     Italian co-host. The only mode-dependent clause is the station's conversation
-    language (Italian-only under Super Italian, Italian/English otherwise).
+    language (Italian-only under Super Italian, mostly English with Italian
+    colour otherwise).
     """
     if not any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
         return ""
@@ -1375,7 +1378,9 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
         if len(regular_host_names) >= 2
         else regular_host_names[0]
     )
-    station_conversation_lang = "Italian" if super_italian else "Italian/English"
+    station_conversation_lang = (
+        "Italian" if super_italian else "mostly English with Italian colour"
+    )
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
         "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
@@ -1453,23 +1458,7 @@ Use these sparingly (1-2 references per script at most). They should feel like i
 jokes between the hosts, not exposition. The listener should feel like they're
 overhearing a world that exists with or without them."""
 
-    if config.super_italian_mode:
-        mode_directive = (
-            f"The station language is {config.station.language}. ALL dialogue must be in "
-            f"{config.station.language}. Lean fully into Italian idioms — address listeners "
-            "as 'amici miei', 'cari ascoltatori', drop English crutches. Italian phrases "
-            "land without translation. English is rare and intentional."
-        )
-    else:
-        mode_directive = (
-            "You broadcast to a mixed international audience. Code-switch charmingly: "
-            "English carries the narrative — the heart of each segment is English the "
-            "audience can follow. Italian phrases sprinkle in for color (ciao, amore, "
-            "che bello, ecco, dai, mamma mia, allora, basta). Open and close with "
-            "Italian flair. Think 'Italian DJ on tour speaking to the world,' not "
-            "'RAI domestic broadcast.' The natural Italian fillers below still apply "
-            "as sprinkles, never as full sentences."
-        )
+    mode_directive = language_mode_directive(config.super_italian_mode)
     # Test balloon: if the Bavarian guest is in the roster, keep him inside the
     # show as a guest star in either language mode (never described without a brief).
     mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
@@ -1800,10 +1789,8 @@ Make this the focus of this banter break. It happened just now — react natural
     raw_heading_announcement_id = raw_heading.id if raw_heading is not None else ""
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
     if heading_announcement and raw_heading is not None and raw_heading_announcement_id:
-        language_line = (
-            "Super Italian Mode is active: lead in Italian and keep the whole notice Italian-first."
-            if config.super_italian_mode
-            else "Use English narrative with a little Italian flavor where it sounds natural."
+        language_line = language_mode_rule(
+            config.super_italian_mode, config.station.language
         )
         course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
             heading_label=heading_announcement,
@@ -2213,7 +2200,7 @@ async def write_news_flash(
         if home_mood:
             mood_line = "\nHome mood: " + _sanitize_prompt_data(home_mood, max_len=120)
         cat_desc = (
-            f"Weather report delivered in {config.station.language} that GROUNDS itself in the "
+            "Weather report that GROUNDS itself in the "
             "listener's REAL local forecast (provided below), then spins it with absurd local color — "
             "gelato logic, coffee dependency, seaside optimism, umbrella superstition. State the REAL "
             "condition from the forecast first so it is unmistakable you know the actual weather "
@@ -2245,7 +2232,7 @@ RULES:
 - For sports: sound like an informed radio sports desk. Keep the update measured and followable.
 - For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
 - Must feel like a real Italian radio news flash interrupting the programming.
-- ALL text in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 
 Return JSON:
 {{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash", "callback_used": false}}"""
@@ -2361,7 +2348,7 @@ RULES:
 - Recent opener stems to avoid repeating: {banned_openers}
 - BANNED openers — never start with: "Che pezzo", "Che ritmo", "Che musica", "Che canzone",
   "Che bomba", "Ah che", "Bella canzone", "Bella musica". These sound like a broken record.
-- ALL text in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 - {style_instruction}
 
 Return JSON:
@@ -2504,7 +2491,7 @@ RULES:
 - You may interleave sound effect cues and environment cues between voice lines.
 - Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
 - Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or environment name above, never invent new ones: {sfx_types}
-- ALL text must be in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 - You may reference what the hosts said, what other ads claimed, or current music.
 
 Return JSON:
