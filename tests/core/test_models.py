@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.models import ChaosSubtype, ListenerProfile, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import ChaosSubtype, Heading, ListenerProfile, Segment, SegmentType, StationState, Track
 
 
 def _track(n: int = 1) -> Track:
@@ -254,6 +254,132 @@ def test_select_next_track_most_stale_fallback():
     picked = state.select_next_track()
 
     assert picked == stale
+
+
+def test_select_next_track_prefers_active_heading_candidates():
+    normal = _track(1)
+    tagged = _track(2)
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged.heading_id = heading.id
+    state = StationState(playlist=[normal, tagged], heading=heading)
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=lambda candidates, **_: [candidates[0]]):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is tagged
+
+
+def test_select_next_track_heading_bias_decays_after_budget_spent():
+    normal = _track(1)
+    tagged = _track(2)
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=1,
+        selection_spent=1,
+    )
+    tagged.heading_id = heading.id
+    state = StationState(playlist=[normal, tagged], heading=heading)
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=lambda candidates, **_: [candidates[0]]):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is normal
+
+
+def test_after_music_spends_heading_budget_only_for_matching_track():
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    normal = _track(1)
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    state = StationState(heading=heading)
+
+    state.after_music(normal)
+    assert heading.selection_spent == 0
+
+    state.after_music(tagged)
+    assert heading.selection_spent == 1
+
+
+def test_after_music_persists_heading_budget_spend():
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    persisted: list[Heading] = []
+    state = StationState(heading=heading, heading_persist_callback=persisted.append)
+
+    state.after_music(tagged)
+
+    assert heading.selection_spent == 1
+    assert persisted == [heading]
+
+
+def test_after_music_heading_persist_callback_failure_is_non_fatal():
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+
+    def fail_persist(_heading: Heading) -> None:
+        raise OSError("disk full")
+
+    state = StationState(heading=heading, heading_persist_callback=fail_persist)
+
+    state.after_music(tagged)
+
+    assert state.current_track is tagged
+    assert heading.selection_spent == 1
+
+
+def test_after_music_never_exceeds_heading_selection_budget():
+    """selection_spent stops at selection_budget even if the same tagged track airs
+    again — the budget cap is what retires the heading bias, so it must never overrun."""
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=1,
+    )
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    state = StationState(heading=heading)
+
+    state.after_music(tagged)
+    state.after_music(tagged)
+
+    assert heading.selection_spent == 1
 
 
 def test_on_stream_segment_counts_canned_clips():

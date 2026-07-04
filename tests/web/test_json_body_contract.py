@@ -170,6 +170,7 @@ JSON_BODY_WRITE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/playlist/move"),
     ("POST", "/api/playlist/add-external"),
     ("POST", "/api/playlist/add"),
+    ("POST", "/api/direction"),
     ("POST", "/api/heading"),
     ("POST", "/api/playlist/enrich"),
     ("POST", "/api/playlist/load"),
@@ -217,7 +218,8 @@ async def test_json_body_write_routes_reject_bad_bodies_without_mutation(
 
 
 @pytest.mark.asyncio
-async def test_admin_auth_runs_before_json_body_parse_for_non_loopback(tmp_path: Path):
+@pytest.mark.parametrize("path", ["/api/quality", "/api/direction"])
+async def test_admin_auth_runs_before_json_body_parse_for_non_loopback(tmp_path: Path, path: str):
     app = _make_test_app(tmp_path, admin_password="secret")
 
     async with httpx.AsyncClient(
@@ -225,7 +227,7 @@ async def test_admin_auth_runs_before_json_body_parse_for_non_loopback(tmp_path:
         base_url="http://testserver",
     ) as client:
         response = await client.post(
-            "/api/quality",
+            path,
             content=b"{bad",
             headers={"content-type": "application/json"},
         )

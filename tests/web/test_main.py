@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1617,6 +1618,551 @@ async def test_startup_clears_heading_when_restore_yields_no_tracks(tmp_path: Pa
 
     m_clear.assert_called_once()
     assert app.state.station_state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_startup_restores_direction_heading_targets(tmp_path: Path):
+    """A persisted text direction rehydrates from concrete targets, not an era source URL."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://2000s female vocals",
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    base_tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+    direction_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+
+    async def _land_direction_track(track, app_state, *_args):
+        app_state.station_state.playlist.append(track)
+        return "queued"
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(base_tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(
+            f"{MODULE}.resolve_direction_tracks",
+            new_callable=AsyncMock,
+            return_value=[direction_track],
+        ) as resolve_direction,
+        patch(
+            f"{MODULE}._download_direction_track",
+            new_callable=AsyncMock,
+            side_effect=_land_direction_track,
+        ) as download_direction,
+        patch(f"{MODULE}.load_explicit_source") as load_explicit,
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    resolve_direction.assert_awaited_once()
+    download_direction.assert_called_once()
+    load_explicit.assert_not_called()
+    m_clear.assert_not_called()
+    state = app.state.station_state
+    assert state.heading == heading
+    assert state.heading.selection_budget == 1
+    assert download_direction.call_args.args[0] is direction_track
+    assert download_direction.call_args.args[0].heading_id == heading.id
+
+
+@pytest.mark.asyncio
+async def test_startup_restores_direction_heading_from_existing_playlist_track(tmp_path: Path):
+    """A persisted text direction stays active when its target is already in the startup pool."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://2000s female vocals",
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    existing_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+    base_tracks = [existing_track, Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(base_tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, return_value=[]) as resolve_direction,
+        patch(f"{MODULE}.load_explicit_source") as load_explicit,
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    resolve_direction.assert_awaited_once()
+    load_explicit.assert_not_called()
+    m_clear.assert_not_called()
+    state = app.state.station_state
+    assert state.heading == heading
+    assert state.heading.selection_budget == 1
+    assert state.playlist[0] is existing_track
+    assert state.playlist[0].heading_id == heading.id
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_existing_direction_heading_tag(tmp_path: Path):
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://2000s female vocals",
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    existing_track = Track(
+        title="Toxic",
+        artist="Britney Spears",
+        duration_ms=1,
+        spotify_id="toxic",
+        heading_id=heading.id,
+    )
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=([existing_track], None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, return_value=[]),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_not_called()
+    state = app.state.station_state
+    assert state.playlist[0] is existing_track
+    assert state.playlist[0].heading_id == heading.id
+    assert state.heading == heading
+
+
+@pytest.mark.asyncio
+async def test_startup_retags_duplicate_explicit_heading_track(tmp_path: Path):
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-classic",
+        "classic://italian/00s",
+        "Anni 2000",
+        1.0,
+        "operator",
+        selection_budget=3,
+    )
+    base_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+    fetched_duplicate = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=([base_track], None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.load_explicit_source", return_value=([fetched_duplicate], None)),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_not_called()
+    state = app.state.station_state
+    assert state.playlist == [base_track]
+    assert base_track.heading_id == heading.id
+    assert state.heading == heading
+    assert state.heading.selection_budget == 3
+
+
+@pytest.mark.asyncio
+async def test_startup_clears_heading_when_explicit_tracks_already_tagged(tmp_path: Path):
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-classic", "classic://italian/00s", "Anni 2000", 1.0, "operator")
+    base_track = Track(
+        title="Toxic",
+        artist="Britney Spears",
+        duration_ms=1,
+        spotify_id="toxic",
+        heading_id=heading.id,
+    )
+    fetched_duplicate = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=([base_track], None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.load_explicit_source", return_value=([fetched_duplicate], None)),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_called_once()
+    assert app.state.station_state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_clears_heading_when_nothing_lands(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+    from mammamiradio.playlist.playlist import read_persisted_heading, write_persisted_heading
+
+    mock_config = _heading_startup_config(tmp_path)
+    mock_config.cache_dir.mkdir(parents=True, exist_ok=True)
+    heading = Heading(
+        "h-direction",
+        "direction://2000s female vocals",
+        "2000s female vocals",
+        1.0,
+        "operator",
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+    )
+    write_persisted_heading(mock_config.cache_dir, heading)
+    state = StationState(
+        playlist=[Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")],
+        heading=heading,
+    )
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+
+    with patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, return_value=[]):
+        await _restore_direction_targets_background(app_state, heading.id, heading.targets, state.source_revision)
+
+    assert state.heading is None
+    assert read_persisted_heading(mock_config.cache_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_ignores_empty_targets(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://empty", "Empty", 1.0, "operator")
+    state = StationState(heading=heading)
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+
+    with patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock) as resolve_direction:
+        await _restore_direction_targets_background(app_state, heading.id, [], state.source_revision)
+
+    resolve_direction.assert_not_called()
+    assert state.heading is heading
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_drops_when_heading_changes_before_commit(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://old", "Old", 1.0, "operator")
+    state = StationState(heading=Heading("other", "direction://new", "New", 2.0, "operator"))
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+    resolved = [Track(title="Toxic", artist="Britney Spears", duration_ms=1, youtube_id="yt")]
+
+    with (
+        patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, return_value=resolved),
+        patch(f"{MODULE}._download_direction_track", new_callable=AsyncMock) as download_direction,
+    ):
+        await _restore_direction_targets_background(
+            app_state,
+            heading.id,
+            [{"artist": "Britney Spears", "title": "Toxic"}],
+            state.source_revision,
+        )
+
+    download_direction.assert_not_called()
+    assert state.heading is not None
+    assert state.heading.id == "other"
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_skips_existing_and_duplicate_targets(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    existing = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="base")
+    new_track = Track(title="Fighter", artist="Christina Aguilera", duration_ms=1, youtube_id="yt-fighter")
+    duplicate = Track(title="Fighter", artist="Christina Aguilera", duration_ms=1, youtube_id="yt-fighter-2")
+    state = StationState(playlist=[existing], heading=heading)
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+
+    with (
+        patch(
+            f"{MODULE}.resolve_direction_tracks",
+            new_callable=AsyncMock,
+            return_value=[existing, new_track, duplicate],
+        ),
+        patch(
+            f"{MODULE}._download_direction_track",
+            new_callable=AsyncMock,
+            return_value="queued",
+        ) as download_direction,
+    ):
+        await _restore_direction_targets_background(
+            app_state,
+            heading.id,
+            [
+                {"artist": "Britney Spears", "title": "Toxic"},
+                {"artist": "Christina Aguilera", "title": "Fighter"},
+            ],
+            state.source_revision,
+        )
+
+    download_direction.assert_called_once()
+    assert download_direction.call_args.args[0] is new_track
+    assert new_track.heading_id == heading.id
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_drops_when_heading_changes_after_download(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, youtube_id="yt")
+    state = StationState(heading=heading)
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+
+    async def download_and_clear(*_args):
+        state.heading = None
+        return "queued"
+
+    with (
+        patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, return_value=[track]),
+        patch(f"{MODULE}._download_direction_track", side_effect=download_and_clear),
+    ):
+        await _restore_direction_targets_background(
+            app_state,
+            heading.id,
+            [{"artist": "Britney Spears", "title": "Toxic"}],
+            state.source_revision,
+        )
+
+    assert state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_logs_resolution_failure(tmp_path: Path, caplog):
+    from mammamiradio.core.models import Heading, StationState
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    state = StationState(heading=heading)
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+
+    with patch(f"{MODULE}.resolve_direction_tracks", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+        await _restore_direction_targets_background(
+            app_state,
+            heading.id,
+            [{"artist": "Britney Spears", "title": "Toxic"}],
+            state.source_revision,
+        )
+
+    assert "Persisted direction background restore failed" in caplog.text
+    assert state.heading is heading
+
+
+@pytest.mark.asyncio
+async def test_startup_clears_persisted_direction_with_no_valid_targets(tmp_path: Path):
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://bad",
+        "Bad",
+        1.0,
+        "operator",
+        targets=[{"artist": "", "title": ""}],
+    )
+    tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}._clear_persisted_heading") as m_clear,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    m_clear.assert_called_once()
+    assert app.state.station_state.heading is None
+
+
+@pytest.mark.asyncio
+async def test_startup_heading_persist_callback_writes_in_background(tmp_path: Path):
+    from mammamiradio.core.models import Heading, Track
+    from mammamiradio.playlist.playlist import read_persisted_heading
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=None),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        # after_music fires the callback with the live active heading; the callback
+        # only persists when it still matches state.heading (identity re-check).
+        app.state.station_state.heading = heading
+        app.state.station_state.heading_persist_callback(heading)
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    assert read_persisted_heading(mock_config.cache_dir) == heading
+
+
+@pytest.mark.asyncio
+async def test_startup_heading_persist_callback_logs_failure(tmp_path: Path, caplog):
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=None),
+        patch(f"{MODULE}.write_persisted_heading", side_effect=OSError("read-only")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        app.state.station_state.heading = heading
+        app.state.station_state.heading_persist_callback(heading)
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    assert "Failed to persist heading update" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_heading_persist_callback_skips_when_course_cleared(tmp_path: Path):
+    """A budget-spend persist racing a Back-to-auto must not resurrect the cleared course."""
+    from mammamiradio.core.models import Heading, Track
+    from mammamiradio.playlist.playlist import read_persisted_heading
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-direction", "direction://2000s", "2000s", 1.0, "operator")
+    tracks = [Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=None),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        # Operator hit "Back to auto" before the fire-and-forget write ran, so the
+        # live heading no longer matches the one the callback captured.
+        app.state.station_state.heading = None
+        app.state.station_state.heading_persist_callback(heading)
+        tasks = list(getattr(app.state, "background_tasks", set()))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    assert read_persisted_heading(mock_config.cache_dir) is None
 
 
 def test_clear_persisted_heading_swallows_oserror():

@@ -94,6 +94,7 @@ _anthropic_attempt_lock: asyncio.Lock | None = None
 
 _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "banter": "script_banter",
+    "direction": "script_banter",
     "news_flash": "script_banter",
     "transition": "script_transition",
     "ad": "script_ads",

@@ -345,6 +345,13 @@ body[data-stopped="true"] .btn-util {
 
 /* ── PLAYLIST / SEARCH ── */
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
+.direction-row .quick-add-label { flex-shrink: 0; }
+.direction-row .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
+.direction-row .btn-direction { min-height: 44px; padding: 10px 16px; }
+.direction-row .btn-direction.loading,
+.direction-row .btn-direction:disabled,
+.direction-row .search-input:disabled { opacity: 0.65; pointer-events: none; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -1103,8 +1110,8 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-content { padding: 16px 16px; }
   .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
   .lg-row .ts { font-size: 9px; }
-  .search-row { flex-direction: column; }
-  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row, .direction-row { flex-direction: column; align-items: stretch; }
+  .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
   /* 481-768px = two-pane desktop column. Keep action buttons on the track
@@ -1751,6 +1758,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
           <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
         </div>
+        <div class="direction-row" id="directionControls">
+          <label class="quick-add-label" for="directionInput">Direction:</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Steer</button>
+        </div>
         <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
           <span>Course: <b>Auto rotation</b></span>
         </div>
@@ -2178,7 +2190,7 @@ function nowTypeStatus(type){
   return{cls:`segment-inline segment-${sKey}`,ariaLabel:`segment: ${sText}`,title:`segment: ${sText}`,text:segmentBadge(typeKey)};
 }
 
-async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(_base+p,o)).json()}
+async function api(m,p,b,timeoutMs){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);let _t=null;if(timeoutMs){const c=new AbortController();o.signal=c.signal;_t=setTimeout(()=>c.abort(),timeoutMs);}try{return(await fetch(_base+p,o)).json()}finally{if(_t)clearTimeout(_t);}}
 
 // ── Clock ──
 function updateClock(){
@@ -3180,6 +3192,61 @@ async function setHeading(kind,el){
   toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
   await refreshFast();
 }
+let _directionPending=false;
+function handleDirectionKey(event){
+  if(event.key!=='Enter' || event.repeat || event.isComposing)return;
+  event.preventDefault();
+  setDirectionText(document.getElementById('directionBtn'));
+}
+async function setDirectionText(el){
+  if(_directionPending)return;
+  const input=document.getElementById('directionInput');
+  const text=(input?.value||'').trim();
+  if(!text){toast('Type a direction and try again.');return;}
+  flash(el);
+  _directionPending=true;
+  if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Steering...';}
+  try{
+    // 60s client-side ceiling so a hung request can't leave the control stuck
+    // on "Steering..." forever with no way out — it rejects into catch below.
+    const r=await api('POST','/api/direction',{text},60000);
+    if(!r.ok){
+      toast(r.message||wayOut('shape that set'));
+      return;
+    }
+    const label=r.heading?.label||text;
+    if(r.idempotent){
+      toast(`${label} is already steering.`);
+    }else{
+      // Only count songs actually confirmed in rotation; anything still
+      // downloading is shown as "finding" rather than counted as aired.
+      const confirmed=Number(r.added||0);
+      const pending=Number(r.pending_downloads||0);
+      let detail='';
+      if(confirmed&&pending)detail=` (${confirmed} song${confirmed===1?'':'s'}, finding ${pending} more…)`;
+      else if(confirmed)detail=` (${confirmed} song${confirmed===1?'':'s'})`;
+      else if(pending)detail=' (finding songs…)';
+      toast(`${label} is steering${detail}.`);
+    }
+    if(input)input.value='';
+    await refreshFast();
+  }catch(e){
+    // The 60s client ceiling can fire while the station is still finding songs —
+    // that's not an outage. Refresh so the Course banner shows the real state
+    // instead of claiming we couldn't reach the studio.
+    if(e&&e.name==='AbortError'){
+      toast('Still finding songs — check the course banner in a moment.');
+      try{await refreshFast();}catch(_){}
+    }else{
+      toast(offlineMsg());
+    }
+  }finally{
+    _directionPending=false;
+    if(input){input.disabled=false;input.removeAttribute('aria-busy');}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Steer';}
+  }
+}
 async function clearHeading(el){
   flash(el);
   const r=await api('POST','/api/heading/clear',{});
@@ -3193,9 +3260,14 @@ function updateHeadingBanner(st){
   if(banner){
     const active=!!heading.active;
     banner.dataset.active=active?'true':'false';
-    banner.innerHTML=active
-      ? `<span>Course: <b>${esc(heading.label||'On course')}</b></span>`
-      : '<span>Course: <b>Auto rotation</b></span>';
+    if(active){
+      // A restored/just-set text direction can be active before its songs have
+      // been found yet — say so plainly instead of claiming it's already steering.
+      const resolving=!!heading.resolving;
+      banner.innerHTML=`<span>Course: <b>${esc(heading.label||'On course')}</b>${resolving?' — finding songs…':''}</span>`;
+    }else{
+      banner.innerHTML='<span>Course: <b>Auto rotation</b></span>';
+    }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
     const d=_HEADING_DISPATCH[btn.dataset.headingKind];
