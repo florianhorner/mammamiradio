@@ -173,8 +173,10 @@ def test_guest_config_style_caps_coffee_instead_of_defining_him(config):
 
 
 def test_root_and_addon_guest_config_styles_stay_in_sync():
+    repo_root = Path(__file__).resolve().parents[2]
+
     def hans_style(path: str) -> str:
-        data = tomllib.loads(Path(path).read_text())
+        data = tomllib.loads((repo_root / path).read_text())
         return next(host["style"] for host in data["hosts"] if host["name"] == _LOCAL_BALLOON_GUEST_HOST)
 
     root_style = hans_style("radio.toml")

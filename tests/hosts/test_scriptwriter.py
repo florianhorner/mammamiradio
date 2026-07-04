@@ -776,8 +776,9 @@ async def test_write_banter_guest_gate_post_dedup_single_line_uses_full_fallback
 
 @pytest.mark.asyncio
 async def test_write_banter_guest_gate_fallback_uses_normal_mode_language(config, state):
+    """Normal Mode with an Italian station falls back to English copy, not Super Italian stock lines."""
+
     config.station.language = "it"
-    config.super_italian_mode = False
     response_json = json.dumps(
         {
             "lines": [
@@ -789,15 +790,30 @@ async def test_write_banter_guest_gate_fallback_uses_normal_mode_language(config
     )
     mock_cls = _mock_anthropic_response(response_json)
 
+    config.super_italian_mode = False
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
     ):
-        result, commit = await write_banter(state, config)
+        normal_result, normal_commit = await write_banter(state, config)
 
-    assert [text for _, text in result] == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
-    assert commit is None
+    config.super_italian_mode = True
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
+    ):
+        italian_result, italian_commit = await write_banter(state, config)
+
+    normal_texts = [text for _, text in normal_result]
+    italian_texts = [text for _, text in italian_result]
+    assert normal_texts == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
+    assert italian_texts == ["Comunque, mica male questa.", "No, dai. Dai, aspetta—", "Musica. Adesso. Fidiamoci."]
+    assert normal_texts != italian_texts
+    assert normal_commit is None
+    assert italian_commit is None
 
 
 @pytest.mark.asyncio
