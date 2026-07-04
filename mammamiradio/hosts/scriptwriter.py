@@ -1449,9 +1449,7 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     if not regulars:
         return ""
     regular_hosts_text = _host_names_text(regulars)
-    station_conversation_lang = (
-        "Italian" if super_italian else "mostly English with Italian colour"
-    )
+    station_conversation_lang = "Italian" if super_italian else "mostly English with Italian colour"
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
         "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
@@ -1860,9 +1858,7 @@ Make this the focus of this banter break. It happened just now — react natural
     raw_heading_announcement_id = raw_heading.id if raw_heading is not None else ""
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
     if heading_announcement and raw_heading is not None and raw_heading_announcement_id:
-        language_line = language_mode_rule(
-            config.super_italian_mode, config.station.language
-        )
+        language_line = language_mode_rule(config.super_italian_mode, config.station.language)
         course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
             heading_label=heading_announcement,
             language_line=language_line,
