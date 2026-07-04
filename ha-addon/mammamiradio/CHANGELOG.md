@@ -11,6 +11,7 @@
 
 ### Changed
 
+- **Hosts push through a long thought instead of shrugging into filler.** When a host break runs longer than the writing budget allows, the station retries once with more room — first with its main writer, then with the backup — instead of quietly airing a generic filler line. The budget grew to match how much the hosts actually have to say, each attempt gets proportional breathing room under a hard time limit, and the music never waits on a chatty host.
 - **The Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. The Jamendo client ID moves behind Home Assistant's optional configuration disclosure for new installs and installs where the saved key is absent; existing installs that already saved a blank value may still show it until that saved option is cleared.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 - **Banter is shorter by default.** Hosts keep most breaks to a quick beat between songs, saving longer breaks for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode.
