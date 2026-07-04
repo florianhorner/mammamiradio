@@ -5,7 +5,23 @@ from __future__ import annotations
 import pytest
 
 from mammamiradio.core.config import load_config
+from mammamiradio.hosts.prompt_world import language_mode_rule
 from mammamiradio.hosts.scriptwriter import _build_system_prompt, _get_system_prompt
+
+
+def test_language_mode_rule_unmapped_code_degrades_not_keyerror():
+    """The ON-mode rule must echo an unmapped language code raw, never KeyError.
+
+    super_italian_mode and station.language are independent config fields, so
+    Super Italian ON with station.language='de' is a reachable production config.
+    _LANGUAGE_NAMES.get(code, code) is the documented guard — this pins it so a
+    later refactor to _LANGUAGE_NAMES[code] can't reintroduce a KeyError inside
+    a live prompt build.
+    """
+    assert language_mode_rule(True, "it") == "ALL text in Italian."
+    assert language_mode_rule(True, "de") == "ALL text in de."
+    # OFF ignores the code entirely — the static 70/30 rule, no map lookup.
+    assert "70% English" in language_mode_rule(False, "de")
 
 
 @pytest.fixture()

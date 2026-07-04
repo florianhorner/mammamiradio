@@ -1,8 +1,8 @@
-# Station personality dial. ON (default): listener UI and hosts are Italian-first.
-# OFF: listener UI in English with Italian
-# headlines and station-feel words; AI hosts code-switch (English narrative +
-# Italian flavor). ON: full Italian throughout. Toggleable from the admin
-# Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
+# Station personality dial. OFF (default): listener UI in English with Italian
+# headlines and station-feel words; AI hosts speak roughly 70% English / 30%
+# Italian (English carries the information; Italian the greetings and punchlines).
+# ON: listener UI is Italian and hosts speak 100% Italian. Toggleable from the
+# admin Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
 super_italian_mode = false
 
 [station]
