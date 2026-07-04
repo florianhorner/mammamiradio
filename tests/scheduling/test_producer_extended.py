@@ -498,12 +498,16 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context) as mock_fetch,
+        patch(f"{MODULE}.resolve_home_mood", return_value=("Scena LLM", "LLM scene")) as mock_resolve_mood,
     ):
         await _run_until_queued(queue, state, config)
 
     mock_fetch.assert_called_once()
+    mock_resolve_mood.assert_called_once_with(config, state, mock_context)
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    assert state.ha_home_mood == "Scena LLM"
+    assert state.ha_home_mood_en == "LLM scene"
     assert state.ha_scored_entities[0]["label"] == "Coffee machine"
     assert state.ha_denylist_hits == {"privacy:person": 1}
     assert state.ha_context_entity_count == 1
@@ -511,6 +515,50 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     assert state.ha_context_last_updated == 1234.5
     assert state.ha_last_event_label == "La macchina del caffe"
     assert state.ha_last_event_label_en == "Coffee machine"
+
+
+@pytest.mark.asyncio
+async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
+    """resolve_home_mood runs outside the segment-render try — a raise there
+    must degrade to the ladder mood, not kill the producer (INSTANT AUDIO)."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Che bella giornata!")]
+
+    mock_context = MagicMock()
+    mock_context.summary = "Il tempo e' bello"
+    mock_context.events_summary = ""
+    mock_context.mood = "Caffe in preparazione"
+    mock_context.weather_arc = ""
+    mock_context.timestamp = 1234.5
+    mock_context.mood_en = "Coffee brewing"
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.events = deque()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.resolve_home_mood", side_effect=RuntimeError("scene namer exploded")),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_home_mood == "Caffe in preparazione"
+    assert state.ha_home_mood_en == "Coffee brewing"
+    assert not queue.empty()
 
 
 @pytest.mark.asyncio

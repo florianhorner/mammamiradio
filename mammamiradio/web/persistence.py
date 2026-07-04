@@ -25,6 +25,13 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
 _ADDON_OPTIONS_LOCK = threading.Lock()
+# Serializes the .env read-modify-write. Without it, two admin saves of DIFFERENT
+# settings (each guarded by its own asyncio lock in web/streamer.py, and each run
+# in an executor thread) race on the shared .env.tmp path and one can silently lose
+# the other's update. Mirrors _ADDON_OPTIONS_LOCK on the /data/options.json side; a
+# given process only writes one store (.env standalone, options.json add-on), so the
+# two locks never contend.
+_DOTENV_LOCK = threading.Lock()
 
 
 def _sanitize_credential_value(value: str) -> str:
@@ -82,36 +89,51 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
 
 def _save_dotenv(updates: dict[str, str]) -> None:
     """Write key=value pairs to .env, updating existing keys or appending new ones."""
-    env_path = Path(".env")
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    with _DOTENV_LOCK:
+        env_path = Path(".env")
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
 
-    safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
+        safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
 
-    written = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in safe_updates:
-                new_lines.append(f'{key}="{safe_updates[key]}"')
-                written.add(key)
-                continue
-        new_lines.append(line)
+        written = set()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in safe_updates:
+                    new_lines.append(f'{key}="{safe_updates[key]}"')
+                    written.add(key)
+                    continue
+            new_lines.append(line)
 
-    for key, value in safe_updates.items():
-        if key not in written:
-            new_lines.append(f'{key}="{value}"')
+        for key, value in safe_updates.items():
+            if key not in written:
+                new_lines.append(f'{key}="{value}"')
 
-    tmp = env_path.with_suffix(".env.tmp")
-    # The .env holds provider API keys; create it 0600 so it is not
-    # world-readable under a default umask (same hardening as secrets.env).
-    _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
-    tmp.replace(env_path)
+        tmp = env_path.with_suffix(".env.tmp")
+        # The .env holds provider API keys; create it 0600 so it is not
+        # world-readable under a default umask (same hardening as secrets.env).
+        _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
+        tmp.replace(env_path)
 
 
 def _save_addon_option(key: str, value) -> None:
     """Persist a single option into /data/options.json atomically."""
+    _save_addon_option_batch({key: value})
+
+
+def _save_addon_option_batch(updates: dict) -> None:
+    """Persist several options into /data/options.json in ONE atomic write.
+
+    Read-modify-write under the shared lock: load the current options, apply
+    every key in ``updates`` at once, then atomically replace the file. Writing
+    the whole set in a single pass is what keeps a multi-field save (e.g. the
+    three pacing keys) from leaving /data/options.json half-updated the way
+    three separate single-key writes would if one failed midway — a failed save
+    then can never leave durable config disagreeing with live config after a
+    restart.
+    """
     import json as _json
     import os as _os
 
@@ -120,10 +142,12 @@ def _save_addon_option(key: str, value) -> None:
         options: dict = {}
         if options_path.exists():
             try:
-                options = _json.loads(options_path.read_text())
+                loaded = _json.loads(options_path.read_text())
+                if isinstance(loaded, dict):
+                    options = loaded
             except (ValueError, OSError):
                 options = {}
-        options[key] = value
+        options.update(updates)
         tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
         tmp_path.write_text(_json.dumps(options, indent=2))
         _os.replace(tmp_path, options_path)

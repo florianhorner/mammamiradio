@@ -379,6 +379,20 @@ def test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_handoff_dir(tmp_pa
     assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
 
 
+def test_prune_stale_handoff_tmp_files_warns_on_dangling_handoff_dir_symlink(tmp_path, caplog):
+    # A dangling symlink survives resolve(strict=False) on every supported
+    # interpreter, so it reaches the not-a-dir branch in _prune_stale_tmp_glob
+    # (unlike the loop case, which 3.11 already rejects one call earlier).
+    # It must warn and degrade to a no-op, never crash.
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    restart_handoff_dir(cache_dir).symlink_to(cache_dir / "missing-target")
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
+
+
 def test_write_spool_preserves_existing_manifest_when_no_candidates_are_accepted(tmp_path):
     existing_path = _write_spooled_file(tmp_path, "existing.mp3", b"existing music")
     existing_entry = _entry_for_path(tmp_path, existing_path, created_at=50.0, artist="Existing", title="Song")

@@ -47,6 +47,12 @@ _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 _ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
 
+PACING_BOUNDS: dict[str, tuple[int, int]] = {
+    "songs_between_banter": (2, 60),
+    "songs_between_ads": (1, 60),
+    "ad_spots_per_break": (1, 5),
+}
+
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
 # fallbacks) references this so the name cannot drift the way "Radio MammaMia",
@@ -116,7 +122,7 @@ class PacingSection:
 
     songs_between_banter: int = 2
     songs_between_ads: int = 4
-    ad_spots_per_break: int = 1
+    ad_spots_per_break: int = 2
     lookahead_segments: int = 4
 
 
@@ -177,6 +183,7 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "news_flash": "creative",
     "ad": "creative",
     "transition": "fast",
+    "home_mood": "fast",
 }
 _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "premium": {
@@ -408,6 +415,10 @@ class HomeAssistantSection:
     # the one-time cold registry/weather warm-up gets a longer budget in the
     # producer (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
     context_refresh_timeout: float = 2.0
+    # Experimental LLM scene-namer for the home mood. The heuristic ladder stays
+    # the always-instant fallback and the default remains off.
+    mood_llm_enabled: bool = False
+    mood_ttl_seconds: float = 90.0
     timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
@@ -946,6 +957,20 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
+    # Pacing (mirrors the toggles above): map persisted /data/options.json values
+    # to env for the non-run.sh add-on boot path. run.sh normally exports these
+    # first, and the `not os.getenv` guard keeps that export authoritative; the
+    # load-time override loop clamps to range, so no clamp is needed here. bool is
+    # excluded because it is an int subclass.
+    for opt_key, env_key in (
+        ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+        ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+        ("ad_spots_per_break", "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ):
+        pv = options.get(opt_key)
+        if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
+            os.environ[env_key] = str(pv)
+
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
@@ -1174,20 +1199,14 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
-    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
-    # config-load and the admin runtime path enforce the same valid range.
-    if config.pacing.songs_between_banter < 2:
-        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
-    if config.pacing.songs_between_banter > 60:
-        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
-    if config.pacing.songs_between_ads < 1:
-        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
-    if config.pacing.songs_between_ads > 60:
-        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
-    if config.pacing.ad_spots_per_break < 1:
-        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
-    if config.pacing.ad_spots_per_break > 5:
-        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
+    # Bounds are shared with env-load clamping and PATCH /api/pacing so the
+    # accepted range cannot drift between boot and live admin changes.
+    for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
+        _value = getattr(config.pacing, _pacing_attr)
+        if _value < _lo:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be >= {_lo}"))
+        if _value > _hi:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
     if config.pacing.lookahead_segments < 1:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
@@ -1200,6 +1219,16 @@ def _validate(config: StationConfig) -> None:
         or _ctx_timeout <= 0
     ):
         errors.append(_err("homeassistant.context_refresh_timeout", "must be a positive number"))
+    if not isinstance(config.homeassistant.mood_llm_enabled, bool):
+        errors.append(_err("homeassistant.mood_llm_enabled", "must be true or false"))
+    _mood_ttl = config.homeassistant.mood_ttl_seconds
+    if (
+        isinstance(_mood_ttl, bool)
+        or not isinstance(_mood_ttl, int | float)
+        or not math.isfinite(_mood_ttl)
+        or _mood_ttl <= 0
+    ):
+        errors.append(_err("homeassistant.mood_ttl_seconds", "must be a positive number"))
     _allowed_urgencies = {"pissed", "urgent", "gentle"}
     for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
         if timer_cfg.cooldown < 1:
@@ -1239,6 +1268,8 @@ def _validate(config: StationConfig) -> None:
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
+        log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
@@ -1252,6 +1283,29 @@ def _validate(config: StationConfig) -> None:
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
+
+
+def _env_positive_float(name: str) -> float | None:
+    """Parse a positive finite float from an env var; warn and return None on invalid.
+
+    Shared by the `[homeassistant]` numeric env overrides so the
+    parse/validate/warn behavior can't drift between knobs.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not a number)", name, raw)
+        return None
+    if math.isfinite(value) and value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
 
 
 def load_config(path: str = "radio.toml") -> StationConfig:
@@ -1370,25 +1424,28 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
-    # Env override for the HA context refresh budget. Reject non-float / non-positive
-    # values (keep the toml/default) rather than letting a typo disable the deadline.
-    _ha_timeout_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "").strip()
-    if _ha_timeout_env:
-        import logging as _ha_logging
+    _ha_mood_llm_env = os.getenv("MAMMAMIRADIO_HA_MOOD_LLM", "").strip().lower()
+    if _ha_mood_llm_env in _TRUTHY:
+        ha_raw["mood_llm_enabled"] = True
+    elif _ha_mood_llm_env in _FALSY:
+        ha_raw["mood_llm_enabled"] = False
+    elif _ha_mood_llm_env:
+        # A typo ("ture") must not silently leave the experiment off while the
+        # operator believes it is on.
+        import logging as _mood_logging
 
-        _ha_log = _ha_logging.getLogger(__name__)
-        try:
-            _ha_timeout_val = float(_ha_timeout_env)
-        except ValueError:
-            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (not a number)", _ha_timeout_env)
-        else:
-            if math.isfinite(_ha_timeout_val) and _ha_timeout_val > 0:
-                ha_raw["context_refresh_timeout"] = _ha_timeout_val
-            else:
-                _ha_log.warning(
-                    "Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (must be a finite number > 0)",
-                    _ha_timeout_env,
-                )
+        _mood_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_MOOD_LLM=%r (use true/1/yes or false/0/no)",
+            _ha_mood_llm_env,
+        )
+    # Env overrides for positive-float HA knobs. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable them.
+    _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
+    if _ctx_override is not None:
+        ha_raw["context_refresh_timeout"] = _ctx_override
+    _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
+    if _mood_ttl_override is not None:
+        ha_raw["mood_ttl_seconds"] = _mood_ttl_override
     # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
     timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
     timer_interrupts = [
@@ -1550,6 +1607,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
     if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
         config.ledger_retention_days = int(_ledger_retention)
+
+    # Env overrides for pacing (HA addon pacing options -> MAMMAMIRADIO_PACING_*
+    # via run.sh; also the admin slider persistence path writing standalone .env).
+    # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
+    # stale or hand-edited env can never brick boot — audio continuity wins over a
+    # strict reject (INSTANT AUDIO).
+    for _pacing_env, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "ad_spots_per_break"),
+    ):
+        _pacing_raw = os.getenv(_pacing_env, "").strip()
+        if not _pacing_raw:
+            continue
+        try:
+            _pacing_val = int(_pacing_raw)
+        except ValueError:
+            continue
+        _lo, _hi = PACING_BOUNDS[_pacing_attr]
+        setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
 
     # Quality dial: pick the active model profile (premium|balanced|economy).
     # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its

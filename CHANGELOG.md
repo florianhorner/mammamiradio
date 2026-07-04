@@ -15,10 +15,12 @@ The current version source of truth is `pyproject.toml`.
 - **The Home Assistant integration updates in place and cleans up after itself.** It is a single-station setup with a **Reconfigure** screen for changing the station's address or admin token later — and a failed change keeps what you typed instead of silently reverting to the old address. Its Home Assistant repair notices clear themselves once the problem is resolved and disappear entirely if you remove the integration, and the "station unreachable" notice now waits for a real, sustained outage instead of flickering on a brief network blip.
 - **Admin Diagnostics now surfaces how much rendered audio was generated but discarded before airing, with a rough cost estimate.** The Runtime Status card shows recent unheard segments, duration in the rolling window, the dominant discard reason, and a count-based proration of session API/TTS spend.
 - **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
+- **Home mood naming can be tested without changing the default.** Operators can opt into an experimental LLM scene name for Home Assistant mood, with a cache window and the existing local mood ladder as the fallback.
 - **You can turn the rotating guest host on or off.** New stations keep the guest in the line-up as before; switch it off to keep the show to your regular hosts only. In the Home Assistant add-on it is the new **Guest host** option.
 
 ### Changed
 
+- **The Home Assistant add-on Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. The Jamendo client ID moves behind Home Assistant's own optional configuration disclosure for new installs and installs where the saved key is absent; existing installs that already saved a blank value may still show it until that saved option is cleared.
 - **Scaletta is now the first tab in the admin panel.** The live queue opens by default — Diretta (pacing controls) moves one position right.
 - **Banter is shorter by default.** Hosts now keep most breaks to a quick beat between songs instead of talking at length every time. Longer breaks are saved for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode — so the occasional long break lands as "this one mattered".
 - **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Clear pool) moves to a separate Pool row below.
@@ -26,6 +28,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **Your pacing settings now stick.** The Diretta sliders — how many songs between host breaks, how many between ad breaks, and how many ads per break — used to snap back to their defaults whenever the station restarted. A change you make is now saved and comes back exactly as you left it, and if a save ever can't be written the panel says so and leaves the current setting untouched instead of half-applying it. In the Home Assistant add-on the three values are also on the Configuration screen.
 - **Restart handoff scratch files no longer build up after a hard kill.** On startup the station now prunes stale restart-handoff `.tmp` files left behind by an interrupted add-on update, while keeping the published manifest and finished music handoff files intact.
 - **Background audio prep can no longer crowd out the next thing to air.** Prefetch and other background FFmpeg work now leave capacity for foreground renders, while emergency bridge audio gets its own tightly bounded priority path so recovery tones and silence fillers do not wait behind routine processing.
 - **The admin panel no longer scrolls sideways on phones.** On some phone browsers the producer desk could run off the right edge — the now-playing line, the live-work feed, and the section tabs were cut off and a stray sideways scrollbar appeared. The page now holds the screen width at every size, text stays at its intended size instead of being blown up, and the section tabs wrap cleanly instead of spilling past the edge.
@@ -39,8 +42,8 @@ The current version source of truth is `pyproject.toml`.
 
 ### Security
 
+- **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-- **Home Assistant add-on provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
 
 ## [2.14.1] - 2026-06-21
 

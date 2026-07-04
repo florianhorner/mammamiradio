@@ -1,0 +1,36 @@
+Proof: pacing-slider persistence (feat(admin): persist pacing sliders across restarts)
+Commit under test: b37202d5 (branch florianhorner/fix/ha-green-sound-hiccups)
+
+== Full test suite ==
+$ python -m pytest tests/ -q
+3645 passed, 2 skipped, 19 deselected in 71.84s
+
+== Gates ==
+$ ruff check .                       -> All checks passed!
+$ mypy mammamiradio/                 -> Success: no issues found in 69 source files
+$ bash scripts/validate-addon.sh     -> All checks passed. Safe to push.
+$ bash scripts/check-changelog-lint.sh -> Changelog lint clean.
+$ bash scripts/check-release-invariants.sh -> All invariants passed.
+$ make coverage-check                -> All coverage floors held. Total: 93% (floor: 92%)
+
+== New tests added for this change ==
+tests/web/test_streamer_routes_extended.py
+  - test_patch_pacing_persists_standalone_all_keys_atomically
+  - test_patch_pacing_persists_addon_one_atomic_batch_write
+  - test_patch_pacing_persists_only_present_keys
+  - test_patch_pacing_persists_clamped_value_not_raw
+  - test_patch_pacing_persist_failure_standalone_leaves_live_untouched
+  - test_patch_pacing_persist_failure_addon_leaves_live_untouched
+  - test_save_addon_option_batch_preserves_other_keys_and_writes_all
+tests/core/test_config.py
+  - test_pacing_env_override_applies
+  - test_pacing_env_override_wins_over_toml
+  - test_pacing_env_override_clamps_out_of_range
+  - test_pacing_env_override_ignores_non_int
+  - test_apply_addon_options_maps_pacing
+tests/web/test_operator_action_ledger.py
+  - test_pacing_records_operator_action_old_and_new
+  - test_pacing_noop_records_no_row
+  - test_pacing_persist_failure_records_no_row_and_no_drift
+tests/web/test_security.py
+  - test_concurrent_writes_preserve_all_keys (regression guard for _DOTENV_LOCK)

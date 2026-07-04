@@ -2,30 +2,15 @@ configuration:
   station_name:
     name: Station Name
     description: Your radio station's name, shown in the UI and stream metadata.
-  jamendo_client_id:
-    name: Jamendo Client ID
-    description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
-  anthropic_api_key:
-    name: Anthropic API Key
-    description: "Legacy fallback field. Prefer ANTHROPIC_API_KEY in /config/secrets.env; non-empty file values win. Unlocks Claude AI hosts for generated banter and ads."
-  openai_api_key:
-    name: OpenAI API Key
-    description: "Legacy fallback field. Prefer OPENAI_API_KEY in /config/secrets.env; non-empty file values win. Enables OpenAI host voices and script fallback."
-  azure_speech_key:
-    name: Azure Speech Key
-    description: "Legacy fallback field. Prefer AZURE_SPEECH_KEY in /config/secrets.env; non-empty file values win. Enables official Azure Speech voices with Azure Speech Region."
-  azure_speech_region:
-    name: Azure Speech Region
-    description: "Legacy fallback field. Prefer AZURE_SPEECH_REGION in /config/secrets.env; non-empty file values win. Azure Speech resource region, such as westeurope or eastus."
-  elevenlabs_api_key:
-    name: ElevenLabs API Key
-    description: "Legacy fallback field. Prefer ELEVENLABS_API_KEY in /config/secrets.env; non-empty file values win. Enables custom ElevenLabs character voices."
-  quality_profile:
-    name: AI Quality
-    description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."
   enable_home_assistant:
     name: Enable Home Assistant Integration
     description: "Let hosts use Home Assistant context, such as lights, presence, and climate, in banter and ads. Requires add-on API access; enable this if the boot log shows ha=disabled."
+  ha_media_player_push:
+    name: On-air media player push
+    description: "On (default): the station shows up in Home Assistant as a media player automatically, so an add-on-only setup gets a tile out of the box. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."
+  quality_profile:
+    name: AI Quality
+    description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."
   admin_token:
     name: Admin Token
     description: "Set a token to require admin sign-in for the admin API. Leave it empty to trust your home network — any device on your local network can open the admin panel, and changes are still protected against cross-site requests. Set a value to require the token even on your local network, for example when automations need a stable credential."
@@ -41,9 +26,18 @@ configuration:
   broadcast_chain:
     name: On-Air Sound
     description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect on the next few tracks as the buffered queue cycles through, not the one playing now."
-  ha_media_player_push:
-    name: On-air media player push
-    description: "On (default): the station shows up in Home Assistant as a media player automatically, so an add-on-only setup gets a tile out of the box. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."
   guest_host:
     name: Guest host
     description: "On (default): the rotating guest host joins the line-up and drops in for occasional guest-star breaks. Turn this Off to keep the show to your regular hosts only. Takes effect after the add-on restarts."
+  songs_between_banter:
+    name: Songs between host breaks
+    description: "How many songs play before the hosts come back for a break. Lower means they talk more often; higher means longer music runs. You can also change this live from the admin panel's Diretta tab — either way it sticks across restarts."
+  songs_between_ads:
+    name: Songs between ad breaks
+    description: "How many songs play between advert breaks. Higher means fewer interruptions. Also adjustable live from the admin panel; the value survives a restart."
+  ad_spots_per_break:
+    name: Ads per break
+    description: "How many advert spots run back to back in a single ad break. Also adjustable live from the admin panel; the value survives a restart."
+  jamendo_client_id:
+    name: Jamendo Client ID (Advanced)
+    description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.

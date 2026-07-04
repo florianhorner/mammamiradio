@@ -450,6 +450,7 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
 - hand-tuned entity labels (curated tier) remain authoritative; unknown entities resolve through a generated catalog backed by Anthropic (`home/catalog.py`, cached locally), then a sanitized HA display name plus area metadata, and are dropped entirely rather than letting a raw entity ID reach a host prompt
 - event diffing, mood classification, and weather narrative arcs continue to feed the existing scriptwriter fields
+- home mood uses the heuristic ladder by default; an experimental LLM scene-namer can be enabled with `MAMMAMIRADIO_HA_MOOD_LLM=true`, caches names for `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`, and falls back to the ladder whenever disabled, unavailable, slow, or invalid
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
@@ -648,7 +649,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/audio/tts.py` | TTS synthesis (Edge, OpenAI, Azure Speech, ElevenLabs) |
 | `mammamiradio/audio/voice_catalog.py` | Edge, OpenAI, and curated Azure voice ID catalogs |
 | `scripts/audition_tts_voices.py` | Local audition clips and manifest generation for configured/catalog TTS voices |
-| `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
+| `mammamiradio/home/ha_context.py` | Home Assistant polling, heuristic mood classification, optional LLM scene-namer, reactive triggers |
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |

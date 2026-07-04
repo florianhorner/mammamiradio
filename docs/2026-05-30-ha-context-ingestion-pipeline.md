@@ -131,7 +131,7 @@ Two narration sources, override-then-fallback:
 
 Hand-tuned dicts beat catalog entries on lookup. Catalog entries beat raw entity IDs. Raw entity IDs never reach the host (anti-illusion guard).
 
-The hardcoded **mood classifier** (`classify_home_mood`) stays in Phase A as a fast-path heuristic; Phase C is the conversation about whether to retire it for an LLM scene-namer over the budgeted set.
+The hardcoded **mood classifier** (`classify_home_mood`) stays in Phase A as the default heuristic ladder. Phase C may add an experimental LLM scene-namer over the budgeted set, but it remains off by default behind `MAMMAMIRADIO_HA_MOOD_LLM`; the ladder stays as the fallback whenever the flag is off, no LLM key is available, the call fails, or the response is rejected.
 
 ## 5. Privacy model (D2)
 
@@ -186,9 +186,11 @@ The producer must continue copying `summary` / `events_summary` / `mood` / `weat
 
 ### Phase C — Mood + scenes by LLM (1 PR, decision point)
 
-- Replace `classify_home_mood` priority ladder with an LLM scene-namer over the L4-budgeted set, cached for `mood_ttl_seconds` (e.g. 90s) to keep cost bounded.
-- Keep the hardcoded ladder as a *fallback* when LLM is unavailable, not as the primary path.
-- **Open question:** is the LLM scene-namer worth the latency / cost vs. a smarter heuristic? Re-decide at Phase C kickoff with Phase B data in hand.
+- Add an experimental LLM scene-namer over the L4-budgeted set, refreshed at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (default target: 90s) to keep latency and cost bounded. The last scene keeps airing while a refresh runs (stale-while-revalidate with a bounded staleness cap) — mood consumers are minutes apart at default pacing, so a scene that dies exactly at its TTL would be paid for on every segment yet almost never heard.
+- Gate it behind `MAMMAMIRADIO_HA_MOOD_LLM` (`false` by default). When disabled, missing a usable LLM key, timed out, rejected, or returning an unusable name, `classify_home_mood` remains the authoritative heuristic ladder.
+- Preserve the existing `ha_home_mood` / `ha_home_mood_en` propagation contract so `scriptwriter.py`, `/status`, and `/public-status` do not need a prompt or API shape change.
+- Track the LLM call under the `script_home_mood` cost category so Motore can show "Home mood" separately from host scripts.
+- **Open question:** is the LLM scene-namer worth the latency / cost vs. a smarter heuristic? Re-decide after comparing it against the ladder with Phase B data in hand.
 
 Each phase ships independently. Each phase's PR follows scope discipline (no planning-doc hitchhikers).
 
@@ -217,7 +219,7 @@ Plus phase-specific tests:
 | Privacy leak via attributes (not just state) | L2 strips known sensitive attribute keys (`latitude`, `longitude`, `gps_accuracy`, `source_type`) globally before L3 sees them |
 | Score function tuned for Florian's home only | Score weights live in config (`radio.toml` or addon options), not constants. Document the tuning knob |
 | Customer addon starts narrating sensitive household state by surprise | Engine Room "What HA sends to the LLM" panel is the canary. First-run experience surfaces it |
-| Hardcoded mood classifier and LLM scene-namer disagree on Florian's home | Phase C decision: data-driven. If LLM consistently produces less interesting moods, keep the ladder |
+| Hardcoded mood classifier and LLM scene-namer disagree on Florian's home | Phase C decision: data-driven. Because the LLM path is off by default, keep the ladder unless the generated names are consistently better |
 
 ## 10. Doc-sync touchpoints
 
@@ -225,7 +227,7 @@ Plus phase-specific tests:
 
 - `docs/architecture.md` — new HA ingestion layer section
 - `docs/operations.md` — privacy defaults + how to opt in
-- `CLAUDE.md` — new env vars (`MAMMAMIRADIO_HA_PRIVACY_*`, `MAMMAMIRADIO_HA_BUDGET_*`)
+- `CLAUDE.md` — new env vars (`MAMMAMIRADIO_HA_PRIVACY_*`, `MAMMAMIRADIO_HA_BUDGET_*`, `MAMMAMIRADIO_HA_MOOD_LLM`, `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`)
 - `CHANGELOG.md` — public-facing summary per phase (editorial-boundary clean)
 - `docs/runbooks/ha-addon.md` — addon options schema additions
 
