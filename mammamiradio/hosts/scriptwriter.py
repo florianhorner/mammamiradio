@@ -362,12 +362,17 @@ def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
 
 
 def _get_openai_client(api_key: str):
-    """Return a reusable OpenAI client, creating one if needed."""
+    """Return a reusable OpenAI client, creating one if needed.
+
+    max_retries=0: script generation does its own budget-aware retrying, and
+    the SDK default (2) would let a wait_for-abandoned executor thread fire two
+    more full-price completions that nothing records. Scoped to script calls
+    only — TTS has its own client in audio/tts.py."""
     global _openai_client, _openai_key
     if _openai_client is None or _openai_key != api_key:
         from openai import OpenAI
 
-        _openai_client = OpenAI(api_key=api_key)
+        _openai_client = OpenAI(api_key=api_key, max_retries=0)
         _openai_key = api_key
     return _openai_client
 
@@ -762,10 +767,12 @@ async def _generate_json_response(
                                 fallback_reason = "anthropic_exception"
                                 logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
                         break
-            if fallback_reason == "anthropic_max_tokens_truncated":
-                # Truncation-exhausted: the OpenAI fallback inherits the LAST
-                # (escalated) budget as its visible-output floor — the original
-                # small floor is how the live incident's second half happened.
+            if truncated_prior_attempt or fallback_reason == "anthropic_max_tokens_truncated":
+                # Attempt 0 proved the content is long — the OpenAI fallback
+                # inherits the LAST (escalated) budget as its visible-output
+                # floor even when the escalated attempt then died on something
+                # ELSE (timeout, sibling-tripped circuit). The original small
+                # floor is how the live incident's second half happened.
                 final_anthropic_max_tokens = current_max_tokens
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
@@ -795,7 +802,13 @@ async def _generate_json_response(
         # OpenAI fallback whenever Anthropic was unavailable. Rebuilt fresh per
         # attempt — never mutated — and the headroom is re-added once per build,
         # so an escalation can't compound it.
-        oa_timeout = _attempt_timeout(visible_budget + _OPENAI_REASONING_HEADROOM)
+        # Deadline-capped so the tail is bounded (a truncated Anthropic chain
+        # can arrive here late), but floored at 45s — the base fallback ladder
+        # always gets a real shot, never strangled by the deadline.
+        oa_timeout = max(
+            45.0,
+            min(_attempt_timeout(visible_budget + _OPENAI_REASONING_HEADROOM), deadline - time.monotonic()),
+        )
         openai_kwargs = dict(
             model=openai_model,
             max_completion_tokens=visible_budget + _OPENAI_REASONING_HEADROOM,
@@ -805,8 +818,9 @@ async def _generate_json_response(
                 {"role": "user", "content": prompt},
             ],
             # SDK-level timeout: asyncio.wait_for around run_in_executor abandons
-            # (does not cancel) the sync SDK thread — the HTTP-layer timeout is
-            # what actually stops a runaway request from billing unrecorded tokens.
+            # (does not cancel) the sync SDK thread — the HTTP-layer timeout plus
+            # the client's max_retries=0 are what actually stop a runaway request
+            # from billing unrecorded tokens.
             timeout=oa_timeout,
         )
 
@@ -839,10 +853,11 @@ async def _generate_json_response(
         finish_reason = getattr(choice, "finish_reason", None)
         # Retry gate for the OTHER half of the live incident: a completion cut at
         # the cap (`finish_reason == "length"`, reasoning tokens included) or a
-        # genuinely empty one gets ONE escalated retry. An empty completion WITH
-        # finish_reason == "stop" is a refusal/filter outcome a bigger budget
-        # cannot fix — that raises below, exactly as before.
-        needs_bigger_budget = finish_reason == "length" or (not raw and finish_reason != "stop")
+        # genuinely empty one gets ONE escalated retry. An empty completion with
+        # finish_reason "stop" (model finished on purpose) or "content_filter"
+        # (refusal) is an outcome a bigger budget cannot fix — that raises below,
+        # exactly as before, without spending a paid retry on it.
+        needs_bigger_budget = finish_reason == "length" or (not raw and finish_reason not in ("stop", "content_filter"))
         if needs_bigger_budget and oa_attempt == 0 and time.monotonic() < deadline:
             logger.info(
                 "openai_script_call",

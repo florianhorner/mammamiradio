@@ -875,16 +875,22 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
     # reasoning and add a small fixed residual buffer on top of the caller's
     # visible-output budget — lock the exact additive contract so a regression
     # that stops adding the caller budget (or inflates it) is caught.
-    from mammamiradio.hosts.scriptwriter import _BANTER_MAX_TOKENS, _OPENAI_REASONING_HEADROOM
+    from mammamiradio.hosts.scriptwriter import (
+        _BANTER_MAX_TOKENS,
+        _OPENAI_REASONING_HEADROOM,
+        _attempt_timeout,
+    )
 
     # write_banter passes max_tokens=_BANTER_MAX_TOKENS into _generate_json_response.
     # Anthropic failed on a generic (non-truncation) exception here, so the OpenAI
     # floor must stay at the BASE budget — no escalation leaked in.
     assert call_kwargs["max_completion_tokens"] == _BANTER_MAX_TOKENS + _OPENAI_REASONING_HEADROOM
     assert call_kwargs.get("reasoning_effort") == "minimal"
-    # The SDK-level timeout must ride along: asyncio.wait_for abandons (does not
-    # cancel) the sync SDK thread, so the HTTP-layer timeout is the real stop.
-    assert call_kwargs.get("timeout") is not None
+    # The SDK-level timeout must ride along AND be budget-scaled: asyncio.wait_for
+    # abandons (does not cancel) the sync SDK thread, so the HTTP-layer timeout is
+    # the real stop — and a regression back to a fixed 45s would make the bigger
+    # budgets die by timeout (the exact failure the scaling exists to prevent).
+    assert call_kwargs.get("timeout") == _attempt_timeout(_BANTER_MAX_TOKENS + _OPENAI_REASONING_HEADROOM)
 
 
 @pytest.mark.asyncio
@@ -1414,17 +1420,22 @@ async def test_openai_empty_completion_retries_with_bigger_budget(config, state)
     escalated = round(_BANTER_MAX_TOKENS * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
     second_kwargs = openai_client.chat.completions.create.call_args_list[1].kwargs
     assert second_kwargs["max_completion_tokens"] == escalated + _OPENAI_REASONING_HEADROOM
+    # The escalated attempt's SDK timeout scales with its own bigger cap.
+    from mammamiradio.hosts.scriptwriter import _attempt_timeout
+
+    assert second_kwargs["timeout"] == _attempt_timeout(escalated + _OPENAI_REASONING_HEADROOM)
     assert any(text == "Ripresa!" for _host, text in lines)
 
 
 @pytest.mark.asyncio
-async def test_openai_empty_with_stop_finish_reason_does_not_retry(config, state):
-    """An empty completion WITH finish_reason='stop' is a refusal/filter
-    outcome — a bigger budget cannot fix it, so no escalated retry is spent;
-    the existing stock-copy fallback takes over immediately."""
+@pytest.mark.parametrize("terminal_reason", ["stop", "content_filter"])
+async def test_openai_empty_with_terminal_finish_reason_does_not_retry(config, state, terminal_reason):
+    """An empty completion with finish_reason='stop' (finished on purpose) or
+    'content_filter' (refusal) is an outcome a bigger budget cannot fix — no
+    escalated retry is spent; the stock-copy fallback takes over immediately."""
     config.anthropic_api_key = ""
     config.openai_api_key = "openai-key"
-    empty = _openai_completion("", finish_reason="stop")
+    empty = _openai_completion("", finish_reason=terminal_reason)
     openai_client = MagicMock()
     openai_client.chat = MagicMock()
     openai_client.chat.completions = MagicMock()
@@ -1439,6 +1450,199 @@ async def test_openai_empty_with_stop_finish_reason_does_not_retry(config, state
     assert openai_client.chat.completions.create.call_count == 1
     # Stock copy aired (write_banter's catch) — never dead air.
     assert lines
+
+
+@pytest.mark.asyncio
+async def test_openai_partial_json_with_length_finish_reason_retries(config, state):
+    """finish_reason='length' with NON-empty partial JSON must also trigger the
+    escalated retry — the gate is 'cut at the cap', not 'came back empty'.
+    Guards against narrowing the gate to empty-only, which would pass the rest
+    of the suite while re-breaking the truncated-partial case."""
+    from mammamiradio.hosts.scriptwriter import (
+        _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR,
+        _BANTER_MAX_TOKENS,
+        _OPENAI_REASONING_HEADROOM,
+    )
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    partial = _openai_completion('{"lines": [{"ho', finish_reason="length")
+    good = _openai_completion(json.dumps({"lines": [{"host": host_name, "text": "Completo!"}], "new_joke": None}))
+    openai_client = MagicMock()
+    openai_client.chat = MagicMock()
+    openai_client.chat.completions = MagicMock()
+    openai_client.chat.completions.create = MagicMock(side_effect=[partial, good])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert openai_client.chat.completions.create.call_count == 2
+    escalated = round(_BANTER_MAX_TOKENS * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+    assert (
+        openai_client.chat.completions.create.call_args_list[1].kwargs["max_completion_tokens"]
+        == escalated + _OPENAI_REASONING_HEADROOM
+    )
+    assert any(text == "Completo!" for _host, text in lines)
+
+
+@pytest.mark.asyncio
+async def test_openai_empty_with_no_finish_reason_retries(config, state):
+    """An empty completion with finish_reason=None (SDK/edge shapes) is NOT a
+    provable refusal — it gets the escalated retry."""
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    empty = _openai_completion("", finish_reason=None)  # type: ignore[arg-type]
+    good = _openai_completion(json.dumps({"lines": [{"host": host_name, "text": "Ci sono."}], "new_joke": None}))
+    openai_client = MagicMock()
+    openai_client.chat = MagicMock()
+    openai_client.chat.completions = MagicMock()
+    openai_client.chat.completions.create = MagicMock(side_effect=[empty, good])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert openai_client.chat.completions.create.call_count == 2
+    assert any(text == "Ci sono." for _host, text in lines)
+
+
+@pytest.mark.asyncio
+async def test_openai_both_attempts_empty_falls_to_stock_copy(config, state):
+    """Both OpenAI attempts cut at the cap → loop exhausts → stock copy airs,
+    and the failed attempt leaves an honest openai_empty_or_length ledger row."""
+    import mammamiradio.hosts.scriptwriter as sw
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    empty = _openai_completion("", finish_reason="length")
+    openai_client = MagicMock()
+    openai_client.chat = MagicMock()
+    openai_client.chat.completions = MagicMock()
+    openai_client.chat.completions.create = MagicMock(side_effect=[empty, empty])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_emit_llm_call", wraps=sw._emit_llm_call) as emit_spy,
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert openai_client.chat.completions.create.call_count == 2
+    assert lines  # stock copy — never dead air
+    retry_rows = [
+        c.kwargs for c in emit_spy.call_args_list if c.kwargs.get("fallback_reason") == "openai_empty_or_length"
+    ]
+    assert retry_rows and retry_rows[0]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_openai_deadline_skips_escalation_but_base_runs(config, state):
+    """Past the total deadline the OpenAI escalation is skipped but the BASE
+    fallback attempt still runs (floored at 45s) — the rescue ladder never
+    shrinks, the deadline only bounds the new mechanism's tail."""
+    import mammamiradio.hosts.scriptwriter as sw
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    empty = _openai_completion("", finish_reason="length")
+    openai_client = MagicMock()
+    openai_client.chat = MagicMock()
+    openai_client.chat.completions = MagicMock()
+    openai_client.chat.completions.create = MagicMock(return_value=empty)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_SCRIPT_TOTAL_DEADLINE", -1.0),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert openai_client.chat.completions.create.call_count == 1
+    assert openai_client.chat.completions.create.call_args.kwargs["timeout"] == 45.0
+    assert lines
+
+
+@pytest.mark.asyncio
+async def test_anthropic_only_both_truncated_falls_to_stock_copy(config, state):
+    """The Anthropic-only tier's terminal floor: base + escalated attempts both
+    truncate, no OpenAI key → the truncation error reaches write_banter's catch
+    and stock copy airs. Two calls prove the retry ran before the terminal raise."""
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = ""
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(
+        side_effect=[_truncated_anthropic_response(), _truncated_anthropic_response()]
+    )
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert mock_client.messages.create.call_count == 2
+    assert lines  # stock copy — never dead air
+
+
+@pytest.mark.asyncio
+async def test_truncation_then_generic_error_keeps_escalated_openai_floor(config, state):
+    """Attempt 0 truncated (content proven long), attempt 1 dies on a DIFFERENT
+    error → the OpenAI floor must still inherit the ESCALATED budget, not the
+    base — otherwise the fallback re-runs the exact starved-floor failure the
+    incident showed."""
+    from mammamiradio.hosts.scriptwriter import (
+        _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR,
+        _BANTER_MAX_TOKENS,
+        _OPENAI_REASONING_HEADROOM,
+    )
+
+    config.anthropic_api_key = "anthropic-key"
+    config.openai_api_key = "openai-key"
+    host_name = config.hosts[0].name
+    openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=[_truncated_anthropic_response(), Exception("boom")])
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await write_banter(state, config)
+
+    assert mock_client.messages.create.call_count == 2
+    escalated = round(_BANTER_MAX_TOKENS * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+    oa_kwargs = openai_client.chat.completions.create.call_args.kwargs
+    assert oa_kwargs["max_completion_tokens"] == escalated + _OPENAI_REASONING_HEADROOM
+
+
+def test_warn_budget_pressure_thresholds(caplog):
+    """The tripwire fires at >=80% of budget and never raises on non-numeric
+    telemetry values (best-effort usage data can be absent or mocked)."""
+    import logging
+
+    from mammamiradio.hosts.scriptwriter import _warn_budget_pressure
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.hosts.scriptwriter"):
+        _warn_budget_pressure(960, 1200, "banter")  # exactly 80%
+        _warn_budget_pressure(959, 1200, "banter")  # just under — silent
+        _warn_budget_pressure(MagicMock(), 1200, "banter")  # non-int — no raise
+        _warn_budget_pressure(100, MagicMock(), "banter")  # non-int — no raise
+    pressure_warnings = [r for r in caplog.records if "budget pressure" in r.getMessage()]
+    assert len(pressure_warnings) == 1
+    assert "960/1200" in pressure_warnings[0].getMessage()
 
 
 @pytest.mark.asyncio
