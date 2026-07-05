@@ -2802,8 +2802,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks "
-            "+ station_name_guard + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
