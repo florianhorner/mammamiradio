@@ -1957,7 +1957,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <span><strong>Super Italian Mode</strong></span>
             </label>
             <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-              Full Italian mode: hosts speak as an Italian station and the listener page stays in Italian.
+              On: hosts speak 100% Italian and the listener page stays in Italian. Off: hosts speak about 70% English with real Italian moments, and the listener page is in English.
             </div>
           </div>
 
@@ -3968,7 +3968,7 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Super Italian ON — hosts go Italian-first, listener page in Italian':'Super Italian OFF — hosts speak English-first (with Italian flavour), listener page in English');
+    if(r&&r.ok)toast(value?'Super Italian ON — hosts go full Italian, listener page in Italian':'Super Italian OFF — hosts speak mostly English with real Italian moments (about 70/30), listener page in English');
     else{
       el.checked=!value;
       toast(wayOut());

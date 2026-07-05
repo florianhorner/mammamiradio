@@ -32,7 +32,7 @@ After installing, go to the add-on's **Configuration** tab:
 - **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant**: Toggle ambient home context in hosts' banter (default: on).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
-- **Super Italian Mode**: Keep listener UI and hosts Italian-first (default: off).
+- **Super Italian Mode**: On, the hosts speak fully in Italian and the listener page goes Italian. Off (default), the hosts speak about 70% English with real Italian moments.
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
