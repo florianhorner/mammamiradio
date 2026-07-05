@@ -382,6 +382,44 @@ async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tm
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_memory_extraction_skips_if_listener_disconnects_before_start_sample(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    listener_id, _ = app.state.stream_hub.subscribe()
+
+    audio_path = tmp_path / "banter.mp3"
+    audio_path.write_bytes(b"x" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=audio_path,
+            metadata={
+                "title": "No-listener bit",
+                "memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]},
+            },
+        )
+    )
+
+    original_on_stream_segment = app.state.station_state.on_stream_segment
+
+    def _on_stream_segment_then_disconnect(segment):
+        original_on_stream_segment(segment)
+        app.state.stream_hub.unsubscribe(listener_id)
+
+    app.state.station_state.on_stream_segment = _on_stream_segment_then_disconnect
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
     """F3 (Scenario-3): a queued segment whose file has vanished — evicted by the
     cache LRU or pruned by the restart-handoff spool while still queued — must be

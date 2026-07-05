@@ -103,7 +103,6 @@ _SCRIPT_TOTAL_DEADLINE = 180.0
 # the block check and issue parallel 401 floods before the first failure trips
 # the circuit. Created lazily inside the running event loop.
 _anthropic_attempt_lock: asyncio.Lock | None = None
-_memory_anthropic_attempt_lock: asyncio.Lock | None = None
 
 
 def _attempt_timeout(max_tokens: int) -> float:
@@ -472,7 +471,6 @@ def reset_provider_backoff() -> None:
         _anthropic_auth_blocked_until, \
         _anthropic_block_expired_logged, \
         _anthropic_attempt_lock, \
-        _memory_anthropic_attempt_lock, \
         _anthropic_blocked_reason, \
         _anthropic_blocked_model
     _anthropic_auth_blocked_key = ""
@@ -481,7 +479,6 @@ def reset_provider_backoff() -> None:
     _anthropic_blocked_model = ""
     _anthropic_block_expired_logged = False
     _anthropic_attempt_lock = None
-    _memory_anthropic_attempt_lock = None
 
 
 def _is_anthropic_auth_error(exc: Exception) -> bool:
@@ -561,25 +558,6 @@ def _get_anthropic_attempt_lock() -> asyncio.Lock:
     return _anthropic_attempt_lock
 
 
-def _get_memory_anthropic_attempt_lock() -> asyncio.Lock:
-    """Return the background-memory Anthropic lock.
-
-    Post-air memory extraction is best-effort. It still serializes its own
-    Anthropic probes, but it must never hold the foreground script lock that
-    protects live banter, transitions, ads, and news from auth-failure floods.
-    """
-    global _memory_anthropic_attempt_lock
-    if _memory_anthropic_attempt_lock is None:
-        _memory_anthropic_attempt_lock = asyncio.Lock()
-    return _memory_anthropic_attempt_lock
-
-
-def _anthropic_attempt_lock_for_caller(caller: str | None) -> asyncio.Lock:
-    if caller == "memory_extract":
-        return _get_memory_anthropic_attempt_lock()
-    return _get_anthropic_attempt_lock()
-
-
 async def _generate_json_response(
     *,
     prompt: str,
@@ -642,7 +620,7 @@ async def _generate_json_response(
             current_max_tokens = max_tokens
             truncated_prior_attempt = False
             for attempt in range(_ANTHROPIC_MAX_TOKENS_RETRY_LIMIT + 1):
-                async with _anthropic_attempt_lock_for_caller(caller):
+                async with _get_anthropic_attempt_lock():
                     # Re-check inside the lock: a sibling task may have just 401'd and
                     # set the block while we were waiting to acquire (or between our
                     # attempts).

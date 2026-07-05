@@ -4585,33 +4585,52 @@ async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, sta
 
 
 @pytest.mark.asyncio
-async def test_memory_extract_does_not_wait_on_foreground_anthropic_lock(config, state):
+async def test_memory_extract_shares_foreground_anthropic_auth_flood_guard(config, state):
     from mammamiradio.hosts.scriptwriter import _generate_json_response
 
-    foreground_lock = scriptwriter_module._get_anthropic_attempt_lock()
-    await foreground_lock.acquire()
-    try:
-        mock_cls = _mock_anthropic_response(json.dumps({"ok": True}))
-        with (
-            patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
-            patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
-        ):
-            result = await asyncio.wait_for(
-                _generate_json_response(
-                    prompt="p",
-                    config=config,
-                    state=state,
-                    model="claude-test",
-                    max_tokens=100,
-                    caller="memory_extract",
-                ),
-                timeout=1,
-            )
-    finally:
-        foreground_lock.release()
+    class _AuthError(Exception):
+        pass
 
-    assert result == {"ok": True}
-    assert mock_cls.return_value.messages.create.await_count == 1
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_AuthError("invalid x-api-key"))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        results = await asyncio.gather(
+            _generate_json_response(
+                prompt="foreground",
+                config=config,
+                state=state,
+                model="claude-test",
+                max_tokens=100,
+                caller="banter",
+            ),
+            _generate_json_response(
+                prompt="memory",
+                config=config,
+                state=state,
+                model="claude-test",
+                max_tokens=100,
+                caller="memory_extract",
+            ),
+            return_exceptions=True,
+        )
+
+    assert mock_client.messages.create.await_count == 1, (
+        "memory_extract must share the foreground Anthropic attempt lock so one "
+        "bad key trips the circuit before the sibling request reaches Anthropic"
+    )
+    assert state.anthropic_disabled_until > 0
+    assert state.anthropic_auth_failures == 1
+    assert all(result == {"ok": "fallback"} for result in results)
 
 
 @pytest.mark.asyncio

@@ -153,6 +153,7 @@ async def test_clean_banter_send_schedules_memory_extraction_even_without_ledger
             seg,
             bytes_sent=4096,
             send_completed_cleanly=True,
+            listeners=1,
         )
 
     schedule.assert_called_once_with(config=config, state=state, metadata=seg.metadata)
@@ -174,6 +175,7 @@ def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
             seg,
             bytes_sent=4096,
             send_completed_cleanly=False,
+            listeners=1,
         )
         _schedule_banter_memory_extraction_after_send(
             app_state,
@@ -182,20 +184,20 @@ def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
             seg,
             bytes_sent=0,
             send_completed_cleanly=True,
+            listeners=1,
         )
 
     schedule.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_memory_extraction_schedules_for_zero_listener_clean_send():
+async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
     app_state = SimpleNamespace(background_tasks=set())
     state = SimpleNamespace()
     config = SimpleNamespace()
     seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
-    task = asyncio.create_task(asyncio.sleep(0))
 
-    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction", return_value=task) as schedule:
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
         _schedule_banter_memory_extraction_after_send(
             app_state,
             config,
@@ -203,7 +205,8 @@ async def test_memory_extraction_schedules_for_zero_listener_clean_send():
             seg,
             bytes_sent=4096,
             send_completed_cleanly=True,
+            listeners=0,
         )
 
-    schedule.assert_called_once_with(config=config, state=state, metadata=seg.metadata)
-    await task
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()

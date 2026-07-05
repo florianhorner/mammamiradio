@@ -1247,18 +1247,37 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     return None
 
 
+_INTERNAL_SEGMENT_METADATA_KEYS = frozenset({"memory_extraction"})
+
+
+def _public_segment_metadata(metadata: object) -> dict:
+    """Copy segment metadata for public/shared status payloads."""
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: copy.deepcopy(value) for key, value in metadata.items() if key not in _INTERNAL_SEGMENT_METADATA_KEYS}
+
+
+def _public_now_streaming_payload(now_streaming: dict | None) -> dict:
+    if not now_streaming:
+        return {}
+    payload = copy.deepcopy(now_streaming)
+    payload["metadata"] = _public_segment_metadata(payload.get("metadata"))
+    return payload
+
+
 def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
     duration_sec = _duration_sec_from_payload(now_streaming)
+    public_now_streaming = _public_now_streaming_payload(now_streaming)
     if not now_streaming:
         return {
-            "now_streaming": now_streaming,
+            "now_streaming": public_now_streaming,
             "current_progress_sec": None,
             "current_duration_sec": None,
         }
     started = now_streaming.get("started")
     progress_sec = max(0.0, now_ts - started) if isinstance(started, int | float) and started > 0 else None
     return {
-        "now_streaming": now_streaming,
+        "now_streaming": public_now_streaming,
         "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
         "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
     }
@@ -1269,7 +1288,7 @@ def _serialize_stream_log_entry(entry) -> dict:
         "type": entry.type,
         "label": entry.label,
         "timestamp": entry.timestamp,
-        "metadata": entry.metadata,
+        "metadata": _public_segment_metadata(entry.metadata),
     }
     duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
     if duration_sec <= 0:
@@ -1708,6 +1727,7 @@ async def run_playback_loop(app) -> None:
                 segment,
                 bytes_sent=bytes_sent,
                 send_completed_cleanly=send_completed_cleanly,
+                listeners=start_listeners,
             )
             _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
@@ -1726,9 +1746,10 @@ def _schedule_banter_memory_extraction_after_send(
     *,
     bytes_sent: int,
     send_completed_cleanly: bool,
+    listeners: int,
 ) -> None:
     """Start post-air memory extraction only after the send loop reaches EOF."""
-    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0:
+    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0 or listeners <= 0:
         return
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
     if not metadata.get("memory_extraction"):
