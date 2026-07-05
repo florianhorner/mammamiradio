@@ -90,7 +90,7 @@ private durable system for strategy or relationship context.
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
-- All checks: `make check` (lint + typecheck + coverage gate with per-module floors)
+- All checks: `make check` (lint + format check + typecheck + coverage gate with per-module floors) — `format-check` mirrors CI's `ruff format --check` so a format nit can't pass locally then fail CI
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
 - **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on every PR)
