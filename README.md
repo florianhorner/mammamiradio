@@ -30,7 +30,7 @@ Native to Home Assistant.
 
 [![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio)
 
-Or by hand: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, paste `https://github.com/florianhorner/mammamiradio`, then install **Mamma Mi Radio** and start. It already has your Home Assistant. Add an AI key and the hosts start riffing on your actual home.
+Or by hand: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, paste `https://github.com/florianhorner/mammamiradio`, then install **Mamma Mi Radio** and start. Open the Web UI first and hear Demo Radio. It already has Supervisor access to Home Assistant; add one AI host key when you want generated hosts and home-aware banter.
 
 <details>
 <summary>Just want to hear it first, without Home Assistant?</summary>
@@ -65,15 +65,15 @@ It plays the moment you start it, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing: the add-on, or `docker compose up` | Music in seconds; between songs, a placeholder voice. Proof it runs before you wire it in. |
-| **Wake the hosts** | An `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
-| **Give your home a voice** | Home Assistant + `HA_TOKEN` | The hosts start noticing your house: lights, locks, who just got home. **The reason it exists.** |
+| **Hear it first** | Nothing: the add-on, or `docker compose up` | Demo Radio plays before you add keys. Proof it runs before you wire it in. |
+| **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
+| **Give your home a voice** | Home Assistant access plus the AI host key | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 
 The first step lets you hear it before you trust it with your house. The last step is the point.
 
 It never goes silent: if a provider hiccups or the queue runs dry, it bridges to cached audio and keeps playing, so the illusion holds.
 
-It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. When home context is on, a filtered snapshot of your home goes to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly, so it's a control promise, not a privacy one. Leave it off and the hosts never mention the house.
+It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there if the hosts should never use it. Leave HA context off, or run without script-provider credentials, and the hosts never mention the house.
 
 ## Make it yours
 

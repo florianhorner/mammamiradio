@@ -372,14 +372,15 @@ diverge from `stream.audio_format.bitrate_kbps` in the same response.
 
 ## Capability flags
 
-The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
+The system uses boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
 
 | Flag | Source | What it enables |
 | --- | --- | --- |
 | `anthropic` | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` present | Live AI-generated banter and ads |
-| `ha` | `HA_TOKEN` + integration enabled | Ambient home context in banter |
+| `ha` | `HA_TOKEN` + integration enabled | Home Assistant API access is available |
+| `home_context_ready` | `ha` is true AND a prompt-safe HA context slice has actually been fetched | Ambient home context in banter |
 
-The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a guided `next_step` hint (what the user should do next).
+The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, Connected Home — reaching Connected Home requires `anthropic` and `home_context_ready` (not just `ha`), so having a valid HA token isn't enough on its own until a real context slice populates. `GET /api/capabilities` returns flags, tier, and a guided `next_step` hint (what the user should do next).
 
 ## Music sources
 
@@ -542,10 +543,12 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
-| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
+| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, and canonical `guided_setup` stages |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
+| `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; never exposed on `/public-status` |
+| `/api/homeassistant/entity-policy` | PATCH | Admin | Idempotently mute/unmute one Home Assistant entity for host context use |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |

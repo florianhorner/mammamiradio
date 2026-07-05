@@ -163,6 +163,39 @@ def test_setup_group_is_collapsible_with_ready_badge() -> None:
     assert "All ready" in html
 
 
+def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
+    html = _html()
+    assert 'id="setupStrip"' in html
+    assert 'id="setupStripChips"' in html
+    assert "openListener()" in html
+    assert 'id="on-air"' in html and 'id="adminTabs"' in html
+    assert html.index('id="on-air"') < html.index('id="setupStrip"') < html.index('id="adminTabs"')
+    assert 'data-tab="motore">Motore' in html
+    assert 'data-tab="setup"' not in html
+
+
+def test_setup_keys_prioritize_one_ai_host_key_and_collapse_premium_voices() -> None:
+    html = _html()
+    assert "One key is enough" in html
+    assert "AI hosts" in html
+    assert 'id="setupPremiumVoices"' in html
+    assert "Premium voices" in html
+    assert html.index('id="setupOpenaiKey"') < html.index('id="setupPremiumVoices"')
+    assert html.index('id="setupAzureSpeechKey"') > html.index('id="setupPremiumVoices"')
+
+
+def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None:
+    html = _html()
+    assert 'id="haContextPreview"' in html
+    assert "/api/homeassistant/context-candidates" in html
+    assert "/api/homeassistant/entity-policy" in html
+    block = html[html.index("function renderHomeContextPreview") : html.index("async function loadHomeContextPreview")]
+    assert "Mute home entity" in block
+    assert "Unmute" in block
+    for forbidden in ("Approve", "Prefer", "Whitelist", "ranking", "score"):
+        assert forbidden not in block
+
+
 def test_setup_auto_collapse_wired_into_render() -> None:
     html = _html()
     assert "motoreSetupAutoCollapse(!needsAction)" in html
@@ -337,7 +370,7 @@ def test_no_italian_utility_strings_remain() -> None:
 
 def test_setup_controls_are_english() -> None:
     html = _html()
-    for s in ("Save Keys", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
+    for s in ("Save AI key", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
         assert s in html
 
 

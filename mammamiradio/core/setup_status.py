@@ -70,6 +70,114 @@ def _playlist_is_demo(state: StationState) -> bool:
     return all(track.spotify_id.startswith("demo") for track in state.playlist[:5])
 
 
+def has_safe_home_context(state: StationState) -> bool:
+    """Return True when a prompt-safe HA context slice is actually available."""
+    return bool(
+        (state.ha_context or "").strip()
+        or state.ha_scored_entities
+        or (state.ha_context_last_updated and state.ha_context_entity_count > 0)
+    )
+
+
+def _llm_key_status(config: StationConfig, provider_health: dict | None = None) -> str:
+    has_anthropic = bool(config.anthropic_api_key)
+    has_openai = bool(config.openai_api_key)
+    if not (has_anthropic or has_openai):
+        return "missing"
+    if not provider_health:
+        return "ready"
+    statuses = [
+        provider_health.get("anthropic", {}).get("key_status") if has_anthropic else None,
+        provider_health.get("openai", {}).get("key_status") if has_openai else None,
+    ]
+    if "valid" in statuses:
+        return "ready"
+    if "unverified" in statuses:
+        return "checking"
+    if "rejected" in statuses:
+        return "rejected"
+    return "ready"
+
+
+def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
+    if state.session_stopped:
+        return "stopped"
+    if golden_path is not None:
+        return "blocked" if golden_path.get("blocking") else "ready"
+    if state.now_streaming or state.queued_segments or state.playlist or state.last_music_file:
+        return "ready"
+    return "checking" if config.allow_ytdlp else "blocked"
+
+
+def build_guided_setup(
+    config: StationConfig,
+    state: StationState,
+    *,
+    golden_path: dict | None = None,
+    provider_health: dict | None = None,
+) -> dict:
+    """Canonical three-stage onboarding projection shared by admin APIs."""
+    has_llm = bool(config.anthropic_api_key or config.openai_api_key)
+    has_ha_access = bool(config.homeassistant.enabled and config.ha_token)
+    home_ready = has_safe_home_context(state)
+    stream_status = _stream_status(config, state, golden_path)
+    ai_status = _llm_key_status(config, provider_health)
+
+    if not has_llm:
+        home_status = "waiting_ai"
+    elif home_ready:
+        home_status = "ready"
+    elif has_ha_access and state.ha_context_last_updated:
+        home_status = "empty"
+    elif has_ha_access:
+        home_status = "checking"
+    else:
+        home_status = "blocked"
+
+    return {
+        "stream": {
+            "status": stream_status,
+            "label": "Stream",
+            "headline": "Demo Radio is ready to hear." if stream_status == "ready" else "Stream needs attention.",
+            "detail": (
+                "Open the listener and hear the station before adding keys."
+                if stream_status == "ready"
+                else "Start the station or add a music source before continuing."
+            ),
+            "action": "open_listener" if stream_status == "ready" else "fix_stream",
+        },
+        "ai_hosts": {
+            "status": ai_status,
+            "label": "AI hosts",
+            "headline": "AI hosts are ready." if ai_status == "ready" else "Add one AI host key.",
+            "detail": (
+                "Anthropic or OpenAI can generate live host breaks."
+                if ai_status == "ready"
+                else "Add ANTHROPIC_API_KEY or OPENAI_API_KEY when you want generated banter and ads."
+            ),
+            "action": "review" if ai_status == "ready" else "add_ai_key",
+        },
+        "home_context": {
+            "status": home_status,
+            "label": "Home context",
+            "headline": (
+                "Home context is available." if home_status == "ready" else "Review home context after AI is ready."
+            ),
+            "detail": (
+                "Filtered Home Assistant context can be inspected and muted from the admin panel."
+                if home_status == "ready"
+                else (
+                    "Supervisor access is automatic in the add-on; "
+                    "AI hosts must be ready before home context is useful."
+                )
+            ),
+            "action": "review_home_context" if home_status in {"ready", "empty"} else "wait",
+            "homeassistant_access": has_ha_access,
+            "home_context_ready": home_ready,
+        },
+    }
+
+
 def classify_station_mode(
     config: StationConfig,
     state: StationState,
@@ -80,9 +188,9 @@ def classify_station_mode(
     if demo_playlist is None:
         demo_playlist = _playlist_is_demo(state)
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
-    has_ha = bool(config.homeassistant.enabled and config.ha_token)
+    has_ha_context = bool(config.homeassistant.enabled and config.ha_token and has_safe_home_context(state))
 
-    if has_llm and has_ha:
+    if has_llm and has_ha_context:
         return {
             "id": "connected_home",
             "label": "Connected Home Radio",
@@ -95,7 +203,7 @@ def classify_station_mode(
             "id": "full_ai",
             "label": "Full AI Radio",
             "summary": "Live AI-generated banter and ads.",
-            "detail": "Add a Home Assistant token to unlock home-aware content.",
+            "detail": "Review Home Assistant context to unlock home-aware content.",
         }
 
     return {
@@ -123,7 +231,13 @@ def addon_options_snippet(config: StationConfig) -> str:
     return "\n".join(lines)
 
 
-def build_setup_status(config: StationConfig, state: StationState) -> dict:
+def build_setup_status(
+    config: StationConfig,
+    state: StationState,
+    *,
+    golden_path: dict | None = None,
+    provider_health: dict | None = None,
+) -> dict:
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
     ffmpeg_bin = shutil.which("ffmpeg")
@@ -135,6 +249,8 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
     has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
     has_ha = bool(config.homeassistant.enabled and config.ha_token)
     is_ha_enabled = bool(config.homeassistant.enabled)
+    guided_setup = build_guided_setup(config, state, golden_path=golden_path, provider_health=provider_health)
+    stream_ready = guided_setup["stream"]["status"] == "ready"
 
     mode_by_id = {entry["id"]: entry for entry in mode["modes"]}
     detected_mode = mode_by_id.get(mode["detected"], {})
@@ -309,8 +425,12 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
         {
             "id": "launch",
             "title": "Launch Station",
-            "status": "done" if station_mode["id"] != "demo" else "todo",
-            "detail": "Open listener mode and verify live audio output.",
+            "status": "done" if stream_ready else "blocked",
+            "detail": (
+                "Open listener mode and verify live audio output."
+                if stream_ready
+                else "Start the station and make sure a music source can serve audio."
+            ),
         },
     ]
 
@@ -323,7 +443,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
         ),
     }
 
-    onboarding_required = station_mode["id"] == "demo"
+    onboarding_required = not stream_ready
 
     signature_data = {
         "mode": mode["detected"],
@@ -338,14 +458,19 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
         "available_modes": mode["modes"],
         "station_mode": station_mode,
         "onboarding_required": onboarding_required,
+        "guided_setup": guided_setup,
         "essentials": essentials,
         "preflight_checks": preflight_checks,
         "onboarding_steps": onboarding_steps,
         "recommended_next_action": (
-            "Add an AI key to unlock full station behavior."
+            "Fix stream readiness before setup continues."
+            if not stream_ready
+            else "Add an AI key to unlock full station behavior."
             if not has_llm
             else "Install ffmpeg before launch."
             if not ffmpeg_bin
+            else "Review the Home Assistant context preview."
+            if guided_setup["home_context"]["status"] in {"ready", "empty"}
             else "Open the listener and verify live playback."
         ),
         "launch": launch,

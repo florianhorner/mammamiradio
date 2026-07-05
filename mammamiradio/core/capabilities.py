@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Capabilities, StationState
+from mammamiradio.core.setup_status import has_safe_home_context
 
 
 def get_capabilities(config: StationConfig, state: StationState) -> Capabilities:
@@ -15,6 +16,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     return Capabilities(
         llm=bool(config.anthropic_api_key or config.openai_api_key),
         ha=bool(config.homeassistant.enabled and config.ha_token),
+        home_context_ready=has_safe_home_context(state),
         jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
         charts_reload=bool(config.allow_ytdlp),
         tts_degraded=bool(getattr(config, "tts_degraded_voices", [])),
@@ -38,6 +40,12 @@ def next_step(caps: Capabilities) -> dict:
             "message": "Connect Home Assistant for home-aware banter",
             "action": "open_settings",
         }
+    if not caps.home_context_ready:
+        return {
+            "key": "review_ha_context",
+            "message": "Review Home Assistant context before calling it Connected Home",
+            "action": "open_settings",
+        }
     return {
         "key": "all_set",
         "message": "",
@@ -51,6 +59,8 @@ def capabilities_to_dict(caps: Capabilities) -> dict:
         "capabilities": {
             "llm": caps.llm,
             "ha": caps.ha,
+            "homeassistant_access": caps.ha,
+            "home_context_ready": caps.home_context_ready,
             "jamendo": caps.jamendo,
             "charts_reload": caps.charts_reload,
         },

@@ -27,6 +27,7 @@ from websockets.asyncio.client import connect as websocket_connect
 from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -707,6 +708,74 @@ def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
     # because that sanitizer is also used by the admin UI path where esc()
     # handles HTML escaping client-side.)
     return rendered.replace("<", "").replace(">", "")
+
+
+def _prune_muted_events(events: deque[HomeEvent] | None, muted_ids: set[str], *, now: float) -> deque[HomeEvent]:
+    if not events:
+        return deque(maxlen=EVENT_BUFFER_SIZE)
+    kept = [event for event in prune_events(events, now=now) if event.entity_id not in muted_ids]
+    return deque(kept, maxlen=EVENT_BUFFER_SIZE)
+
+
+def _apply_muted_policy_to_context(
+    context: HomeContext,
+    muted_ids: set[str],
+    *,
+    cache_dir: Path | None = None,
+    now: float | None = None,
+) -> HomeContext:
+    """Remove muted ids from an already-built context cache."""
+    if not muted_ids:
+        return context
+    timestamp = time.time() if now is None else now
+    if not any(
+        entity_id in muted_ids
+        for entity_id in (
+            set(context.raw_states)
+            | {event.entity_id for event in context.events}
+            | {entity.entity_id for entity in context.scored}
+        )
+    ):
+        return context
+
+    context.raw_states = {
+        entity_id: data for entity_id, data in context.raw_states.items() if entity_id not in muted_ids
+    }
+    context.events = _prune_muted_events(context.events, muted_ids, now=timestamp)
+    context.scored = [entity for entity in context.scored if entity.entity_id not in muted_ids]
+    _, labels_en = _build_entity_label_maps(context.raw_states, cache_dir=cache_dir)
+    context.summary = _build_budgeted_summary(context.scored)
+    context.events_summary = build_events_summary(context.events, now=timestamp)
+    context.events_summary_en = build_events_summary_en(context.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+    context.mood = classify_home_mood(context.raw_states)
+    context.mood_en = classify_home_mood_en(context.raw_states)
+    if "weather.forecast_home" in muted_ids:
+        context.weather_arc = ""
+        context.weather_arc_en = ""
+    context.last_event_label_en = ""
+    if context.events:
+        newest = max(context.events, key=lambda event: event.timestamp)
+        context.last_event_label_en = labels_en.get(newest.entity_id, newest.label)
+    label_stats = _label_stats(context.scored)
+    context.catalog_hit_rate = float(label_stats["catalog_hit_rate"])
+    context.label_stats = label_stats
+    context.denylist_hits = dict(context.denylist_hits)
+    context.denylist_hits["user_muted"] = context.denylist_hits.get("user_muted", 0) + len(muted_ids)
+    return context
+
+
+def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> HomeContext:
+    """Re-apply the live mute policy to a context obtained outside fetch_home_context.
+
+    ``fetch_home_context`` mute-filters on every return path, but a caller that
+    falls back to a previously-held context on its own (e.g. a timed-out
+    refresh reusing the caller's stale copy) bypasses that filtering. This is
+    the public entry point for those callers.
+    """
+    if cache_dir is None:
+        return context
+    muted_ids = muted_entity_ids(Path(cache_dir))
+    return _apply_muted_policy_to_context(context, muted_ids, cache_dir=cache_dir, now=time.time())
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -1429,14 +1498,23 @@ async def fetch_home_context(
     global _ha_cache
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
+    muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
+        effective_cache = _apply_muted_policy_to_context(
+            effective_cache,
+            muted_ids,
+            cache_dir=cache_dir,
+            now=time.time(),
+        )
+        _ha_cache = effective_cache
         # Refresh event ages and prune expired entries even on cache hits, so
         # "X min fa" timestamps stay accurate and stale events are dropped.
         now = time.time()
-        effective_cache.events = prune_events(effective_cache.events, now=now)
+        effective_cache.events = _prune_muted_events(effective_cache.events, muted_ids, now=now)
         effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
+        _, labels_en = _build_entity_label_maps(effective_cache.raw_states, cache_dir=cache_dir)
         effective_cache.events_summary_en = build_events_summary_en(
-            effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=now
+            effective_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=now
         )
         return effective_cache
 
@@ -1468,8 +1546,19 @@ async def fetch_home_context(
             )
             is not None
         }
-        old_states = effective_cache.raw_states if effective_cache else {}
-        old_events = effective_cache.events if effective_cache else None
+        if muted_ids:
+            muted_present = set(relevant) & muted_ids
+            if muted_present:
+                denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present)
+                relevant = {
+                    entity_id: state_data for entity_id, state_data in relevant.items() if entity_id not in muted_ids
+                }
+        old_states = {
+            entity_id: state_data
+            for entity_id, state_data in (effective_cache.raw_states if effective_cache else {}).items()
+            if entity_id not in muted_ids
+        }
+        old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
         labels_it, labels_en = _build_entity_label_maps(relevant, cache_dir=cache_dir)
         events = diff_states(
             old_states,
@@ -1488,7 +1577,8 @@ async def fetch_home_context(
         label_stats = _label_stats(scored)
         mood = classify_home_mood(relevant)
         mood_en = classify_home_mood_en(relevant)
-        weather_arc = await fetch_weather_forecast(ha_url, ha_token)
+        weather_muted = "weather.forecast_home" in muted_ids
+        weather_arc = "" if weather_muted else await fetch_weather_forecast(ha_url, ha_token)
         summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
         events_summary_en = build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
@@ -1506,7 +1596,7 @@ async def fetch_home_context(
             weather_arc=weather_arc,
             timestamp=timestamp,
             mood_en=mood_en,
-            weather_arc_en=get_weather_arc_en(),
+            weather_arc_en="" if weather_muted else get_weather_arc_en(),
             events_summary_en=events_summary_en,
             last_event_label_en=last_event_label_en,
             scored=scored,
@@ -1531,11 +1621,19 @@ async def fetch_home_context(
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
-            effective_cache.events = prune_events(effective_cache.events, now=timestamp)
-            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
-            effective_cache.events_summary_en = build_events_summary_en(
-                effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
+            effective_cache = _apply_muted_policy_to_context(
+                effective_cache,
+                muted_ids,
+                cache_dir=cache_dir,
+                now=timestamp,
             )
+            effective_cache.events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp)
+            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
+            _, labels_en = _build_entity_label_maps(effective_cache.raw_states, cache_dir=cache_dir)
+            effective_cache.events_summary_en = build_events_summary_en(
+                effective_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp
+            )
+            _ha_cache = effective_cache
             return effective_cache
         return HomeContext()
 

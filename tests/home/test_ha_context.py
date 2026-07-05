@@ -772,6 +772,139 @@ async def test_fetch_calls_api_when_stale():
 
 
 @pytest.mark.asyncio
+async def test_fetch_home_context_applies_muted_policy_before_context_fanout(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(
+        tmp_path,
+        "switch.bar_kaffeemaschine_steckdose",
+        True,
+        label="Coffee machine",
+        domain="switch",
+        area="Kitchen",
+    )
+    stale_cache = HomeContext(
+        raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}}},
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="switch.bar_kaffeemaschine_steckdose",
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        timestamp=time.time() - 120.0,
+    )
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=stale_cache,
+            cache_dir=tmp_path,
+        )
+
+    assert "switch.bar_kaffeemaschine_steckdose" not in result.raw_states
+    assert "caff" not in result.summary.lower()
+    assert "caff" not in result.events_summary.lower()
+    assert all(entity.entity_id != "switch.bar_kaffeemaschine_steckdose" for entity in result.scored)
+    assert all(event.entity_id != "switch.bar_kaffeemaschine_steckdose" for event in result.events)
+    assert result.denylist_hits["user_muted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_prunes_muted_entities_from_fresh_cache(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "switch.bar_kaffeemaschine_steckdose", True, label="Coffee machine")
+    cache = HomeContext(
+        raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee"}}},
+        summary="- Macchina del caffè: acceso/a",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="switch.bar_kaffeemaschine_steckdose",
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=cache,
+            cache_dir=tmp_path,
+        )
+
+    assert result.raw_states == {}
+    assert result.summary == ""
+    assert list(result.events) == []
+    assert result.events_summary == ""
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.forecast_home", True, label="Weather")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock) as weather,
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+        )
+
+    weather.assert_not_called()
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert "weather.forecast_home" not in result.raw_states
+
+
+@pytest.mark.asyncio
 async def test_fetch_home_context_computes_catalog_hit_rate(tmp_path):
     from mammamiradio.home.catalog import compute_hash, save_catalog
 

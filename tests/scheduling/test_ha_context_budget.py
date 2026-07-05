@@ -140,3 +140,30 @@ async def test_refresh_uses_module_cache_when_passed_cache_is_none():
     ):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), None)
     assert out is module_cache
+
+
+@pytest.mark.asyncio
+async def test_refresh_timeout_fallback_still_honors_a_mute_applied_mid_flight(tmp_path):
+    """A mute saved while a refresh is in flight must not resurface via the
+    timeout fallback — this bypasses fetch_home_context's own mute filtering
+    entirely by reusing a context built before the mute existed."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_entity = "switch.bar_kaffeemaschine_steckdose"
+    stale = HomeContext(
+        raw_states={muted_entity: {"state": "on", "attributes": {}}},
+        summary="- Coffee machine: on",
+    )
+
+    async def _slow(**_kwargs):
+        set_entity_muted(tmp_path, muted_entity, True, label="Coffee machine")
+        await asyncio.sleep(1.0)
+        return HomeContext(summary="fresh")
+
+    config = _config(timeout=0.01)
+    config.cache_dir = tmp_path
+    with patch.object(producer, "fetch_home_context", _slow):
+        out = await _refresh_home_context_budgeted(config, stale)
+
+    assert muted_entity not in out.raw_states
+    assert "caff" not in out.summary.lower()

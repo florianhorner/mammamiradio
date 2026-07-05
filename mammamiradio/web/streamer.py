@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import copy
+import functools
 import importlib
 import logging
 import math
@@ -43,6 +44,11 @@ from mammamiradio.core.models import (
 from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
+from mammamiradio.home.entity_policy import (
+    load_entity_policy,
+    set_entity_muted,
+    valid_entity_id,
+)
 from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
@@ -451,6 +457,7 @@ def _has_any_mp3(path: Path) -> bool:
 
 _golden_path_cache: dict | None = None
 _golden_path_cache_ts: float = 0.0
+_golden_path_cache_key: tuple | None = None
 _GOLDEN_PATH_TTL = 10.0  # seconds — music sources change rarely
 
 _cache_size_mb_val: float = 0.0
@@ -474,12 +481,22 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
 
 def _golden_path_status(config, state) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
-    global _golden_path_cache, _golden_path_cache_ts
+    global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
-    if _golden_path_cache is not None and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL:
+    allow_ytdlp = bool(getattr(config, "allow_ytdlp", False))
+    cache_key = (
+        allow_ytdlp,
+        getattr(state, "playlist_revision", 0),
+        getattr(state, "source_revision", 0),
+        bool(getattr(state, "session_stopped", False)),
+    )
+    if (
+        _golden_path_cache is not None
+        and _golden_path_cache_key == cache_key
+        and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL
+    ):
         return _golden_path_cache
 
-    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
     has_demo_assets = _has_any_mp3(_ASSETS_DIR / "demo" / "music")
     has_local_music = _has_any_mp3(Path("music"))
 
@@ -488,6 +505,10 @@ def _golden_path_status(config, state) -> dict:
         sources.append("bundled demo tracks")
     if has_local_music:
         sources.append("local music/*.mp3 files")
+    playlist = getattr(state, "playlist", None)
+    if isinstance(playlist, list | tuple) and playlist:
+        source = getattr(state, "playlist_source", None)
+        sources.append(getattr(source, "label", "") or "loaded playlist")
     if allow_ytdlp:
         sources.append("yt-dlp downloads")
 
@@ -511,6 +532,7 @@ def _golden_path_status(config, state) -> dict:
             **shared,
         }
         _golden_path_cache = result
+        _golden_path_cache_key = cache_key
         _golden_path_cache_ts = now
         return result
 
@@ -526,6 +548,7 @@ def _golden_path_status(config, state) -> dict:
         **shared,
     }
     _golden_path_cache = result
+    _golden_path_cache_key = cache_key
     _golden_path_cache_ts = now
     return result
 
@@ -1021,6 +1044,115 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "context_last_updated": state.ha_context_last_updated or None,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
+
+
+def _safe_home_entity_preview(state: StationState, config) -> dict:
+    """Return admin-only, sanitized HA context candidates for onboarding."""
+    policy = load_entity_policy(config.cache_dir)
+    muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
+    muted_ids = set(muted_map)
+    ctx = get_cached_home_context()
+    rows: dict[str, dict] = {}
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", [])[:24]:
+            status = entity.to_status_dict()
+            entity_id = str(status.get("entity_id") or "")
+            if not entity_id:
+                continue
+            stale_after = max(float(config.homeassistant.poll_interval) * 2, 120.0)
+            rows[entity_id] = {
+                "entity_id": entity_id,
+                "label": status.get("label") or entity_id,
+                "area": status.get("area") or "",
+                "domain": status.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": status.get("summary") or str(status.get("state") or ""),
+                "reason": "Sent to host prompt" if entity_id not in muted_ids else "Muted by operator",
+                "muted": entity_id in muted_ids,
+                "sent_to_prompt": entity_id not in muted_ids,
+                "last_updated": getattr(ctx, "timestamp", 0.0) or None,
+                "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
+            }
+    for status in state.ha_scored_entities[:24]:
+        entity_id = str(status.get("entity_id") or "")
+        if not entity_id or entity_id in rows:
+            continue
+        rows[entity_id] = {
+            "entity_id": entity_id,
+            "label": status.get("label") or entity_id,
+            "area": status.get("area") or "",
+            "domain": status.get("domain") or entity_id.split(".", 1)[0],
+            "state_summary": status.get("summary") or str(status.get("state") or ""),
+            "reason": "Sent to host prompt" if entity_id not in muted_ids else "Muted by operator",
+            "muted": entity_id in muted_ids,
+            "sent_to_prompt": entity_id not in muted_ids,
+            "last_updated": state.ha_context_last_updated or None,
+            "stale": False,
+        }
+    for entity_id, entry in muted_map.items():
+        if not isinstance(entry, dict) or not isinstance(entity_id, str):
+            continue
+        rows.setdefault(
+            entity_id,
+            {
+                "entity_id": entity_id,
+                "label": entry.get("label") or entity_id,
+                "area": entry.get("area") or "",
+                "domain": entry.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": "Muted locally",
+                "reason": "Muted by operator",
+                "muted": True,
+                "sent_to_prompt": False,
+                "last_updated": entry.get("muted_at"),
+                "stale": False,
+            },
+        )
+    sent_now = [row for row in rows.values() if row["sent_to_prompt"] and not row["muted"]]
+    muted = [row for row in rows.values() if row["muted"]]
+    candidates = [row for row in rows.values() if not row["sent_to_prompt"] and not row["muted"]]
+    preview_status = "ready" if sent_now else "empty" if (ctx is not None or state.ha_scored_entities) else "checking"
+    return {
+        "ok": True,
+        "status": preview_status,
+        "sent_now": sent_now[:12],
+        "candidates": candidates[:12],
+        "muted": muted[:24],
+        "counts": {
+            "sent_now": len(sent_now),
+            "candidates": len(candidates),
+            "muted": len(muted),
+            "filtered": sum((getattr(ctx, "denylist_hits", {}) or {}).values()) if ctx is not None else 0,
+        },
+    }
+
+
+def _clear_home_context_usage(state: StationState, entity_id: str | None = None) -> bool:
+    """Clear prompt-facing HA fields after a hard mute policy change.
+
+    Returns True when the evening running-gag ledger was also purged and
+    needs `save_if_dirty()` — the caller owns persistence so this stays a
+    plain in-memory mutator (no synchronous disk I/O in an async route).
+    """
+    state.ha_context = ""
+    state.ha_events_summary = ""
+    state.ha_home_mood = ""
+    state.ha_weather_arc = ""
+    state.ha_pending_directive = ""
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
+    state.ha_recent_event_count = 0
+    state.ha_last_event_label = ""
+    state.ha_last_event_ts = 0.0
+    state.ha_home_mood_en = ""
+    state.ha_weather_arc_en = ""
+    state.ha_events_summary_en = ""
+    state.ha_last_event_label_en = ""
+    state.ha_scored_entities = []
+    state.ha_context_last_updated = 0.0
+    state.ha_context_entity_count = 0
+    state.ha_context_char_count = 0
+    if entity_id and state.evening_ledger is not None:
+        return state.evening_ledger.purge_entity(entity_id)
+    return False
 
 
 def _runtime_monotonic() -> float:
@@ -2191,17 +2323,23 @@ async def logs(request: Request, lines: int = 50, _: None = Depends(require_admi
 @router.get("/api/setup/status")
 async def setup_status(request: Request, _: None = Depends(require_admin_access)):
     """Return the current first-run setup snapshot for onboarding."""
+    _sync_runtime_state(request)
     config = request.app.state.config
     state = request.app.state.station_state
-    return build_setup_status(config, state)
+    golden_path = _golden_path_status(config, state)
+    provider_health = _provider_health_snapshot(config, state)
+    return build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
 
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
     """Force a fresh setup snapshot."""
+    _sync_runtime_state(request)
     config = request.app.state.config
     state = request.app.state.station_state
-    return build_setup_status(config, state)
+    golden_path = _golden_path_status(config, state)
+    provider_health = _provider_health_snapshot(config, state)
+    return build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
 
 
 @router.post("/api/setup/provider-check")
@@ -2401,6 +2539,12 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
     }
     result["golden_path"] = _golden_path_status(config, state)
+    result["guided_setup"] = build_setup_status(
+        config,
+        state,
+        golden_path=result["golden_path"],
+        provider_health=provider_health,
+    )["guided_setup"]
     result["startup_source_error"] = state.startup_source_error or ""
     result["provider_health"] = provider_health
     return result
@@ -2432,6 +2576,73 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
             raise HTTPException(status_code=409, detail="HA label generation already in progress")
         return {"scheduled": False, "reason": "no_candidates"}
     return {"scheduled": True}
+
+
+@router.get("/api/homeassistant/context-candidates")
+async def homeassistant_context_candidates(request: Request, _: None = Depends(require_admin_access)):
+    """Return a sanitized admin-only preview of HA context candidates."""
+    return _safe_home_entity_preview(request.app.state.station_state, request.app.state.config)
+
+
+@router.patch("/api/homeassistant/entity-policy")
+async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
+    """Mute/unmute one Home Assistant entity for host context use."""
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    entity_id = body.get("entity_id")
+    muted = body.get("muted")
+    if not isinstance(entity_id, str) or not valid_entity_id(entity_id):
+        raise HTTPException(status_code=422, detail="entity_id must be a Home Assistant entity id")
+    if not isinstance(muted, bool):
+        raise HTTPException(status_code=422, detail="muted must be true or false")
+
+    config = request.app.state.config
+    preview = _safe_home_entity_preview(request.app.state.station_state, config)
+    by_entity = {
+        row["entity_id"]: row
+        for group in ("sent_now", "candidates", "muted")
+        for row in preview.get(group, [])
+        if isinstance(row, dict) and row.get("entity_id")
+    }
+    if muted and entity_id not in by_entity:
+        raise HTTPException(status_code=404, detail="entity is not available in the safe Home Assistant preview")
+
+    row = by_entity.get(entity_id, {})
+    loop = asyncio.get_running_loop()
+    try:
+        policy = await loop.run_in_executor(
+            None,
+            functools.partial(
+                set_entity_muted,
+                config.cache_dir,
+                entity_id,
+                muted,
+                label=row.get("label") or entity_id,
+                domain=row.get("domain") or entity_id.split(".", 1)[0],
+                area=row.get("area") or "",
+            ),
+        )
+    except OSError as exc:
+        logger.warning("Failed to save HA entity policy", exc_info=True)
+        raise HTTPException(status_code=500, detail="could not save entity policy") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if muted:
+        state = request.app.state.station_state
+        ledger_dirty = _clear_home_context_usage(state, entity_id)
+        if ledger_dirty and state.evening_ledger is not None:
+            await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
+    return {
+        "ok": True,
+        "entity_id": entity_id,
+        "muted": muted,
+        "policy": {
+            "schema_version": policy.get("schema_version"),
+            "muted_count": len(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}),
+        },
+    }
 
 
 @router.post("/api/shuffle")

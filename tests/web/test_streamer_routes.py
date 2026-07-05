@@ -2569,6 +2569,26 @@ async def test_capabilities_openai_only_marks_ai_as_available():
 
 
 @pytest.mark.asyncio
+async def test_setup_status_and_capabilities_share_guided_setup_projection():
+    app = _make_test_app()
+    app.state.config.openai_api_key = "openai-key"
+    _record_provider_verdict(app.state.station_state, _probe_payload(openai_chat="ok"))
+    app.state.config.homeassistant.enabled = True
+    app.state.config.ha_token = "ha-token"
+    app.state.station_state.ha_context = "- Coffee machine: on"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        capabilities_resp = await client.get("/api/capabilities")
+        setup_resp = await client.get("/api/setup/status")
+
+    assert capabilities_resp.status_code == 200
+    assert setup_resp.status_code == 200
+    assert capabilities_resp.json()["guided_setup"] == setup_resp.json()["guided_setup"]
+    assert capabilities_resp.json()["guided_setup"]["ai_hosts"]["status"] == "ready"
+    assert capabilities_resp.json()["guided_setup"]["home_context"]["status"] == "ready"
+
+
+@pytest.mark.asyncio
 async def test_capabilities_trial_exhausted_flag():
     """trial.exhausted is True when canned_clips_streamed >= limit."""
     from mammamiradio.scheduling.producer import SHAREWARE_CANNED_LIMIT
@@ -2707,6 +2727,179 @@ async def test_homeassistant_labels_regenerate_no_candidates_is_not_a_conflict()
 
     assert resp.status_code == 200
     assert resp.json() == {"scheduled": False, "reason": "no_candidates"}
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_context_candidates_returns_sanitized_admin_preview(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.station_state.ha_context_last_updated = time.time()
+    app.state.station_state.ha_scored_entities = [
+        {
+            "entity_id": "switch.coffee_machine",
+            "label": "Coffee machine",
+            "area": "Kitchen",
+            "domain": "switch",
+            "state": "on",
+            "summary": "Coffee machine: on",
+            "score": 99,
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/homeassistant/context-candidates")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ready"
+    row = body["sent_now"][0]
+    assert row["entity_id"] == "switch.coffee_machine"
+    assert row["label"] == "Coffee machine"
+    assert row["state_summary"] == "Coffee machine: on"
+    assert "score" not in row
+    assert "attributes" not in row
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_mute_persists_and_clears_prompt_state(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.ha_context = "- Coffee machine: on"
+    state.ha_events_summary = "- Coffee machine: off -> on"
+    state.ha_pending_directive = "Mention coffee"
+    state.ha_running_gag = "Coffee again"
+    state.ha_last_event_label = "Coffee machine"
+    state.ha_last_event_ts = time.time()
+    state.ha_context_last_updated = time.time()
+    state.ha_context_entity_count = 1
+    state.ha_context_char_count = 20
+    state.ha_scored_entities = [
+        {
+            "entity_id": "switch.coffee_machine",
+            "label": "Coffee machine",
+            "area": "Kitchen",
+            "domain": "switch",
+            "state": "on",
+            "summary": "Coffee machine: on",
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": True},
+        )
+        preview = await client.get("/api/homeassistant/context-candidates")
+
+    assert resp.status_code == 200
+    assert resp.json()["muted"] is True
+    policy = tmp_path / "state" / "ha_entity_policy.json"
+    assert "switch.coffee_machine" in policy.read_text()
+    assert state.ha_context == ""
+    assert state.ha_pending_directive == ""
+    assert state.ha_running_gag == ""
+    assert state.ha_scored_entities == []
+    muted_rows = preview.json()["muted"]
+    assert muted_rows[0]["entity_id"] == "switch.coffee_machine"
+    assert muted_rows[0]["sent_to_prompt"] is False
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_path):
+    """A gag observed before a mute must not survive it — entity_denylist only
+    stops NEW events from becoming buckets; it does nothing about a bucket
+    already tallied before the operator muted the entity."""
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.ha_scored_entities = [
+        {
+            "entity_id": "switch.coffee_machine",
+            "label": "Coffee machine",
+            "area": "Kitchen",
+            "domain": "switch",
+            "state": "on",
+            "summary": "Coffee machine: on",
+        }
+    ]
+    ledger = EveningLedger()
+    ledger.buckets["k"] = GagBucket(
+        "switch.coffee_machine", "Coffee machine", "off", "on", count=3, last_ts=time.time()
+    )
+    ledger.session_id = 1
+    state.evening_ledger = ledger
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": True},
+        )
+
+    assert resp.status_code == 200
+    assert ledger.buckets == {}
+    ledger_file = tmp_path / "evening_ledger.json"
+    assert ledger_file.exists()
+    assert "switch.coffee_machine" not in ledger_file.read_text()
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_unmute_is_idempotent_for_existing_muted_entity(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee machine", domain="switch", area="Kitchen")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": False},
+        )
+        second = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": False},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["muted"] is False
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_context_candidates_public_ip_without_auth_rejected():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/api/homeassistant/context-candidates")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_token_auth_public_ip_allows_write(tmp_path):
+    app = _make_test_app(admin_token="tok")
+    app.state.config.cache_dir = tmp_path
+    app.state.station_state.ha_scored_entities = [
+        {
+            "entity_id": "switch.coffee_machine",
+            "label": "Coffee machine",
+            "area": "Kitchen",
+            "domain": "switch",
+            "state": "on",
+            "summary": "Coffee machine: on",
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            headers={"X-Radio-Admin-Token": "tok"},
+            json={"entity_id": "switch.coffee_machine", "muted": True},
+        )
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

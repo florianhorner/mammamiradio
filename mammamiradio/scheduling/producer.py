@@ -58,10 +58,12 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.catalog import schedule_label_generation
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
+    apply_entity_mute_policy,
     check_reactive_triggers,
     fetch_home_context,
     get_cached_home_context,
@@ -1524,7 +1526,11 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
         )
     except TimeoutError:
         logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
-        return ha_cache or get_cached_home_context() or HomeContext()
+        stale = ha_cache or get_cached_home_context() or HomeContext()
+        # fetch_home_context() mute-filters on every return path; this fallback
+        # bypasses it entirely by reusing a context built before this call, so
+        # the live mute policy has to be re-applied here explicitly.
+        return apply_entity_mute_policy(stale, config.cache_dir)
 
 
 def _maybe_arm_first_home_context_moment(
@@ -1651,7 +1657,10 @@ async def run_producer(
                                 "Content-Type": "application/json",
                             }
                             timer_states: dict[str, dict] = {}
+                            muted_ids = muted_entity_ids(config.cache_dir)
                             for eid in _timer_entity_ids:
+                                if eid in muted_ids:
+                                    continue
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if r.status_code == 200:
                                     timer_states[eid] = r.json()
@@ -1671,6 +1680,11 @@ async def run_producer(
                                 state_translations={},
                                 now=time.time(),
                             )
+                            if muted_ids:
+                                timer_events = deque(
+                                    (event for event in timer_events if event.entity_id not in muted_ids),
+                                    maxlen=timer_events.maxlen,
+                                )
                             _timer_old_states.update(timer_states)
                             if timer_events:
                                 result = check_reactive_triggers(

@@ -364,6 +364,22 @@ class EveningLedger:
         bucket.last_spoken_ts = now
         self._dirty = True
 
+    def purge_entity(self, entity_id: str) -> bool:
+        """Drop any bucket already tallied for ``entity_id``.
+
+        `entity_denylist` only stops NEW events from becoming buckets — it does
+        nothing about a bucket built before an operator mutes the entity, and
+        `offer_gag()` does not re-check the denylist at read time. Called when
+        an operator mutes an entity so an already-observed moment about it
+        cannot still be offered as a running gag after the mute.
+        """
+        to_drop = [key for key, bucket in self.buckets.items() if bucket.entity_id == entity_id]
+        for key in to_drop:
+            del self.buckets[key]
+        if to_drop:
+            self._dirty = True
+        return bool(to_drop)
+
     def select_and_render(self, *, now: float, rng: random.Random | None = None) -> str:
         """Pick one eligible gag and immediately spend its cooldown."""
         offer = self.offer_gag(now=now, rng=rng)

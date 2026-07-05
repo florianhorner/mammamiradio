@@ -9,10 +9,30 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
 Add: `https://github.com/florianhorner/mammamiradio`
 
-### 2. Configure provider secrets
+### 2. Start the add-on
+
+Click Start. Watch the log for:
+- `[mammamiradio] Starting add-on...`
+- `[mammamiradio] Home Assistant API access configured via Supervisor`
+- `Producer started`
+- `Station ready`
+
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. Once the station is ready, the listener stream should produce audio quickly. No AI key is required for this first proof: Demo Radio plays with stock host copy and fallback voices.
+
+### 3. Open the Web UI and listen
+
+Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys.
+
+### 4. Add one AI host key, then review home context
+
+Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
+
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are not sent to prompts, public Casa moments, reactive triggers, or running-gag inputs.
+
+Premium voice keys are optional and separate from the first AI-host unlock.
 
 Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
-`ANTHROPIC_API_KEY` (recommended for AI banter and ads), `OPENAI_API_KEY` (script fallback and OpenAI
+`ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
 `ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
 longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
@@ -41,20 +61,6 @@ Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
 Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
-
-### 3. Start the add-on
-
-Click Start. Watch the log for:
-- `[mammamiradio] Starting add-on...`
-- `[mammamiradio] Home Assistant API access configured via Supervisor`
-- `Producer started`
-- `Station ready`
-
-First boot is slow (30–90 seconds) — yt-dlp downloads Italian chart tracks before playback begins.
-
-### 4. Open the listener page
-
-Click Open Web UI or navigate to the ingress URL in the sidebar. Italian radio should start within 10 seconds.
 
 ## Architecture
 

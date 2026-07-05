@@ -216,6 +216,39 @@ def test_render_phrasing_by_count():
     assert "non si ferma" in _render_gag(heavy)
 
 
+def test_purge_entity_removes_matching_buckets_and_marks_dirty():
+    led = _ledger_with_hot_gag()
+    led._dirty = False
+    assert led.purge_entity(COFFEE) is True
+    assert led.buckets == {}
+    assert led._dirty is True
+
+
+def test_purge_entity_leaves_other_entities_untouched():
+    led = _ledger_with_hot_gag()
+    led.buckets["other"] = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
+    led.purge_entity(COFFEE)
+    assert "k" not in led.buckets
+    assert "other" in led.buckets
+
+
+def test_purge_entity_no_match_returns_false_and_stays_clean():
+    led = _ledger_with_hot_gag()
+    led._dirty = False
+    assert led.purge_entity(WASHER) is False
+    assert led._dirty is False
+
+
+def test_muted_entity_cannot_still_fire_a_gag_after_purge(monkeypatch):
+    """A gag observed before a mute must not still be offerable after it."""
+    monkeypatch.setattr("mammamiradio.home.evening_memory.GAG_INJECT_PROBABILITY", 1.0)
+    led = _ledger_with_hot_gag()
+    assert led.select_and_render(now=BASE, rng=random.Random(0))  # sanity: it would fire
+    led.buckets["k"].last_spoken_ts = 0.0  # reset cooldown to isolate the mute effect
+    led.purge_entity(COFFEE)
+    assert led.select_and_render(now=BASE, rng=random.Random(0)) == ""
+
+
 # --- S2 empty fallback -------------------------------------------------------
 
 
