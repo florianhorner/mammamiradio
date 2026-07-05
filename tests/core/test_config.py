@@ -272,6 +272,11 @@ def test_audio_section_loaded():
     assert config.audio.bitrate == 192
     # Model IDs now live in [models]; the audio section no longer carries them.
     assert resolve_model(config.models, "banter", "anthropic")
+    assert resolve_model(config.models, "memory_extract", "anthropic") == resolve_model(
+        config.models,
+        "transition",
+        "anthropic",
+    )
 
 
 def test_homeassistant_section_loaded():

@@ -23,7 +23,8 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
-from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
+from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
+from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _pick_canned_clip,
@@ -139,6 +140,7 @@ async def test_banter_segment_queued():
     """Producer queues a BANTER segment with synthesized dialogue."""
     state = _make_state()
     config = _make_config()
+    config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
@@ -150,6 +152,7 @@ async def test_banter_segment_queued():
         patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -160,6 +163,50 @@ async def test_banter_segment_queued():
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("type") == "banter"
     assert list(state.recent_banter_paths) == []
+
+
+@pytest.mark.asyncio
+async def test_banter_segment_carries_memory_extraction_with_final_script():
+    state = _make_state()
+    config = _make_config()
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    commit = BanterCommit(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": host.name, "text": "draft"}],
+            persona_context="existing",
+            interaction_context={"listener_request": "none"},
+            youtube_id="yt-memory",
+            source_session=2,
+        )
+    )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Dedicato a te!")], commit),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    payload = seg.metadata["memory_extraction"]
+    assert payload["script_lines"] == [
+        {"host": host.name, "text": "Allora...", "type": "transition"},
+        {"host": host.name, "text": "Dedicato a te!"},
+    ]
+    assert payload["youtube_id"] == "yt-memory"
+    assert payload["source_session"] == 2
 
 
 @pytest.mark.asyncio
@@ -1019,6 +1066,8 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 
     # canned path: _used_generated_banter is False, commit is None — request must remain
     assert req in state.pending_requests
+    seg = queue.get_nowait()
+    assert "memory_extraction" not in seg.metadata
 
 
 def _ha_ctx_mock():
@@ -1181,6 +1230,7 @@ async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit
     assert req in state.pending_requests
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
+    assert "memory_extraction" not in seg.metadata
 
 
 # ---------------------------------------------------------------------------

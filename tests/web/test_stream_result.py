@@ -7,11 +7,15 @@ disabled-is-silent, and that a broken ledger never raises into the stream.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from mammamiradio.core.models import SegmentType
-from mammamiradio.web.streamer import _emit_stream_result
+from mammamiradio.web.streamer import _emit_stream_result, _schedule_banter_memory_extraction_after_send
 
 
 class _FakeLedger:
@@ -131,3 +135,78 @@ def test_broken_ledger_never_raises():
     state = SimpleNamespace(ledger=_Boom())
     # Must swallow — the stream's finally cannot raise.
     _emit_stream_result(state, _segment({}), bytes_sent=10, was_skipped=False, listeners=1)
+
+
+@pytest.mark.asyncio
+async def test_clean_banter_send_schedules_memory_extraction_even_without_ledger():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace(ledger=None)
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
+    task = asyncio.create_task(asyncio.sleep(0))
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction", return_value=task) as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+        )
+
+    schedule.assert_called_once_with(config=config, state=state, metadata=seg.metadata)
+    assert task in app_state.background_tasks
+    await task
+
+
+def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=False,
+            listeners=1,
+        )
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=0,
+            send_completed_cleanly=True,
+            listeners=1,
+        )
+
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=0,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()

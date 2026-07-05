@@ -14,6 +14,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Time-of-day / cultural cues injected into prompts  | `mammamiradio/hosts/context_cues.py`         |
 | Ads (brands, voices, campaign spines)              | `mammamiradio/hosts/ad_creative.py`          |
 | Foreign/competitor station-name scrubbing (spoken + now-playing) | `mammamiradio/hosts/station_name_guard.py` |
+| Post-air listener/song memory extraction          | `mammamiradio/hosts/memory_extractor.py`   |
 | Music sources (charts, Jamendo, local files)       | `mammamiradio/playlist/playlist.py`          |
 | yt-dlp / Jamendo / local file fetch                | `mammamiradio/playlist/downloader.py`        |
 | Per-track rules ("skip the bridge", anthems)       | `mammamiradio/playlist/track_rules.py`       |

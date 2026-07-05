@@ -73,7 +73,7 @@ The first step lets you hear it before you trust it with your house. The last st
 
 It never goes silent: if a provider hiccups or the queue runs dry, it bridges to cached audio and keeps playing, so the illusion holds.
 
-It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. When home context is on, a filtered snapshot of your home goes to the AI you picked to write the banter, so it's a control promise, not a privacy one. Leave it off and the hosts never mention the house.
+It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. When home context is on, a filtered snapshot of your home goes to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly, so it's a control promise, not a privacy one. Leave it off and the hosts never mention the house.
 
 ## Make it yours
 

@@ -53,6 +53,7 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
 )
+from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
     _EXPRESSION_BANK,
     _HOST_FINGERPRINTS,
@@ -135,6 +136,7 @@ _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "news_flash": "script_banter",
     "transition": "script_transition",
     "ad": "script_ads",
+    MEMORY_EXTRACT_CALLER: "script_memory",
 }
 
 
@@ -272,6 +274,7 @@ class BanterCommit:
     heading_announcement: HeadingAnnouncementCommit | None = None
     release_beat: ReleaseBeatBanterCommit | None = None
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None
+    memory_extraction: MemoryExtractionCommit | None = None
 
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
         if self.listener_request is not None:
@@ -289,14 +292,21 @@ def _banter_commit(
     heading_announcement: HeadingAnnouncementCommit | None,
     release_beat: ReleaseBeatBanterCommit | None = None,
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None,
+    memory_extraction: MemoryExtractionCommit | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
-    if heading_announcement is None and release_beat is None and guest_host_cooldown is None:
+    if (
+        heading_announcement is None
+        and release_beat is None
+        and guest_host_cooldown is None
+        and memory_extraction is None
+    ):
         return listener_request
     return BanterCommit(
         listener_request=listener_request,
         heading_announcement=heading_announcement,
         release_beat=release_beat,
         guest_host_cooldown=guest_host_cooldown,
+        memory_extraction=memory_extraction,
     )
 
 
@@ -1277,10 +1287,10 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 # station tight and makes the occasional long break land as "this one mattered".
 _BANTER_EXCHANGE_COUNT: str = "2-3"
 _BANTER_EXCHANGE_COUNT_WARRANTED: str = "4-6"
-# Raised from 1200 (600 pre-2.8.0) after live truncation recurred 2026-07: the
-# demanded OUTPUT contract grew (warranted 4-6 exchanges + persona_updates +
-# song_cues + new_joke + release_beat). Paired with the escalation retry in
-# _generate_json_response — not a standalone fix.
+# Raised from 1200 (600 pre-2.8.0) after live truncation recurred 2026-07:
+# warranted 4-6 exchanges plus `new_joke` and `release_beat_used` can still
+# pressure the hot JSON contract. Paired with the escalation retry in
+# _generate_json_response, not a standalone fix.
 _BANTER_MAX_TOKENS = 2400
 
 
@@ -1631,9 +1641,9 @@ async def write_banter(
 
     Always returns ``(lines, commit)`` where ``commit`` is a deferred state
     mutation for any pending listener request, or ``None`` if no request was
-    injected.  When a PersonaStore is available on state, loads the listener
-    persona into the prompt and requests persona_updates from the LLM.  The
-    returned updates are persisted asynchronously so sessions compound.
+    injected. When a PersonaStore is available on state, loads the listener
+    persona into the prompt and captures a memory-extraction commit. The actual
+    memory write happens later, only after the segment finishes airing cleanly.
     """
     if not has_script_llm(config):
         if chaos_subtype is not None:
@@ -1776,6 +1786,8 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
     # Compounding listener memory — persona built across sessions
     persona_block = ""
     arc_phase_block = ""
+    persona_ctx = ""
+    persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
     if persona_store:
         try:
@@ -1783,6 +1795,7 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
 
             persona = await persona_store.get_persona()
             persona_ctx = persona.to_prompt_context()
+            persona_session_count = persona.session_count
 
             # Arc phase directive — relationship stage shapes host behavior
             phase = persona.arc_phase
@@ -1919,28 +1932,6 @@ beat in the lines you wrote. Otherwise set it false.
 """
             release_beat_schema = ', "release_beat_used": false'
 
-    # If persona is active, request persona_updates in the response
-    persona_update_schema = ""
-    if persona_block:
-        # Only include song_cues field when we have a real youtube_id to echo back.
-        # Without it the LLM hallucinates IDs that can never be retrieved from the DB.
-        song_cues_schema = ""
-        if state.played_tracks:
-            _last = list(state.played_tracks)[-1]
-            _yt = getattr(_last, "youtube_id", "") or ""
-            if _yt:
-                song_cues_schema = (
-                    f',\n    "song_cues": [{{"youtube_id": "{_yt}", '
-                    '"cue_text": "what the hosts said/did about it", "cue_type": "reaction"}}]'
-                )
-        persona_update_schema = f""",
-  "persona_updates": {{
-    "new_theories": ["new theory about the listener based on this interaction, or empty"],
-    "new_personality_guesses": ["one guess about who this listener is, or empty"],
-    "new_jokes": ["any new running joke to carry across sessions, or empty"],
-    "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}]{song_cues_schema}
-  }}"""
-
     guest_host_block = ""
     guest_host_invited = False
     guest_host_cooldown_commit: GuestHostBanterCooldownCommit | None = None
@@ -1999,7 +1990,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 </context_awareness>
 {track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{persona_update_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}}}"""
 
     try:
         data = await _generate_json_response(
@@ -2106,41 +2097,38 @@ Return JSON:
                 state.add_joke(gag_text)
                 state.pending_verbal_gag = {"text": gag_text, "punch": gag_punch}
 
-        # Persist persona updates from the LLM response (fire-and-forget)
-        if persona_store and data.get("persona_updates"):
-            try:
-                await persona_store.update_persona(data["persona_updates"])
-            except Exception:
-                logger.warning("Failed to persist persona updates", exc_info=True)
+        if release_beat_commit is not None:
+            release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
 
-            # Persist LLM-generated song cues (fire-and-forget)
-            # Pin youtube_id to the known value from played_tracks — never trust
-            # the LLM to echo it correctly (hallucinated IDs create orphan rows).
-            llm_cues = data["persona_updates"].get("song_cues", [])
+        memory_extraction_commit: MemoryExtractionCommit | None = None
+        if persona_store and persona_block:
             known_yt = ""
             if state.played_tracks:
                 _last_track = list(state.played_tracks)[-1]
                 known_yt = getattr(_last_track, "youtube_id", "") or ""
-            if isinstance(llm_cues, list) and llm_cues and known_yt:
-                try:
-                    from mammamiradio.playlist.song_cues import add_cue
-
-                    db_path = config.cache_dir / "mammamiradio.db"
-                    persona = await persona_store.get_persona()
-                    for cue in llm_cues:
-                        if isinstance(cue, dict) and cue.get("cue_text"):
-                            await add_cue(
-                                db_path,
-                                known_yt,
-                                cue.get("cue_type", "reaction"),
-                                cue["cue_text"],
-                                source_session=persona.session_count,
-                            )
-                except Exception:
-                    logger.warning("Failed to persist LLM song cues", exc_info=True)
-
-        if release_beat_commit is not None:
-            release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
+            memory_extraction_commit = MemoryExtractionCommit(
+                script_lines=[{"host": host.name, "text": text} for host, text in result],
+                persona_context=persona_ctx,
+                interaction_context={
+                    "recent_tracks": recent,
+                    "running_jokes": jokes,
+                    "track_memory": track_rules_block,
+                    "home_context": ha_block,
+                    "home_mood": mood_block,
+                    "context_awareness": context_block,
+                    "listener_request": listener_request_block,
+                    "reactive_directive": reactive_block,
+                    "course_change": course_change_block,
+                    "new_listener": new_listener_block,
+                    "listener_behavior": listener_block,
+                    "arc_phase": arc_phase_block,
+                    "release_beat": release_beat_block,
+                    "chaos": chaos_block,
+                    "festival": festival_block,
+                },
+                youtube_id=known_yt,
+                source_session=persona_session_count,
+            )
 
         logger.info("Generated banter: %d lines", len(result))
         return result, _banter_commit(
@@ -2148,6 +2136,7 @@ Return JSON:
             heading_announcement_commit,
             release_beat_commit,
             guest_host_cooldown_commit,
+            memory_extraction_commit,
         )
 
     except Exception as e:

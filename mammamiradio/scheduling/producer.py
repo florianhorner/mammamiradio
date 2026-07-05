@@ -577,6 +577,24 @@ def _release_beat_metadata_from_commit(commit) -> dict:
         return {}
 
 
+def _memory_extraction_metadata_from_commit(commit, script_lines: list[dict]) -> dict:
+    memory_commit = getattr(commit, "memory_extraction", None)
+    if memory_commit is None:
+        return {}
+    try:
+        final_commit = replace(
+            memory_commit,
+            script_lines=[dict(line) for line in script_lines if isinstance(line, dict)],
+        )
+        payload = final_commit.to_metadata()
+        if not payload.get("script_lines"):
+            return {}
+        return {"memory_extraction": payload}
+    except Exception:
+        logger.warning("Memory extraction metadata extraction failed", exc_info=True)
+        return {}
+
+
 def _abandon_release_beat_commit(state: StationState, commit) -> None:
     release_commit = _release_beat_commit_from_banter(commit)
     if release_commit is None:
@@ -2636,8 +2654,13 @@ async def run_producer(
 
                 banter_commit = listener_request_commit
                 release_beat_metadata = {}
+                memory_extraction_metadata = {}
                 if canned is None and not impossible_tts:
                     release_beat_metadata = _release_beat_metadata_from_commit(banter_commit)
+                    memory_extraction_metadata = _memory_extraction_metadata_from_commit(
+                        banter_commit,
+                        state.last_banter_script,
+                    )
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -2655,6 +2678,7 @@ async def run_producer(
                         "has_music_tail": bool(has_music_tail),
                         "ledger_segment_id": _banter_attempt_id or None,
                         **release_beat_metadata,
+                        **memory_extraction_metadata,
                     },
                     ephemeral=canned is None,
                 )
