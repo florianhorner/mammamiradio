@@ -441,6 +441,29 @@ class EveningGagsSection:
 
 
 @dataclass
+class RadioEventRule:
+    """Opt-in HA event promotion rule from ``[[home.radio_event]]``."""
+
+    id: str
+    label: str = ""
+    mode: str = "directive"  # "directive" | "gag"
+    entity_id: str = ""
+    entity_glob: str = ""
+    domain: str = ""
+    device_class: str = ""
+    trigger: str = "state"  # "state" | "attribute" | "numeric_threshold"
+    from_state: str = ""
+    to_state: str = ""
+    attribute: str = ""
+    from_value: str = ""
+    to_value: str = ""
+    threshold: float | None = None
+    direction: str = "above"  # "above" | "below"
+    cooldown_seconds: int = 900
+    directive: str = ""
+
+
+@dataclass
 class SonicBrandSection:
     """Station sonic identity: jingles, sweepers, and motif configuration."""
 
@@ -618,6 +641,7 @@ class StationConfig:
     models: ModelsSection = field(default_factory=_build_default_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
+    radio_events: list[RadioEventRule] = field(default_factory=list)
     moderation: ModerationSection = field(default_factory=ModerationSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
     brand: BrandSection = field(default_factory=BrandSection)
@@ -1309,6 +1333,128 @@ def _env_positive_float(name: str) -> float | None:
     return None
 
 
+def _clean_str(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _parse_radio_event_rules(value: object) -> list[RadioEventRule]:
+    """Parse ``[[home.radio_event]]`` rules.
+
+    Bad rule blocks are ignored with a warning. This feature is opt-in and
+    operator-facing, so a malformed custom event must not stop the station.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        log.warning("Ignoring [home.radio_event]: expected an array of tables")
+        return []
+
+    rules: list[RadioEventRule] = []
+    seen_ids: set[str] = set()
+    for idx, raw_rule in enumerate(value):
+        if not isinstance(raw_rule, dict):
+            log.warning("Ignoring home.radio_event[%d]: expected a table", idx)
+            continue
+        rule_id = _clean_str(raw_rule.get("id"))
+        if not rule_id:
+            log.warning("Ignoring home.radio_event[%d]: id is required", idx)
+            continue
+        if rule_id in seen_ids:
+            log.warning("Ignoring home.radio_event[%d]: duplicate id %r", idx, rule_id)
+            continue
+
+        mode = _clean_str(raw_rule.get("mode")) or "directive"
+        trigger = _clean_str(raw_rule.get("trigger")) or "state"
+        direction = _clean_str(raw_rule.get("direction")) or "above"
+        if mode not in {"directive", "gag"}:
+            log.warning("Ignoring home.radio_event[%d] %r: mode must be directive or gag", idx, rule_id)
+            continue
+        if trigger not in {"state", "attribute", "numeric_threshold"}:
+            log.warning(
+                "Ignoring home.radio_event[%d] %r: trigger must be state, attribute, or numeric_threshold",
+                idx,
+                rule_id,
+            )
+            continue
+        if direction not in {"above", "below"}:
+            log.warning("Ignoring home.radio_event[%d] %r: direction must be above or below", idx, rule_id)
+            continue
+
+        entity_id = _clean_str(raw_rule.get("entity_id"))
+        entity_glob = _clean_str(raw_rule.get("entity_glob"))
+        domain = _clean_str(raw_rule.get("domain"))
+        device_class = _clean_str(raw_rule.get("device_class"))
+        if not any((entity_id, entity_glob, domain)):
+            log.warning("Ignoring home.radio_event[%d] %r: one selector is required", idx, rule_id)
+            continue
+
+        label = _clean_str(raw_rule.get("label"))
+        directive = _clean_str(raw_rule.get("directive"))
+        if mode == "directive" and not directive:
+            log.warning("Ignoring home.radio_event[%d] %r: directive is required for directive mode", idx, rule_id)
+            continue
+        if mode == "gag" and not label:
+            log.warning("Ignoring home.radio_event[%d] %r: label is required for gag mode", idx, rule_id)
+            continue
+
+        attribute = _clean_str(raw_rule.get("attribute"))
+        if trigger == "attribute" and not attribute:
+            log.warning("Ignoring home.radio_event[%d] %r: attribute is required", idx, rule_id)
+            continue
+
+        threshold: float | None = None
+        if trigger == "numeric_threshold":
+            raw_threshold = raw_rule.get("threshold")
+            if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, int | float | str):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            try:
+                threshold = float(raw_threshold)
+            except (TypeError, ValueError):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            if not math.isfinite(threshold):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be finite", idx, rule_id)
+                continue
+
+        cooldown_raw = raw_rule.get("cooldown_seconds", 900)
+        cooldown_seconds = 900
+        if not isinstance(cooldown_raw, bool):
+            try:
+                parsed_cooldown = int(cooldown_raw)
+            except (TypeError, ValueError):
+                parsed_cooldown = 900
+            if parsed_cooldown >= 1:
+                cooldown_seconds = parsed_cooldown
+
+        rules.append(
+            RadioEventRule(
+                id=rule_id,
+                label=label,
+                mode=mode,
+                entity_id=entity_id,
+                entity_glob=entity_glob,
+                domain=domain,
+                device_class=device_class,
+                trigger=trigger,
+                from_state=_clean_str(raw_rule.get("from_state")),
+                to_state=_clean_str(raw_rule.get("to_state")),
+                attribute=attribute,
+                from_value=_clean_str(raw_rule.get("from_value")),
+                to_value=_clean_str(raw_rule.get("to_value")),
+                threshold=threshold,
+                direction=direction,
+                cooldown_seconds=cooldown_seconds,
+                directive=directive,
+            )
+        )
+        seen_ids.add(rule_id)
+    return rules
+
+
 def load_config(path: str = "radio.toml") -> StationConfig:
     """Load ``radio.toml`` plus environment overrides into a validated config."""
     addon_mode = _is_addon()
@@ -1471,6 +1617,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
     home_raw = raw.get("home", {})
+    radio_events_raw = home_raw.get("radio_event", []) if isinstance(home_raw, dict) else []
+    radio_events = _parse_radio_event_rules(radio_events_raw)
     gags_raw = home_raw.get("running_gags", {}) if isinstance(home_raw, dict) else {}
     if not isinstance(gags_raw, dict):
         gags_raw = {}
@@ -1556,6 +1704,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         models=models_section,
         homeassistant=ha_section,
         running_gags=running_gags,
+        radio_events=radio_events,
         moderation=moderation,
         persona=PersonaSection(**raw.get("persona", {})),
         brand=brand,

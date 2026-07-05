@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from mammamiradio.core.config import RadioEventRule
 from mammamiradio.home.ha_context import (
     _DEFAULT_STATION_ARTWORK_URL,
     ENTITY_LABELS,
@@ -737,6 +738,19 @@ async def test_fetch_returns_cached_if_fresh():
 
 
 @pytest.mark.asyncio
+async def test_fetch_cached_context_does_not_repeat_radio_events():
+    cache = HomeContext(
+        summary="cached",
+        timestamp=time.time(),
+        radio_events=[object()],
+    )
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
+    assert result is cache
+    assert result.radio_events == []
+
+
+@pytest.mark.asyncio
 async def test_fetch_calls_api_when_stale():
     stale_cache = HomeContext(
         raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}}},
@@ -769,6 +783,58 @@ async def test_fetch_calls_api_when_stale():
     assert result.timestamp > stale_cache.timestamp
     assert "macchina del caff" in result.summary
     assert "macchina del caff" in result.events_summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_matches_radio_events_without_ambient_script_visibility():
+    rule = RadioEventRule(
+        id="tts_script_started",
+        entity_glob="script.*tts*",
+        trigger="state",
+        from_state="off",
+        to_state="on",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+    )
+    states = [
+        {
+            "entity_id": "script.kitchen_tts",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen TTS"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._radio_event_state_cache",
+            {"script.kitchen_tts": {"state": "off", "attributes": {}}},
+        ),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            radio_event_rules=[rule],
+        )
+
+    assert "script.kitchen_tts" not in result.raw_states
+    assert len(result.radio_events) == 1
+    assert result.radio_events[0].directive == "One of the house voices just spoke."
 
 
 @pytest.mark.asyncio

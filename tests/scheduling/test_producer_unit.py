@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.normalizer import save_track_metadata
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.models import (
     HostPersonality,
     PlaylistSource,
@@ -22,11 +22,14 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.ha_enrichment import HomeEvent
+from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
+    _apply_radio_event_matches,
     _pick_canned_clip,
     run_producer,
 )
@@ -1083,7 +1086,123 @@ def _ha_ctx_mock():
     ctx.weather_arc_en = ""
     ctx.events_summary_en = ""
     ctx.last_event_label_en = ""
+    ctx.radio_events = []
     return ctx
+
+
+def test_radio_event_directive_uses_next_break_path():
+    state = _make_state()
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as commit:
+        gag_events = _apply_radio_event_matches(state, [match])
+
+    assert gag_events == []
+    assert state.ha_pending_directive == "One of the house voices just spoke."
+    commit.assert_called_once_with(match)
+
+
+def test_radio_event_directive_does_not_override_existing_directive():
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="new directive",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as commit:
+        gag_events = _apply_radio_event_matches(state, [match])
+
+    assert gag_events == []
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+def test_radio_event_gag_feeds_ledger_event_path():
+    state = _make_state()
+    event = HomeEvent(
+        "binary_sensor.phone_charging",
+        "A household device started charging",
+        "off",
+        "on",
+        time.time(),
+        force_gag_candidate=True,
+        gag_cooldown_seconds=120,
+    )
+    match = RadioEventMatch(
+        rule_id="device_charging",
+        mode="gag",
+        directive="",
+        event=event,
+        cooldown_seconds=120,
+        matched_at=time.time(),
+    )
+
+    assert _apply_radio_event_matches(state, [match]) == [event]
+    assert state.ha_pending_directive == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_passes_radio_event_rules_and_applies_directive_match():
+    """Producer loop wires configured radio-event rules through HA refresh."""
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.radio_events = [
+        RadioEventRule(
+            id="tts_script_started",
+            label="Kitchen TTS",
+            mode="directive",
+            entity_glob="script.*tts*",
+            trigger="state",
+            from_state="off",
+            to_state="on",
+            cooldown_seconds=60,
+            directive="One of the house voices just spoke.",
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.radio_events = [match]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context) as mock_fetch,
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as mock_commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert mock_fetch.await_args.kwargs["radio_event_rules"] == config.radio_events
+    assert state.ha_pending_directive == "One of the house voices just spoke."
+    mock_commit.assert_called_once_with(match)
 
 
 @pytest.mark.asyncio

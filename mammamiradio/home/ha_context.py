@@ -24,7 +24,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig, is_absolute_http_url
+from mammamiradio.core.config import DEFAULT_STATION_NAME, RadioEventRule, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
 from mammamiradio.home.ha_enrichment import (
@@ -35,6 +35,7 @@ from mammamiradio.home.ha_enrichment import (
     diff_states,
     prune_events,
 )
+from mammamiradio.home.radio_events import RadioEventMatch, build_radio_event_baseline, match_radio_events
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
@@ -366,6 +367,7 @@ class HomeContext:
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
     events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=EVENT_BUFFER_SIZE))
+    radio_events: list[RadioEventMatch] = field(default_factory=list)
     events_summary: str = ""
     timestamp: float = 0.0
     # Phase 2: mood classification
@@ -1138,6 +1140,7 @@ def check_reactive_triggers(
 
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
+_radio_event_state_cache: dict[str, dict] = {}
 _ha_registry_snapshot_cache: HomeRegistrySnapshot | None = None
 _ha_registry_fetched_at: float = 0.0
 _HA_REGISTRY_TTL = 6 * 60 * 60
@@ -1419,6 +1422,7 @@ async def fetch_home_context(
     poll_interval: float = 60.0,
     _cache: HomeContext | None = None,
     cache_dir: Path | None = None,
+    radio_event_rules: list[RadioEventRule] | None = None,
 ) -> HomeContext:
     """Fetch current home state from HA REST API.
 
@@ -1426,7 +1430,7 @@ async def fetch_home_context(
     Uses module-level cache for persistence across calls, with the
     _cache parameter as a fallback for backward compatibility.
     """
-    global _ha_cache
+    global _ha_cache, _radio_event_state_cache
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
     if effective_cache and effective_cache.age_seconds < poll_interval:
@@ -1438,6 +1442,7 @@ async def fetch_home_context(
         effective_cache.events_summary_en = build_events_summary_en(
             effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=now
         )
+        effective_cache.radio_events = []
         return effective_cache
 
     try:
@@ -1456,6 +1461,25 @@ async def fetch_home_context(
         denylist_hits: dict[str, int] = {}
         registry_snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
         entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        radio_events: list[RadioEventMatch] = []
+        if radio_event_rules:
+            try:
+                radio_events = match_radio_events(
+                    radio_event_rules,
+                    _radio_event_state_cache,
+                    entity_map,
+                    now=timestamp,
+                )
+            except Exception as exc:  # pragma: no cover - defensive continuity guard
+                logger.warning("Failed to match configured HA radio events: %s", exc)
+                radio_events = []
+            try:
+                _radio_event_state_cache = build_radio_event_baseline(entity_map, radio_event_rules)
+            except Exception as exc:  # pragma: no cover - defensive continuity guard
+                logger.warning("Failed to update configured HA radio-event baseline: %s", exc)
+                _radio_event_state_cache = {}
+        else:
+            _radio_event_state_cache = {}
         relevant = {
             entity_id: filtered
             for entity_id, state_data in entity_map.items()
@@ -1501,6 +1525,7 @@ async def fetch_home_context(
             raw_states=relevant,
             summary=summary,
             events=events,
+            radio_events=radio_events,
             events_summary=events_summary,
             mood=mood,
             weather_arc=weather_arc,
@@ -1536,6 +1561,7 @@ async def fetch_home_context(
             effective_cache.events_summary_en = build_events_summary_en(
                 effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
             )
+            effective_cache.radio_events = []
             return effective_cache
         return HomeContext()
 
