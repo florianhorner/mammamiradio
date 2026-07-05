@@ -100,10 +100,11 @@ check the post-air extractor path separately:
 - `memory_extract` uses the fast script role and appears in `/status`
   consumption as the Memory row (`script_memory`). Missing provider keys make it
   a warning-only no-op/fallback path, not a stream failure.
-- There is no separate toggle for this extra fast-role call. If generated banter
-  has listener memory metadata and airs cleanly, extraction is attempted
-  automatically; disable the persona store or remove script-provider credentials
-  to prevent durable memory extraction.
+- There is no separate toggle for this extra fast-role call, and the persona
+  store is initialized on normal startup. If generated banter has listener memory
+  metadata and airs cleanly, extraction is attempted automatically. Leave HA
+  context disabled to keep house state out of the extractor prompt; remove
+  script-provider credentials to prevent durable AI memory extraction entirely.
 - Persona writes require `state.persona_store`; song-cue writes also require a
   pinned `youtube_id`. Missing either input is safe, but no durable row is added.
 
