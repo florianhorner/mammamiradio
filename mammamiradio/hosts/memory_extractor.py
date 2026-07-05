@@ -27,6 +27,10 @@ _MAX_IN_FLIGHT_EXTRACTIONS = 5
 
 _active_tasks: set[asyncio.Task] = set()
 _apply_lock: asyncio.Lock | None = None
+# This module is deliberately excluded from `web/streamer.py`'s hot-reload set
+# (see `hot_reload_modules`) so a reload never orphans the task registry or
+# apply lock mid-extraction. Adding this module to that set would require
+# migrating or draining `_active_tasks`/`_apply_lock` first.
 
 
 def _get_apply_lock() -> asyncio.Lock:
