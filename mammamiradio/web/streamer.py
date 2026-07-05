@@ -4069,6 +4069,31 @@ async def _await_first_direction_commit(download_tasks: list[asyncio.Task[str]])
     return committed, list(pending)
 
 
+async def _clear_empty_heading_after_direction_downloads(
+    download_tasks: list[asyncio.Task[str]],
+    app_state: Any,
+    originating_source_revision: int,
+    heading_id: str,
+) -> None:
+    """Clear an all-new direction if its background batch finishes with no playable tracks."""
+    results = await asyncio.gather(*download_tasks, return_exceptions=True)
+    if any(result == "queued" for result in results):
+        return
+
+    state = app_state.station_state
+    async with app_state.source_switch_lock:
+        if (
+            state.heading is None
+            or state.heading.id != heading_id
+            or state.source_revision != originating_source_revision
+            or _heading_playlist_track_count(state, heading_id) > 0
+        ):
+            return
+        logger.warning("Direction downloads finished with no playable tracks; returning to auto")
+        _clear_active_heading(state)
+        _delete_persisted_heading(app_state.config.cache_dir)
+
+
 # Listener-request endpoints + _download_listener_song background task moved to
 # mammamiradio/web/listener_requests.py (Track B v2.11.0 extraction). The new
 # router is mounted in main.py alongside this one.
@@ -4312,6 +4337,15 @@ async def _set_direction_text(request: Request, text: str):
             )
         except TimeoutError:
             still_downloading = True
+            cleanup_task = asyncio.create_task(
+                _clear_empty_heading_after_direction_downloads(
+                    dl_tasks,
+                    request.app.state,
+                    originating_source_revision,
+                    heading.id,
+                )
+            )
+            _register_background_task(request.app.state, cleanup_task)
         else:
             if committed_downloads == 0:
                 # Every download failed — roll the course back to auto rather than
