@@ -270,13 +270,23 @@ def test_select_next_track_prefers_active_heading_candidates():
     tagged.heading_id = heading.id
     state = StationState(playlist=[normal, tagged], heading=heading)
 
-    with patch("mammamiradio.core.models.random.choices", side_effect=lambda candidates, **_: [candidates[0]]):
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [tagged]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
         picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
 
     assert picked is tagged
+    normal_idx = captured["candidates"].index(normal)
+    tagged_idx = captured["candidates"].index(tagged)
+    assert captured["weights"][tagged_idx] > captured["weights"][normal_idx]
 
 
-def test_select_next_track_heading_bias_decays_after_budget_spent():
+def test_select_next_track_heading_bias_persists_after_budget_spent():
     normal = _track(1)
     tagged = _track(2)
     heading = Heading(
@@ -290,11 +300,20 @@ def test_select_next_track_heading_bias_decays_after_budget_spent():
     )
     tagged.heading_id = heading.id
     state = StationState(playlist=[normal, tagged], heading=heading)
+    captured = {}
 
-    with patch("mammamiradio.core.models.random.choices", side_effect=lambda candidates, **_: [candidates[0]]):
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [tagged]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
         picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
 
-    assert picked is normal
+    assert picked is tagged
+    normal_idx = captured["candidates"].index(normal)
+    tagged_idx = captured["candidates"].index(tagged)
+    assert captured["weights"][tagged_idx] > captured["weights"][normal_idx]
 
 
 def test_after_music_spends_heading_budget_only_for_matching_track():
@@ -361,9 +380,8 @@ def test_after_music_heading_persist_callback_failure_is_non_fatal():
     assert heading.selection_spent == 1
 
 
-def test_after_music_never_exceeds_heading_selection_budget():
-    """selection_spent stops at selection_budget even if the same tagged track airs
-    again — the budget cap is what retires the heading bias, so it must never overrun."""
+def test_after_music_counts_heading_tracks_beyond_legacy_budget():
+    """selection_spent is telemetry now; it must not retire the heading bias."""
     heading = Heading(
         id="heading-1",
         seed="direction://2000s",
@@ -379,7 +397,7 @@ def test_after_music_never_exceeds_heading_selection_budget():
     state.after_music(tagged)
     state.after_music(tagged)
 
-    assert heading.selection_spent == 1
+    assert heading.selection_spent == 2
 
 
 def test_on_stream_segment_counts_canned_clips():

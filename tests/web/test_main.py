@@ -1781,6 +1781,7 @@ async def test_startup_retags_duplicate_explicit_heading_track(tmp_path: Path):
         1.0,
         "operator",
         selection_budget=3,
+        first_found_at=55.0,
     )
     base_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
     fetched_duplicate = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
@@ -1806,6 +1807,8 @@ async def test_startup_retags_duplicate_explicit_heading_track(tmp_path: Path):
     assert base_track.heading_id == heading.id
     assert state.heading == heading
     assert state.heading.selection_budget == 3
+    assert state.heading.phase == "steering"
+    assert state.heading.first_found_at == 55.0
 
 
 @pytest.mark.asyncio

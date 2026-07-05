@@ -206,11 +206,12 @@ def language_mode_rule(super_italian: bool, language_code: str) -> str:
 
 
 COURSE_CHANGE_MOOD_NOTICE_TEMPLATE = """
-COURSE CHANGE:
-Someone asked for, or is clearly in the mood for, {heading_label}. Notice that request as a mood in the room.
-Do not claim current playlist state, a live turn in direction, a return to that era, or a promise to stay there.
-Do not say "heading", "seed", "button", "operator", or describe the control surface.
-Frame it as a remembered request or desire that remains true even if the playlist has already moved on.
+RECORD HUNT:
+The station is digging through LP/CD crates for {heading_label}.
+{narration_line}
+Do not promise an exact next song, a queue purge, an interruption, or a permanent format change.
+Do not say "heading", "seed", "button", "operator", "phase", or describe the control surface.
+Frame it as crate-digging momentum: the hosts are steering the show toward what they find.
 {language_line}
 """
 

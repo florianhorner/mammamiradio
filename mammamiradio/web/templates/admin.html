@@ -172,7 +172,7 @@ body[data-stopped="true"] .btn-util {
   width: 100%; margin-top: 8px; padding: 9px 11px;
   border: 1px solid rgba(244,208,72,0.18); border-radius: 8px;
   background: rgba(20,17,15,0.34); color: rgba(245,237,216,0.78);
-  font-size: 12px;
+  font-size: 12px; min-width: 0; overflow-wrap: break-word;
 }
 .course-banner b { color: var(--sun2); font-weight: 700; }
 .course-banner[data-active="false"] b { color: rgba(245,237,216,0.58); }
@@ -1751,20 +1751,20 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
           <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
         </div>
-        <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
-          <span class="quick-add-label">Steer:</span>
+        <div class="quick-actions" id="headingControls" aria-label="Record Hunt presets">
+          <span class="quick-add-label">Record Hunt:</span>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_70s" onclick="setHeading('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
           <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
         </div>
         <div class="direction-row" id="directionControls">
-          <label class="quick-add-label" for="directionInput">Direction:</label>
+          <label class="quick-add-label" for="directionInput">Find records:</label>
           <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
-          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Steer</button>
+          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt</button>
         </div>
         <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
-          <span>Course: <b>Auto rotation</b></span>
+          <span>Record Hunt: <b>Auto rotation</b></span>
         </div>
       </div>
       <div class="rotation-select" id="plSelectBar" style="display:none">
@@ -3184,12 +3184,14 @@ async function enrichPlaylistSource(kind,el){
 async function setHeading(kind,el){
   flash(el);
   const dispatch=_HEADING_DISPATCH[kind]||_HEADING_DISPATCH.classic_80s;
+  renderRecordHuntPending(dispatch.label);
   const r=await api('POST','/api/heading',{seed:dispatch.seed});
   if(!r.ok){
     toast(r.message||wayOut('pull that vibe'));
+    await refreshFast();
     return;
   }
-  toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
+  toast(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`);
   await refreshFast();
 }
 let _directionPending=false;
@@ -3206,28 +3208,30 @@ async function setDirectionText(el){
   flash(el);
   _directionPending=true;
   if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
-  if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Steering...';}
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Hunting...';}
+  renderRecordHuntPending(text);
   try{
     // 60s client-side ceiling so a hung request can't leave the control stuck
-    // on "Steering..." forever with no way out — it rejects into catch below.
+    // on "Hunting..." forever with no way out — it rejects into catch below.
     const r=await api('POST','/api/direction',{text},60000);
     if(!r.ok){
       toast(r.message||wayOut('shape that set'));
+      await refreshFast();
       return;
     }
     const label=r.heading?.label||text;
     if(r.idempotent){
-      toast(`${label} is already steering.`);
+      toast(`${label} is already in the crate.`);
     }else{
       // Only count songs actually confirmed in rotation; anything still
-      // downloading is shown as "finding" rather than counted as aired.
+      // downloading is shown as hunting rather than counted as aired.
       const confirmed=Number(r.added||0);
       const pending=Number(r.pending_downloads||0);
       let detail='';
-      if(confirmed&&pending)detail=` (${confirmed} song${confirmed===1?'':'s'}, finding ${pending} more…)`;
-      else if(confirmed)detail=` (${confirmed} song${confirmed===1?'':'s'})`;
-      else if(pending)detail=' (finding songs…)';
-      toast(`${label} is steering${detail}.`);
+      if(confirmed&&pending)detail=` (${confirmed} record${confirmed===1?'':'s'}, hunting ${pending} more...)`;
+      else if(confirmed)detail=` (${confirmed} record${confirmed===1?'':'s'})`;
+      else if(pending)detail=' (hunting records...)';
+      toast(`Record Hunt started for ${label}${detail}.`);
     }
     if(input)input.value='';
     await refreshFast();
@@ -3236,7 +3240,7 @@ async function setDirectionText(el){
     // that's not an outage. Refresh so the Course banner shows the real state
     // instead of claiming we couldn't reach the studio.
     if(e&&e.name==='AbortError'){
-      toast('Still finding songs — check the course banner in a moment.');
+      toast('Still hunting records - check the banner in a moment.');
       try{await refreshFast();}catch(_){}
     }else{
       toast(offlineMsg());
@@ -3244,7 +3248,7 @@ async function setDirectionText(el){
   }finally{
     _directionPending=false;
     if(input){input.disabled=false;input.removeAttribute('aria-busy');}
-    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Steer';}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt';}
   }
 }
 async function clearHeading(el){
@@ -3254,6 +3258,12 @@ async function clearHeading(el){
   toast('Back to auto.');
   await refreshFast();
 }
+function renderRecordHuntPending(label){
+  const banner=document.getElementById('courseBanner');
+  if(!banner)return;
+  banner.dataset.active='true';
+  banner.innerHTML=`<span>Record Hunt: hunting records for <b>${esc(label||'that vibe')}</b></span>`;
+}
 function updateHeadingBanner(st){
   const heading=st?.heading||{};
   const banner=document.getElementById('courseBanner');
@@ -3261,12 +3271,19 @@ function updateHeadingBanner(st){
     const active=!!heading.active;
     banner.dataset.active=active?'true':'false';
     if(active){
-      // A restored/just-set text direction can be active before its songs have
-      // been found yet — say so plainly instead of claiming it's already steering.
-      const resolving=!!heading.resolving;
-      banner.innerHTML=`<span>Course: <b>${esc(heading.label||'On course')}</b>${resolving?' — finding songs…':''}</span>`;
+      const phase=heading.phase||'steering';
+      const label=esc(heading.label||'that vibe');
+      const count=Number(heading.tagged_count||0);
+      if(phase==='hunting'||heading.resolving){
+        banner.innerHTML=`<span>Record Hunt: hunting records for <b>${label}</b></span>`;
+      }else if(phase==='complete'){
+        banner.innerHTML=`<span>Record Hunt: <b>${label}</b> played through. Back on auto.</span>`;
+      }else{
+        const found=count>0?` — found ${count} record${count===1?'':'s'}`:'';
+        banner.innerHTML=`<span>Record Hunt: <b>${label}</b> is shaping the next stretch${found}</span>`;
+      }
     }else{
-      banner.innerHTML='<span>Course: <b>Auto rotation</b></span>';
+      banner.innerHTML='<span>Record Hunt: <b>Auto rotation</b></span>';
     }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{

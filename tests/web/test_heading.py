@@ -79,10 +79,14 @@ async def test_heading_set_adds_tags_and_persists(tmp_path):
     assert body["added"] == 2
     assert state.playlist_revision == start_revision + 1
     assert state.heading is not None
-    assert {track.heading_id for track in state.playlist[:2]} == {state.heading.id}
+    assert state.playlist[0].title == "Base"
+    assert {track.heading_id for track in state.playlist if track.title in {"Blue Jeans", "Notte"}} == {
+        state.heading.id
+    }
     assert read_persisted_heading(tmp_path) == state.heading
     assert status.json()["heading"]["active"] is True
     assert status.json()["heading"]["label"] == "Anni '80"
+    assert status.json()["heading"]["phase"] == "steering"
 
 
 @pytest.mark.asyncio
@@ -159,7 +163,8 @@ async def test_heading_same_era_after_clear_retags_existing_tracks(tmp_path):
     assert state.heading is not None
     assert state.heading.id != old_heading_id
     assert [track.heading_id for track in state.playlist if track.title == "Splendido"] == [state.heading.id]
-    assert state.heading_pending_announcement == ""
+    assert state.heading_pending_announcement == "Anni '80"
+    assert state.heading_pending_narration_kind == "first_found"
     assert read_persisted_heading(tmp_path) == state.heading
 
 
@@ -563,13 +568,18 @@ def test_serialize_heading_resolving_before_tracks_tagged(tmp_path):
     state.heading = heading
 
     data = _serialize_heading(heading, state)
+    assert data["phase"] == "hunting"
     assert data["tagged_count"] == 0
     assert data["resolving"] is True
 
     state.playlist[0].heading_id = heading.id
+    heading.selection_budget = 1
+    heading.selection_spent = 1
     data2 = _serialize_heading(heading, state)
+    assert data2["phase"] == "steering"
     assert data2["tagged_count"] == 1
     assert data2["resolving"] is False
+    assert data2["selection_remaining"] == 0
 
     # No state passed -> no resolving/tagged_count fields (back-compat callers).
     assert "resolving" not in _serialize_heading(heading)
@@ -650,6 +660,8 @@ async def test_download_direction_track_grows_budget_and_persists(tmp_path):
     assert status == "queued"
     assert track in app.state.station_state.playlist
     assert heading.selection_budget == 1  # grew from 0 to cover the landed track
+    assert heading.phase == "steering"
     restored = read_persisted_heading(tmp_path)
     assert restored is not None
     assert restored.selection_budget == 1
+    assert restored.phase == "steering"
