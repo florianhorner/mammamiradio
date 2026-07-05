@@ -27,6 +27,8 @@ class HomeEvent:
     timestamp: float
     raw_old_state: str = ""
     raw_new_state: str = ""
+    force_gag_candidate: bool = False
+    gag_cooldown_seconds: float = 0.0
 
     def age_seconds(self, *, now: float | None = None) -> float:
         ref_now = time.time() if now is None else now
