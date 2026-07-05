@@ -109,6 +109,7 @@ async def test_write_banter_prompt_frames_heading_as_request_mood(tmp_path):
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    config.party_mode = None
     heading = _heading()
     state = StationState(heading=heading, heading_pending_announcement=heading.label)
     captured: dict[str, str] = {}
@@ -120,20 +121,50 @@ async def test_write_banter_prompt_frames_heading_as_request_mood(tmp_path):
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_capture_prompt):
         _, commit = await write_banter(state, config)
 
-    course_block = captured["prompt"].split("COURSE CHANGE:", 1)[1].split("Return JSON:", 1)[0].lower()
-    assert "asked for" in course_block
-    assert "mood" in course_block
-    assert "request" in course_block
+    course_block = captured["prompt"].split("RECORD HUNT:", 1)[1].split("Return JSON:", 1)[0].lower()
+    assert "digging through lp/cd crates" in course_block
+    assert "steering" in course_block
+    assert "exact next song" in course_block
     assert "now playing" not in course_block
     assert "tornando ora" not in course_block
     assert "has just turned" not in course_block
     assert "going back" not in course_block
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == ""
     assert state.heading is not None
     assert state.heading.announced is False
     assert read_persisted_heading(tmp_path) is None
     assert commit is not None
+
+
+@pytest.mark.asyncio
+async def test_hunt_start_notice_does_not_mark_first_record_announced(tmp_path):
+    config = load_config()
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
+    config.cache_dir = tmp_path
+    config.party_mode = None
+    heading = _heading()
+    state = StationState(
+        heading=heading,
+        heading_pending_announcement=heading.label,
+        heading_pending_narration_kind="hunt_start",
+    )
+
+    async def _capture_prompt(**kwargs):
+        return {"lines": [{"host": config.hosts[0].name, "text": "Stiamo scavando nelle casse."}]}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_capture_prompt):
+        _, commit = await write_banter(state, config)
+
+    assert commit is not None
+    commit.apply(state, config)
+    assert state.heading is not None
+    assert state.heading.hunt_started_announced is True
+    assert state.heading.announced is False
+    assert state.heading_announced_id == ""
+    assert read_persisted_heading(tmp_path) == state.heading
 
 
 @pytest.mark.asyncio
@@ -168,6 +199,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    config.party_mode = None
     heading = _heading()
     tagged = _track("Vibe", heading_id=heading.id)
     state = StationState(playlist=[tagged], heading=heading, heading_pending_announcement=heading.label)
@@ -179,6 +211,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
         _, stale_commit = await write_banter(state, config)
 
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == ""
     assert stale_commit is not None
 
@@ -186,6 +219,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     _arm_accepted_heading_announcement(state, tagged)
 
     assert state.heading_pending_announcement == heading.label
+    assert state.heading_pending_narration_kind == "first_found"
     assert state.heading_announced_id == ""
     assert state.heading is not None
     assert state.heading.announced is False
@@ -198,6 +232,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     queued_commit.apply(state, config)
 
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == heading.id
     assert state.heading is not None
     assert state.heading.announced is True

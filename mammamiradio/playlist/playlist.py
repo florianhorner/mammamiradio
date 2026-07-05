@@ -626,6 +626,9 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
                 title = str(raw_target.get("title", "")).strip()
                 if artist and title:
                     targets.append({"artist": artist, "title": title})
+        phase = str(payload.get("phase", "")).strip()
+        if phase not in {"hunting", "steering", "complete"}:
+            phase = "hunting" if targets and int(payload.get("selection_budget", 0) or 0) <= 0 else "steering"
         return Heading(
             id=heading_id,
             seed=seed,
@@ -636,6 +639,11 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
             selection_budget=max(0, int(payload.get("selection_budget", 0) or 0)),
             selection_spent=max(0, int(payload.get("selection_spent", 0) or 0)),
             targets=targets,
+            phase=phase,
+            hunt_started_announced=bool(payload.get("hunt_started_announced", False)),
+            first_found_at=max(0.0, float(payload.get("first_found_at", 0.0) or 0.0)),
+            last_narrated_at=max(0.0, float(payload.get("last_narrated_at", 0.0) or 0.0)),
+            narration_count=max(0, int(payload.get("narration_count", 0) or 0)),
         )
     except (TypeError, ValueError):
         logger.warning("Persisted heading has invalid fields: %s", path)
@@ -654,6 +662,11 @@ def write_persisted_heading(cache_dir: Path, heading: Heading) -> None:
         "announced": heading.announced,
         "selection_budget": max(0, int(heading.selection_budget or 0)),
         "selection_spent": max(0, int(heading.selection_spent or 0)),
+        "phase": heading.phase if heading.phase in {"hunting", "steering", "complete"} else "steering",
+        "hunt_started_announced": bool(heading.hunt_started_announced),
+        "first_found_at": max(0.0, float(heading.first_found_at or 0.0)),
+        "last_narrated_at": max(0.0, float(heading.last_narrated_at or 0.0)),
+        "narration_count": max(0, int(heading.narration_count or 0)),
         "targets": [
             {"artist": str(target.get("artist", "")).strip(), "title": str(target.get("title", "")).strip()}
             for target in heading.targets

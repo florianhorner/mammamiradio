@@ -88,36 +88,39 @@ base playlist:
 
 `cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
 corrupt/missing tolerant and return no heading rather than failing boot. Seed
-headings persist the seed; text directions persist concrete targets plus the
-selection budget. Restore splits by kind to honor INSTANT AUDIO: a **seed** heading
-still restores synchronously during startup (re-fetch the source, re-tag matching
-tracks, blend new ones; on empty/failure it deletes `heading.json` and continues in
-auto). A **text direction** does NOT re-search yt-dlp on the boot path — startup
-re-tags any target already present in the freshly-fetched pool and marks the course
-active immediately, then defers the network target re-search + downloads to a
-background task (`_restore_direction_targets_background`) dispatched *after* the
+headings persist the seed; text directions persist concrete targets, phase, safe
+counts, and Record Hunt narration throttle fields. Restore splits by kind to honor
+INSTANT AUDIO: a **seed** heading still restores synchronously during startup
+(re-fetch the source, re-tag matching tracks, blend new ones at the back of the
+rotation; on empty/failure it deletes `heading.json` and continues in auto). A
+**text direction** does NOT re-search yt-dlp on the boot path — startup re-tags any
+target already present in the freshly-fetched pool and marks the course active
+immediately, then defers the network target re-search + downloads to a background
+task (`_restore_direction_targets_background`) dispatched *after* the
 producer/playback tasks start, so a slow search can never delay first audio. Until
-that background resolve lands its first track, the course reports `resolving` (the
-admin banner shows "finding songs…"); if the background resolve yields no playable
-track, it clears the heading back to auto and deletes `heading.json`. Persisted-
-heading writes (budget growth as tracks land, spend as they air) are serialized
-under `source_switch_lock` with a fresh identity re-check, so a write racing a "Back
-to auto" can't resurrect a just-cleared course on the next restart.
+that background resolve lands its first track, the course reports `phase:
+"hunting"` / `resolving: true` (the admin banner shows the station hunting
+records); if the background resolve yields no playable track, it clears the heading
+back to auto and deletes `heading.json`. Persisted-heading writes (phase changes,
+safe count updates, and narration throttle changes) are serialized under
+`source_switch_lock` with a fresh identity re-check, so a write racing a "Back to
+auto" can't resurrect a just-cleared course on the next restart.
 
-Narration and stickiness are selection-driven, not button-driven.
+Narration and stickiness are selection-driven, not queue-control-driven.
 `StationState.select_next_track()` first applies the normal diversity filters and
-then, while the active heading has remaining budget, prefers eligible tracks tagged
-with that heading id. If no tagged track is eligible, the existing fallback ladder
-still returns normal music. `heading_pending_announcement` is armed only when the
-producer accepts a tagged track for airing. The next host break consumes that
-dedicated slot at prompt-build into a mood-noticing block; it does not reuse or
-overwrite `ha_pending_directive`. The host observes that someone asked for, or is
-in the mood for, the selected direction rather than claiming the station is
-currently playing it. Because the line asserts a request, not present playlist
-state, it is intentionally allowed to air even if Back to auto or another heading
-lands while the banter is rendering. Consuming the notice marks `heading.announced`
-and persists that flag best-effort so restarts do not redundantly re-notice. The
-music turn always remains best-effort and never blocks or delays audio.
+then gives eligible tracks tagged with the active heading id a durable soft weight.
+Cooldowns, bans, artist diversity, pinned tracks, and rescue paths can still win;
+the heading never purges the queue, forces play-next, or interrupts audio.
+`heading_pending_announcement` is armed for hunt start, first found record, and
+occasional crate-digging beats. The next ordinary host break consumes that
+dedicated slot at prompt-build into a Record Hunt block; it does not reuse or
+overwrite `ha_pending_directive`, and it waits behind listener requests, HA
+directives, chaos interrupts, release beats, festival beats, and new-listener
+moments. Because the line asserts crate-digging momentum, not exact playlist state,
+it is intentionally allowed to air even if Back to auto or another heading lands
+while the banter is rendering. Consuming the notice persists the relevant narration
+flag/counter best-effort so restarts do not redundantly re-notice. The music turn
+always remains best-effort and never blocks or delays audio.
 
 ## Segment production
 

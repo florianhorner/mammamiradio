@@ -215,6 +215,11 @@ class Heading:
     selection_budget: int = 0
     selection_spent: int = 0
     targets: list[dict[str, str]] = field(default_factory=list)
+    phase: str = "hunting"
+    hunt_started_announced: bool = False
+    first_found_at: float = 0.0
+    last_narrated_at: float = 0.0
+    narration_count: int = 0
 
 
 @dataclass
@@ -502,6 +507,7 @@ class StationState:
     heading_revision: int = 0
     heading_persist_callback: Callable[[Heading], None] | None = None
     heading_pending_announcement: str = ""
+    heading_pending_narration_kind: str = ""
     heading_announced_id: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
@@ -901,19 +907,26 @@ class StationState:
         self.heading = None
         self.heading_revision += 1
         self.heading_pending_announcement = ""
+        self.heading_pending_narration_kind = ""
         self.heading_announced_id = ""
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading
-        if (
-            heading is None
-            or not heading.id
-            or self.heading_announced_id == heading.id
-            or self.heading_pending_announcement
-        ):
+        if heading is None or not heading.id or self.heading_pending_announcement:
             return
         if track.heading_id == heading.id:
+            if heading.phase == "hunting":
+                heading.phase = "steering"
+            if heading.first_found_at <= 0:
+                heading.first_found_at = time.time()
+            if heading.announced or self.heading_announced_id == heading.id:
+                now = time.time()
+                if heading.narration_count > 0 and now - heading.last_narrated_at >= 1800:
+                    self.heading_pending_announcement = heading.label
+                    self.heading_pending_narration_kind = "crate_beat"
+                return
             self.heading_pending_announcement = heading.label
+            self.heading_pending_narration_kind = "first_found"
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""
@@ -1114,14 +1127,9 @@ class StationState:
 
             candidates = [max(pool, key=_staleness)]
 
-        heading = self.heading
-        if heading is not None and heading.id and heading.selection_budget > heading.selection_spent:
-            heading_candidates = [t for t in candidates if t.heading_id == heading.id]
-            if heading_candidates:
-                candidates = heading_candidates
-
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         weights: list[float] = []
+        heading = self.heading
         for track in candidates:
             w = 1.0
 
@@ -1143,6 +1151,11 @@ class StationState:
             if track.popularity:
                 w *= 0.8 + 0.2 * (track.popularity / 100.0)
 
+            if heading is not None and heading.id and track.heading_id == heading.id:
+                # Record Hunt is steering, not queue control: matching records get a
+                # durable lift, but cooldowns, bans, pinned tracks, and diversity still win.
+                w *= 4.0
+
             weights.append(max(w, 0.01))  # Floor to avoid zero weights
 
         selected = random.choices(candidates, weights=weights, k=1)[0]
@@ -1154,12 +1167,7 @@ class StationState:
         self.current_track = track
         heading = self.heading
         spent_heading: Heading | None = None
-        if (
-            heading is not None
-            and heading.id
-            and track.heading_id == heading.id
-            and heading.selection_budget > heading.selection_spent
-        ):
+        if heading is not None and heading.id and track.heading_id == heading.id:
             heading.selection_spent += 1
             spent_heading = heading
         if spent_heading is not None and self.heading_persist_callback is not None:

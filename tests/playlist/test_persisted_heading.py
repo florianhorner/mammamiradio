@@ -57,6 +57,11 @@ def test_persisted_heading_round_trip_direction_targets(tmp_path):
         selection_budget=5,
         selection_spent=2,
         targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+        phase="steering",
+        hunt_started_announced=True,
+        first_found_at=124.0,
+        last_narrated_at=125.0,
+        narration_count=2,
     )
 
     write_persisted_heading(tmp_path, heading)
@@ -67,6 +72,31 @@ def test_persisted_heading_round_trip_direction_targets(tmp_path):
     assert restored.selection_budget == 5
     assert restored.selection_spent == 2
     assert restored.targets == [{"artist": "Britney Spears", "title": "Toxic"}]
+    assert restored.phase == "steering"
+    assert restored.hunt_started_announced is True
+    assert restored.first_found_at == 124.0
+    assert restored.last_narrated_at == 125.0
+    assert restored.narration_count == 2
+
+
+def test_persisted_heading_defaults_legacy_direction_to_hunting(tmp_path):
+    (tmp_path / "heading.json").write_text(
+        """{
+  "id": "h-direction",
+  "seed": "direction://2000s",
+  "label": "2000s",
+  "set_at": 1.0,
+  "set_by": "operator",
+  "selection_budget": 0,
+  "selection_spent": 0,
+  "targets": [{"artist": "Britney Spears", "title": "Toxic"}]
+}"""
+    )
+
+    restored = read_persisted_heading(tmp_path)
+
+    assert restored is not None
+    assert restored.phase == "hunting"
 
 
 def test_persisted_heading_missing_returns_none(tmp_path):
