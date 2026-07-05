@@ -442,7 +442,7 @@ Instruction-like patterns in persona entries are filtered before storage (matchi
 - **Skip-bit detection**: a track skipped 2+ times gets a skip-bit cue. When the listener skips a known skip-bit track, the hosts can react ("caught you again").
 - **LLM reaction cues**: after a generated banter segment airs cleanly, `hosts/memory_extractor.py` can extract one free-text reaction cue for the pinned current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
 
-Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from live playback state is pinned in segment metadata and used to key cues after extraction rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
+Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from the producer-side queued music history is pinned in segment metadata and used to key cues after extraction rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
 
 Cue text is sanitized via `_sanitize_prompt_data` on the read path before injection, closing a cross-session prompt injection vector.
 

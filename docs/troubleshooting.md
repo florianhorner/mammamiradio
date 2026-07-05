@@ -105,8 +105,10 @@ check the post-air extractor path separately:
   metadata and airs cleanly, extraction is attempted automatically. Leave HA
   context disabled to keep house state out of the extractor prompt; remove
   script-provider credentials to prevent durable AI memory extraction entirely.
-- Persona writes require `state.persona_store`; song-cue writes also require a
-  pinned `youtube_id`. Missing either input is safe, but no durable row is added.
+- Persona writes require `state.persona_store`; if the store is absent,
+  extraction skips before the LLM call. Song-cue writes separately require a
+  pinned `youtube_id`; when it is missing, persona updates may still write but
+  no song-cue row is added.
 
 ## Host voice sounds different than expected
 
