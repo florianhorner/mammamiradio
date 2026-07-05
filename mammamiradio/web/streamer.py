@@ -1247,18 +1247,37 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     return None
 
 
+_INTERNAL_SEGMENT_METADATA_KEYS = frozenset({"memory_extraction"})
+
+
+def _public_segment_metadata(metadata: object) -> dict:
+    """Copy segment metadata for public/shared status payloads."""
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: copy.deepcopy(value) for key, value in metadata.items() if key not in _INTERNAL_SEGMENT_METADATA_KEYS}
+
+
+def _public_now_streaming_payload(now_streaming: dict | None) -> dict:
+    if not now_streaming:
+        return {}
+    payload = copy.deepcopy(now_streaming)
+    payload["metadata"] = _public_segment_metadata(payload.get("metadata"))
+    return payload
+
+
 def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
     duration_sec = _duration_sec_from_payload(now_streaming)
+    public_now_streaming = _public_now_streaming_payload(now_streaming)
     if not now_streaming:
         return {
-            "now_streaming": now_streaming,
+            "now_streaming": public_now_streaming,
             "current_progress_sec": None,
             "current_duration_sec": None,
         }
     started = now_streaming.get("started")
     progress_sec = max(0.0, now_ts - started) if isinstance(started, int | float) and started > 0 else None
     return {
-        "now_streaming": now_streaming,
+        "now_streaming": public_now_streaming,
         "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
         "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
     }
@@ -1269,7 +1288,7 @@ def _serialize_stream_log_entry(entry) -> dict:
         "type": entry.type,
         "label": entry.label,
         "timestamp": entry.timestamp,
-        "metadata": entry.metadata,
+        "metadata": _public_segment_metadata(entry.metadata),
     }
     duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
     if duration_sec <= 0:
@@ -1618,6 +1637,7 @@ async def run_playback_loop(app) -> None:
             send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
+            send_completed_cleanly = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -1655,6 +1675,8 @@ async def run_playback_loop(app) -> None:
                         ahead = expected - elapsed
                         if ahead > 0.005:
                             await asyncio.sleep(ahead)
+                    else:
+                        send_completed_cleanly = True
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
@@ -1698,6 +1720,15 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            _schedule_banter_memory_extraction_after_send(
+                app.state,
+                config,
+                state,
+                segment,
+                bytes_sent=bytes_sent,
+                send_completed_cleanly=send_completed_cleanly,
+                listeners=start_listeners,
+            )
             _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
             # and escape the finally, killing the playback loop after we already
@@ -1705,6 +1736,34 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
+
+
+def _schedule_banter_memory_extraction_after_send(
+    app_state: Any,
+    config: Any,
+    state: StationState,
+    segment: Segment,
+    *,
+    bytes_sent: int,
+    send_completed_cleanly: bool,
+    listeners: int,
+) -> None:
+    """Start post-air memory extraction only after the send loop reaches EOF."""
+    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0 or listeners <= 0:
+        return
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if not metadata.get("memory_extraction"):
+        return
+    try:
+        from mammamiradio.hosts.memory_extractor import schedule_banter_memory_extraction
+
+        task = schedule_banter_memory_extraction(config=config, state=state, metadata=metadata)
+        if task is not None:
+            # This is intentionally tied to audio send completion, not queueing:
+            # queued/purged/skipped banter never becomes durable listener memory.
+            _register_background_task(app_state, task)
+    except Exception:
+        logger.warning("memory_extract: scheduling failed", exc_info=True)
 
 
 def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
@@ -2698,9 +2757,10 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
     names to the stale submodules.
-    NOT reloaded: producer, streamer, persona (hold live task/instance state),
-    auth (reloading would fork require_admin_access from the identity the
-    router captured at import — auth edits would silently not apply).
+    NOT reloaded: producer, streamer, persona, memory_extractor (hold live
+    task/instance state), auth (reloading would fork require_admin_access from
+    the identity the router captured at import — auth edits would silently not
+    apply).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
@@ -3149,8 +3209,21 @@ _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 # (Edge-tts is free and never counted), so this never bills a silent fallback.
 TTS_BLENDED_RATE = 0.00002
 
-COST_BREAKDOWN_CATEGORY_ORDER = ("script_banter", "script_transition", "script_ads", "script_home_mood", "tts")
-LLM_COST_BREAKDOWN_CATEGORIES = ("script_banter", "script_transition", "script_ads", "script_home_mood")
+COST_BREAKDOWN_CATEGORY_ORDER = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+    "script_memory",
+    "tts",
+)
+LLM_COST_BREAKDOWN_CATEGORIES = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+    "script_memory",
+)
 
 
 def _model_token_cost(model_id: str, toks: dict) -> tuple[float, bool]:

@@ -178,6 +178,56 @@ async def test_stream_log_serializes_real_duration_when_available():
 
 
 @pytest.mark.asyncio
+async def test_status_payloads_redact_internal_memory_extraction_metadata():
+    app = _make_test_app()
+    state = app.state.station_state
+    private_memory = {
+        "script_lines": [{"host": "Marco", "text": "Aired text"}],
+        "persona_context": {"Marco": "private host note"},
+        "interaction_context": {"home_state": "private room context"},
+    }
+    metadata = {
+        "title": "Aired banter",
+        "artist": "Marco",
+        "album_art": "https://example.test/art.jpg",
+        "host": "Marco",
+        "source_kind": "generated_banter",
+        "duration_ms": 5000,
+        "memory_extraction": private_memory,
+    }
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=Path("/tmp/banter.mp3"),
+            duration_sec=5.0,
+            metadata=metadata,
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    for body in (public, admin):
+        now_metadata = body["now_streaming"]["metadata"]
+        assert "memory_extraction" not in now_metadata
+        assert now_metadata["title"] == "Aired banter"
+        assert now_metadata["artist"] == "Marco"
+        assert now_metadata["album_art"] == "https://example.test/art.jpg"
+        assert now_metadata["host"] == "Marco"
+        assert now_metadata["source_kind"] == "generated_banter"
+
+        log_metadata = body["stream_log"][-1]["metadata"]
+        assert "memory_extraction" not in log_metadata
+        assert log_metadata["title"] == "Aired banter"
+        assert log_metadata["duration_ms"] == 5000
+
+    assert state.now_streaming["metadata"]["memory_extraction"] is private_memory
+    assert state.stream_log[-1].metadata["memory_extraction"] is private_memory
+
+
+@pytest.mark.asyncio
 async def test_public_status_strict_subset_of_admin():
     """Every field in /public-status must also exist in /status.
 

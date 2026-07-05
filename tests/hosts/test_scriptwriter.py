@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
-from mammamiradio.core.config import load_config, resolve_model
+from mammamiradio.core.config import DEFAULT_ROLE, load_config, resolve_model
 from mammamiradio.core.models import (
+    LLM_COST_CATEGORIES,
     ChaosSubtype,
     Heading,
     HostPersonality,
@@ -18,10 +20,12 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
+from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
     _LOCAL_BALLOON_GUEST_HOST,
     CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
+    _banter_commit,
     _banter_exchange_count,
     _build_system_prompt,
     _chaos_prompt_block,
@@ -406,6 +410,15 @@ def test_banter_exchange_count_short_by_default_long_when_warranted():
     # The default must stay the shorter count — guards against bumping the
     # everyday banter back to the long form (the "always 90 seconds" complaint).
     assert int(short.split("-")[1]) < int(long.split("-")[1])
+
+
+def test_banter_commit_does_not_collapse_plain_memory_extraction():
+    memory = MemoryExtractionCommit(script_lines=[{"host": "Marco", "text": "heard"}])
+
+    commit = _banter_commit(None, None, memory_extraction=memory)
+
+    assert commit is not None
+    assert commit.memory_extraction is memory
 
 
 def _banter_user_prompt(mock_cls) -> str:
@@ -1715,9 +1728,9 @@ def test_attempt_timeout_scales_with_budget():
 
 def test_banter_max_tokens_floor_guard():
     """600 tokens truncated banter pre-v2.8.0; 1200 truncated it again 2026-07
-    once the output contract grew (warranted 4-6 exchanges + persona_updates +
-    song_cues). A future 'optimization' must not silently shrink the floor —
-    this guard pins it; the reliability guards are the escalation-retry tests."""
+    once the output contract grew. A future 'optimization' must not silently
+    shrink the floor — this guard pins it; the reliability guards are the
+    escalation-retry tests."""
     from mammamiradio.hosts.scriptwriter import _BANTER_MAX_TOKENS
 
     assert _BANTER_MAX_TOKENS >= 2000
@@ -2246,6 +2259,7 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
         ("news_flash", "script_banter"),
         ("transition", "script_transition"),
         ("ad", "script_ads"),
+        (MEMORY_EXTRACT_CALLER, "script_memory"),
     ],
 )
 async def test_generate_json_response_records_cost_category_by_caller(config, state, caller, category):
@@ -2267,6 +2281,25 @@ async def test_generate_json_response_records_cost_category_by_caller(config, st
     assert state.api_calls_by_category[category] == 1
     assert state.api_tokens_by_category_model[category][expected_model]["input"] == 11
     assert state.api_tokens_by_category_model[category][expected_model]["output"] == 7
+
+
+def test_script_cost_callers_have_valid_categories_and_model_routes(config):
+    mapping = scriptwriter_module._SCRIPT_COST_CATEGORY_BY_CALLER
+
+    assert set(mapping.values()) <= set(LLM_COST_CATEGORIES)
+    assert config.models.routing[MEMORY_EXTRACT_CALLER] == "fast"
+    assert config.models.routing[MEMORY_EXTRACT_CALLER] == config.models.routing["transition"]
+    assert "direction" not in config.models.routing  # intentional DEFAULT_ROLE fallback
+
+    for caller in mapping:
+        role = config.models.routing.get(caller, DEFAULT_ROLE)
+        for profile in config.models.profiles:
+            for provider, catalog in config.models.catalog.items():
+                model = resolve_model(config.models, caller, provider, profile=profile)
+                assert model
+                assert model in catalog.values()
+                if role == "fast":
+                    assert model == resolve_model(config.models, "transition", provider, profile=profile)
 
 
 @pytest.mark.asyncio
@@ -2682,7 +2715,7 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result, _ = await write_banter(state, config)
+        result, commit = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Bentornato!"
@@ -2693,9 +2726,15 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
     assert "listener_memory" in prompt_text
     assert "jazz notturno" in prompt_text
 
-    # Verify persona_updates were persisted
+    # Generation no longer persists persona memory. It only carries a post-air
+    # extraction commit so queued-but-never-aired banter cannot create memories.
     persona = await store.get_persona()
-    assert "ascolta sempre di sera" in persona.theories
+    assert "ascolta sempre di sera" not in persona.theories
+    assert getattr(commit, "memory_extraction", None) is not None
+    memory = commit.memory_extraction
+    assert memory.persona_context
+    assert memory.source_session == 1
+    assert memory.script_lines == [{"host": host_name, "text": "Bentornato!"}]
 
 
 @pytest.mark.asyncio
@@ -2750,7 +2789,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
             ],
         ),
     ):
-        result, _ = await write_banter(state, config, is_first_listener=True)
+        result, commit = await write_banter(state, config, is_first_listener=True)
 
     assert len(result) == 1
     prompt = captured["prompt"]
@@ -2765,9 +2804,14 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert "<arc_phase>" in prompt
     assert "<listener_memory>" in prompt
     assert "FIRST listener" in prompt
-    assert '"persona_updates"' in prompt
-    assert '"song_cues"' in prompt
+    assert '"persona_updates"' not in prompt
+    assert '"song_cues"' not in prompt
     assert state.ha_pending_directive == ""
+    memory = commit.memory_extraction
+    assert memory is not None
+    assert memory.youtube_id == "yt123"
+    assert "Florian" in memory.interaction_context["reactive_directive"]
+    assert "TRACK MEMORY for Rule Artist" in memory.interaction_context["track_memory"]
 
 
 @pytest.mark.asyncio
@@ -3238,15 +3282,16 @@ async def test_write_banter_survives_persona_get_failure(config, state, tmp_path
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        result, _ = await write_banter(state, config)
+        result, commit = await write_banter(state, config)
 
     assert len(result) == 1
     assert result[0][1] == "Funziona comunque!"
+    assert commit is None
 
 
 @pytest.mark.asyncio
-async def test_write_banter_survives_persona_update_failure(config, state, tmp_path):
-    """Banter returns successfully even when update_persona throws."""
+async def test_write_banter_does_not_apply_persona_updates_during_generation(config, state, tmp_path):
+    """Banter generation carries memory metadata but never writes persona state inline."""
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -3277,6 +3322,7 @@ async def test_write_banter_survives_persona_update_failure(config, state, tmp_p
     # Banter still returned despite update failure
     assert len(result) == 1
     assert result[0][1] == "Banter ok!"
+    store.update_persona.assert_not_awaited()
 
 
 # --- write_ad tests ---
@@ -4382,8 +4428,8 @@ async def test_banter_security_boundary_preserved(config, state):
 
 
 @pytest.mark.asyncio
-async def test_write_banter_song_cues_schema_omitted_when_no_yt_id(config, state, tmp_path):
-    """When a track has no youtube_id, song_cues is omitted from the persona_update schema."""
+async def test_write_banter_memory_commit_uses_empty_youtube_id_when_no_track_id(config, state, tmp_path):
+    """When a track has no youtube_id, the deferred memory commit cannot file song cues."""
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -4407,12 +4453,12 @@ async def test_write_banter_song_cues_schema_omitted_when_no_yt_id(config, state
         }
 
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate):
-        await write_banter(state, config)
+        _, commit = await write_banter(state, config)
 
     prompt = captured["prompt"]
-    assert '"persona_updates"' in prompt
-    # No youtube_id → song_cues field must not appear
+    assert '"persona_updates"' not in prompt
     assert '"song_cues"' not in prompt
+    assert commit.memory_extraction.youtube_id == ""
 
 
 @pytest.mark.asyncio
@@ -4536,6 +4582,55 @@ async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, sta
     )
     assert state.anthropic_auth_failures == 1
     assert all(not isinstance(r, Exception) for r in results), f"unexpected exceptions: {results}"
+
+
+@pytest.mark.asyncio
+async def test_memory_extract_shares_foreground_anthropic_auth_flood_guard(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    class _AuthError(Exception):
+        pass
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_AuthError("invalid x-api-key"))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        results = await asyncio.gather(
+            _generate_json_response(
+                prompt="foreground",
+                config=config,
+                state=state,
+                model="claude-test",
+                max_tokens=100,
+                caller="banter",
+            ),
+            _generate_json_response(
+                prompt="memory",
+                config=config,
+                state=state,
+                model="claude-test",
+                max_tokens=100,
+                caller=MEMORY_EXTRACT_CALLER,
+            ),
+            return_exceptions=True,
+        )
+
+    assert mock_client.messages.create.await_count == 1, (
+        "memory_extract must share the foreground Anthropic attempt lock so one "
+        "bad key trips the circuit before the sibling request reaches Anthropic"
+    )
+    assert state.anthropic_disabled_until > 0
+    assert state.anthropic_auth_failures == 1
+    assert all(result == {"ok": "fallback"} for result in results)
 
 
 @pytest.mark.asyncio

@@ -138,6 +138,7 @@ music turn always remains best-effort and never blocks or delays audio.
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
   - preserves running jokes in `StationState`
+  - snapshots the generated evidence needed for listener/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
@@ -276,6 +277,11 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- BANTER memory extraction is deliberately **not** a queue-time commit. The
+  scriptwriter snapshots context, the producer rewrites that snapshot with the
+  final aired lines including the transition, and the streamer schedules
+  `memory_extractor` only after the send loop reaches EOF with bytes sent. Purged,
+  skipped, stale, failed, or partial banter never writes persona or song-cue memory.
 
 ### Dynamic LLM routing (which model voices each task)
 
@@ -286,6 +292,7 @@ Script generation never names a model in code. Each call site asks for a model b
 task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
   "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
   "transition"              "fast"                                          "haiku"     "claude-haiku-..."
+  "memory_extract"          "fast"                                          "haiku"     "claude-haiku-..."
 ```
 
 - The `[models]` block in `radio.toml` is the only place model IDs live: a
@@ -298,7 +305,7 @@ task (caller)  ──routing──▶  role  ──active profile──▶  cata
   `DEFAULT_MODELS` cold-start safety net.
 - A missing or malformed `[models]` block **degrades** to `DEFAULT_MODELS` so the
   station always boots and airs; it never fails boot.
-- `fast` (transitions) is pinned to the lowest-latency model in every profile.
+- `fast` (transitions and post-air memory extraction) is pinned to the lowest-latency model in every profile.
 - The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
   falls back to the fast OpenAI model and banter to the creative one.
 - The quality profile hot-swaps live via `POST /api/quality` (admin) with no restart
@@ -309,7 +316,7 @@ Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings a
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
-**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
+**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
 
 **Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on real activity (excluding numeric drift, `person.*`, device-availability flaps, and passive `weather`/`sun` changes), so neither radio-cadence polling nor passive environmental events can keep a quiet evening alive forever — or at the 4am day rollover.
 
@@ -423,7 +430,7 @@ A singleton OpenAI client is reused across OpenAI TTS calls for connection pool 
 - **Running jokes**: cross-session callbacks that build familiarity
 - **Callbacks used**: structured format `{"song": "...", "context": "..."}` recording which songs were referenced and why
 
-During banter generation, the persona is loaded into the prompt via `<listener_memory>`. Claude's response includes `persona_updates` (new theories, jokes, callbacks) which are persisted back to SQLite. First-time listeners get curiosity and intrigue. Returning listeners get inside jokes, personal references, and phase-aware banter depth.
+During banter generation, the persona is loaded into the prompt via `<listener_memory>`, but the hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has listener memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials. First-time listeners get curiosity and intrigue; returning listeners get inside jokes, personal references, and phase-aware banter depth only from content that actually aired.
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
@@ -433,9 +440,9 @@ Instruction-like patterns in persona entries are filtered before storage (matchi
 
 - **Anthem detection**: a track played 3+ times and never skipped becomes an anthem. The cue is stored with confidence "anthem".
 - **Skip-bit detection**: a track skipped 2+ times gets a skip-bit cue. When the listener skips a known skip-bit track, the hosts can react ("caught you again").
-- **LLM reaction cues**: during banter generation Claude can generate a free-text reaction cue for the current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
+- **LLM reaction cues**: after a generated banter segment airs cleanly, `hosts/memory_extractor.py` can extract one free-text reaction cue for the pinned current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
 
-Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from live playback state is used to key cues rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
+Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from the producer-side queued music history is pinned in segment metadata and used to key cues after extraction rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
 
 Cue text is sanitized via `_sanitize_prompt_data` on the read path before injection, closing a cross-session prompt injection vector.
 
@@ -534,7 +541,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -580,7 +587,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
-| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
+| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
 ### Auth rules
 
@@ -627,7 +634,8 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
 | `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
-| `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, LLM reaction cues |
+| `mammamiradio/hosts/memory_extractor.py` | Post-air banter memory extraction for persona updates and LLM reaction cues |
+| `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, stored reaction cues |
 | `mammamiradio/playlist/track_rationale.py` | "Why this track?" rationale generation for listener UI |
 | `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |

@@ -179,6 +179,7 @@ news_flash = "creative"
 ad         = "creative"
 transition = "fast"
 home_mood  = "fast"       # background HA scene namer (experimental, off by default)
+memory_extract = "fast"   # post-air banter memory extractor
 
 [models.profiles.premium]    # role → catalog key, per provider
 anthropic = { creative = "opus", fast = "haiku" }

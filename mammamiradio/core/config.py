@@ -184,6 +184,7 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "ad": "creative",
     "transition": "fast",
     "home_mood": "fast",
+    "memory_extract": "fast",
 }
 _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "premium": {
