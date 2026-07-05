@@ -875,7 +875,7 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
         ("chaos", "CHAOS_"),
         ("ha_directive", "HIGH PRIORITY — HOME EVENT DIRECTIVE"),
         ("listener_request", "LISTENER REQUEST"),
-        ("course_change", "COURSE CHANGE"),
+        ("course_change", "RECORD HUNT"),
         ("release_beat", "<release_beat>"),
         ("new_listener", "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!"),
     ],
@@ -890,6 +890,7 @@ async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, 
     elif blocker == "listener_request":
         state.pending_requests.append({"name": "Luca", "message": "saluti", "type": "message"})
     elif blocker == "course_change":
+        config.party_mode = None
         state.heading = Heading("h-test", "classic://italian/90s", "Anni '90", 1.0, "operator")
         state.heading_pending_announcement = "Anni '90"
     elif blocker == "release_beat":
@@ -4893,10 +4894,11 @@ async def test_ad_prompt_carries_mode_language_rule(config, state, super_italian
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("super_italian", "expected", "forbidden"), _LANG_MODE_CASES)
-async def test_course_change_block_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
-    """The heading-announcement notice inherits the shared mode rule (it used to
+async def test_record_hunt_block_carries_mode_language_rule(config, state, super_italian, expected, forbidden):
+    """The record-hunt notice inherits the shared mode rule (it used to
     carry its own hand-rolled language line)."""
     config.super_italian_mode = super_italian
+    config.party_mode = None
     host_name = config.hosts[0].name
     state.heading = Heading(
         id="heading-80s",
@@ -4917,6 +4919,64 @@ async def test_course_change_block_carries_mode_language_rule(config, state, sup
         await write_banter(state, config)
 
     prompt = mock_generate.await_args.kwargs["prompt"]
-    assert "COURSE CHANGE:" in prompt
+    assert "RECORD HUNT:" in prompt
+    assert "digging through LP/CD crates" in prompt
     assert expected in prompt
     assert forbidden not in prompt
+
+
+@pytest.mark.asyncio
+async def test_record_hunt_coexists_with_persistent_festival_mode(config, state):
+    host_name = config.hosts[0].name
+    config.party_mode = "festival"
+    state.heading = Heading(
+        id="heading-80s",
+        seed="classic://italian/80s",
+        label="Anni '80",
+        set_at=1.0,
+        set_by="operator",
+    )
+    state.heading_pending_announcement = "Anni '80"
+    state.heading_pending_narration_kind = "first_found"
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+    ) as mock_generate:
+        await write_banter(state, config)
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "FESTIVAL MODE" in prompt
+    assert "RECORD HUNT:" in prompt
+    assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
+
+
+@pytest.mark.asyncio
+async def test_record_hunt_waits_behind_listener_request(config, state):
+    host_name = config.hosts[0].name
+    config.party_mode = None
+    state.heading = Heading(
+        id="heading-80s",
+        seed="classic://italian/80s",
+        label="Anni '80",
+        set_at=1.0,
+        set_by="operator",
+    )
+    state.heading_pending_announcement = "Anni '80"
+    state.heading_pending_narration_kind = "hunt_start"
+    state.pending_requests.append({"name": "Luca", "message": "saluti", "type": "message"})
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+    ) as mock_generate:
+        await write_banter(state, config)
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "LISTENER REQUEST" in prompt
+    assert "RECORD HUNT:" not in prompt
+    assert state.heading_pending_announcement == "Anni '80"
+    assert state.heading_pending_narration_kind == "hunt_start"

@@ -405,7 +405,13 @@ async def startup():
                         persisted_heading.selection_budget = _heading_selection_budget(
                             restored_count or len(pending_direction_targets)
                         )
-                    tracks = blended_heading_tracks[:5] + tracks + blended_heading_tracks[5:]
+                    if restored_count:
+                        persisted_heading.phase = "steering"
+                        if persisted_heading.first_found_at <= 0:
+                            persisted_heading.first_found_at = time.time()
+                    else:
+                        persisted_heading.phase = "hunting"
+                    tracks = tracks + blended_heading_tracks
                     logger.info(
                         "Restored heading %s with %d fetched track(s), %d blended, %d retagged",
                         persisted_heading.label,

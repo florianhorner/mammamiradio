@@ -81,6 +81,34 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
+def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "updateHeadingBanner")
+    style = re.search(r"\.course-banner\s*\{([^}]*)\}", html, re.DOTALL)
+
+    assert style is not None
+    assert "min-width: 0" in style.group(1)
+    assert "overflow-wrap: break-word" in style.group(1)
+    assert "Record Hunt: <b>Auto rotation</b>" in html
+    assert "Record Hunt:" in block
+    assert "hunting records for" in block
+    assert "is shaping the next stretch" in block
+    assert "played through. Back on auto." in block
+    assert "Course:" not in block
+
+
+def test_failed_direction_refreshes_pending_record_hunt_banner() -> None:
+    block = _function_block(_read_admin_html(), "setDirectionText")
+
+    assert (
+        "if(!r.ok){\n"
+        "      toast(r.message||wayOut('shape that set'));\n"
+        "      await refreshFast();\n"
+        "      return;\n"
+        "    }"
+    ) in block
+
+
 def test_pipeline_status_uses_canonical_status_chips() -> None:
     block = _function_block(_read_admin_html(), "updatePipelineStatus")
 

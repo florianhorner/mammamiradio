@@ -79,10 +79,14 @@ async def test_heading_set_adds_tags_and_persists(tmp_path):
     assert body["added"] == 2
     assert state.playlist_revision == start_revision + 1
     assert state.heading is not None
-    assert {track.heading_id for track in state.playlist[:2]} == {state.heading.id}
+    assert state.playlist[0].title == "Base"
+    assert {track.heading_id for track in state.playlist if track.title in {"Blue Jeans", "Notte"}} == {
+        state.heading.id
+    }
     assert read_persisted_heading(tmp_path) == state.heading
     assert status.json()["heading"]["active"] is True
     assert status.json()["heading"]["label"] == "Anni '80"
+    assert status.json()["heading"]["phase"] == "steering"
 
 
 @pytest.mark.asyncio
@@ -159,7 +163,8 @@ async def test_heading_same_era_after_clear_retags_existing_tracks(tmp_path):
     assert state.heading is not None
     assert state.heading.id != old_heading_id
     assert [track.heading_id for track in state.playlist if track.title == "Splendido"] == [state.heading.id]
-    assert state.heading_pending_announcement == ""
+    assert state.heading_pending_announcement == "Anni '80"
+    assert state.heading_pending_narration_kind == "first_found"
     assert read_persisted_heading(tmp_path) == state.heading
 
 
@@ -563,13 +568,18 @@ def test_serialize_heading_resolving_before_tracks_tagged(tmp_path):
     state.heading = heading
 
     data = _serialize_heading(heading, state)
+    assert data["phase"] == "hunting"
     assert data["tagged_count"] == 0
     assert data["resolving"] is True
 
     state.playlist[0].heading_id = heading.id
+    heading.selection_budget = 1
+    heading.selection_spent = 1
     data2 = _serialize_heading(heading, state)
+    assert data2["phase"] == "steering"
     assert data2["tagged_count"] == 1
     assert data2["resolving"] is False
+    assert data2["selection_remaining"] == 0
 
     # No state passed -> no resolving/tagged_count fields (back-compat callers).
     assert "resolving" not in _serialize_heading(heading)
@@ -623,6 +633,56 @@ async def test_direction_all_new_timeout_keeps_course_and_still_downloading(tmp_
 
 
 @pytest.mark.asyncio
+async def test_direction_all_new_timeout_clears_when_background_downloads_all_fail(tmp_path, monkeypatch):
+    """A timed-out all-new hunt must not stay stuck resolving after its batch fails."""
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    expansion = DirectionExpansion(
+        label="Sunday morning Italian",
+        targets=[DirectionTarget("Lucio Battisti", "Il mio canto libero")],
+        source="curated",
+    )
+    new_track = _track("Il mio canto libero", "Lucio Battisti", "yt", youtube_id="btti1234567")
+
+    async def _slow_first_commit(_tasks):
+        await asyncio.sleep(10)
+        return 0, []
+
+    monkeypatch.setattr("mammamiradio.web.streamer.DIRECTION_COMMIT_WAIT_SECONDS", 0.05)
+
+    with (
+        patch("mammamiradio.web.streamer.expand_direction", return_value=expansion),
+        patch(
+            "mammamiradio.web.streamer._resolve_direction_tracks_for_route",
+            new_callable=AsyncMock,
+            return_value=[new_track],
+        ),
+        patch("mammamiradio.web.streamer._await_first_direction_commit", side_effect=_slow_first_commit),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("yt-dlp failed"),
+        ),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/api/direction", json={"text": "sunday morning italian"})
+            tasks = list(getattr(app.state, "background_tasks", set()))
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            status = await client.get("/status")
+
+    body = resp.json()
+    state = app.state.station_state
+    assert body["ok"] is True
+    assert body["still_downloading"] is True
+    assert state.heading is None
+    assert read_persisted_heading(tmp_path) is None
+    assert status.json()["heading"]["active"] is False
+    reasons = [n.get("reason") for n in state.external_add_notices]
+    assert "download_failed" in reasons
+
+
+@pytest.mark.asyncio
 async def test_download_direction_track_grows_budget_and_persists(tmp_path):
     """A landed direction download grows the course's selection budget to cover it
     and re-persists, so the downloaded songs actually get selection bias."""
@@ -650,6 +710,8 @@ async def test_download_direction_track_grows_budget_and_persists(tmp_path):
     assert status == "queued"
     assert track in app.state.station_state.playlist
     assert heading.selection_budget == 1  # grew from 0 to cover the landed track
+    assert heading.phase == "steering"
     restored = read_persisted_heading(tmp_path)
     assert restored is not None
     assert restored.selection_budget == 1
+    assert restored.phase == "steering"

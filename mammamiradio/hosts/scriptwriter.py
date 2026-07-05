@@ -206,15 +206,25 @@ class HeadingAnnouncementCommit:
     """Deferred heading notice update, applied only after banter queues."""
 
     heading: Heading
+    kind: str = "first_found"
 
     def apply(self, state: StationState, config: StationConfig) -> None:
-        state.heading_announced_id = self.heading.id
         if state.heading is not None and state.heading.id == self.heading.id:
-            state.heading.announced = True
+            now = time.time()
+            if self.kind == "hunt_start":
+                state.heading.hunt_started_announced = True
+            elif self.kind == "first_found":
+                state.heading_announced_id = self.heading.id
+                state.heading.announced = True
+                state.heading.phase = "steering"
+                if state.heading.first_found_at <= 0:
+                    state.heading.first_found_at = now
+            state.heading.last_narrated_at = now
+            state.heading.narration_count += 1
             try:
                 write_persisted_heading(config.cache_dir, state.heading)
             except Exception:
-                logger.warning("Failed to persist consumed heading mood notice", exc_info=True)
+                logger.warning("Failed to persist consumed record hunt notice", exc_info=True)
 
 
 @dataclass
@@ -1862,31 +1872,16 @@ Make this the focus of this banter break. It happened just now — react natural
             state.ha_pending_directive = ""
             consumed_pending_directive = True
 
-    # Operator course changes have their own one-shot slot so a music-heading
-    # notice never clobbers a real Home Assistant impossible moment.
+    # Record Hunt narration has its own one-shot slot. It is planned after the
+    # higher-priority prompt opportunities below, so it never clobbers a real
+    # Home Assistant impossible moment, listener request, release beat, or chaos cut.
     course_change_block = ""
     heading_announcement_commit: HeadingAnnouncementCommit | None = None
     raw_heading_announcement = state.heading_pending_announcement
+    raw_heading_narration_kind = state.heading_pending_narration_kind
     raw_heading = state.heading
     raw_heading_announcement_id = raw_heading.id if raw_heading is not None else ""
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
-    if heading_announcement and raw_heading is not None and raw_heading_announcement_id:
-        language_line = language_mode_rule(config.super_italian_mode, config.station.language)
-        course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
-            heading_label=heading_announcement,
-            language_line=language_line,
-        )
-        state.heading_pending_announcement = ""
-        heading_announcement_commit = HeadingAnnouncementCommit(
-            Heading(
-                id=raw_heading.id,
-                seed=raw_heading.seed,
-                label=raw_heading.label,
-                set_at=raw_heading.set_at,
-                set_by=raw_heading.set_by,
-                announced=True,
-            )
-        )
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
@@ -1931,6 +1926,52 @@ beat in the lines you wrote. Otherwise set it false.
 </release_beat>
 """
             release_beat_schema = ', "release_beat_used": false'
+
+    record_hunt_blocked = any(
+        (
+            pending_directive,
+            chaos_subtype is not None,
+            listener_request_block,
+            release_beat_block,
+            new_listener_block,
+        )
+    )
+    if heading_announcement and raw_heading is not None and raw_heading_announcement_id and not record_hunt_blocked:
+        narration_kind = raw_heading_narration_kind if raw_heading_narration_kind else "first_found"
+        if narration_kind not in {"hunt_start", "first_found", "crate_beat"}:
+            narration_kind = "first_found"
+        narration_line = {
+            "hunt_start": "Mention the hunt has begun: they are digging through the right crate now, not promising what lands.",
+            "first_found": "Mention that the first record has turned up and the show can lean into it.",
+            "crate_beat": "Mention the ongoing crate-digging briefly, like a live booth aside.",
+        }[narration_kind]
+        language_line = language_mode_rule(config.super_italian_mode, config.station.language)
+        course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
+            heading_label=heading_announcement,
+            narration_line=narration_line,
+            language_line=language_line,
+        )
+        state.heading_pending_announcement = ""
+        state.heading_pending_narration_kind = ""
+        heading_announcement_commit = HeadingAnnouncementCommit(
+            Heading(
+                id=raw_heading.id,
+                seed=raw_heading.seed,
+                label=raw_heading.label,
+                set_at=raw_heading.set_at,
+                set_by=raw_heading.set_by,
+                announced=raw_heading.announced,
+                selection_budget=raw_heading.selection_budget,
+                selection_spent=raw_heading.selection_spent,
+                targets=list(raw_heading.targets),
+                phase=raw_heading.phase,
+                hunt_started_announced=raw_heading.hunt_started_announced,
+                first_found_at=raw_heading.first_found_at,
+                last_narrated_at=raw_heading.last_narrated_at,
+                narration_count=raw_heading.narration_count,
+            ),
+            kind=narration_kind,
+        )
 
     guest_host_block = ""
     guest_host_invited = False
@@ -2145,6 +2186,11 @@ Return JSON:
             release_beat_commit.abandon(state)
         if consumed_pending_directive and not state.ha_pending_directive:
             state.ha_pending_directive = raw_pending_directive
+        if heading_announcement_commit is not None and raw_heading is not None:
+            current_heading = state.heading
+            if current_heading is not None and current_heading.id == raw_heading.id:
+                state.heading_pending_announcement = raw_heading_announcement
+                state.heading_pending_narration_kind = raw_heading_narration_kind
         # The running-gag callback never reached air (we're falling back to stock
         # copy), so release its cooldown bucket. The producer spends the cooldown
         # only when ha_running_gag_key is still set; clearing it here keeps a failed

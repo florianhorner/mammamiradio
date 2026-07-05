@@ -69,6 +69,8 @@ from mammamiradio.home.ha_context import (
     get_cached_home_context,
     push_state_to_ha,
 )
+from mammamiradio.home.ha_enrichment import HomeEvent
+from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
 from mammamiradio.home.scene_namer import resolve_home_mood
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
@@ -1521,6 +1523,7 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
                 poll_interval=float(config.homeassistant.poll_interval),
                 _cache=ha_cache,
                 cache_dir=config.cache_dir,
+                radio_event_rules=config.radio_events,
             ),
             timeout=budget,
         )
@@ -1531,6 +1534,22 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
         # bypasses it entirely by reusing a context built before this call, so
         # the live mute policy has to be re-applied here explicitly.
         return apply_entity_mute_policy(stale, config.cache_dir)
+
+
+def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatch]) -> list[HomeEvent]:
+    """Apply configured HA radio-event matches to existing producer handoff paths."""
+    gag_events: list[HomeEvent] = []
+    for match in matches:
+        if match.mode == "gag":
+            gag_events.append(match.event)
+            continue
+        if match.mode != "directive" or not match.directive:
+            continue
+        if state.ha_pending_directive:
+            continue
+        state.ha_pending_directive = match.directive
+        commit_radio_event_directive(match)
+    return gag_events
 
 
 def _maybe_arm_first_home_context_moment(
@@ -2059,6 +2078,7 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+            radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,
@@ -2072,7 +2092,7 @@ async def run_producer(
             # the addon's frequent restarts.
             if state.evening_ledger is not None:
                 _now = time.time()
-                state.evening_ledger.observe(ha_cache.events, now=_now)
+                state.evening_ledger.observe([*ha_cache.events, *radio_gag_events], now=_now)
                 if seg_type == SegmentType.BANTER:
                     # Offer (don't spend) — the cooldown is marked in the banter
                     # success callback only if generated banter actually airs, so

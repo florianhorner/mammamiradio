@@ -308,12 +308,8 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
 # message rather than silently starving the station (leadership #1 + #5). A single
 # per-row removal is never rejected — the operator asked for that one song gone.
 MIN_ROTATION_AFTER_BAN = 5
-# How many blended heading tracks get spliced to the front of the queue.
-HEADING_FRONT_INSERT_LIMIT = 5
-# How many upcoming picks a course biases toward its tagged tracks. Kept separate
-# from HEADING_FRONT_INSERT_LIMIT (a different concern) and sized to cover a full
-# text-direction target set (up to MAX_DIRECTION_TARGETS) so a direction that
-# resolves 8-10 songs biases all of them, not just the first 5.
+# Legacy count ceiling for heading status and persisted compatibility. The actual
+# steering bias is now persistent until Back to auto, source replacement, or failure.
 HEADING_SELECTION_BUDGET_LIMIT = 10
 # Wall-clock budget an all-new direction waits for its first track to actually
 # land before it either confirms success or (if every download failed) rolls the
@@ -1275,7 +1271,13 @@ def _serialize_source(source: PlaylistSource | None) -> dict | None:
 
 def _serialize_heading(heading: Heading | None, state: StationState | None = None) -> dict:
     if heading is None:
-        return {"active": False, "id": "", "seed": "", "label": ""}
+        return {"active": False, "id": "", "seed": "", "label": "", "phase": "auto"}
+    tagged = _heading_playlist_track_count(state, heading.id) if state is not None else 0
+    target_count = len(heading.targets) or tagged or max(0, int(heading.selection_budget or 0))
+    phase = heading.phase if heading.phase in {"hunting", "steering", "complete"} else "steering"
+    if state is not None and phase != "complete":
+        phase = "hunting" if tagged == 0 and len(heading.targets) > 0 else "steering"
+    resolving = phase == "hunting"
     data = {
         "active": True,
         "id": heading.id,
@@ -1283,10 +1285,11 @@ def _serialize_heading(heading: Heading | None, state: StationState | None = Non
         "label": heading.label,
         "set_at": heading.set_at,
         "set_by": heading.set_by,
+        "phase": phase,
         "selection_budget": heading.selection_budget,
         "selection_spent": heading.selection_spent,
         "selection_remaining": max(0, heading.selection_budget - heading.selection_spent),
-        "target_count": len(heading.targets),
+        "target_count": target_count,
     }
     # When state is available, report how many rotation tracks actually carry this
     # course yet. A text direction restored at boot (or mid-resolve) has targets
@@ -1294,9 +1297,8 @@ def _serialize_heading(heading: Heading | None, state: StationState | None = Non
     # that as `resolving` so the admin banner can say "finding songs…" instead of
     # claiming the course is already steering (honesty; leadership #5).
     if state is not None:
-        tagged = _heading_playlist_track_count(state, heading.id)
         data["tagged_count"] = tagged
-        data["resolving"] = tagged == 0 and len(heading.targets) > 0
+        data["resolving"] = resolving
     return data
 
 
@@ -4236,8 +4238,16 @@ async def _download_direction_track(
             heading = state.heading
             if heading is not None and heading.id == heading_id:
                 updated_budget = _heading_selection_budget(_heading_playlist_track_count(state, heading_id))
+                dirty = False
                 if updated_budget > heading.selection_budget:
                     heading.selection_budget = updated_budget
+                    dirty = True
+                if heading.phase == "hunting":
+                    heading.phase = "steering"
+                    if heading.first_found_at <= 0:
+                        heading.first_found_at = time.time()
+                    dirty = True
+                if dirty:
                     try:
                         await asyncio.to_thread(write_persisted_heading, app_state.config.cache_dir, heading)
                     except Exception:
@@ -4268,6 +4278,31 @@ async def _await_first_direction_commit(download_tasks: list[asyncio.Task[str]])
             if status == "queued":
                 committed += 1
     return committed, list(pending)
+
+
+async def _clear_empty_heading_after_direction_downloads(
+    download_tasks: list[asyncio.Task[str]],
+    app_state: Any,
+    originating_source_revision: int,
+    heading_id: str,
+) -> None:
+    """Clear an all-new direction if its background batch finishes with no playable tracks."""
+    results = await asyncio.gather(*download_tasks, return_exceptions=True)
+    if any(result == "queued" for result in results):
+        return
+
+    state = app_state.station_state
+    async with app_state.source_switch_lock:
+        if (
+            state.heading is None
+            or state.heading.id != heading_id
+            or state.source_revision != originating_source_revision
+            or _heading_playlist_track_count(state, heading_id) > 0
+        ):
+            return
+        logger.warning("Direction downloads finished with no playable tracks; returning to auto")
+        _clear_active_heading(state)
+        _delete_persisted_heading(app_state.config.cache_dir)
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
@@ -4316,17 +4351,31 @@ def _heading_playlist_track_count(state: StationState, heading_id: str) -> int:
     return sum(1 for track in state.playlist if track.heading_id == heading_id)
 
 
+def _queue_heading_narration(state: StationState, heading: Heading, kind: str) -> None:
+    if not heading.id or state.heading_pending_announcement:
+        return
+    if kind == "hunt_start" and heading.hunt_started_announced:
+        return
+    if kind == "first_found" and heading.announced:
+        return
+    state.heading_pending_announcement = heading.label
+    state.heading_pending_narration_kind = kind
+
+
 def _set_active_heading(state: StationState, heading: Heading) -> None:
     state.heading = heading
     state.heading_revision += 1
     state.heading_pending_announcement = ""
+    state.heading_pending_narration_kind = ""
     state.heading_announced_id = ""
+    _queue_heading_narration(state, heading, "hunt_start" if heading.phase == "hunting" else "first_found")
 
 
 def _clear_active_heading(state: StationState) -> None:
     state.heading = None
     state.heading_revision += 1
     state.heading_pending_announcement = ""
+    state.heading_pending_narration_kind = ""
     state.heading_announced_id = ""
 
 
@@ -4452,6 +4501,8 @@ async def _set_direction_text(request: Request, text: str):
             set_by="operator",
             selection_budget=_heading_selection_budget(len(existing_tracks)),
             targets=expansion.target_dicts,
+            phase="steering" if existing_tracks else "hunting",
+            first_found_at=time.time() if existing_tracks else 0.0,
         )
         for track in existing_tracks:
             if track.heading_id != heading.id:
@@ -4497,6 +4548,15 @@ async def _set_direction_text(request: Request, text: str):
             )
         except TimeoutError:
             still_downloading = True
+            cleanup_task = asyncio.create_task(
+                _clear_empty_heading_after_direction_downloads(
+                    dl_tasks,
+                    request.app.state,
+                    originating_source_revision,
+                    heading.id,
+                )
+            )
+            _register_background_task(request.app.state, cleanup_task)
         else:
             if committed_downloads == 0:
                 # Every download failed — roll the course back to auto rather than
@@ -4593,7 +4653,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 "skipped_existing": 0,
                 "idempotent": True,
                 "message": "Already steering there.",
-                "heading": _serialize_heading(state.heading),
+                "heading": _serialize_heading(state.heading, state),
             }
 
         try:
@@ -4664,6 +4724,8 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 set_at=time.time(),
                 set_by="operator",
                 selection_budget=_heading_selection_budget(len(tracks)),
+                phase="steering",
+                first_found_at=time.time(),
             )
             retagged = 0
             retagged_keys: set[tuple[str, str]] = set()
@@ -4722,7 +4784,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 "skipped_existing": len(tracks),
                 "retagged_existing": retagged,
                 "persisted": persisted,
-                "heading": _serialize_heading(heading),
+                "heading": _serialize_heading(heading, state),
                 "tracks": [],
             }
 
@@ -4733,13 +4795,12 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
             set_at=time.time(),
             set_by="operator",
             selection_budget=_heading_selection_budget(len(new_tracks)),
+            phase="steering",
+            first_found_at=time.time(),
         )
         for track in new_tracks:
             track.heading_id = heading.id
-        front = new_tracks[:HEADING_FRONT_INSERT_LIMIT]
-        rest = new_tracks[HEADING_FRONT_INSERT_LIMIT:]
-        state.playlist[0:0] = front
-        state.playlist.extend(rest)
+        state.playlist.extend(new_tracks)
         state.playlist_revision += 1
         _set_active_heading(state, heading)
 
@@ -4769,7 +4830,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
             "added": len(new_tracks),
             "skipped_existing": len(tracks) - len(new_tracks),
             "persisted": persisted,
-            "heading": _serialize_heading(heading),
+            "heading": _serialize_heading(heading, state),
             "tracks": [_serialize_track(track) for track in new_tracks[:20]],
         }
 
