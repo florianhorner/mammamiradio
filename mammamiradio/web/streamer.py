@@ -1618,6 +1618,7 @@ async def run_playback_loop(app) -> None:
             send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
+            send_completed_cleanly = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -1655,6 +1656,8 @@ async def run_playback_loop(app) -> None:
                         ahead = expected - elapsed
                         if ahead > 0.005:
                             await asyncio.sleep(ahead)
+                    else:
+                        send_completed_cleanly = True
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
@@ -1698,6 +1701,14 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            _schedule_banter_memory_extraction_after_send(
+                app.state,
+                config,
+                state,
+                segment,
+                bytes_sent=bytes_sent,
+                send_completed_cleanly=send_completed_cleanly,
+            )
             _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
             # and escape the finally, killing the playback loop after we already
@@ -1705,6 +1716,33 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
+
+
+def _schedule_banter_memory_extraction_after_send(
+    app_state: Any,
+    config: Any,
+    state: StationState,
+    segment: Segment,
+    *,
+    bytes_sent: int,
+    send_completed_cleanly: bool,
+) -> None:
+    """Start post-air memory extraction only after the send loop reaches EOF."""
+    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0:
+        return
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if not metadata.get("memory_extraction"):
+        return
+    try:
+        from mammamiradio.hosts.memory_extractor import schedule_banter_memory_extraction
+
+        task = schedule_banter_memory_extraction(config=config, state=state, metadata=metadata)
+        if task is not None:
+            # This is intentionally tied to audio send completion, not queueing:
+            # queued/purged/skipped banter never becomes durable listener memory.
+            _register_background_task(app_state, task)
+    except Exception:
+        logger.warning("memory_extract: scheduling failed", exc_info=True)
 
 
 def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
@@ -2694,7 +2732,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
     Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
-    + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
+    + memory_extractor + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
     names to the stale submodules.
@@ -2704,6 +2742,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
+    import mammamiradio.hosts.memory_extractor as _memory_extractor_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
     import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
@@ -2738,11 +2777,13 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
         importlib.reload(_station_name_guard_mod)
+        importlib.reload(_memory_extractor_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
+            "hot-reload: reloaded prompt_world + transitions + fallbacks "
+            "+ station_name_guard + memory_extractor + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2752,6 +2793,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
                 "mammamiradio.hosts.station_name_guard",
+                "mammamiradio.hosts.memory_extractor",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,
@@ -3149,8 +3191,21 @@ _UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
 # (Edge-tts is free and never counted), so this never bills a silent fallback.
 TTS_BLENDED_RATE = 0.00002
 
-COST_BREAKDOWN_CATEGORY_ORDER = ("script_banter", "script_transition", "script_ads", "script_home_mood", "tts")
-LLM_COST_BREAKDOWN_CATEGORIES = ("script_banter", "script_transition", "script_ads", "script_home_mood")
+COST_BREAKDOWN_CATEGORY_ORDER = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+    "script_memory",
+    "tts",
+)
+LLM_COST_BREAKDOWN_CATEGORIES = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+    "script_memory",
+)
 
 
 def _model_token_cost(model_id: str, toks: dict) -> tuple[float, bool]:

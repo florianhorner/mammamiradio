@@ -9,8 +9,10 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import SegmentType, StationState, Track
+from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.scheduling.producer import (
     _abandon_release_beat_commit,
+    _memory_extraction_metadata_from_commit,
     _release_beat_metadata_from_commit,
     _release_campaign_should_force_first_banter,
     run_producer,
@@ -87,6 +89,34 @@ def test_release_beat_metadata_and_abandon_helpers():
 
     _abandon_release_beat_commit(state, commit)
     assert state.release_campaign.abandoned == ["attempt-1"]
+
+
+def test_memory_extraction_metadata_helper_uses_final_aired_script():
+    commit = SimpleNamespace(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            persona_context="existing memory",
+            interaction_context={"reactive_directive": "door opened"},
+            youtube_id="yt-final",
+            source_session=3,
+        )
+    )
+
+    metadata = _memory_extraction_metadata_from_commit(
+        commit,
+        [
+            {"host": "Sofia", "text": "Allora...", "type": "transition"},
+            {"host": "Marco", "text": "final aired line"},
+        ],
+    )
+
+    payload = metadata["memory_extraction"]
+    assert payload["script_lines"] == [
+        {"host": "Sofia", "text": "Allora...", "type": "transition"},
+        {"host": "Marco", "text": "final aired line"},
+    ]
+    assert payload["youtube_id"] == "yt-final"
+    assert payload["source_session"] == 3
 
 
 @pytest.mark.asyncio

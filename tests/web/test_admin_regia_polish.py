@@ -188,6 +188,7 @@ def test_cost_split_survives_in_costs_group_before_segment_counts() -> None:
     assert "Cost split" in html
     assert "Host scripts" in html
     assert "Ad scripts" in html
+    assert "Memory" in html
     assert "Voice synthesis" in html
     assert html.index('id="engineCostSplit"') < html.index('id="engineSegments"') < html.index('id="setupGroup"')
 

@@ -354,6 +354,34 @@ async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+
+    audio_path = tmp_path / "banter.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=audio_path,
+            metadata={
+                "title": "Partial bit",
+                "memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]},
+            },
+        )
+    )
+    app.state.stream_hub.broadcast = AsyncMock(side_effect=[None, RuntimeError("wire broke")])
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        task = asyncio.create_task(run_playback_loop(app))
+        result = await asyncio.gather(task, return_exceptions=True)
+
+    assert isinstance(result[0], RuntimeError)
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
     """F3 (Scenario-3): a queued segment whose file has vanished — evicted by the
     cache LRU or pruned by the restart-handoff spool while still queued — must be
@@ -2740,6 +2768,7 @@ async def test_hot_reload_authenticated_200():
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.station_name_guard",
+        "mammamiradio.hosts.memory_extractor",
         "mammamiradio.hosts.scriptwriter",
     ]
     assert body["stream_status"] == "unaffected"
@@ -2788,8 +2817,8 @@ async def test_hot_reload_prompt_world_stage_failure_returns_500():
 async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
-    The data leaves (prompt_world, transitions, fallbacks) reload cleanly (first three
-    side-effects return), then the scriptwriter facade raises (fourth side-effect).
+    The data leaves and memory extractor reload cleanly, then the scriptwriter
+    facade raises at the final stage.
     Without the sequenced side-effect this stage would go uncovered, since an earlier
     reload would short-circuit the failure.
     """
@@ -2797,7 +2826,7 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=[None, None, None, ImportError("syntax error in scriptwriter.py")],
+        side_effect=[None, None, None, None, None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -2864,6 +2893,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.station_name_guard",
+        "mammamiradio.hosts.memory_extractor",
         "mammamiradio.hosts.scriptwriter",
     ], "data submodules must reload before scriptwriter (leaves-first)"
 
