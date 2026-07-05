@@ -117,6 +117,19 @@ async def test_extract_banter_memory_malformed_payload_does_not_write(config, st
 
 
 @pytest.mark.asyncio
+async def test_extract_banter_memory_non_dict_payload_does_not_write(config, state):
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new=AsyncMock(return_value=["not", "a", "dict"]),
+    ):
+        await extract_banter_memory(_commit(), config=config, state=state)
+
+    persona = await state.persona_store.get_persona()
+    assert persona.theories == []
+    assert await get_cues(config.cache_dir / "mammamiradio.db", "yt_memory_1") == []
+
+
+@pytest.mark.asyncio
 async def test_extract_banter_memory_apply_failure_is_swallowed(config, state):
     state.persona_store.update_persona = AsyncMock(side_effect=RuntimeError("db locked"))
 
@@ -200,6 +213,15 @@ async def test_schedule_banter_memory_extraction_caps_in_flight(config, state):
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         memory_extractor._active_tasks.difference_update(tasks)
+
+
+def test_schedule_banter_memory_extraction_rejects_invalid_metadata(config, state):
+    active_before = set(memory_extractor._active_tasks)
+
+    assert schedule_banter_memory_extraction(config=config, state=state, metadata=None) is None
+    assert schedule_banter_memory_extraction(config=config, state=state, metadata={}) is None
+
+    assert set(memory_extractor._active_tasks) == active_before
 
 
 @pytest.mark.asyncio

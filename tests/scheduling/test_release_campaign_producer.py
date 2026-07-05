@@ -117,6 +117,39 @@ def test_memory_extraction_metadata_helper_uses_final_aired_script():
     ]
     assert payload["youtube_id"] == "yt-final"
     assert payload["source_session"] == 3
+    assert commit.memory_extraction.script_lines == [{"host": "Marco", "text": "draft"}]
+
+
+def test_memory_extraction_metadata_helper_returns_empty_without_commit():
+    assert _memory_extraction_metadata_from_commit(SimpleNamespace(), []) == {}
+    assert _memory_extraction_metadata_from_commit(SimpleNamespace(memory_extraction=None), []) == {}
+
+
+def test_memory_extraction_metadata_helper_returns_empty_when_final_script_has_no_lines():
+    commit = SimpleNamespace(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            youtube_id="yt-final",
+        )
+    )
+
+    assert _memory_extraction_metadata_from_commit(commit, [{}]) == {}
+    assert commit.memory_extraction.script_lines == [{"host": "Marco", "text": "draft"}]
+
+
+def test_memory_extraction_metadata_helper_returns_empty_on_serialization_failure():
+    class _BrokenMemoryCommit(MemoryExtractionCommit):
+        def to_metadata(self):
+            raise RuntimeError("metadata broke")
+
+    commit = SimpleNamespace(
+        memory_extraction=_BrokenMemoryCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            youtube_id="yt-final",
+        )
+    )
+
+    assert _memory_extraction_metadata_from_commit(commit, [{"host": "Marco", "text": "final"}]) == {}
 
 
 @pytest.mark.asyncio

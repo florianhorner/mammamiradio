@@ -233,6 +233,10 @@ async def extract_banter_memory(
         logger.warning("memory_extract: generation failed: %s", exc, exc_info=True)
         return
 
+    if not isinstance(data, dict):
+        logger.warning("memory_extract: ignored non-object LLM payload of type %s", type(data).__name__)
+        return
+
     persona_updates = data.get("persona_updates")
     if not isinstance(persona_updates, dict):
         persona_updates = {}

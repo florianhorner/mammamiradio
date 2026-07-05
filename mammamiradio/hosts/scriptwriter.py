@@ -53,7 +53,7 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
 )
-from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
+from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
     _EXPRESSION_BANK,
     _HOST_FINGERPRINTS,
@@ -136,7 +136,7 @@ _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "news_flash": "script_banter",
     "transition": "script_transition",
     "ad": "script_ads",
-    "memory_extract": "script_memory",
+    MEMORY_EXTRACT_CALLER: "script_memory",
 }
 
 

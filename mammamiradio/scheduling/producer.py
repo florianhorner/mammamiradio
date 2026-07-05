@@ -582,8 +582,11 @@ def _memory_extraction_metadata_from_commit(commit, script_lines: list[dict]) ->
     if memory_commit is None:
         return {}
     try:
-        memory_commit.script_lines = [dict(line) for line in script_lines if isinstance(line, dict)]
-        payload = memory_commit.to_metadata()
+        final_commit = replace(
+            memory_commit,
+            script_lines=[dict(line) for line in script_lines if isinstance(line, dict)],
+        )
+        payload = final_commit.to_metadata()
         if not payload.get("script_lines"):
             return {}
         return {"memory_extraction": payload}

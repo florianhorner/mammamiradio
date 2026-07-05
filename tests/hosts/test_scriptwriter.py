@@ -20,7 +20,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
-from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
+from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
     _LOCAL_BALLOON_GUEST_HOST,
     CHAOS_MODE_BLOCK,
@@ -2259,7 +2259,7 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
         ("news_flash", "script_banter"),
         ("transition", "script_transition"),
         ("ad", "script_ads"),
-        ("memory_extract", "script_memory"),
+        (MEMORY_EXTRACT_CALLER, "script_memory"),
     ],
 )
 async def test_generate_json_response_records_cost_category_by_caller(config, state, caller, category):
@@ -2287,8 +2287,8 @@ def test_script_cost_callers_have_valid_categories_and_model_routes(config):
     mapping = scriptwriter_module._SCRIPT_COST_CATEGORY_BY_CALLER
 
     assert set(mapping.values()) <= set(LLM_COST_CATEGORIES)
-    assert config.models.routing["memory_extract"] == "fast"
-    assert config.models.routing["memory_extract"] == config.models.routing["transition"]
+    assert config.models.routing[MEMORY_EXTRACT_CALLER] == "fast"
+    assert config.models.routing[MEMORY_EXTRACT_CALLER] == config.models.routing["transition"]
     assert "direction" not in config.models.routing  # intentional DEFAULT_ROLE fallback
 
     for caller in mapping:
@@ -4619,7 +4619,7 @@ async def test_memory_extract_shares_foreground_anthropic_auth_flood_guard(confi
                 state=state,
                 model="claude-test",
                 max_tokens=100,
-                caller="memory_extract",
+                caller=MEMORY_EXTRACT_CALLER,
             ),
             return_exceptions=True,
         )
