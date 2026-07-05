@@ -2753,17 +2753,17 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
     Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
-    + memory_extractor + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
+    + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
     names to the stale submodules.
-    NOT reloaded: producer, streamer, persona (hold live task/instance state),
-    auth (reloading would fork require_admin_access from the identity the
-    router captured at import — auth edits would silently not apply).
+    NOT reloaded: producer, streamer, persona, memory_extractor (hold live
+    task/instance state), auth (reloading would fork require_admin_access from
+    the identity the router captured at import — auth edits would silently not
+    apply).
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
-    import mammamiradio.hosts.memory_extractor as _memory_extractor_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
     import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
@@ -2798,13 +2798,12 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
         importlib.reload(_station_name_guard_mod)
-        importlib.reload(_memory_extractor_mod)
         importlib.reload(_scriptwriter_mod)
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
             "hot-reload: reloaded prompt_world + transitions + fallbacks "
-            "+ station_name_guard + memory_extractor + scriptwriter in %dms",
+            "+ station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -2814,7 +2813,6 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
                 "mammamiradio.hosts.station_name_guard",
-                "mammamiradio.hosts.memory_extractor",
                 "mammamiradio.hosts.scriptwriter",
             ],
             "duration_ms": duration_ms,

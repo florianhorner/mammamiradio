@@ -2806,7 +2806,6 @@ async def test_hot_reload_authenticated_200():
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.station_name_guard",
-        "mammamiradio.hosts.memory_extractor",
         "mammamiradio.hosts.scriptwriter",
     ]
     assert body["stream_status"] == "unaffected"
@@ -2855,8 +2854,8 @@ async def test_hot_reload_prompt_world_stage_failure_returns_500():
 async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
-    The data leaves and memory extractor reload cleanly, then the scriptwriter
-    facade raises at the final stage.
+    The data leaves reload cleanly, then the scriptwriter facade raises at the
+    final stage.
     Without the sequenced side-effect this stage would go uncovered, since an earlier
     reload would short-circuit the failure.
     """
@@ -2864,7 +2863,7 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=[None, None, None, None, None, ImportError("syntax error in scriptwriter.py")],
+        side_effect=[None, None, None, None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -2931,7 +2930,6 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
         "mammamiradio.hosts.station_name_guard",
-        "mammamiradio.hosts.memory_extractor",
         "mammamiradio.hosts.scriptwriter",
     ], "data submodules must reload before scriptwriter (leaves-first)"
 
