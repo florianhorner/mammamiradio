@@ -2902,6 +2902,69 @@ async def test_homeassistant_entity_policy_token_auth_public_ip_allows_write(tmp
     assert resp.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_rejects_malformed_entity_id():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "not-a-valid-entity-id", "muted": True},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_rejects_non_boolean_muted():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": "yes"},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_mute_of_entity_not_in_preview_is_404(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    # No ha_scored_entities and no cached context — the entity is not in the
+    # safe preview, so muting an arbitrary id must not be allowed to persist.
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.never_seen", "muted": True},
+        )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_write_failure_returns_500(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.station_state.ha_scored_entities = [
+        {
+            "entity_id": "switch.coffee_machine",
+            "label": "Coffee machine",
+            "area": "Kitchen",
+            "domain": "switch",
+            "state": "on",
+            "summary": "Coffee machine: on",
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.set_entity_muted", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "switch.coffee_machine", "muted": True},
+            )
+    assert resp.status_code == 500
+
+
 # ---------------------------------------------------------------------------
 # Stopped sessions stay stopped until explicit resume
 # ---------------------------------------------------------------------------

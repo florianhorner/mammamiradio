@@ -174,6 +174,23 @@ def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
     assert 'data-tab="setup"' not in html
 
 
+def test_setup_strip_treats_not_configured_home_context_as_done_not_a_todo() -> None:
+    """Home Assistant is optional — a standalone station without it must not
+    show a permanent 'needs attention' banner (regression: it used to render
+    'blocked', an error-styled state that never resolved for non-HA users)."""
+    html = _html()
+    block = html[html.index("function renderGuidedSetupStrip") : html.index("async function setupRecheck")]
+    assert "item.status!=='not_configured'" in block
+    strip_chip_error_rule = next(
+        line for line in html.splitlines() if line.strip().startswith('.setup-strip-chip[data-s="blocked"]')
+    )
+    strip_chip_warn_rule = next(
+        line for line in html.splitlines() if line.strip().startswith('.setup-strip-chip[data-s="missing"]')
+    )
+    assert "not_configured" not in strip_chip_error_rule
+    assert "not_configured" not in strip_chip_warn_rule
+
+
 def test_setup_keys_prioritize_one_ai_host_key_and_collapse_premium_voices() -> None:
     html = _html()
     assert "One key is enough" in html

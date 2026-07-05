@@ -195,6 +195,31 @@ def test_guided_setup_home_context_empty_after_successful_empty_fetch():
     assert guided["home_context"]["status"] == "empty"
 
 
+def test_guided_setup_standalone_station_without_ha_is_not_configured_not_blocked():
+    """Home Assistant is an optional upgrade — a station that never turns it
+    on must not show a permanent 'blocked' (error-styled) home context chip."""
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    state = _real_state()
+
+    guided = build_guided_setup(config, state)
+
+    assert guided["home_context"]["status"] == "not_configured"
+    assert guided["home_context"]["action"] == "none"
+
+
+def test_guided_setup_ha_enabled_without_token_still_blocked():
+    """An operator who DID turn on HA but hasn't finished configuring it
+    keeps the real 'blocked' signal — only the never-configured case changes."""
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.ha_token = ""
+    state = _real_state()
+
+    assert build_guided_setup(config, state)["home_context"]["status"] == "blocked"
+
+
 def test_guided_setup_stream_stopped_and_no_source_states():
     config = load_config()
     state = StationState()

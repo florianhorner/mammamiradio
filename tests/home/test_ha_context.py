@@ -786,6 +786,39 @@ async def test_fetch_calls_api_when_stale():
 
 
 @pytest.mark.asyncio
+async def test_fetch_home_context_exception_fallback_still_honors_mute(tmp_path):
+    """When the live HA call itself throws, the stale-cache fallback must still
+    exclude a muted entity — mute enforcement can't depend on the happy path."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_entity = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_entity, True, label="Coffee machine")
+    stale_cache = HomeContext(
+        raw_states={muted_entity: {"state": "on", "attributes": {}}},
+        summary="- Macchina del caffè: acceso/a",
+        timestamp=time.time() - 120.0,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = RuntimeError("HA unreachable")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=stale_cache,
+            cache_dir=tmp_path,
+        )
+
+    assert muted_entity not in result.raw_states
+    assert "caff" not in result.summary.lower()
+
+
+@pytest.mark.asyncio
 async def test_fetch_home_context_applies_muted_policy_before_context_fanout(tmp_path):
     from mammamiradio.home.entity_policy import set_entity_muted
 

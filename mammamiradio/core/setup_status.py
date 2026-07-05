@@ -127,6 +127,11 @@ def build_guided_setup(
         home_status = "waiting_ai"
     elif home_ready:
         home_status = "ready"
+    elif not config.homeassistant.enabled:
+        # Home Assistant is an optional upgrade, not a required completion
+        # state — a standalone station that never turned it on is done, not
+        # blocked. "blocked" stays reserved for HA enabled-but-not-working.
+        home_status = "not_configured"
     elif has_ha_access and state.ha_context_last_updated:
         home_status = "empty"
     elif has_ha_access:
@@ -161,17 +166,29 @@ def build_guided_setup(
             "status": home_status,
             "label": "Home context",
             "headline": (
-                "Home context is available." if home_status == "ready" else "Review home context after AI is ready."
+                "Home context is available."
+                if home_status == "ready"
+                else "Home Assistant isn't connected."
+                if home_status == "not_configured"
+                else "Review home context after AI is ready."
             ),
             "detail": (
                 "Filtered Home Assistant context can be inspected and muted from the admin panel."
                 if home_status == "ready"
+                else "Optional — connect Home Assistant if you want the hosts to notice your house."
+                if home_status == "not_configured"
                 else (
                     "Supervisor access is automatic in the add-on; "
                     "AI hosts must be ready before home context is useful."
                 )
             ),
-            "action": "review_home_context" if home_status in {"ready", "empty"} else "wait",
+            "action": (
+                "review_home_context"
+                if home_status in {"ready", "empty"}
+                else "none"
+                if home_status == "not_configured"
+                else "wait"
+            ),
             "homeassistant_access": has_ha_access,
             "home_context_ready": home_ready,
         },

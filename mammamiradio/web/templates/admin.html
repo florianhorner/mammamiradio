@@ -3023,7 +3023,7 @@ function openSetupPanel(){
   setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
 }
 function guidedShape(status){
-  if(status==='ready')return SHAPE.ok;
+  if(status==='ready'||status==='not_configured')return status==='ready'?SHAPE.ok:SHAPE.info;
   if(status==='blocked'||status==='rejected'||status==='stopped')return SHAPE.error;
   return SHAPE.warn;
 }
@@ -3037,7 +3037,10 @@ function renderGuidedSetupStrip(setup){
     guided.ai_hosts||{label:'AI hosts',status:'missing'},
     guided.home_context||{label:'Home context',status:'waiting_ai'},
   ];
-  const show=entries.some(item=>item.status!=='ready');
+  // "not_configured" (e.g. Home Assistant never turned on) is a done state,
+  // not a to-do — Home Assistant is an optional upgrade, so a standalone
+  // station must not show a persistent "needs attention" banner forever.
+  const show=entries.some(item=>item.status!=='ready'&&item.status!=='not_configured');
   strip.classList.toggle('show',show);
   chips.innerHTML=entries.map(item=>`<span class="setup-strip-chip" data-s="${esc(item.status||'checking')}"><span aria-hidden="true">${guidedShape(item.status)}</span>${esc(item.label||'Setup')}: ${esc(item.status||'checking')}</span>`).join('');
 }

@@ -1872,6 +1872,82 @@ async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_timer_interrupt_poll_skips_muted_entity(tmp_path):
+    """A muted timer entity must not be polled or reach diff_states — entity_denylist-
+    style filtering has to hold for the reactive-trigger path too, not just fetch_home_context."""
+    from mammamiradio.core.config import TimerInterruptConfig
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_id = "timer.pasta_timer"
+    live_id = "timer.pizza_timer"
+    set_entity_muted(tmp_path, muted_id, True, label="Pasta timer")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 0.01
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(entity_id=muted_id, directive="La pasta scotta!", urgency="pissed", cooldown=60),
+        TimerInterruptConfig(entity_id=live_id, directive="La pizza e pronta!", urgency="pissed", cooldown=60),
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
+    mock_client.aclose = AsyncMock()
+
+    seen = asyncio.Event()
+
+    def _capture_diff_states(old_states, new_states, *_args, **_kwargs):
+        seen.new_states = dict(new_states)
+        seen.set()
+        return deque(maxlen=20)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch("mammamiradio.home.ha_enrichment.diff_states", side_effect=_capture_diff_states),
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(seen.wait(), timeout=2.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    requested_ids = {call.args[0].rsplit("/", 1)[-1] for call in mock_client.get.await_args_list}
+    assert muted_id not in requested_ids
+    assert live_id in requested_ids
+    assert muted_id not in seen.new_states
+
+
+@pytest.mark.asyncio
 async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
     """Timer poll events must use wall-clock time so reactive age checks can see them."""
     from mammamiradio.core.config import TimerInterruptConfig

@@ -42,7 +42,12 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.core.provider_checks import check_provider_keys
-from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
+from mammamiradio.core.setup_status import (
+    addon_options_snippet,
+    build_guided_setup,
+    build_setup_status,
+    classify_station_mode,
+)
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
     load_entity_policy,
@@ -2541,12 +2546,12 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
     }
     result["golden_path"] = _golden_path_status(config, state)
-    result["guided_setup"] = build_setup_status(
+    result["guided_setup"] = build_guided_setup(
         config,
         state,
         golden_path=result["golden_path"],
         provider_health=provider_health,
-    )["guided_setup"]
+    )
     result["startup_source_error"] = state.startup_source_error or ""
     result["provider_health"] = provider_health
     return result
