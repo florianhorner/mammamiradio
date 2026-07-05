@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -467,7 +468,7 @@ async def test_direction_empty_text_returns_422_without_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path):
+async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path, caplog):
     """Existing match keeps the course live; a failed new download surfaces a notice
     and is NOT counted as an aired song (added = confirmed only)."""
     existing = _track("Toxic", "Britney Spears", "base")
@@ -481,6 +482,7 @@ async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path)
     new_track = _track("Glamorous", "Fergie", "yt", youtube_id="ferg1234567")
 
     with (
+        caplog.at_level(logging.WARNING, logger="mammamiradio.web.streamer"),
         patch("mammamiradio.web.streamer.expand_direction", return_value=expansion),
         patch(
             "mammamiradio.web.streamer._resolve_direction_tracks_for_route",
@@ -511,6 +513,9 @@ async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path)
     assert existing.heading_id == state.heading.id
     reasons = [n.get("reason") for n in state.external_add_notices]
     assert "download_failed" in reasons
+    assert "Direction download failed for Fergie – Glamorous" in caplog.text
+    assert "RuntimeError: yt-dlp failed" in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 @pytest.mark.asyncio

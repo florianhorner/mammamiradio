@@ -4003,8 +4003,14 @@ async def _download_direction_track(
     except asyncio.CancelledError:
         logger.info("Direction download cancelled: %s (yt:%s)", track.display, track.youtube_id)
         raise
-    except Exception:
-        logger.warning("Direction download failed for %s (yt:%s)", track.display, track.youtube_id, exc_info=True)
+    except Exception as exc:
+        logger.warning(
+            "Direction download failed for %s (yt:%s): %s: %s",
+            track.display,
+            track.youtube_id,
+            type(exc).__name__,
+            exc,
+        )
         _record_direction_notice(state, track, ok=False, reason="download_failed")
         return "failed"
 

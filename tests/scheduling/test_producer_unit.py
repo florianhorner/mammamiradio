@@ -22,7 +22,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.evening_memory import EveningLedger
-from mammamiradio.hosts.ad_creative import AdScript, SonicWorld
+from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
@@ -309,6 +309,61 @@ async def test_time_check_uses_host_engine_for_tts():
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+
+
+@pytest.mark.asyncio
+async def test_ad_promo_tag_uses_configured_ad_voice_engine():
+    """The promo tag must not pass a cloud ad voice ID to edge-tts."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.voices = [
+        AdVoice(
+            name="L'Annunciatore",
+            voice="elevenlabs-voice-id",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            style="classic",
+            role="hammer",
+        )
+    ]
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", SonicWorld(), ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.AD
+    promo_call = next(call for call in mock_synthesize.await_args_list if call.args[0] == "Messaggio promozionale.")
+    assert promo_call.args[1] == "elevenlabs-voice-id"
+    assert promo_call.kwargs["engine"] == "elevenlabs"
+    assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
 
 
 # ---------------------------------------------------------------------------
