@@ -3010,9 +3010,10 @@ async def run_producer(
                     try:
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
                         if config.ads.voices:
-                            pvoice = config.ads.voices[0].voice
-                            pengine = "edge"
-                            pfallback = ""
+                            promo_voice = config.ads.voices[0]
+                            pvoice = promo_voice.voice
+                            pengine = promo_voice.engine
+                            pfallback = promo_voice.edge_fallback_voice
                         else:
                             pvoice = ihost.voice
                             pengine = ihost.engine
