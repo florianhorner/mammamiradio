@@ -2412,6 +2412,44 @@ async def test_push_state_to_ha_retry_then_success_is_silent(reset_ha_push_debou
     assert "HA push failed" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_push_state_to_ha_posts_entities_sequentially(reset_ha_push_debounce):
+    """State pushes should smooth HA/Supervisor load instead of POSTing all entities at once."""
+    in_flight = 0
+    max_in_flight = 0
+    urls: list[str] = []
+
+    async def _post_side_effect(url, **kwargs):
+        nonlocal in_flight, max_in_flight
+        urls.append(url)
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+            current_track=None,
+            listeners_active=1,
+            session_stopped=False,
+        )
+
+    assert max_in_flight == 1
+    assert [url.rsplit("/", 1)[-1] for url in urls] == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
+    ]
+
+
 def _mp_attrs(mock_client):
     mp_call = next(c for c in mock_client.post.call_args_list if "media_player" in c.args[0])
     return mp_call.kwargs["json"]["attributes"]

@@ -1793,4 +1793,9 @@ async def push_state_to_ha(
                 last_exc,
             )
 
-        await asyncio.gather(*(_push_one(eid, p) for eid, p in entities))
+        # Keep state writes ordered. Supervisor's API proxy can report noisy
+        # request-body errors when all entity updates hit it at once during HA
+        # slowness; the outer push lock already serializes push cycles, so this
+        # preserves freshness while smoothing each cycle.
+        for eid, payload in entities:
+            await _push_one(eid, payload)
