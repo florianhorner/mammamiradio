@@ -1538,7 +1538,21 @@ async def fetch_home_context(
         timestamp = time.time()
         denylist_hits: dict[str, int] = {}
         registry_snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
-        entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        # Re-read the mute policy after the awaited HA/registry calls above so an
+        # operator mute applied mid-refresh isn't served by a stale pre-await
+        # snapshot (TOCTOU — codex adversarial review).
+        if cache_dir is not None:
+            muted_ids = muted_entity_ids(Path(cache_dir))
+        all_entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        muted_present = set(all_entity_map) & muted_ids
+        # Muted ids are dropped from entity_map itself — not just the ambient
+        # "relevant" slice — so a configured radio_event rule can never fire a
+        # directive for an entity the operator explicitly excluded.
+        entity_map = (
+            {eid: data for eid, data in all_entity_map.items() if eid not in muted_ids}
+            if muted_present
+            else all_entity_map
+        )
         radio_events: list[RadioEventMatch] = []
         if radio_event_rules:
             try:
@@ -1570,13 +1584,8 @@ async def fetch_home_context(
             )
             is not None
         }
-        if muted_ids:
-            muted_present = set(relevant) & muted_ids
-            if muted_present:
-                denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present)
-                relevant = {
-                    entity_id: state_data for entity_id, state_data in relevant.items() if entity_id not in muted_ids
-                }
+        if muted_present:
+            denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present)
         old_states = {
             entity_id: state_data
             for entity_id, state_data in (effective_cache.raw_states if effective_cache else {}).items()
@@ -1664,8 +1673,17 @@ async def fetch_home_context(
         return HomeContext()
 
 
-def get_cached_home_context() -> HomeContext | None:
-    """Return the module-level HA context cache for admin-triggered refreshes."""
+def get_cached_home_context(cache_dir: Path | None = None) -> HomeContext | None:
+    """Return the module-level HA context cache for admin-triggered refreshes.
+
+    The module cache is only refreshed by fetch_home_context()'s own poll
+    cycle — a caller reading it directly between polls could otherwise see a
+    just-muted entity that hasn't been purged from it yet (adversarial
+    review). Pass ``cache_dir`` to re-apply the live mute policy before
+    returning; omit it for callers that don't consume entity content.
+    """
+    if cache_dir is not None and _ha_cache is not None:
+        return apply_entity_mute_policy(_ha_cache, cache_dir)
     return _ha_cache
 
 

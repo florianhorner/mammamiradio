@@ -1004,6 +1004,65 @@ async def test_fetch_matches_radio_events_without_ambient_script_visibility():
 
 
 @pytest.mark.asyncio
+async def test_fetch_home_context_muted_entity_cannot_trigger_a_radio_event(tmp_path):
+    """A muted entity must not be able to fire a configured radio_event
+    directive — the mute promise covers reactive triggers, and radio_events
+    are a reactive-trigger mechanism (codex adversarial review: match_radio_events
+    ran against the unfiltered entity_map before mute filtering)."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "script.kitchen_tts", True, label="Kitchen TTS")
+    rule = RadioEventRule(
+        id="tts_script_started",
+        entity_glob="script.*tts*",
+        trigger="state",
+        from_state="off",
+        to_state="on",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+    )
+    states = [
+        {
+            "entity_id": "script.kitchen_tts",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen TTS"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._radio_event_state_cache",
+            {"script.kitchen_tts": {"state": "off", "attributes": {}}},
+        ),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+            radio_event_rules=[rule],
+        )
+
+    assert result.radio_events == []
+    assert "script.kitchen_tts" not in result.raw_states
+
+
+@pytest.mark.asyncio
 async def test_fetch_home_context_computes_catalog_hit_rate(tmp_path):
     from mammamiradio.home.catalog import compute_hash, save_catalog
 

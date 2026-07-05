@@ -56,22 +56,31 @@ def empty_policy() -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "muted": {}}
 
 
+# Last known-good policy per resolved path, in-memory only. A transient read
+# error (disk hiccup, a write caught mid-flight despite the atomic replace,
+# permissions) must not silently un-mute every entity — this is a privacy
+# control, so an unreadable file degrades to the last confirmed-good policy
+# instead of "nothing is muted" (codex adversarial review).
+_LAST_GOOD_POLICY: dict[str, dict[str, Any]] = {}
+
+
 def load_entity_policy(cache_dir: Path) -> dict[str, Any]:
     """Load entity policy; malformed/missing files degrade to an empty policy."""
     path = policy_path(cache_dir)
+    key = str(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return empty_policy()
     except (OSError, json.JSONDecodeError, TypeError) as exc:
         logger.warning("Ignoring malformed HA entity policy %s: %s", path, exc)
-        return empty_policy()
+        return _LAST_GOOD_POLICY.get(key, empty_policy())
     if not isinstance(data, dict):
         logger.warning("Ignoring malformed HA entity policy %s: root is not an object", path)
-        return empty_policy()
+        return _LAST_GOOD_POLICY.get(key, empty_policy())
     muted_raw = data.get("muted")
     if not isinstance(muted_raw, dict):
-        return empty_policy()
+        return _LAST_GOOD_POLICY.get(key, empty_policy())
     muted: dict[str, dict[str, Any]] = {}
     for entity_id, entry in muted_raw.items():
         if not isinstance(entity_id, str):
@@ -79,7 +88,9 @@ def load_entity_policy(cache_dir: Path) -> dict[str, Any]:
         clean = _clean_entry(entity_id, entry)
         if clean is not None:
             muted[entity_id] = clean
-    return {"schema_version": SCHEMA_VERSION, "muted": muted}
+    policy = {"schema_version": SCHEMA_VERSION, "muted": muted}
+    _LAST_GOOD_POLICY[key] = policy
+    return policy
 
 
 def muted_entity_ids(cache_dir: Path | None) -> set[str]:

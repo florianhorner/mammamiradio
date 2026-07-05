@@ -84,12 +84,27 @@ def test_load_entity_policy_skips_non_string_keys_and_invalid_entries(tmp_path):
     assert set(policy["muted"]) == {"switch.valid"}
 
 
-def test_load_entity_policy_permission_error_returns_empty(tmp_path):
+def test_load_entity_policy_permission_error_returns_empty_on_first_ever_read(tmp_path):
     path = policy_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"schema_version": 1, "muted": {}}))
     with patch("pathlib.Path.read_text", side_effect=OSError("permission denied")):
         assert load_entity_policy(tmp_path) == empty_policy()
+
+
+def test_load_entity_policy_read_error_falls_back_to_last_known_good_not_empty(tmp_path):
+    """A transient disk error must not silently un-mute everything — this is a
+    privacy control, so it degrades to the last confirmed policy, not empty
+    (codex adversarial review: fail-open here defeats the mute promise)."""
+    set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
+    good_policy = load_entity_policy(tmp_path)
+    assert good_policy["muted"]
+
+    with patch("pathlib.Path.read_text", side_effect=OSError("disk hiccup")):
+        degraded = load_entity_policy(tmp_path)
+
+    assert degraded == good_policy
+    assert degraded != empty_policy()
 
 
 def test_clean_text_none_becomes_empty_string():

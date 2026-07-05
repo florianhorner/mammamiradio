@@ -2652,6 +2652,55 @@ async def test_homeassistant_labels_regenerate_schedules_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_poll(tmp_path):
+    """The module-level HA cache is only refreshed on fetch_home_context()'s own
+    poll cycle — this route reads it directly, so a mute applied after the last
+    poll but before this manual trigger must still be honored (adversarial
+    review: get_cached_home_context() previously returned the raw stale cache)."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.ha_context import HomeContext, ScoredEntity
+
+    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
+
+    stale_cache = HomeContext(
+        raw_states={
+            muted_id: {"state": "on", "attributes": {"friendly_name": "Coffee"}},
+            "light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}},
+        },
+        scored=[
+            ScoredEntity(
+                entity_id="light.counter",
+                area="Kitchen",
+                domain="light",
+                score=0.6,
+                raw_state={"state": "on", "attributes": {}},
+                label_it="Luce",
+                label_en="Counter light",
+                summary_line="Counter light: on",
+            )
+        ],
+    )
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.anthropic_api_key = "sk-ant-test"
+
+    with (
+        patch("mammamiradio.home.ha_context._ha_cache", stale_cache),
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
+        patch("mammamiradio.web.streamer.schedule_label_generation", return_value=True) as schedule,
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/homeassistant/labels/regenerate")
+
+    assert resp.status_code == 200
+    schedule.assert_called_once()
+    assert muted_id not in schedule.call_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_returns_409_when_running():
     app = _make_test_app()
     app.state.config.anthropic_api_key = "sk-ant-test"
@@ -2927,18 +2976,24 @@ async def test_homeassistant_entity_policy_rejects_non_boolean_muted():
 
 
 @pytest.mark.asyncio
-async def test_homeassistant_entity_policy_mute_of_entity_not_in_preview_is_404(tmp_path):
+async def test_homeassistant_entity_policy_can_mute_entity_absent_from_preview(tmp_path):
+    """Radio_event-only entities are deliberately kept out of the ambient
+    preview, but an operator must still be able to mute them by id — muting
+    something that was never going to be sent is inert, not unsafe."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     # No ha_scored_entities and no cached context — the entity is not in the
-    # safe preview, so muting an arbitrary id must not be allowed to persist.
+    # safe preview, but the mute must still persist.
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             json={"entity_id": "switch.never_seen", "muted": True},
         )
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.json()["muted"] is True
+    policy = tmp_path / "state" / "ha_entity_policy.json"
+    assert "switch.never_seen" in policy.read_text()
 
 
 @pytest.mark.asyncio

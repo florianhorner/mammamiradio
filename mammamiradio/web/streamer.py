@@ -2565,7 +2565,7 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         raise HTTPException(status_code=409, detail="HA label generation already in progress")
     if not config.anthropic_api_key:
         return {"scheduled": False, "reason": "anthropic_key_missing"}
-    context = get_cached_home_context()
+    context = get_cached_home_context(config.cache_dir)
     if context is None or not context.raw_states:
         return {"scheduled": False, "reason": "home_context_unavailable"}
     scheduled = schedule_label_generation(
@@ -2612,9 +2612,11 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         for row in preview.get(group, [])
         if isinstance(row, dict) and row.get("entity_id")
     }
-    if muted and entity_id not in by_entity:
-        raise HTTPException(status_code=404, detail="entity is not available in the safe Home Assistant preview")
-
+    # No preview-membership gate: some entities (e.g. radio_event-only
+    # entities, deliberately kept out of ambient context) never appear in the
+    # sanitized preview but an operator still needs to be able to mute them by
+    # id — over-inclusive muting can only exclude more, never expose more, so
+    # any syntactically valid entity_id (already checked above) is accepted.
     row = by_entity.get(entity_id, {})
     loop = asyncio.get_running_loop()
     try:

@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
@@ -294,12 +295,21 @@ async def startup():
     # resumes the same session and gags instead of resetting them. Missing or
     # corrupt files start fresh and never block boot. Candidacy policy comes from
     # config ([home.running_gags]); empty lists keep the built-in domain default.
+    # The mute policy's entity_denylist is static (config-only) and doesn't
+    # purge already-persisted buckets on its own, so a mute applied in a prior
+    # session (or a purge whose save_if_dirty() failed) would otherwise
+    # survive a restart and still be offerable as a running gag (codex
+    # adversarial review). Merge the current mute policy into the denylist
+    # AND purge any matching buckets already on disk.
+    _muted_at_boot = muted_entity_ids(config.cache_dir)
     evening_ledger = EveningLedger.load(
         config.cache_dir,
         domain_allowlist=config.running_gags.domain_allowlist or None,
         entity_allowlist=config.running_gags.entity_allowlist or None,
-        entity_denylist=config.running_gags.entity_denylist or None,
+        entity_denylist=(set(config.running_gags.entity_denylist) | _muted_at_boot) or None,
     )
+    for _muted_entity_id in _muted_at_boot:
+        evening_ledger.purge_entity(_muted_entity_id)
 
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not

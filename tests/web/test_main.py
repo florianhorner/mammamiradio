@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -528,12 +529,65 @@ async def test_startup_wires_running_gag_policy_from_config():
 
         await startup()
 
+    # entity_denylist is now the config denylist merged with the current mute
+    # policy (empty here — no entity_policy.json at TEST_CACHE), so startup()
+    # passes a set rather than the raw config list; EveningLedger.load() casts
+    # either to frozenset internally so the two are behaviorally identical.
     m_ledger.load.assert_called_once_with(
         TEST_CACHE,
         domain_allowlist=["light"],
         entity_allowlist=None,
-        entity_denylist=["binary_sensor.flappy"],
+        entity_denylist={"binary_sensor.flappy"},
     )
+
+
+@pytest.mark.asyncio
+async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_session(tmp_path):
+    """A bucket persisted before a mute (or from a session whose purge-on-mute
+    save_if_dirty() failed) must not survive a restart and still be offerable
+    as a running gag (codex adversarial review)."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
+
+    seed_ledger = EveningLedger()
+    seed_ledger.buckets["k"] = GagBucket(muted_id, "Coffee machine", "off", "on", count=3, last_ts=time.time())
+    seed_ledger.buckets["other"] = GagBucket(
+        "switch.bad_gross_waschmaschine_steckdose", "Washer", "off", "on", count=3, last_ts=time.time()
+    )
+    seed_ledger._dirty = True
+    seed_ledger.save_if_dirty(tmp_path)
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path
+    mock_config.cache_dir = tmp_path
+    mock_config.running_gags.domain_allowlist = []
+    mock_config.running_gags.entity_allowlist = []
+    mock_config.running_gags.entity_denylist = []
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    ledger = app.state.station_state.evening_ledger
+    assert "k" not in ledger.buckets
+    assert "other" in ledger.buckets
 
 
 @pytest.mark.asyncio
