@@ -121,6 +121,7 @@ def test_load_config_running_gags_defaults_empty(tmp_path):
     assert config.running_gags.domain_allowlist == []
     assert config.running_gags.entity_allowlist == []
     assert config.running_gags.entity_denylist == []
+    assert config.radio_events == []
 
 
 def test_load_config_parses_running_gags_overrides(tmp_path):
@@ -148,6 +149,139 @@ def test_load_config_running_gags_malformed_degrades(tmp_path):
     custom_path.write_text(custom)
     config = load_config(str(custom_path))
     assert config.running_gags.domain_allowlist == []
+
+
+def test_load_config_parses_radio_event_rules(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+id = "tts_script_started"
+entity_glob = "script.*tts*"
+trigger = "state"
+from_state = "off"
+to_state = "on"
+mode = "directive"
+directive = "One of the house voices just spoke."
+cooldown_seconds = 120
+
+[[home.radio_event]]
+id = "tts_automation_fired"
+entity_glob = "automation.*tts*"
+trigger = "attribute"
+attribute = "last_triggered"
+mode = "directive"
+directive = "A Home Assistant voice automation just fired."
+
+[[home.radio_event]]
+id = "device_charging"
+label = "A household device started charging"
+domain = "binary_sensor"
+device_class = "battery_charging"
+trigger = "state"
+to_state = "on"
+mode = "gag"
+cooldown_seconds = true
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    assert len(config.radio_events) == 3
+    script_rule = config.radio_events[0]
+    assert script_rule.id == "tts_script_started"
+    assert script_rule.entity_glob == "script.*tts*"
+    assert script_rule.from_state == "off"
+    assert script_rule.to_state == "on"
+    assert script_rule.mode == "directive"
+    assert script_rule.cooldown_seconds == 120
+    automation_rule = config.radio_events[1]
+    assert automation_rule.trigger == "attribute"
+    assert automation_rule.attribute == "last_triggered"
+    charging_rule = config.radio_events[2]
+    assert charging_rule.mode == "gag"
+    assert charging_rule.device_class == "battery_charging"
+    assert charging_rule.label == "A household device started charging"
+    assert charging_rule.cooldown_seconds == 900
+
+
+def test_load_config_parses_radio_event_numeric_threshold(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+id = "washer_power"
+entity_id = "sensor.washer_power"
+trigger = "numeric_threshold"
+threshold = 50.5
+direction = "above"
+mode = "directive"
+directive = "The washer crossed the power threshold."
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    [rule] = load_config(str(custom_path)).radio_events
+
+    assert rule.threshold == 50.5
+    assert rule.direction == "above"
+    assert rule.cooldown_seconds == 900
+
+
+def test_load_config_radio_event_malformed_blocks_degrade(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+entity_glob = "script.*tts*"
+trigger = "state"
+directive = "missing id"
+
+[[home.radio_event]]
+id = "bad_mode"
+entity_glob = "script.*tts*"
+mode = "interrupt"
+directive = "bad mode"
+
+[[home.radio_event]]
+id = "bad_threshold"
+entity_id = "sensor.power"
+trigger = "numeric_threshold"
+threshold = "hot"
+directive = "bad threshold"
+
+[[home.radio_event]]
+id = "valid"
+entity_id = "script.valid"
+trigger = "state"
+to_state = "on"
+directive = "valid directive"
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    rules = load_config(str(custom_path)).radio_events
+
+    assert [rule.id for rule in rules] == ["valid"]
+
+
+def test_load_config_radio_event_non_list_degrades(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text() + '\n[home]\nradio_event = "not a list"\n'
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    assert load_config(str(custom_path)).radio_events == []
 
 
 def test_load_config_parses_moderation_blocked_names(tmp_path):

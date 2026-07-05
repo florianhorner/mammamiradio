@@ -232,6 +232,41 @@ mood_ttl_seconds = 90.0        # minimum seconds between background scene refres
 # entity_allowlist = []   # if non-empty, restricts gags to these exact entity_ids
 # entity_denylist  = []   # silence chatty entities, e.g. a flapping presence sensor
 
+# Opt-in radio-worthy Home Assistant events. These rules do NOT add the matched
+# entity to the ambient prompt context; they only promote the configured label or
+# directive. Diagnostic signal strength, timestamps, and battery percentage
+# sensors are ignored even under broad globs.
+#
+# [[home.radio_event]]
+# id = "tts_script_started"
+# entity_glob = "script.*tts*"
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "directive"
+# directive = "One of the house voices just spoke. Mention it once in the next break without naming the source entity."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "tts_automation_fired"
+# entity_glob = "automation.*tts*"
+# trigger = "attribute"
+# attribute = "last_triggered"
+# mode = "directive"
+# directive = "A Home Assistant voice automation just fired. Make a short, playful next-break callout."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "device_charging"
+# label = "A household device started charging"
+# domain = "binary_sensor"
+# device_class = "battery_charging"  # or "plug" for plug sensors
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "gag"
+# cooldown_seconds = 900
+
 [persona]
 arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend
 anthem_threshold = 3            # plays without skip to declare anthem
