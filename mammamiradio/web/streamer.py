@@ -1182,17 +1182,25 @@ async def run_playback_loop(app) -> None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
 
-                # Serve a canned clip instead of dead air while the producer catches up
-                from mammamiradio.scheduling.producer import _pick_canned_clip
+                # Serve packaged continuity audio instead of dead air while the
+                # producer catches up. This shares the producer recovery order:
+                # recovery/ -> banter/ -> welcome/.
+                from mammamiradio.scheduling.producer import _pick_recovery_clip
 
-                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                fallback = _pick_recovery_clip(state)
                 if fallback:
-                    logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                    logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
                     state.queue_empty_since = None
                     segment = Segment(
                         type=SegmentType.BANTER,
                         path=fallback,
-                        metadata={"type": "banter", "canned": True, "fallback": True},
+                        metadata={
+                            "type": "banter",
+                            "canned": True,
+                            "fallback": True,
+                            "rescue": True,
+                            "title": "Station continuity",
+                        },
                         ephemeral=False,
                     )
                 else:

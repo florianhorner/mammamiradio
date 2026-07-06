@@ -1391,6 +1391,7 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_reject),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
     ):
         await _run_until_queued(queue, state, config)
 
@@ -1403,9 +1404,9 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
-    """When all-silence rejections hit the circuit breaker AND a canned banter clip
-    is available, the breaker must queue BANTER instead of the silent track."""
+async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
+    """When all-silence rejections hit the circuit breaker, the breaker must use
+    the full recovery clip ladder instead of the older banter/welcome-only path."""
     state = _make_state()
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
@@ -1413,12 +1414,17 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    fake_banter = tmp_path / "fallback_banter.mp3"
-    fake_banter.write_bytes(b"fake")
+    recovery_clip = tmp_path / "continuity_1.mp3"
+    recovery_clip.write_bytes(b"fake")
+    picked_subdirs: list[str] = []
 
     def _always_silence(path, seg_type):
         if seg_type == SegmentType.MUSIC:
             raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _pick_recovery_only(subdir: str, *, state=None):
+        picked_subdirs.append(subdir)
+        return recovery_clip if subdir == "recovery" else None
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -1427,14 +1433,18 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-        patch(f"{MODULE}._pick_canned_clip", return_value=fake_banter),
+        patch(f"{MODULE}._pick_canned_clip", side_effect=_pick_recovery_only),
     ):
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
-    # Banter was available → circuit breaker must queue BANTER not the silent track
+    # Packaged recovery was available -> circuit breaker must queue BANTER not the silent track.
     assert seg.type == SegmentType.BANTER
+    assert seg.path == recovery_clip
     assert seg.metadata.get("silence_fallback") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("title") == "Station continuity"
+    assert picked_subdirs == ["recovery"]
 
 
 # ---------------------------------------------------------------------------

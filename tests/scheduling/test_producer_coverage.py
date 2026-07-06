@@ -24,6 +24,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
     AdFormat,
@@ -940,6 +941,7 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert is_fallback_active(seg.metadata) is True
 
 
 @pytest.mark.asyncio
@@ -987,6 +989,7 @@ async def test_error_recovery_sweeper_timeout_falls_through_to_emergency_tone(tm
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert is_fallback_active(seg.metadata) is True
 
 
 # ---------------------------------------------------------------------------

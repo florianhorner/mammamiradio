@@ -2268,7 +2268,7 @@ async def run_producer(
 
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
-                # pre-bundled banter clip (when the rejection is due to silence — i.e. all
+                # packaged recovery clip (when the rejection is due to silence — i.e. all
                 # tracks are silence placeholders and playing them would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
@@ -2286,12 +2286,12 @@ async def run_producer(
                             if "silence" in str(exc).lower():
                                 # All available tracks are silence placeholders.  Playing
                                 # them would break the illusion with dead air.  Insert a
-                                # bundled banter clip instead so the stream stays alive.
-                                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                                # packaged recovery clip instead so the stream stays alive.
+                                fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
                                         "Quality gate circuit breaker: %d consecutive silence rejections — "
-                                        "inserting fallback banter to prevent dead air (%s: %s)",
+                                        "inserting packaged recovery clip to prevent dead air (%s: %s)",
                                         MUSIC_QUALITY_GATE_REJECTION_LIMIT,
                                         norm_path.name,
                                         exc,
@@ -2307,13 +2307,13 @@ async def run_producer(
                                                 "canned": True,
                                                 "silence_fallback": True,
                                                 "rescue": True,
-                                                "title": "Recovery banter",
+                                                "title": "Station continuity",
                                             },
                                             ephemeral=False,
                                         )
                                     )
                                     continue
-                                # No banter clips — recycle the last known-good music
+                                # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
                                 if last_good:
@@ -2340,7 +2340,7 @@ async def run_producer(
                                         )
                                     )
                                     continue
-                                # No banter, no last-known-good.  Drop this track and let
+                                # No recovery clip, no last-known-good.  Drop this track and let
                                 # the streamer's rescue path handle the gap — queueing a
                                 # silent file would break the illusion.
                                 logger.error(
