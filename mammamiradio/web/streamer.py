@@ -65,7 +65,6 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
-from mammamiradio.scheduling.scheduler import preview_upcoming
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
     _ASSETS_DIR,
