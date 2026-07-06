@@ -131,6 +131,35 @@ async def test_public_status_does_not_expose_admin_cost_breakdown():
 
 
 @pytest.mark.asyncio
+async def test_public_status_does_not_expose_operator_song_preferences():
+    app = _make_test_app()
+    app.state.station_state.song_preferences = {
+        ("modugno", "volare"): {
+            "score": 1,
+            "display": "Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+        preferences_resp = await client.get("/api/track/preferences")
+
+    public = public_resp.json()
+    admin = admin_resp.json()
+    preferences = preferences_resp.json()
+    assert "song_preferences" not in public
+    assert "current_track_preference" not in public
+    assert admin["song_preferences"]["count"] == 1
+    assert "preferences" not in admin["song_preferences"]
+    assert "current_track_preference" in admin
+    assert preferences["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_uptime_and_tracks():
     """Cross-page invariant facts that must match admin /status."""
     app = _make_test_app()

@@ -11,11 +11,13 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
@@ -164,6 +166,16 @@ class Track:
     def display(self) -> str:
         """Human-readable label used in logs and APIs."""
         return f"{self.artist} – {self.title}"
+
+    @cached_property
+    def normalized_key(self) -> tuple[str, str]:
+        """Canonical station song identity used by bans, preferences, and dedupe."""
+        return (self.artist.strip().lower(), self.title.strip().lower())
+
+
+def normalized_track_key(track: Track) -> tuple[str, str]:
+    """Canonical station song identity used by bans, preferences, and dedupe."""
+    return track.normalized_key
 
 
 @dataclass
@@ -589,6 +601,13 @@ class StationState:
     # read-modify-write and the disk save), so handlers cannot interleave and lose an
     # update — the same single-loop discipline switch_playlist / queue_remove_item use.
     blocklist: dict[tuple[str, str], dict] = field(default_factory=dict)
+    # Persistent operator taste: normalized (artist, title) -> {score, display,
+    # updated_at, updated_by}. Scores are soft scheduler weights only; bans remain
+    # the sole hard exclusion.
+    song_preferences: dict[tuple[str, str], dict] = field(default_factory=dict)
+    # In-session version for cheap admin polling. Startup-loaded preferences start
+    # at 0; every real operator mutation bumps this once.
+    song_preferences_revision: int = 0
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
     # Recently consumed requests kept for 5 min so the admin can see what happened
@@ -1136,6 +1155,7 @@ class StationState:
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         weights: list[float] = []
         heading = self.heading
+        preference_scores = preference_score_map(self.song_preferences)
         for track in candidates:
             w = 1.0
 
@@ -1157,10 +1177,16 @@ class StationState:
             if track.popularity:
                 w *= 0.8 + 0.2 * (track.popularity / 100.0)
 
-            if heading is not None and heading.id and track.heading_id == heading.id:
+            heading_match = heading is not None and heading.id and track.heading_id == heading.id
+            if heading_match:
                 # Record Hunt is steering, not queue control: matching records get a
                 # durable lift, but cooldowns, bans, pinned tracks, and diversity still win.
                 w *= 4.0
+
+            score = preference_scores.get(normalized_track_key(track), 0)
+            if score < 0 and heading_match:
+                score = 0
+            w *= preference_weight(score)
 
             weights.append(max(w, 0.01))  # Floor to avoid zero weights
 

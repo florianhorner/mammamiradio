@@ -4,7 +4,13 @@ configuration:
     description: Your radio station's name, shown in the UI and stream metadata.
   enable_home_assistant:
     name: Enable Home Assistant Integration
-    description: "Let hosts use Home Assistant context, such as lights, presence, and climate, in banter and ads. Requires add-on API access; enable this if the boot log shows ha=disabled."
+    description: "Allow the add-on to talk to Home Assistant for entity publishing, optional host context, and timer interrupts. Turn this Off only if the station should run without Home Assistant access."
+  ha_context_enabled:
+    name: Host home context
+    description: "On (default): hosts may mention filtered Home Assistant state in banter, ads, and news. Off: the station still publishes its own HA entities, but it stops the full home-state polling used for host prompts."
+  ha_context_poll_interval:
+    name: Host context refresh interval
+    description: "How often the station refreshes the full filtered Home Assistant state snapshot for host prompts. The default 300 seconds is gentler on Home Assistant Green than once-a-minute polling."
   ha_media_player_push:
     name: On-air media player push
     description: "On (default): the station shows up in Home Assistant as a media player automatically, so an add-on-only setup gets a tile out of the box. Turn this Off only if you install the separate Mamma Mi Radio integration from HACS — that gives you a controllable media player, and this push would fight it. The station's other sensors keep working either way."

@@ -92,6 +92,8 @@ class MammaRadioCoordinator(DataUpdateCoordinator[RadioStatus]):
         self._session = async_get_clientsession(hass)
         self._consecutive_failures = 0
         self._first_failure_at: float | None = None
+        self._etag: str | None = None
+        self._last_status: RadioStatus | None = None
 
     @property
     def consecutive_failures(self) -> int:
@@ -101,13 +103,18 @@ class MammaRadioCoordinator(DataUpdateCoordinator[RadioStatus]):
     async def _async_update_data(self) -> RadioStatus:
         """Fetch and parse the now-playing contract."""
         url = f"{self._base_url}{NOW_PLAYING_PATH}"
+        headers = {"If-None-Match": self._etag} if self._etag else None
         try:
             async with asyncio.timeout(HTTP_TIMEOUT):
-                async with self._session.get(url) as resp:
+                async with self._session.get(url, headers=headers) as resp:
+                    if resp.status == 304 and self._last_status is not None:
+                        self._record_success()
+                        return self._last_status
                     if resp.status != 200:
                         self._record_failure()
                         raise UpdateFailed(f"now-playing returned HTTP {resp.status}")
                     payload = await resp.json(content_type=None)
+                    etag = resp.headers.get("ETag")
         except (aiohttp.ClientError, TimeoutError) as err:
             self._record_failure()
             raise UpdateFailed(f"cannot reach the station: {err}") from err
@@ -115,6 +122,8 @@ class MammaRadioCoordinator(DataUpdateCoordinator[RadioStatus]):
             self._record_failure()
             raise UpdateFailed("now-playing returned a non-object payload")
         status = RadioStatus.from_payload(payload)
+        self._etag = etag
+        self._last_status = status
         self._record_success()
         return status
 

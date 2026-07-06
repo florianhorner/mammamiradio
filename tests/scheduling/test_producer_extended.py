@@ -518,6 +518,37 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ha_context_disabled_skips_full_state_refresh(tmp_path):
+    """Operators can keep HA entity publishing while disabling full /api/states prompt context."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Che bella giornata!")]
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock) as mock_fetch,
+        patch(f"{MODULE}.resolve_home_mood") as mock_resolve_mood,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    mock_fetch.assert_not_called()
+    mock_resolve_mood.assert_not_called()
+    assert state.ha_context == ""
+    assert state.ha_context_last_updated == 0.0
+
+
+@pytest.mark.asyncio
 async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
     """resolve_home_mood runs outside the segment-render try — a raise there
     must degrade to the ladder mood, not kill the producer (INSTANT AUDIO)."""

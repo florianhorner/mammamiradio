@@ -1615,6 +1615,14 @@ def get_cached_home_context() -> HomeContext | None:
 _last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
 _last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
+_HA_ENTITY_RECOVERY_REPUBLISH_SECONDS = 300.0
+_HA_DEDUPED_ENTITY_IDS = {
+    "sensor.mammamiradio_segment_type",
+    "sensor.mammamiradio_listeners",
+    "binary_sensor.mammamiradio_on_air",
+}
+_ha_entity_payload_fingerprints: dict[str, str] = {}
+_ha_entity_last_push_at: dict[str, float] = {}
 
 # Absolute fallback logo for the HA media_player entity_picture. HA's
 # media-control card does NOT clear a removed entity_picture — it keeps the last
@@ -1653,6 +1661,36 @@ def _get_ha_push_lock() -> asyncio.Lock:
 
 _GHOST_MEDIA_PLAYER_EID = "media_player.mammamiradio"
 _media_player_ghost_purged = False
+
+
+def _ha_payload_fingerprint(payload: dict) -> str:
+    """Stable payload fingerprint for unchanged HA sensor writes."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _ha_entity_write_due(eid: str, payload: dict, now: float) -> bool:
+    """Return whether this entity should be written to HA this cycle.
+
+    The media player is intentionally not deduped: its playback position changes
+    over time and add-on-only installs expect a regular card refresh. The
+    auxiliary sensors are much cheaper to recover from a slower forced heartbeat,
+    so unchanged payloads wait for the recovery interval instead of writing every
+    30 seconds forever.
+    """
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return True
+    fingerprint = _ha_payload_fingerprint(payload)
+    if _ha_entity_payload_fingerprints.get(eid) != fingerprint:
+        return True
+    last_push = _ha_entity_last_push_at.get(eid, 0.0)
+    return now - last_push >= _HA_ENTITY_RECOVERY_REPUBLISH_SECONDS
+
+
+def _remember_ha_entity_write(eid: str, payload: dict, now: float) -> None:
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return
+    _ha_entity_payload_fingerprints[eid] = _ha_payload_fingerprint(payload)
+    _ha_entity_last_push_at[eid] = now
 
 
 def _media_player_push_enabled() -> bool:
@@ -1843,7 +1881,7 @@ async def push_state_to_ha(
             entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
             await _purge_ghost_media_player(base_url, headers, client)
 
-        async def _push_one(eid: str, p: dict) -> None:
+        async def _push_one(eid: str, p: dict) -> bool:
             # Always log the exception TYPE + repr. A bare str() on a timeout or
             # cancellation-style exception is empty, which is what produced the
             # unreadable "HA push failed for <eid>: " lines in production. Include
@@ -1871,23 +1909,28 @@ async def push_state_to_ha(
                             resp.status_code,
                             f" — {body}" if body else "",
                         )
-                    return
+                        return False
+                    return True
                 except httpx.TransportError as e:
                     last_exc = e
                     continue
                 except Exception as e:
                     logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
-                    return
+                    return False
             logger.warning(
                 "HA push failed for %s after retry: %s: %r",
                 eid,
                 type(last_exc).__name__,
                 last_exc,
             )
+            return False
 
         # Keep state writes ordered. Supervisor's API proxy can report noisy
         # request-body errors when all entity updates hit it at once during HA
         # slowness; the outer push lock already serializes push cycles, so this
         # preserves freshness while smoothing each cycle.
         for eid, payload in entities:
-            await _push_one(eid, payload)
+            if not _ha_entity_write_due(eid, payload, now):
+                continue
+            if await _push_one(eid, payload):
+                _remember_ha_entity_write(eid, payload, now)

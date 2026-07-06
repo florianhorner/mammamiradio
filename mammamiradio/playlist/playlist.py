@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Heading, PlaylistSource, Track
+from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
@@ -266,7 +267,7 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
 
 
 def _normalized_track_key(track: Track) -> tuple[str, str]:
-    return (track.artist.strip().lower(), track.title.strip().lower())
+    return _core_normalized_track_key(track)
 
 
 # Public alias: the single canonical (artist, title) identity used for both
