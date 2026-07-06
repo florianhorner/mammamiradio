@@ -548,7 +548,7 @@ def _apply_preference(
         updated_by = str(meta.get("updated_by", updated_by) or updated_by)
     if changed:
         state.song_preferences_revision += 1
-    persisted = save_preferences(config.cache_dir, state.song_preferences) if changed else True
+    persisted = save_preferences(config.cache_dir, state.song_preferences)
     return {
         "ok": True,
         "target": target,
