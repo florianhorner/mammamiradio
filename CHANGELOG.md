@@ -14,6 +14,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [2.16.0] - 2026-07-06
 
+### Added
+
+- **Tell the station which songs you want more or less often without banning them.** The admin console now has thumbs-up/thumbs-down controls on the on-air song and every rotation row. Thumbs nudge future rotation only: they do not interrupt what is playing, they never turn into bans, and only the control room sees them.
+
 ### Changed
 
 - **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
@@ -22,7 +26,6 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
-- **Tell the station which songs you want more or less often without banning them.** The admin console now has thumbs-up/thumbs-down controls on the on-air song and every rotation row. Thumbs nudge future rotation only: they do not interrupt what is playing, they never turn into bans, and only the control room sees them.
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **Steer the station with your own words.** A new "Direction" box in the admin panel lets you point the music where you want it — type "2000s female vocals" or "sunday morning italian" and the station finds matching songs and blends them into rotation in the background, without interrupting what's playing. Songs already in rotation join the course right away; the rest arrive as they download, and the course sticks across a restart until you tap "Back to auto". If a direction can't be filled the station says so plainly and stays on automatic rotation instead of pretending.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded, listener-safe cold-open campaign after an update, with delivery counted only when a real listener receives streamed audio. If the station restarts, it can also bring back a recently rendered music segment so the first listen after an update reaches live programming faster instead of starting from an empty queue.
