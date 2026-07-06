@@ -415,8 +415,61 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             ephemeral=False,
         )
 
+    last_good = _get_last_music_file(state)
+    last_good_title = ""
+    last_good_artist = ""
+    if last_good:
+        last_good_meta = load_track_metadata(last_good) or {}
+        last_good_raw_title = str(last_good_meta.get("title") or "").strip()
+        last_good_raw_artist = str(last_good_meta.get("artist") or "").strip()
+        if state.blocklist:
+            if last_good_raw_title and last_good_raw_artist:
+                last_good_key = (last_good_raw_artist.lower(), last_good_raw_title.lower())
+                if last_good_key in state.blocklist:
+                    logger.warning(
+                        "Error recovery: skipping blocklisted last-known-good music: %s - %s",
+                        last_good_raw_artist,
+                        last_good_raw_title,
+                    )
+                    last_good = None
+            else:
+                logger.warning(
+                    "Error recovery: skipping unidentified last-known-good music while blocklist is active: %s",
+                    last_good.name,
+                )
+                last_good = None
+        if last_good_raw_title:
+            last_good_title = strip_foreign_station_name(
+                last_good_raw_title, config.display_station_name, prefix_only=True
+            )
+        elif last_good:
+            last_good_title = last_good.name
+        last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
+    if last_good:
+        logger.warning(
+            "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
+            last_good.name,
+        )
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=last_good,
+            metadata={
+                "type": "music",
+                "recycled": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": last_good_title or last_good.name,
+                "artist": last_good_artist,
+                "title_only": last_good_title or last_good.name,
+                "audio_source": "last_known_good",
+            },
+            ephemeral=False,
+        )
+
     try:
-        logger.warning("No packaged recovery clips or norm cache available — inserting recovery sweeper")
+        logger.warning(
+            "No packaged recovery clips, norm cache, or last-known-good music available — inserting recovery sweeper"
+        )
         return await asyncio.wait_for(
             _build_recovery_sweeper_segment(config, state),
             timeout=RECOVERY_SWEEPER_TIMEOUT_SECONDS,
@@ -1282,6 +1335,7 @@ async def _render_sweeper_audio(
     state: StationState,
     *,
     prefix: str,
+    validate_dry: bool = False,
 ) -> Path:
     """Render a short station-imaging sweeper with the configured voice and sting."""
     sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
@@ -1294,6 +1348,12 @@ async def _render_sweeper_audio(
         edge_fallback_voice=sweeper_fallback,
         state=state,
     )
+    if validate_dry:
+        try:
+            await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+        except (AudioQualityError, AudioToolError):
+            audio_path.unlink(missing_ok=True)
+            raise
     loop = asyncio.get_running_loop()
     sting_path = config.tmp_dir / f"{prefix}_sting_{uuid4().hex[:8]}.mp3"
     mixed_path = config.tmp_dir / f"{prefix}_mixed_{uuid4().hex[:8]}.mp3"
@@ -1316,7 +1376,18 @@ async def _build_recovery_sweeper_segment(config: StationConfig, state: StationS
     """Build a branded rescue sweeper before falling through to emergency tone."""
     station_name = config.display_station_name or config.station.name
     sweeper_text = random.choice(RECOVERY_SWEEPER_LINES).format(station=station_name)
-    audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="recovery_sweeper")
+    audio_path = await _render_sweeper_audio(
+        sweeper_text,
+        config,
+        state,
+        prefix="recovery_sweeper",
+        validate_dry=True,
+    )
+    try:
+        await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+    except (AudioQualityError, AudioToolError):
+        audio_path.unlink(missing_ok=True)
+        raise
     return Segment(
         type=SegmentType.SWEEPER,
         path=audio_path,
