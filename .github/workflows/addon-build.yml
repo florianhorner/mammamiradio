@@ -33,7 +33,7 @@ jobs:
       addon_version: ${{ steps.addon-version.outputs.version }}
       short_sha: ${{ steps.sha.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Validate add-on invariants
         run: bash scripts/validate-addon.sh
@@ -75,7 +75,7 @@ jobs:
             platform: linux/arm64
             base: ghcr.io/home-assistant/aarch64-base:3.20
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Copy source into addon build context
         run: |
@@ -93,7 +93,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push stable add-on image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
