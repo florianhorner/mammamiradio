@@ -875,14 +875,11 @@ async def test_public_status_rendered_upcoming_is_capped_at_8_with_source_fields
 
 @pytest.mark.asyncio
 async def test_public_status_upcoming_mode_building_when_shadow_empty():
-    """With empty shadow and no predictions, mode falls to 'building'."""
+    """With an empty rendered shadow, mode falls to 'building'."""
     app = _make_app(shadow=[], queue_items=0)
 
-    # preview_upcoming always predicts non-music segments even with an empty
-    # playlist, so we must mock it to exercise the truly-empty path.
-    with patch("mammamiradio.web.streamer.preview_upcoming", return_value=[]):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/public-status")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -891,8 +888,8 @@ async def test_public_status_upcoming_mode_building_when_shadow_empty():
 
 
 @pytest.mark.asyncio
-async def test_public_status_predicted_source_when_shadow_empty_but_playlist_present():
-    """Empty shadow but playlist present → predicted_from_playlist items."""
+async def test_public_status_hides_playlist_predictions_when_shadow_empty():
+    """Empty rendered shadow stays empty even when the playlist has tracks."""
     app = _make_app(shadow=[], queue_items=0)
     # playlist already has one track from _make_app
 
@@ -901,29 +898,24 @@ async def test_public_status_predicted_source_when_shadow_empty_but_playlist_pre
 
     assert resp.status_code == 200
     data = resp.json()
-    predicted = [i for i in data["upcoming"] if i["source"] == "predicted_from_playlist"]
-    assert len(predicted) > 0
+    assert data["upcoming_mode"] == "building"
+    assert data["upcoming"] == []
 
 
 @pytest.mark.asyncio
-async def test_public_status_predicted_upcoming_requests_8_with_source_fields():
-    """Prediction previews request 8 items and annotate their source."""
+async def test_public_status_hides_force_next_predictions_when_shadow_empty():
+    """A pinned next track is intent, not render-ready audio."""
     app = _make_app(shadow=[], queue_items=0)
+    app.state.station_state.force_next = SegmentType.MUSIC
+    app.state.station_state.pinned_track = app.state.station_state.playlist[0]
 
-    def _preview(*_args, count: int) -> list[dict]:
-        return [{"type": "music", "label": f"Predicted {i}"} for i in range(count)]
-
-    with patch("mammamiradio.web.streamer.preview_upcoming", side_effect=_preview) as preview:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/public-status")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/public-status")
 
     assert resp.status_code == 200
-    preview.assert_called_once()
-    assert preview.call_args.kwargs["count"] == 8
-    upcoming = resp.json()["upcoming"]
-    assert len(upcoming) == 8
-    assert [item["label"] for item in upcoming] == [f"Predicted {i}" for i in range(8)]
-    assert all(item["source"] == "predicted_from_playlist" for item in upcoming)
+    data = resp.json()
+    assert data["upcoming_mode"] == "building"
+    assert data["upcoming"] == []
 
 
 @pytest.mark.asyncio

@@ -1343,6 +1343,33 @@ class TestStoppedStateQuietsTheUI:
                 "radio.toml / /public-status."
             )
 
+    def test_listener_building_schedule_is_single_placeholder(self):
+        """An empty rendered queue should not look like four fake future slots."""
+        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        css = (WEB_ROOT / "static" / "listener.css").read_text()
+
+        assert "status.upcoming_mode === 'building'" in js
+        assert "The next records are being cued" in js
+        assert "status: true" in js
+        assert 'li class="status" role="status"' in js
+        assert "status.golden_path && status.golden_path.stage === 'needs_music_source'" in js
+        assert "np_no_source" in js
+        assert js.index("noMusicSource") < js.index("status.upcoming_mode === 'building'"), (
+            "listener schedule must render no-source copy before falling through to generic building copy."
+        )
+        assert "while (cards.length < 4)" not in js, (
+            "listener schedule must not pad every missing future slot with the building copy."
+        )
+        assert "if (!stopped && noMusicSource && cards.length < 4)" in js, (
+            "the no-source placeholder must be gated behind '!stopped' so a paused station "
+            "never shows 'no music source' instead of the stopped card."
+        )
+        assert "} else if (!stopped && status && status.upcoming_mode === 'building' && cards.length < 4)" in js, (
+            "the generic building placeholder must be gated behind '!stopped' for the same reason."
+        )
+        assert ".mmr-schedule li.status" in css
+        assert ".mmr-schedule li.status .m .title" in css
+
     def test_admin_station_card_uses_status_stream_metadata(self):
         html = ADMIN_HTML.read_text()
         assert "96.7" not in html
@@ -1369,9 +1396,23 @@ class TestStoppedStateQuietsTheUI:
             "Scaletta distinguishes a paused station from one building its queue."
         )
         assert "Station paused" in block, "renderProgramme() stopped branch must render the paused-state copy."
-        assert "Preparing the next segment" in block, (
+        assert "The next item is being cued for air." in block, (
             "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
+        assert "No music source selected. Add a source to build the rundown." in block, (
+            "renderProgramme() must distinguish no-source from active producer building."
+        )
+        assert "st?.golden_path?.stage==='needs_music_source'" in block, (
+            "renderProgramme() must use golden_path as the no-source authority, not just source objects."
+        )
+        assert "needsMusicSource||!hasMusicSource" in block, (
+            "renderProgramme() must still show no-source copy when startup has a fallback playlist_source."
+        )
+        assert "No '+segmentText(_programmeFilter)+' ready in this rundown." in block, (
+            "renderProgramme() must distinguish a filtered-empty rendered queue from a building queue."
+        )
+        assert 'aria-live="polite"' in html
+        assert 'aria-atomic="true"' in html
 
     def test_render_programme_memo_hash_tracks_id_and_stop_state(self):
         """The renderProgramme() memoization hash must include each row's queue
@@ -1388,6 +1429,9 @@ class TestStoppedStateQuietsTheUI:
         hash_line = next(line for line in block.splitlines() if "const hash=" in line)
         assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
         assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
+        assert "current_source" in hash_line and "playlist_source" in hash_line and "golden_path" in hash_line, (
+            "renderProgramme() memo hash must include source/golden-path state so no-source/building copy refreshes."
+        )
 
     def test_refresh_fast_syncs_stop_state_from_status_poll(self):
         """The status poll must drive `data-stopped` from `session_stopped` so a
@@ -1425,7 +1469,7 @@ class TestFaderDownEmptyRoomUI:
         assert "The record is cued. Waiting for someone to tune in." in html
         assert "Fader Down — the record is cued for the next listener." in programme
         assert "Station paused — press Start to resume." in programme
-        assert "Preparing the next segment..." in programme
+        assert "The next item is being cued for air." in programme
 
     def test_fader_down_freezes_elapsed_timer_without_waiting_for_stop(self):
         freeze = _admin_function_block("freezeFaderDownProgress")

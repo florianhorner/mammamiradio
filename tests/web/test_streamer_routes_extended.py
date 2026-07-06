@@ -390,7 +390,7 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_move_to_next_updates_public_upcoming_preview():
+async def test_move_to_next_does_not_fake_public_upcoming_preview():
     app = _make_test_app()
     app.state.station_state.segments_produced = 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -400,10 +400,11 @@ async def test_move_to_next_updates_public_upcoming_preview():
 
     assert move_resp.status_code == 200
     assert move_resp.json()["ok"] is True
-    upcoming = status_resp.json()["upcoming"]
-    assert upcoming[0]["type"] == "music"
-    assert upcoming[0]["label"] == "Artist C – Song C"
-    assert upcoming[0]["playlist_index"] == 2
+    body = status_resp.json()
+    assert body["upcoming"] == []
+    assert body["upcoming_mode"] == "building"
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.display == "Artist C – Song C"
 
 
 @pytest.mark.asyncio
@@ -825,6 +826,7 @@ async def test_playlist_api_returns_paginated_track_page():
         )
         for i in range(6)
     ]
+    app.state.station_state.playlist[2].heading_id = "hunt-2"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/playlist?offset=2&limit=3")
@@ -835,6 +837,7 @@ async def test_playlist_api_returns_paginated_track_page():
     assert body["tracks"][0]["source"] == "classic"
     assert body["tracks"][0]["year"] == 1982
     assert body["tracks"][0]["youtube_id"] == "ytid0000002"
+    assert body["tracks"][0]["heading_id"] == "hunt-2"
     assert body["total"] == 6
     assert body["offset"] == 2
     assert body["limit"] == 3
@@ -888,6 +891,7 @@ async def test_status_playlist_page_preserves_admin_status_contract():
     assert body["playlist"][0]["source"] == "classic"
     assert body["playlist"][0]["year"] == 2090
     assert body["playlist"][0]["youtube_id"] == "ytid0000100"
+    assert body["playlist"][0]["heading_id"] == ""
     assert body["playlist_page"] == {
         "total": 205,
         "offset": 100,
