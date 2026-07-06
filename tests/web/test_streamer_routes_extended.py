@@ -826,6 +826,7 @@ async def test_playlist_api_returns_paginated_track_page():
         )
         for i in range(6)
     ]
+    app.state.station_state.playlist[2].heading_id = "hunt-2"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/playlist?offset=2&limit=3")
@@ -836,6 +837,7 @@ async def test_playlist_api_returns_paginated_track_page():
     assert body["tracks"][0]["source"] == "classic"
     assert body["tracks"][0]["year"] == 1982
     assert body["tracks"][0]["youtube_id"] == "ytid0000002"
+    assert body["tracks"][0]["heading_id"] == "hunt-2"
     assert body["total"] == 6
     assert body["offset"] == 2
     assert body["limit"] == 3
@@ -889,6 +891,7 @@ async def test_status_playlist_page_preserves_admin_status_contract():
     assert body["playlist"][0]["source"] == "classic"
     assert body["playlist"][0]["year"] == 2090
     assert body["playlist"][0]["youtube_id"] == "ytid0000100"
+    assert body["playlist"][0]["heading_id"] == ""
     assert body["playlist_page"] == {
         "total": 205,
         "offset": 100,
