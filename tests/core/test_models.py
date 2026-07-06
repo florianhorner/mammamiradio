@@ -301,6 +301,39 @@ def test_select_next_track_consumes_pinned_track():
     assert state.pinned_track is None
 
 
+def test_select_next_track_excluded_keys_raise_when_pool_empty():
+    track = _track(1)
+    state = StationState(playlist=[track])
+
+    with pytest.raises(RuntimeError, match="Playlist has no eligible tracks"):
+        state.select_next_track(excluded_cache_keys={track.cache_key})
+
+
+def test_select_next_track_excluded_pinned_track_raises_when_no_eligible_tracks():
+    track = _track(1)
+    state = StationState(playlist=[track], pinned_track=track)
+
+    with pytest.raises(RuntimeError, match="Playlist has no eligible tracks"):
+        state.select_next_track(excluded_cache_keys={track.cache_key})
+
+    assert state.pinned_track is None
+
+
+def test_select_next_track_skips_excluded_pinned_track_for_eligible_pool():
+    rejected_pin = _track(1)
+    eligible = _track(2)
+    state = StationState(playlist=[eligible], pinned_track=rejected_pin)
+
+    def _choose(candidates, **kwargs):
+        return [candidates[0]]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(excluded_cache_keys={rejected_pin.cache_key})
+
+    assert picked is eligible
+    assert state.pinned_track is None
+
+
 def test_select_next_track_most_stale_fallback():
     stale = _track(1)
     recent = _track(2)

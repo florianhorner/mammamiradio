@@ -69,9 +69,10 @@ a network error never leaves the console permanently compact.
 Below the console, a **tab bar** swaps a single **work area** — one panel visible
 at a time, choice persisted in `sessionStorage['adminTab']`:
 
-1. **Diretta** — `Modalità live` (Chaos/Festival toggles), `Azioni rapide` (fewer
-   banter / fewer ads / reload / flag, plus a Lancia-red `Purge queue`), `Cadenza`
-   (pacing sliders). The `Azioni immediate` triggers moved up into the console.
+1. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
+   `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
+   `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
+   moved up into the console.
 2. **Scaletta** (default tab) — forward-only rundown of up to ~8 upcoming items,
    each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
@@ -86,9 +87,9 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    state persists via sessionStorage (`mmr.admin.archivio.filters`).
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
    context), `Costi` (token cost counter + cost split + segment counts — always visible),
-   `Configurazione` (station behavior controls), and `Setup` (a collapsible
-   `<details>` that auto-collapses when every readiness item is ready; shows an
-   `All ready ✓` blue badge when collapsed).
+   `Configurazione` (AI Quality and On-Air Sound controls), and `Setup` (a
+   collapsible `<details>` that auto-collapses when every readiness item is
+   ready; shows an `All ready ✓` blue badge when collapsed).
 
 Each panel carries exactly one header (Playfair title); the old per-drawer summary
 plus inner-panel double header is gone. On narrow viewports the console stacks to
@@ -120,7 +121,7 @@ Italian headlines and station-feel words).
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change
 - Admin controls must show feedback within 300ms of user action (toast, state change, or loading indicator)
-- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en) — admin stays `lang="it"`. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Filter chips/pills (`.filter-pill`) and section tabs (`.mmr-tab`) meet the 44px minimum; compact badge chips (`.status-chip`, `.btn-chip`) are read-only indicators and stay smaller.
+- **Accessibility structure:** the listener page exposes a `<main id="content">` landmark with a skip link, and its `<html lang>` follows the active copy register (it/en). Admin stays `lang="en"` because operator utility copy is English-first even when structural section names preserve Italian flair. A stopped session is baked into the first server paint (`body[data-stopped]` + `is-stopped` + paused waveform) so the page never flashes "live" before JS hydrates. Admin section tabs implement the ARIA tablist/tab/tabpanel pattern (roving focus, Left/Right/Home/End arrow-key navigation, `aria-selected`), and the brand wordmark is the page `<h1>`. Filter chips/pills (`.filter-pill`) and section tabs (`.mmr-tab`) meet the 44px minimum; compact badge chips (`.status-chip`, `.btn-chip`) are read-only indicators and stay smaller.
 
 ## QA requirement
 

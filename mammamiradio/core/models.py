@@ -8,7 +8,7 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
@@ -470,6 +470,7 @@ class ConsumedListenerRequest(TypedDict):
     song_track: str | None
     type: str | None
     status: str  # "sent_to_hosts" | "song_not_found" | "source_changed"
+    song_error_reason: str
     consumed_at: float
 
 
@@ -1095,6 +1096,7 @@ class StationState:
         repeat_cooldown: int = 8,
         artist_cooldown: int = 3,
         max_artist_per_hour: int = 3,
+        excluded_cache_keys: Collection[str] | None = None,
     ) -> Track:
         """Pick the next track using weighted random selection with diversity rules.
 
@@ -1106,12 +1108,19 @@ class StationState:
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
 
+        excluded = set(excluded_cache_keys or ())
+
         if self.pinned_track is not None:
             track = self.pinned_track
             self.pinned_track = None
-            return track
+            if track.cache_key not in excluded:
+                return track
+            if not any(candidate.cache_key not in excluded for candidate in self.playlist):
+                raise RuntimeError("Playlist has no eligible tracks")
 
-        pool = list(self.playlist)
+        pool = [track for track in self.playlist if track.cache_key not in excluded]
+        if not pool:
+            raise RuntimeError("Playlist has no eligible tracks")
 
         # Build all filter/weight data in a single pass over played_tracks.
         # Each track is visited once; sets and counters are accumulated per-index.
