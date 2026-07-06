@@ -1149,6 +1149,16 @@ def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
         load_config(str(custom_path))
 
 
+def test_load_config_rejects_zero_ha_context_poll_interval(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("poll_interval = 300", "poll_interval = 0", 1)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.poll_interval must be >= 1"):
+        load_config(str(custom_path))
+
+
 def test_load_config_rejects_non_positive_context_refresh_timeout(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace("context_refresh_timeout = 2.0", "context_refresh_timeout = 0.0")
