@@ -25,11 +25,12 @@ from __future__ import annotations
 # rescue audio. Mirrors the historical inline check in on_stream_segment.
 _FALLBACK_FLAG_KEYS = (
     "fallback",
+    "rescue",
+    "error_recovery",
     "queue_drain_recovery",
     "resume_bridge",
     "silence_fallback",
     "idle_bridge",
-    "error_recovery",
 )
 
 # audio_source values that are themselves fallback sources even when no boolean

@@ -160,19 +160,20 @@ async def test_queued_segment_uses_selected_track_identity_for_duplicate_cache_k
 
 @pytest.mark.asyncio
 async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
-    """Empty fallback audio delivery must not leak stale music attribution.
-
-    No canned clip, no norm cache, no last-known-good music: the rescue ladder
-    bottoms out at an emergency tone, never generated silence."""
+    """Empty fallback audio delivery must not leak stale music attribution or queue silence."""
     from mammamiradio.scheduling import producer
 
     track = Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1", source="classic")
     state = StationState(playlist=[track], listeners_active=1)
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    def fake_tone(path: Path, *_args, **_kwargs) -> None:
-        path.write_bytes(b"tone")
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     orig_last_music = producer._last_music_file
     producer._last_music_file = None
@@ -185,8 +186,13 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
                 side_effect=RuntimeError("no audio"),
             ),
             patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
-            patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=fake_tone) as mock_tone,
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
             patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         ):
             await _run_until_status_queued(queue, state, config)
@@ -196,9 +202,8 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     queued = state.queued_segments[-1]
     assert queued["playlist_index"] == -1
     assert queued["source_kind"] == ""
-    # This empty-fallback tone is emergency audio — it must take the rescue
-    # admission lane so it never queues behind routine ffmpeg work (#685-687).
-    assert mock_tone.call_args.kwargs.get("rescue") is True
+    mock_silence.assert_not_called()
+    assert queued["label"] == "Recovery sweeper"
 
 
 @pytest.mark.asyncio

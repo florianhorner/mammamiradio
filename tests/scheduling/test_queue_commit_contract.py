@@ -292,30 +292,43 @@ async def test_prewarm_airs_without_shadow_row(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
+async def test_error_recovery_uses_norm_cache_rescue_and_appends_shadow_row(tmp_path):
     """Outer error-recovery rescue (``rescue=True``) is built inside the main loop
     body and so flows through the epilogue — unlike a bridge it DOES append an
     up-next shadow row (``producer.py:3060``). Also exercises the empty-container
-    fallback (Scenario 2): no canned clip and no norm cache available, so the
-    emergency-tone rescue fires — never generated silence."""
+    fallback (Scenario 2): no canned clip available, so recovery must still use
+    real audio instead of generated silence."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    norm_file = tmp_path / "norm_cached_192k.mp3"
+    norm_file.write_bytes(b"fake norm audio" * 100)
+    producer.save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> tone rescue
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> norm-cache rescue
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_file),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock) as mock_sweeper,
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await _wait_for(lambda: queue.qsize() > 0)
             seg = queue.get_nowait()
+            mock_silence.assert_not_called()
+            mock_sweeper.assert_not_called()
+            assert seg.type == SegmentType.MUSIC
+            assert seg.path == norm_file
             assert seg.metadata.get("rescue") is True
             assert seg.metadata.get("error_recovery") is True
-            assert seg.metadata.get("audio_source") == "emergency_tone"
+            assert seg.metadata.get("audio_source") == "norm_cache"
             assert len(state.queued_segments) == 1  # rescue-via-epilogue DID add an up-next row
         finally:
             await _cancel(task)
@@ -332,9 +345,12 @@ async def test_error_recovery_queues_rescue_before_consecutive_failure_backoff(t
     original_sleep = asyncio.sleep
     backoff_queue_sizes: list[int] = []
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    recovery.path.write_bytes(b"recovery")
 
     async def _record_sleep(delay: float, *_args, **_kwargs):
         if delay == EXPECTED_CONSECUTIVE_FAILURE_BACKOFF:
@@ -344,9 +360,14 @@ async def test_error_recovery_queues_rescue_before_consecutive_failure_backoff(t
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
     ):
@@ -356,8 +377,7 @@ async def test_error_recovery_queues_rescue_before_consecutive_failure_backoff(t
             assert backoff_queue_sizes[0] == 1
             seg = queue.get_nowait()
             assert seg.metadata.get("rescue") is True
-            assert seg.metadata.get("title") == "Station continuity"
-            assert seg.metadata.get("audio_source") == "emergency_tone"
+            assert seg.metadata.get("title") == "Recovery sweeper"
             assert len(state.queued_segments) == 1
             assert state.failed_segments == 2
         finally:
@@ -397,7 +417,7 @@ async def test_error_recovery_queues_canned_rescue_before_consecutive_failure_ba
             assert seg.path == canned_clip
             assert seg.metadata.get("error_recovery") is True
             assert seg.metadata.get("rescue") is True
-            assert seg.metadata.get("title") == "Recovery banter"
+            assert seg.metadata.get("title") == "Station continuity"
             assert len(state.queued_segments) == 1
             assert state.failed_segments == 2
         finally:
@@ -438,21 +458,26 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
     )
     original_sleep = asyncio.sleep
     backoff_snapshots: list[tuple[int, SegmentType | None, int]] = []
+    backoff_seen = asyncio.Event()
 
     async def _record_sleep(delay: float, *_args, **_kwargs):
         if delay == EXPECTED_CONSECUTIVE_FAILURE_BACKOFF:
             backoff_snapshots.append((queue.qsize(), state.operator_force_pending, len(state.queued_segments)))
+            backoff_seen.set()
         await original_sleep(0)
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        # This test is about operator recovery queue ordering. Keep the unrelated
+        # transition-stinger path from trying to inspect the fake MP3 fixture.
+        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await _wait_for(lambda: bool(backoff_snapshots))
+            await asyncio.wait_for(backoff_seen.wait(), timeout=5.0)
             assert backoff_snapshots[0] == (2, None, 2)
             rescue = queue.get_nowait()
             placeholder = queue.get_nowait()
@@ -461,7 +486,7 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
             assert rescue.metadata.get("error_recovery") is True
             assert rescue.metadata.get("rescue") is True
             assert placeholder.metadata.get("placeholder") is True
-            assert state.queued_segments[0]["label"] == "Recovery banter"
+            assert state.queued_segments[0]["label"] == "Station continuity"
             assert state.queued_segments[1]["label"] == "Buffered placeholder"
             assert state.failed_segments == 2
         finally:
@@ -486,9 +511,12 @@ async def test_error_recovery_stale_discard_awaits_consecutive_failure_backoff(t
     original_sleep = asyncio.sleep
     backoff_sleeps: list[float] = []
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    recovery.path.write_bytes(b"recovery")
 
     def _stale_probe(_path: Path) -> float:
         if stale_field == "source":
@@ -508,9 +536,14 @@ async def test_error_recovery_stale_discard_awaits_consecutive_failure_backoff(t
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_stale_probe),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
     ):
@@ -535,9 +568,12 @@ async def test_error_recovery_enqueue_failure_awaits_consecutive_failure_backoff
     backoff_sleeps: list[float] = []
     enqueue_attempts = 0
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    recovery.path.write_bytes(b"recovery")
 
     async def _reject_enqueue(*_args, **_kwargs) -> bool:
         nonlocal enqueue_attempts
@@ -552,9 +588,14 @@ async def test_error_recovery_enqueue_failure_awaits_consecutive_failure_backoff
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}._enqueue_with_egress", side_effect=_reject_enqueue),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
