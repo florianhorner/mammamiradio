@@ -37,6 +37,8 @@ def _reset_push_globals():
     ha._last_ha_push = 0.0
     ha._last_ha_stop_push = 0.0
     ha._media_player_ghost_purged = False
+    ha._ha_entity_payload_fingerprints.clear()
+    ha._ha_entity_last_push_at.clear()
     yield
 
 

@@ -40,7 +40,7 @@ CANNED_NONE=$(grep -rl '_pick_canned_clip.*return_value=None\|return_value=None.
 if [ "$CANNED_NONE" -gt 0 ]; then
     ok "_pick_canned_clip returning None is tested ($CANNED_NONE test file(s))"
 else
-    fail "No test mocks _pick_canned_clip to return None — empty container silence is untested"
+    fail "No test mocks _pick_canned_clip to return None — empty container recovery is untested"
 fi
 
 # ── 3. Test: post-restart session_stopped scenario ───────────────────────────

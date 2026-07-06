@@ -118,6 +118,26 @@ async def test_music_segment_payload():
 
 
 @pytest.mark.asyncio
+async def test_operator_preferences_do_not_change_v1_now_playing_shape():
+    app = make_integrations_app()
+    app.state.station_state.song_preferences = {
+        ("domenico modugno", "volare"): {
+            "score": 1,
+            "display": "Domenico Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+    play_music_segment(app.state.station_state)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+
+    assert set(body["now_playing"]) == set(V1_NOW_PLAYING)
+    assert "preference" not in str(body).lower()
+
+
+@pytest.mark.asyncio
 async def test_banter_segment_payload_is_voice():
     app = make_integrations_app()
     play_segment(app.state.station_state, SegmentType.BANTER, title="Gianni e Marco", host="Gianni")
