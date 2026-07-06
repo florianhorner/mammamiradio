@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 2.16.1 - 2026-07-06
+
 ### Fixed
 
 - **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
+- **Resume now clears the stopped status right away.** After tapping Resume, the add-on's public and admin status panels no longer keep showing the old stopped-state copy while the station waits for the next segment.
+- **Listener dediche no longer disappear when you switch playlists.** If a request is waiting and the operator loads a different playlist, the request moves into the recently handled feed as "Playlist changed" instead of vanishing after the listener already saw the request accepted.
 
 ## 2.16.0
 
