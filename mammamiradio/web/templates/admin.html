@@ -2032,6 +2032,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="setup-headline" id="setupHeadline">Checking configuration...</div>
             <div class="setup-meta" id="setupMeta"></div>
             <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+            <div class="setup-subhead">Identity</div>
+            <div class="setup-list" id="setupIdentity"></div>
             <div class="setup-subhead">Steps</div>
             <ul class="setup-steps" id="setupSteps"></ul>
             <div class="setup-subhead">Essentials</div>
@@ -3104,6 +3106,24 @@ function renderSetup(setup){
   document.getElementById('setupHeadline').textContent=setup.launch?.headline||'Configuration status available';
   document.getElementById('setupMeta').textContent=`Mode: ${modeLabel} • Station: ${stationLabel}`;
   document.getElementById('setupNext').textContent=setup.recommended_next_action||'Configuration complete.';
+
+  const identity=setup.identity||{};
+  const preview=identity.preview||{};
+  const identityRows=[
+    setupRow('Station name', identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Heard on air', preview.heard_on_air||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Seen by listeners', preview.seen_by_listeners||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Seen in Home Assistant', preview.seen_in_home_assistant||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow(
+      'Automation IDs',
+      'Entity IDs, media-source paths, add-on slug, and integration domain stay mammamiradio.',
+      identity.custom_copy_preserved?'warn':'done'
+    ),
+  ];
+  if(identity.custom_copy_preserved){
+    identityRows.push(setupRow('Custom copy preserved','Some custom brand or sonic copy still uses operator-provided wording. Regenerate it deliberately if it should match the station name.','warn'));
+  }
+  document.getElementById('setupIdentity').innerHTML=identityRows.join('');
 
   const steps=(setup.onboarding_steps||[]).map(step=>{
     const detail = step.detail ? ` - ${step.detail}` : '';

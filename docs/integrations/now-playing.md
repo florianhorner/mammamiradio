@@ -72,6 +72,12 @@ check the status code before parsing the body.
 }
 ```
 
+`station.name` is the resolved station identity from the add-on's `station_name`
+option, environment override, or `radio.toml` fallback. It is safe to show to
+users as the station label. It is not a stable identifier; integrations should
+continue using the `mammamiradio` domain, `media_player.mammamiradio`, and
+`media-source://mammamiradio/live` for automation and routing.
+
 `up_next[].predicted` is the readiness boundary. `false` means the audio is
 actually queued; `true` is a scheduler guess that may appear even when the
 rendered queue is empty. If you are migrating from `/public-status.upcoming`

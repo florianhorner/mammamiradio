@@ -219,7 +219,7 @@ async def startup():
     global _producer_task, _playback_task, _prewarm_task
 
     config = load_config()
-    logger.info("Station: %s (%s)", config.station.name, config.station.language)
+    logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
 
     # One integrated-LUFS target across every segment type: configure the
     # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,

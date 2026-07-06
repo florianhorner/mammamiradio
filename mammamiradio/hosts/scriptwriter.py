@@ -1783,8 +1783,9 @@ overhearing a world that exists with or without them."""
     # Test balloon: if the Bavarian guest is in the roster, keep him inside the
     # show as a guest star in either language mode (never described without a brief).
     mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
+    station_name = config.display_station_name
 
-    return f"""You write scripts for a fake AI radio station called "{config.station.name}".
+    return f"""You write scripts for a fake AI radio station called "{station_name}".
 {mode_directive}
 Theme: {config.station.theme}{geography}
 {station_world}
@@ -1811,14 +1812,14 @@ Rules:
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
-- STATION NAME: drop "{config.station.name}" naturally about once every 3-4 exchanges —
-  the way a real DJ does. Not an announcement, just woven in. "...siamo su {config.station.name},
-  che altro?" or just "{config.station.name}." at the end of a thought. Never more than once
+- STATION NAME: drop "{station_name}" naturally about once every 3-4 exchanges —
+  the way a real DJ does. Not an announcement, just woven in. "...siamo su {station_name},
+  che altro?" or just "{station_name}." at the end of a thought. Never more than once
   per banter block. Never forced.
 - CRITICAL — STATION NAME ONLY: The ONLY radio station name you may ever write is
-  "{config.station.name}". Never write any other real or invented station name — not
+  "{station_name}". Never write any other real or invented station name — not
   Kiss Kiss, not RDS, not RTL, not Radio Italia, not any variant. If you feel the urge
-  to mention a station, use "{config.station.name}" or skip it entirely. Writing the wrong
+  to mention a station, use "{station_name}" or skip it entirely. Writing the wrong
   station name is the single most damaging thing you can do to the listener's experience.
 - CONFLICT IS MANDATORY. Hosts must disagree at least once per exchange. Not just
   "beh, forse..." — actual opposition. "No, ma che stai dicendo?" levels. They never
@@ -2361,7 +2362,7 @@ Return JSON:
             raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
-        result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
+        result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
@@ -2677,7 +2678,9 @@ Return JSON:
             caller="news_flash",
         )
 
-        text = sanitize_spoken_station_name(data.get("text") or _news_flash_fallback(config), config.station.name)
+        text = sanitize_spoken_station_name(
+            data.get("text") or _news_flash_fallback(config), config.display_station_name
+        )
         if callback_gag:
             # Model-reported: did it actually land the cross-domain gag? The
             # producer retires the gag only when this is true (queue-time != used).
@@ -2961,7 +2964,7 @@ Return JSON:
             parts.append(
                 AdPart(
                     type=p.get("type", "voice"),
-                    text=sanitize_spoken_station_name(p.get("text", ""), config.station.name),
+                    text=sanitize_spoken_station_name(p.get("text", ""), config.display_station_name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
                     role=p.get("role", ""),

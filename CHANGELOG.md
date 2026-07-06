@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
+
 ## [2.16.1] - 2026-07-06
 
 ### Changed

@@ -680,22 +680,23 @@ def test_is_addon_ignores_options_file_without_tokens(monkeypatch):
         assert _is_addon() is False
 
 
-def test_apply_addon_options(monkeypatch, tmp_path):
-    options = {"anthropic_api_key": "test_key"}
+def test_apply_addon_options(tmp_path):
+    options = {"anthropic_api_key": "test_key", "station_name": "Radio Addon"}
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps(options))
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
     import os
 
-    with patch("mammamiradio.core.config.Path") as mock_path_cls:
-        mock_path_cls.return_value = options_file
-        _apply_addon_options()
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("STATION_NAME", None)
 
-    assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
-    # Cleanup
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+
+        assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
+        assert os.environ.get("STATION_NAME") == "Radio Addon"
 
 
 def test_apply_addon_options_reads_provider_secrets_file(monkeypatch, tmp_path):
@@ -1288,7 +1289,7 @@ def test_loaded_sweepers_use_canonical_station_name(monkeypatch):
 
 
 def test_display_station_name_is_canonical_and_never_blank(monkeypatch):
-    """display_station_name resolves brand → station → default and never returns an empty string."""
+    """display_station_name is the compatibility alias for resolved identity."""
     monkeypatch.delenv("STATION_NAME", raising=False)
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(source))
@@ -1296,17 +1297,12 @@ def test_display_station_name_is_canonical_and_never_blank(monkeypatch):
     # Default shipped config resolves to the canonical name.
     assert config.display_station_name == "Mamma Mi Radio"
 
-    # Brand name wins when set.
-    config.brand.station_name = "Radio Sole"
+    # The alias reads the resolved identity, not a second brand/station path.
+    config.identity.station_name = "Radio Sole"
     assert config.display_station_name == "Radio Sole"
 
-    # Blank brand falls through to the station name.
-    config.brand.station_name = ""
-    config.station.name = "Engine Name"
-    assert config.display_station_name == "Engine Name"
-
-    # Both blank floors to the canonical default — never empty.
-    config.station.name = ""
+    # Blank identity floors to the canonical default — never empty.
+    config.identity.station_name = ""
     assert config.display_station_name == "Mamma Mi Radio"
 
 
