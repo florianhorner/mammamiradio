@@ -5,6 +5,7 @@
 ### Fixed
 
 - **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the last-resort silence placeholder, so provider or download trouble feels intentional instead of like dead air.
 
 ## 2.16.0
 

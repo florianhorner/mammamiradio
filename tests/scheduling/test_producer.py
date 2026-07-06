@@ -165,15 +165,20 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     state = StationState(playlist=[track], listeners_active=1)
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    def fake_silence(path: Path, _duration: float, **_kwargs) -> None:
-        path.write_bytes(b"silence")
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no audio")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence) as mock_silence,
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")),
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
     ):
         await _run_until_status_queued(queue, state, config)
@@ -181,9 +186,7 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
     queued = state.queued_segments[-1]
     assert queued["playlist_index"] == -1
     assert queued["source_kind"] == ""
-    # This empty-fallback silence is emergency audio — it must take the rescue
-    # admission lane so it never queues behind routine ffmpeg work (#685-687).
-    assert mock_silence.call_args.kwargs.get("rescue") is True
+    assert queued["label"] == "Recovery sweeper"
 
 
 @pytest.mark.asyncio
