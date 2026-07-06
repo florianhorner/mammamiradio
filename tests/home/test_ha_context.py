@@ -17,6 +17,7 @@ import pytest
 from mammamiradio.core.config import RadioEventRule
 from mammamiradio.home.ha_context import (
     _DEFAULT_STATION_ARTWORK_URL,
+    _HA_SEGMENT_TYPE_FALLBACK_ICON,
     ENTITY_LABELS,
     MAX_PRESENCE_IN_SLICE,
     HomeContext,
@@ -36,6 +37,7 @@ from mammamiradio.home.ha_context import (
     _ha_websocket_url,
     _sanitize_state_value,
     _score_entity,
+    _segment_type_icon,
     _write_registry_snapshot,
     check_reactive_triggers,
     classify_home_mood,
@@ -2317,6 +2319,11 @@ async def test_push_state_to_ha_segment_type_icon_map(
 
     attrs = _attrs_by_entity(mock_client)
     assert attrs["sensor.mammamiradio_segment_type"]["icon"] == expected_icon
+
+
+def test_segment_type_icon_normalizes_known_values_and_falls_back():
+    assert _segment_type_icon(" Music ") == "mdi:music-note"
+    assert _segment_type_icon(None) == _HA_SEGMENT_TYPE_FALLBACK_ICON
 
 
 @pytest.mark.asyncio
