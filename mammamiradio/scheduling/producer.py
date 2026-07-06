@@ -2029,6 +2029,7 @@ async def run_producer(
         # poll interval, not made real-time — the TTL is deliberately unchanged.
         if (
             config.homeassistant.enabled
+            and config.homeassistant.context_enabled
             and config.ha_token
             and seg_type
             in (

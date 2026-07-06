@@ -345,6 +345,8 @@ def test_parser_exports_all_supported_keys():
         "quality_profile": "premium",
         "admin_token": "tok123",
         "enable_home_assistant": True,
+        "ha_context_enabled": False,
+        "ha_context_poll_interval": 600,
         "jamendo_client_id": "abc123",
     }
     rc, stdout, _ = _run_parser(options)
@@ -359,6 +361,8 @@ def test_parser_exports_all_supported_keys():
     assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
     assert exports["ADMIN_TOKEN"] == "tok123"
     assert exports["HA_ENABLED"] == "true"
+    assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "false"
+    assert exports["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "600"
     assert exports["JAMENDO_CLIENT_ID"] == "abc123"
 
 
@@ -397,6 +401,29 @@ def test_parser_media_player_push_missing_key_preserves_legacy_default():
     assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == "true"
 
 
+def test_parser_ha_context_defaults_for_green_class_hardware():
+    rc, stdout, _ = _run_parser({})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "true"
+    assert exports["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "300"
+
+
+def test_parser_ha_context_can_disable_full_state_polling():
+    rc, stdout, _ = _run_parser({"ha_context_enabled": False})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["HA_ENABLED"] == "true"
+    assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "false"
+
+
+def test_parser_ha_context_poll_interval_invalid_defaults_to_300():
+    for value in ("soon", 0, -1):
+        rc, stdout, _ = _run_parser({"ha_context_poll_interval": value})
+        assert rc == 0
+        assert _parse_exports(stdout)["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "300"
+
+
 def test_parser_media_player_push_explicit_true_and_false():
     for value, expected in ((True, "true"), (False, "false")):
         rc, stdout, _ = _run_parser({"ha_media_player_push": value})
@@ -432,6 +459,23 @@ def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
         body = config.read_text()
         assert re.search(r"(?m)^  ha_media_player_push: true$", body), (
             f"{config} must default new installs to On so an add-on-only setup gets a media_player tile out of the box"
+        )
+
+
+def test_addon_manifest_ha_context_defaults_for_new_installs():
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        body = config.read_text()
+        assert re.search(r"(?m)^  ha_context_enabled: true$", body), (
+            f"{config} must keep HA prompt context enabled unless the operator opts out"
+        )
+        assert re.search(r"(?m)^  ha_context_poll_interval: 300$", body), (
+            f"{config} must default full-state polling to a Green-safe 300s interval"
+        )
+        assert re.search(r"(?m)^  ha_context_enabled: bool\?$", body), (
+            f"{config} must expose ha_context_enabled in the schema"
+        )
+        assert re.search(r"(?m)^  ha_context_poll_interval: int\(1,3600\)\?$", body), (
+            f"{config} must bound ha_context_poll_interval in the schema"
         )
 
 

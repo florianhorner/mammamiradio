@@ -408,7 +408,8 @@ class HomeAssistantSection:
 
     enabled: bool = False
     url: str = ""
-    poll_interval: int = 60  # seconds between state refreshes
+    context_enabled: bool = True  # full /api/states prompt-context ingest
+    poll_interval: int = 300  # seconds between full state refreshes
     timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
     # Wall-clock budget (seconds) the producer gives a single HA context refresh
     # before it airs on last-known context instead of blocking segment production.
@@ -1234,6 +1235,8 @@ def _validate(config: StationConfig) -> None:
             errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
     if config.pacing.lookahead_segments < 1:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
+    if config.homeassistant.poll_interval < 1:
+        errors.append(_err("homeassistant.poll_interval", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
         errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
     _ctx_timeout = config.homeassistant.context_refresh_timeout
@@ -1330,6 +1333,25 @@ def _env_positive_float(name: str) -> float | None:
     if math.isfinite(value) and value > 0:
         return value
     log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
+
+
+def _env_positive_int(name: str) -> int | None:
+    """Parse a positive integer from an env var; warn and return None on invalid."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer)", name, raw)
+        return None
+    if value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be > 0)", name, raw)
     return None
 
 
@@ -1571,6 +1593,18 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
+    _ha_context_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "").strip().lower()
+    if _ha_context_env in _TRUTHY:
+        ha_raw["context_enabled"] = True
+    elif _ha_context_env in _FALSY:
+        ha_raw["context_enabled"] = False
+    elif _ha_context_env:
+        import logging as _ha_context_logging
+
+        _ha_context_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_CONTEXT_ENABLED=%r (use true/1/yes or false/0/no)",
+            _ha_context_env,
+        )
     _ha_mood_llm_env = os.getenv("MAMMAMIRADIO_HA_MOOD_LLM", "").strip().lower()
     if _ha_mood_llm_env in _TRUTHY:
         ha_raw["mood_llm_enabled"] = True
@@ -1590,6 +1624,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
     if _ctx_override is not None:
         ha_raw["context_refresh_timeout"] = _ctx_override
+    _poll_override = _env_positive_int("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL")
+    if _poll_override is not None:
+        ha_raw["poll_interval"] = _poll_override
     _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
     if _mood_ttl_override is not None:
         ha_raw["mood_ttl_seconds"] = _mood_ttl_override

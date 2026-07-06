@@ -52,11 +52,11 @@ now-playing contract; this integration is the HA-native face of it.
 
 ## Turn off the add-on's media_player push (when using this integration)
 
-The add-on pushes a `media_player.mammamiradio` "ghost" every few seconds over
-the REST API — **on by default**, so an add-on-only setup gets a basic
-media-player tile automatically. Once this integration owns that entity, the push
-fights it (the HA state machine is last-writer-wins) and flaps the card. So when
-you install this integration:
+The add-on pushes a `media_player.mammamiradio` "ghost" after segment changes
+and on its heartbeat — **on by default**, so an add-on-only setup gets a basic
+media-player tile automatically. Once this integration owns that entity, the
+push fights it (the HA state machine is last-writer-wins) and flaps the card. So
+when you install this integration:
 
 **Add-on → Configuration → turn off `On-air media player push`
 (`ha_media_player_push`).**
