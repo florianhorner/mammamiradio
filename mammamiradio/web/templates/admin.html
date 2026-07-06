@@ -2706,7 +2706,7 @@ function renderProgramme(st){
   // different copy when stopped vs building, so a stop/resume with an unchanged
   // upcoming list must still re-render.
   const faderDown=shouldFaderDown(st);
-  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),st?.current_source?.kind,st?.current_source?.label,st?.playlist_source?.kind,st?.playlist_source?.label,_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),st?.current_source?.kind,st?.current_source?.label,st?.playlist_source?.kind,st?.playlist_source?.label,st?.golden_path?.stage,_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -2714,7 +2714,8 @@ function renderProgramme(st){
   // Suppress optimistically-removed rows until their deferred backend call
   // commits (delayed-commit undo). A pending purge blanks the whole queue.
   const upcoming=_pendingPurge?[]:(st.upcoming||[]).filter(it=>!_pendingRemovals.has(it.id));
-  const hasMusicSource=!!(st.current_source||st.playlist_source);
+  const needsMusicSource=st?.golden_path?.stage==='needs_music_source';
+  const hasMusicSource=!needsMusicSource&&!!(st.current_source||st.playlist_source);
   const rows=[];
 
   function matchFilter(type){
@@ -2773,7 +2774,7 @@ function renderProgramme(st){
     el.innerHTML=emptyState('No '+segmentText(_programmeFilter)+' ready in this rundown.');
   }else if(document.body.getAttribute('data-stopped')==='true'){
     el.innerHTML=emptyState('Station paused — press Start to resume.');
-  }else if(!hasMusicSource){
+  }else if(needsMusicSource||!hasMusicSource){
     el.innerHTML=emptyState('No music source selected. Add a source to build the rundown.');
   }else if(faderDown){
     el.innerHTML=emptyState('Fader Down — the record is cued for the next listener.');
@@ -3110,11 +3111,12 @@ function updateSystems(caps,st){
   }
 
   const sourceLabel=st?.current_source?.label||st?.playlist_source?.label||'No playlist source';
-  const hasMusicSource=!!(st?.current_source||st?.playlist_source);
+  const needsMusicSource=gp.stage==='needs_music_source';
+  const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source);
   const upcomingMusic=(st?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
   let musicState='ready',musicLabel='Ready',musicDetail=`Source: ${sourceLabel}.`;
-  if(!hasMusicSource){
-    musicState='blocked';musicLabel='Error';musicDetail='No music source configured.';
+  if(needsMusicSource||!hasMusicSource){
+    musicState='blocked';musicLabel='Needs source';musicDetail='Add a source from Rotazione to build the rundown.';
   }else if(st?.session_stopped===true){
     musicState='idle';musicLabel='Paused';musicDetail=`Source: ${sourceLabel}. Station paused — press Start to resume.`;
   }else if(upcomingMusic.length){

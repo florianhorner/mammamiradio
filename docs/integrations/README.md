@@ -45,8 +45,10 @@ voice/interstitial segments without faking music metadata.
 
 ## Auth model
 
-- **v1:** unauthenticated. Same as `/public-status`. The endpoint returns
-  the same data any listener can see via the public stream.
+- **v1:** unauthenticated. Same trust boundary as `/public-status`: it only
+  returns listener-safe status. Its `up_next` list may include scheduler
+  predictions, so consumers that need render-ready audio should filter to
+  `predicted === false`.
 - **v1.1 (reserved):** an optional `X-Integration-Token` header may be
   added for rate-limit lifting and access to consumer-specific telemetry.
   Unauthenticated clients will continue to work.

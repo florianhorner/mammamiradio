@@ -1,9 +1,23 @@
-make check (ruff lint + format-check + mypy + pytest with coverage gate)
+Review/fix validation for the fake-scaletta public schedule change.
 Branch: florianhorner/fix/fake-scaletta
-Commit: f44c77dd
+Validation date: 2026-07-06
 
-All checks passed!
-Required test coverage of 92.0% reached. Total coverage: 93.02%
-3891 passed, 2 skipped, 19 deselected in 90.59s (0:01:30)
-All coverage floors held. Total: 93% (floor: 92%)
-All checks passed
+Focused contract checks:
+- .venv/bin/python -m pytest tests/web/test_admin_status_invariants.py::test_system_health_rows_use_canonical_status_helpers tests/web/test_ui_control_contracts.py::TestStoppedStateQuietsTheUI
+  - 13 passed in 0.72s
+- .venv/bin/python -m pytest tests/web/test_public_status_contract.py tests/web/test_shadow_queue_sync.py tests/web/test_streamer_routes.py::test_public_status_upcoming_mode_building_when_queue_empty tests/web/test_streamer_routes.py::test_public_status_needs_music_source_and_building_queue_together tests/web/test_streamer_routes.py::test_public_status_session_stopped_alongside_needs_music_source tests/integrations/test_now_playing_fallbacks.py tests/integrations/test_now_playing_etag.py
+  - 128 passed in 2.31s
+
+Review gate checks:
+- pyproject.toml version and ha-addon/mammamiradio/config.yaml version both 2.16.0.
+- /healthz and /readyz routes remain registered in mammamiradio/web/streamer.py.
+- No changed shell scripts in this diff; bash -n gate not applicable.
+- Diff secret scan returned no matches.
+- git diff --check passed.
+
+Full gate:
+- make check (ruff lint + format-check + mypy + vulture + pytest with coverage gate)
+- All checks passed.
+- Required test coverage of 92.0% reached. Total coverage: 93.07%.
+- 3901 passed, 2 skipped, 19 deselected in 101.34s (0:01:41).
+- All coverage floors held. Total: 93% (floor: 92%).

@@ -1377,6 +1377,12 @@ class TestStoppedStateQuietsTheUI:
         assert "No music source selected. Add a source to build the rundown." in block, (
             "renderProgramme() must distinguish no-source from active producer building."
         )
+        assert "st?.golden_path?.stage==='needs_music_source'" in block, (
+            "renderProgramme() must use golden_path as the no-source authority, not just source objects."
+        )
+        assert "needsMusicSource||!hasMusicSource" in block, (
+            "renderProgramme() must still show no-source copy when startup has a fallback playlist_source."
+        )
         assert "No '+segmentText(_programmeFilter)+' ready in this rundown." in block, (
             "renderProgramme() must distinguish a filtered-empty rendered queue from a building queue."
         )
@@ -1398,8 +1404,8 @@ class TestStoppedStateQuietsTheUI:
         hash_line = next(line for line in block.splitlines() if "const hash=" in line)
         assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
         assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
-        assert "current_source" in hash_line and "playlist_source" in hash_line, (
-            "renderProgramme() memo hash must include source state so no-source/building copy refreshes."
+        assert "current_source" in hash_line and "playlist_source" in hash_line and "golden_path" in hash_line, (
+            "renderProgramme() memo hash must include source/golden-path state so no-source/building copy refreshes."
         )
 
     def test_refresh_fast_syncs_stop_state_from_status_poll(self):

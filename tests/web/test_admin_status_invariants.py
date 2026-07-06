@@ -268,7 +268,11 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "musicState='ready'" in update_systems
     assert "musicState='working'" in update_systems
     assert "musicState='blocked'" in update_systems
-    assert "if(!hasMusicSource)" in update_systems
+    assert "const needsMusicSource=gp.stage==='needs_music_source'" in update_systems
+    assert "const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source)" in update_systems
+    assert "if(needsMusicSource||!hasMusicSource)" in update_systems
+    assert "musicLabel='Needs source'" in update_systems
+    assert "Add a source from Rotazione to build the rundown." in update_systems
     assert "else if(st?.session_stopped===true)" in update_systems
     assert "else if(st?.upcoming_mode==='building')" in update_systems
     assert update_systems.index("st?.session_stopped===true") < update_systems.index("st?.upcoming_mode==='building'")
