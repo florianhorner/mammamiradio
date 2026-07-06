@@ -1,0 +1,90 @@
+=== mammamiradio no-dead-air producer rescue ladder — test proof ===
+commit: 46c0dd5b
+date: 2026-07-06T15:09:59Z
+
+--- pytest tests/scheduling/test_producer_unit.py -k 'error_recovery or pick_canned_clip' ---
+..........                                                               [100%]
+10 passed, 106 deselected in 0.42s
+
+--- pytest tests/scheduling/test_producer_coverage.py -k 'error_recovery or drain_guard' ---
+...........                                                              [100%]
+11 passed, 45 deselected in 1.36s
+
+--- pytest tests/scheduling/test_queue_commit_contract.py -k error_recovery_rescue_appends_shadow_row ---
+.                                                                        [100%]
+1 passed, 14 deselected in 0.49s
+
+--- pytest tests/scheduling/test_egress_pipeline.py tests/core/test_segment_status.py ---
+..............................................................           [100%]
+62 passed in 0.30s
+
+--- pytest tests/scheduling/ tests/core/ tests/web/test_public_status_contract.py (full regression) ---
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+........................................................................ [ 46%]
+........................................................................ [ 55%]
+........................................................................ [ 64%]
+........................................................................ [ 73%]
+........................................................................ [ 83%]
+........................................................................ [ 92%]
+...........................................................              [100%]
+779 passed in 42.60s
+
+--- bash scripts/check-release-invariants.sh ---
+
+=== mammamiradio release invariants ===
+
+1. FFmpeg music_eq filter chain (normalizer.py)
+  [PASS] music_eq_chain has 2 equalizer filters (de-mud 200Hz + presence 3kHz)
+
+2. Test coverage — empty fallback scenario
+  [PASS] _pick_canned_clip returning None is tested (10 test file(s))
+
+3. Test coverage — post-restart scenario
+  [PASS] session_stopped scenario is tested (50 test file(s))
+
+4. HA Green fallback performance gates
+  [PASS] queue fallback wait is 5.0s (<= 5s)
+  [PASS] norm-cache rescue avoids deterministic first-file selection
+  [PASS] HA Green perf smoke script and Make target are present
+  [PASS] HA Green cold-launch smoke script and Make target are present
+
+5. Release beat manifest
+release beat: no manifest at mammamiradio/assets/release/release_beat.toml; no-op
+  [PASS] release beat manifest is absent, disabled, or schema-valid
+
+6. Producer error-recovery rescue ladder
+  [PASS] producer.py does not import or call generate_silence
+
+=======================================
+  Passed: 9  Failed: 0
+=======================================
+
+All invariants passed.
+
+--- bash scripts/check-changelog-lint.sh ---
+Changelog lint clean.
+
+--- make check (lint + format-check + typecheck + full coverage-gated suite) ---
+mammamiradio/web/mp3_frames.py                50      1     18      2    96%   77->81, 84
+mammamiradio/web/og_card.py                   95      3     22      2    96%   60-61, 94, 155->157
+mammamiradio/web/pages.py                     26      0      6      0   100%
+mammamiradio/web/persistence.py              136      6     52      8    93%   61, 68->78, 143->150, 146->150, 166-169, 172->180, 175->180, 177-178, 189, 198->202
+mammamiradio/web/provider_verdict.py          37      0     14      0   100%
+mammamiradio/web/streamer.py                2497    171    732     91    92%   161-162, 165-166, 242-243, 251->250, 334-335, 340->352, 347->349, 371->369, 374, 381, 411->410, 487->490, 513-526, 673-675, 680-682, 691-693, 1112-1114, 1122-1124, 1229->1231, 1245, 1248, 1297, 1298->1301, 1418-1419, 1424-1437, 1442, 1459-1460, 1463, 1481->1530, 1550-1551, 1586-1587, 1595-1607, 1611->1613, 1622-1636, 1662-1665, 1678->1660, 1705->1715, 1713-1714, 1739->1394, 1763->exit, 1767-1768, 1894-1899, 1920, 1934, 1961->exit, 1990-2000, 2106, 2112, 2145, 2150-2151, 2248-2258, 2259->2272, 2276->2278, 2281->2285, 2313, 2434, 2589-2590, 2597->2602, 2605->2613, 2708, 2741-2742, 2878, 2887, 2897->2926, 3102, 3170, 3411->3416, 3506, 3510->3508, 3513->3512, 3517, 3612->3611, 3615, 3783, 3918-3920, 3948-3950, 3952, 3960-3962, 3968, 3971, 3985-3986, 4006-4007, 4028->4050, 4031->4034, 4034->4039, 4036->4038, 4039->4050, 4042-4043, 4062-4066, 4091, 4139, 4145, 4147, 4149, 4230-4238, 4255, 4265, 4271-4279, 4297->4296, 4309-4311, 4354->4357, 4418, 4421, 4454-4477, 4524, 4527, 4533-4541, 4553-4555, 4599-4601, 4692->4694, 4981, 5057-5058
+mammamiradio/web/ui_copy.py                    7      0      0      0   100%
+--------------------------------------------------------------------------------------
+TOTAL                                      14943    847   4770    486    93%
+Required test coverage of 92.0% reached. Total coverage: 92.90%
+3879 passed, 2 skipped, 19 deselected in 88.56s (0:01:28)
+
+
+All coverage floors held. Total: 93% (floor: 92%)
+
+Modules with ratchet headroom (will auto-update on main):
+  mammamiradio.hosts.context_cues: 99% (floor: 94%)
+  mammamiradio.integrations.now_playing: 92% (floor: 88%)
+  mammamiradio.scheduling.producer: 88% (floor: 83%)
+All checks passed
