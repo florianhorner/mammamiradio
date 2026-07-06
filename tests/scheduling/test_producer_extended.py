@@ -1162,7 +1162,11 @@ async def test_error_recovery_emergency_tone_failure_is_contained(tmp_path):
         ),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
         patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
-        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, side_effect=RuntimeError("tts down")),
+        patch(
+            f"{MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts down"),
+        ),
         patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
         patch(
             f"{MODULE}.generate_silence",
@@ -1735,6 +1739,8 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
         patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):

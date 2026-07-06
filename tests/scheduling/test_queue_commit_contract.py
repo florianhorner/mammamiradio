@@ -416,7 +416,7 @@ async def test_error_recovery_queues_canned_rescue_before_consecutive_failure_ba
             assert seg.path == canned_clip
             assert seg.metadata.get("error_recovery") is True
             assert seg.metadata.get("rescue") is True
-            assert seg.metadata.get("title") == "Recovery banter"
+            assert seg.metadata.get("title") == "Station continuity"
             assert len(state.queued_segments) == 1
             assert state.failed_segments == 2
         finally:
@@ -480,7 +480,7 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
             assert rescue.metadata.get("error_recovery") is True
             assert rescue.metadata.get("rescue") is True
             assert placeholder.metadata.get("placeholder") is True
-            assert state.queued_segments[0]["label"] == "Recovery banter"
+            assert state.queued_segments[0]["label"] == "Station continuity"
             assert state.queued_segments[1]["label"] == "Buffered placeholder"
             assert state.failed_segments == 2
         finally:

@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+## 2.16.1 - 2026-07-06
+
 ### Fixed
 
+- **Recovery now uses real packaged audio instead of generated silence.** If the producer hits a broad failure or the queue drains after an operator clears the pool, the add-on now reaches for a committed recovery clip, then normalized cached music, then a branded recovery sweeper, then an emergency tone. The release checks fail if the recovery clip is missing or if producer recovery calls `generate_silence` again.
 - **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
-- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the last-resort silence placeholder, so provider or download trouble feels intentional instead of like dead air.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the emergency-tone fallback, so provider or download trouble feels intentional instead of like dead air.
 
 ## 2.16.0
 
@@ -30,7 +33,6 @@
 
 ### Fixed
 
-- **Recovery now uses real packaged audio instead of generated silence.** If the producer hits a broad failure or the queue drains after an operator clears the pool, the add-on now reaches for a committed recovery clip, then normalized cached music, then an emergency tone.
 - **The add-on logs stay calmer when providers or downloads fail safely.** Ad promo tags now use the configured ad voice engine instead of handing ElevenLabs IDs to Edge TTS, Azure and ElevenLabs auth/config failures fall back once and then stay on the Edge fallback for the session, direction-download failures no longer dump traceback noise for ordinary YouTube blocks, and Home Assistant state pushes are smoothed into ordered writes.
 - **Hans Günther now stays a cameo instead of taking over a host break.** The add-on recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange if needed.
 - **Your pacing settings now stick.** The Diretta sliders in the admin panel — songs between host breaks, songs between ad breaks, and ads per break — used to reset to their defaults after a restart. They are now saved and restored, and the three values also appear on the add-on Configuration screen. If a save can't be written the panel says so and leaves the current setting untouched instead of half-applying it.
