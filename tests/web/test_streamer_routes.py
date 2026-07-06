@@ -1643,15 +1643,15 @@ async def test_public_status_needs_music_source_and_building_queue_together(monk
     the same response -- the two "getting started" surfaces (listener no-source
     banner, admin no-source empty state) both key off this combination, so a
     change that decouples them again must fail here, not silently in the UI."""
-    import mammamiradio.web.streamer as streamer_mod
+    from mammamiradio.web import status_payload as status_payload_mod
 
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None, raising=False)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0, raising=False)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
 
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
-    with patch("mammamiradio.web.streamer._has_any_mp3", return_value=False):
+    with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/public-status")
     assert resp.status_code == 200
@@ -1666,16 +1666,16 @@ async def test_public_status_session_stopped_alongside_needs_music_source(monkey
     """A stopped station with no music source still reports both flags plainly --
     the listener/admin UIs are responsible for prioritizing "stopped" copy over
     "no source" copy; the backend never collapses one signal into the other."""
-    import mammamiradio.web.streamer as streamer_mod
+    from mammamiradio.web import status_payload as status_payload_mod
 
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None, raising=False)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0, raising=False)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
 
     app = _make_test_app()
     app.state.station_state.session_stopped = True
     transport = httpx.ASGITransport(app=app)
-    with patch("mammamiradio.web.streamer._has_any_mp3", return_value=False):
+    with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/public-status")
     assert resp.status_code == 200
