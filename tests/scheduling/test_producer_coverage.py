@@ -1119,6 +1119,7 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._get_last_music_file", return_value=None),
         patch(
             f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
             new_callable=AsyncMock,
