@@ -1611,6 +1611,7 @@ def _heading_startup_config(tmp_path: Path) -> MagicMock:
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
+    mock_config.pacing.songs_between_banter = 2
     mock_config.max_cache_size_mb = 500
     mock_config.tmp_dir = tmp_path / "tmp"
     mock_config.cache_dir = tmp_path / "cache"
@@ -1935,6 +1936,60 @@ async def test_direction_background_restore_clears_heading_when_nothing_lands(tm
 
     assert state.heading is None
     assert read_persisted_heading(mock_config.cache_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_skips_longform_first_hit(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://fkj tadow",
+        "FKJ Tadow",
+        1.0,
+        "operator",
+        targets=[{"artist": "FKJ", "title": "Tadow"}],
+    )
+    state = StationState(
+        playlist=[Track(title="Base", artist="Base Artist", duration_ms=200_000, youtube_id="base0000001")],
+        heading=heading,
+    )
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+    longform = {
+        "youtube_id": "set00000001",
+        "title": "FKJ - Tadow DJ Set Full Album",
+        "artist": "FKJ",
+        "duration_ms": 7_200_000,
+    }
+    single = {
+        "youtube_id": "song0000001",
+        "title": "FKJ - Tadow official audio",
+        "artist": "FKJ",
+        "duration_ms": 240_000,
+    }
+
+    async def _land_direction_track(track, app_state, *_args):
+        app_state.station_state.playlist.append(track)
+        return "queued"
+
+    with (
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[longform, single]),
+        patch(f"{MODULE}._download_direction_track", side_effect=_land_direction_track) as download_direction,
+    ):
+        await _restore_direction_targets_background(app_state, heading.id, heading.targets, state.source_revision)
+
+    download_direction.assert_called_once()
+    restored = download_direction.call_args.args[0]
+    assert restored.youtube_id == "song0000001"
+    assert restored.heading_id == heading.id
+    assert state.heading is heading
 
 
 @pytest.mark.asyncio

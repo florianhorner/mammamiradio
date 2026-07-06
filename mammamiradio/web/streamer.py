@@ -25,7 +25,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
-from mammamiradio.audio.normalizer import configure_broadcast_chain, humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.normalizer import (
+    configure_broadcast_chain,
+    humanize_norm_filename,
+    load_track_metadata,
+    norm_cache_duration_sec,
+    probe_duration_sec,
+)
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import PACING_BOUNDS
@@ -62,7 +68,12 @@ from mammamiradio.playlist.direction import (
     expand_direction,
     find_existing_direction_tracks,
     normalize_direction_text,
-    track_from_direction_search,
+    resolve_direction_search_results,
+)
+from mammamiradio.playlist.music_admission import (
+    YOUTUBE_ADMISSION_SEARCH_DEPTH,
+    classify_youtube_candidate,
+    is_youtube_music_candidate,
 )
 from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
@@ -136,6 +147,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
+_LONGFORM_NOTICE_REASON = "longform_audio"
 
 # Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
@@ -1628,15 +1640,16 @@ async def run_playback_loop(app) -> None:
                                 # now-playing artist/label. Strip it and drop to
                                 # title-only rather than airing a competitor's name.
                                 clean_artist = strip_foreign_station_name(
-                                    sidecar["artist"], config.display_station_name
+                                    str(sidecar["artist"]), config.display_station_name
                                 )
                                 # prefix_only on the song title: drop a "Radio X - Song"
                                 # rescue prefix but keep a song really titled "Radio Ga Ga".
+                                raw_sidecar_title = str(sidecar["title"])
                                 song_title = (
                                     strip_foreign_station_name(
-                                        sidecar["title"], config.display_station_name, prefix_only=True
+                                        raw_sidecar_title, config.display_station_name, prefix_only=True
                                     )
-                                    or sidecar["title"]
+                                    or raw_sidecar_title
                                 )
                                 if clean_artist:
                                     rescue_title = f"{clean_artist} – {song_title}"
@@ -1647,13 +1660,17 @@ async def run_playback_loop(app) -> None:
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
+                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
+                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
                                 type=SegmentType.MUSIC,
                                 path=rescue,
+                                duration_sec=duration_sec,
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
                                     **({"artist": rescue_artist} if rescue_artist else {}),
+                                    **duration_fields,
                                     "audio_source": "fallback_norm_cache",
                                     "fallback": True,
                                 },
@@ -1688,13 +1705,17 @@ async def run_playback_loop(app) -> None:
                                 rescue.name,
                             )
                             state.queue_empty_since = None
+                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
+                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
                                 type=SegmentType.MUSIC,
                                 path=rescue,
+                                duration_sec=duration_sec,
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
                                     "artist": rescue_artist,
+                                    **duration_fields,
                                     "audio_source": "fallback_demo_asset",
                                     "fallback": True,
                                 },
@@ -4022,6 +4043,23 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         youtube_id=youtube_id,
         album_art=album_art,
     )
+    verdict = classify_youtube_candidate(track, state.playlist, config.pacing, metadata=dict(body))
+    if not verdict.accepted:
+        logger.info(
+            "External track held out of rotation before download: %s (yt:%s reason=%s)",
+            track.display,
+            youtube_id,
+            verdict.reason,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": verdict.notice_reason,
+                "reason": verdict.reason,
+                "message": verdict.message,
+            },
+            status_code=409,
+        )
 
     # Fire the download in the background and return before the ingress proxy
     # times out the long yt-dlp fetch. The task pins the track to play next once
@@ -4061,11 +4099,12 @@ async def _commit_external_download(
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
     the rotation pool but the play-next slot was occupied), "banned" (the song is on
-    the operator blocklist and was refused), or "dropped" (source switched / consumed).
+    the operator blocklist and was refused), "held" (long-form/non-rotation audio
+    refused after download), or "dropped" (source switched / consumed).
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
-    from mammamiradio.playlist.downloader import download_external_track
+    from mammamiradio.playlist.downloader import download_external_track, reject_cached_download
 
     state = app_state.station_state
     config = app_state.config
@@ -4079,7 +4118,14 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    actual_duration_sec: float | None = None
+    try:
+        downloaded_path = Path(downloaded_path)
+        if downloaded_path.exists():
+            actual_duration_sec = await asyncio.to_thread(probe_duration_sec, downloaded_path)
+    except (OSError, TypeError, ValueError):
+        logger.debug("Skipping external duration probe for %s", track.display, exc_info=True)
     # Serialize the commit decision with source switches. /api/playlist/load holds
     # source_switch_lock across the slow load and only bumps source_revision at the
     # very end (switch_playlist). Without this lock a download finishing mid-load
@@ -4088,6 +4134,7 @@ async def _commit_external_download(
     # Acquiring the lock makes us wait out any in-flight switch, then re-check the
     # (now bumped) revision. The block below is synchronous — it never awaits while
     # holding the lock, so it can't deadlock the switch routes.
+    rejected_download_reason = ""
     async with app_state.source_switch_lock:
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
@@ -4095,22 +4142,41 @@ async def _commit_external_download(
         # resurrect a banned song. A distinct "banned" status (not "dropped") lets
         # each caller surface an honest, specific message — the admin sees "it's
         # banned", the listener stops spinning on "searching…" with a real answer.
-        if normalized_track_key(track) in state.blocklist:
-            return "banned"
-        state.playlist.append(track)
-        state.playlist_revision += 1
-        # Don't clobber a pin that's still pending — claim the play-next slot only
-        # when the caller's guard says it's free. Otherwise the track is in
-        # rotation and the caller surfaces that it's queued-behind, not next.
-        if not should_pin():
-            return "queued"
-        state.pinned_track = track
-        # Only force MUSIC when nothing else is already forced. An operator trigger
-        # (banter/ad/news) or a mode change may have set force_next; that directive
-        # plays first, then the pinned track lands on the next music slot.
-        if state.force_next is None:
-            state.force_next = SegmentType.MUSIC
-        return "pinned"
+        if is_youtube_music_candidate(track):
+            verdict = classify_youtube_candidate(
+                track,
+                state.playlist,
+                config.pacing,
+                actual_duration_sec=actual_duration_sec if actual_duration_sec and actual_duration_sec > 0 else None,
+            )
+            if not verdict.accepted:
+                rejected_download_reason = verdict.reason
+        if not rejected_download_reason:
+            if normalized_track_key(track) in state.blocklist:
+                return "banned"
+            state.playlist.append(track)
+            state.playlist_revision += 1
+            # Don't clobber a pin that's still pending — claim the play-next slot only
+            # when the caller's guard says it's free. Otherwise the track is in
+            # rotation and the caller surfaces that it's queued-behind, not next.
+            if not should_pin():
+                return "queued"
+            state.pinned_track = track
+            # Only force MUSIC when nothing else is already forced. An operator trigger
+            # (banter/ad/news) or a mode change may have set force_next; that directive
+            # plays first, then the pinned track lands on the next music slot.
+            if state.force_next is None:
+                state.force_next = SegmentType.MUSIC
+            return "pinned"
+
+    await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
+    logger.info(
+        "External track held out of rotation after download: %s (yt:%s reason=%s)",
+        track.display,
+        getattr(track, "youtube_id", ""),
+        rejected_download_reason,
+    )
+    return "held"
 
 
 async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
@@ -4147,6 +4213,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
         _notice(False, "banned")
         return
 
+    if status == "held":
+        logger.info("Admin external track held out of rotation: %s", track.display)
+        _notice(False, _LONGFORM_NOTICE_REASON)
+        return
+
     if status == "dropped":
         logger.info("Admin external track dropped — playlist source changed: %s", track.display)
         _notice(False, "source_changed")
@@ -4164,7 +4235,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
     logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 
-async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) -> list[Track]:
+async def _resolve_direction_tracks_for_route(
+    targets: list[DirectionTarget],
+    state: StationState | None = None,
+    config: Any | None = None,
+) -> list[Track]:
     """Resolve direction targets to YouTube-backed tracks without downloading audio."""
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
@@ -4172,13 +4247,28 @@ async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) ->
 
     async def _search_one(target: DirectionTarget) -> Track | None:
         try:
-            results = await loop.run_in_executor(_direction_search_executor, search_ytdlp_metadata, target.query, 1)
+            results = await loop.run_in_executor(
+                _direction_search_executor,
+                search_ytdlp_metadata,
+                target.query,
+                YOUTUBE_ADMISSION_SEARCH_DEPTH,
+            )
         except Exception:
             logger.debug("Direction metadata search failed for %s", target.query, exc_info=True)
             return None
-        if not results:
-            return None
-        return track_from_direction_search(target, results[0])
+        playlist = state.playlist if state is not None and config is not None else None
+        pacing = config.pacing if state is not None and config is not None else None
+        resolution = resolve_direction_search_results(target, results, playlist=playlist, pacing=pacing)
+        if resolution.track is not None:
+            return resolution.track
+        if state is not None and resolution.rejected_track is not None:
+            _record_direction_notice(
+                state,
+                resolution.rejected_track,
+                ok=False,
+                reason=resolution.rejected_reason or _LONGFORM_NOTICE_REASON,
+            )
+        return None
 
     try:
         resolved = await asyncio.wait_for(
@@ -4272,6 +4362,9 @@ async def _download_direction_track(
     elif status == "banned":
         logger.info("Direction track refused because it is blocklisted: %s", track.display)
         _record_direction_notice(state, track, ok=False, reason="banned")
+    elif status == "held":
+        logger.info("Direction track held out of rotation: %s", track.display)
+        _record_direction_notice(state, track, ok=False, reason=_LONGFORM_NOTICE_REASON)
     else:
         logger.info("Direction track skipped after %s: %s", status, track.display)
         _record_direction_notice(state, track, ok=False, reason="source_changed")
@@ -4465,7 +4558,7 @@ async def _set_direction_text(request: Request, text: str):
 
     resolved_tracks: list[Track] = []
     if config.allow_ytdlp:
-        resolved_tracks = await _resolve_direction_tracks_for_route(expansion.targets)
+        resolved_tracks = await _resolve_direction_tracks_for_route(expansion.targets, state, config)
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
 
     source_switch_lock = request.app.state.source_switch_lock

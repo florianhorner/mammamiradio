@@ -21,7 +21,10 @@ from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
     concat_files,
     configure_broadcast_chain,
+    crossfade_voice_over_music,
+    generate_transition_sting,
     normalize,
+    probe_duration_sec,
 )
 
 # Use the project-wide `requires_ffmpeg` marker (registered in pyproject.toml)
@@ -219,6 +222,34 @@ def test_normalize_applies_soft_fade_in_on_real_audio(tmp_path):
     assert head_rms < mid_rms * 0.6, (
         f"first 100ms ({head_rms:.4f}) should be noticeably quieter than mid-track ({mid_rms:.4f}) due to 250ms fade-in"
     )
+
+
+def test_transition_sting_variants_render_with_real_ffmpeg(tmp_path):
+    """All bounded transition-sting variants must render valid MP3s, not just mocked command shapes."""
+    for from_type, to_type in (("music", "banter"), ("banter", "music")):
+        for variant in range(3):
+            out = tmp_path / f"sting-{from_type}-{to_type}-{variant}.mp3"
+
+            generate_transition_sting(from_type, to_type, out, variant=variant)
+
+            assert out.exists(), f"variant {variant} produced no file for {from_type}->{to_type}"
+            assert out.stat().st_size > 0, f"variant {variant} produced an empty file for {from_type}->{to_type}"
+            assert probe_duration_sec(out) > 0.2
+
+
+def test_crossfade_voice_over_music_renders_with_short_voice_delay_real_ffmpeg(tmp_path):
+    """The 150ms talkover path must execute against real FFmpeg without clipping output away."""
+    music = tmp_path / "music.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "talkover.mp3"
+    _make_tone_mp3(music, duration_sec=2.0, freq=330)
+    _make_tone_mp3(voice, duration_sec=1.0, freq=880)
+
+    crossfade_voice_over_music(music, voice, out, tail_seconds=1.0, voice_delay_ms=150)
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+    assert probe_duration_sec(out) >= 1.1
 
 
 def _measure_lufs_real(path) -> float | None:

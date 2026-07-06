@@ -2787,6 +2787,8 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.metadata.get("resume_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Abc123"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache resume bridge fire is recorded.
@@ -2828,6 +2830,8 @@ async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path)
 
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Sogno Americano"
     assert seg.metadata.get("artist") == "Artie 5ive"
 
@@ -2984,6 +2988,8 @@ async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_pat
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Idle123"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache idle bridge fire is recorded.
@@ -3025,6 +3031,8 @@ async def test_idle_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
 
     seg = queue.get_nowait()
     assert seg.metadata.get("idle_bridge") is True
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Musica Leggera"
     assert seg.metadata.get("artist") == "Colapesce Dimartino"
 

@@ -181,6 +181,8 @@ class ListenerRequestCommit:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
         if self.mark_song_error:
             self.request["song_error"] = True
+            if not self.request.get("song_error_reason"):
+                self.request["song_error_reason"] = "not_found"
         if self.consume:
             now = time.time()
             state.recently_consumed_requests.append(
@@ -191,6 +193,7 @@ class ListenerRequestCommit:
                     "song_track": self.request.get("song_track"),
                     "type": self.request.get("type"),
                     "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "song_error_reason": self.request.get("song_error_reason") or "",
                     "consumed_at": now,
                 }
             )
@@ -1271,6 +1274,235 @@ def _strip_fences(raw: str) -> str:
     return raw
 
 
+_LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")
+
+_NORMAL_MODE_LANGUAGE_REPAIR = """
+NORMAL MODE LANGUAGE REPAIR:
+The previous JSON was too Italian for Normal Mode. Rewrite the same content as
+English-led host speech: roughly 70% English / 30% Italian. English carries the
+information and full sentences; Italian is only greetings, reactions, punchlines,
+and colour. Keep the same JSON schema and valid host names.
+""".strip()
+
+_NORMAL_MODE_ENGLISH_MARKERS = frozenset(
+    {
+        "a",
+        "about",
+        "after",
+        "again",
+        "all",
+        "and",
+        "anyway",
+        "are",
+        "back",
+        "be",
+        "because",
+        "been",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "english",
+        "exactly",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "here",
+        "in",
+        "is",
+        "it",
+        "keep",
+        "little",
+        "more",
+        "music",
+        "next",
+        "no",
+        "not",
+        "now",
+        "of",
+        "on",
+        "or",
+        "out",
+        "room",
+        "say",
+        "song",
+        "stay",
+        "still",
+        "that",
+        "the",
+        "then",
+        "there",
+        "this",
+        "to",
+        "track",
+        "was",
+        "we",
+        "what",
+        "with",
+        "you",
+    }
+)
+
+_NORMAL_MODE_ITALIAN_MARKERS = frozenset(
+    {
+        "abbiamo",
+        "adesso",
+        "allora",
+        "anche",
+        "ancora",
+        "ascolta",
+        "bene",
+        "benissimo",
+        "calma",
+        "canzone",
+        "casa",
+        "che",
+        "ci",
+        "come",
+        "con",
+        "continua",
+        "cosa",
+        "cosi",
+        "così",
+        "da",
+        "dai",
+        "della",
+        "di",
+        "e",
+        "era",
+        "finisce",
+        "fretta",
+        "in",
+        "italiano",
+        "la",
+        "lo",
+        "ma",
+        "musica",
+        "nel",
+        "nella",
+        "nessuna",
+        "non",
+        "ora",
+        "piano",
+        "poi",
+        "questa",
+        "questo",
+        "qui",
+        "respira",
+        "restiamo",
+        "senza",
+        "si",
+        "sì",
+        "studio",
+        "tutti",
+        "un",
+        "una",
+        "va",
+    }
+)
+
+_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS = frozenset({"a", "in", "no"})
+
+
+def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
+    """Extract model-authored speech fields from script JSON for language checks."""
+    if not isinstance(data, dict):
+        return []
+    if surface == "banter":
+        texts: list[str] = []
+        raw_lines = data.get("lines")
+        if isinstance(raw_lines, list):
+            for line in raw_lines:
+                if isinstance(line, dict) and isinstance(line.get("text"), str):
+                    texts.append(line["text"])
+                elif isinstance(line, str):
+                    texts.append(line)
+        return texts
+    if surface == "ad":
+        texts = []
+        raw_parts = data.get("parts")
+        if isinstance(raw_parts, list):
+            for part in raw_parts:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type", "voice") == "voice"
+                    and isinstance(part.get("text"), str)
+                ):
+                    texts.append(part["text"])
+        if not texts and isinstance(data.get("text"), str):
+            texts.append(data["text"])
+        return texts
+    text = data.get("text")
+    return [text] if isinstance(text, str) else []
+
+
+def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
+    """Return false only for clearly all-Italian generated speech in Normal Mode."""
+    if config.super_italian_mode:
+        return True
+    combined = " ".join(text.strip() for text in texts if text and text.strip())
+    if not combined:
+        return True
+    tokens = [token.casefold() for token in _LANGUAGE_TOKEN_RE.findall(combined)]
+    if len(tokens) < 12:
+        return True
+
+    english_hits = sum(
+        token in _NORMAL_MODE_ENGLISH_MARKERS and token not in _NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS
+        for token in tokens
+    )
+    italian_hits = sum(
+        token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù") for token in tokens
+    )
+    english_floor = max(2, len(tokens) // 10)
+    if english_hits >= english_floor:
+        return True
+
+    italian_floor = max(4, len(tokens) // 4)
+    return italian_hits < italian_floor
+
+
+async def _generate_json_response_with_language_guard(
+    *,
+    prompt: str,
+    config: StationConfig,
+    state: StationState,
+    model: str,
+    max_tokens: int,
+    caller: str | None = None,
+    role: str | None = None,
+    spot_index: int | None = None,
+) -> dict:
+    """Generate JSON and enforce Normal Mode's English-led output invariant."""
+    surface = caller or "script"
+    current_prompt = prompt
+    for attempt in range(2):
+        data = await _generate_json_response(
+            prompt=current_prompt,
+            config=config,
+            state=state,
+            model=model,
+            max_tokens=max_tokens,
+            caller=caller,
+            role=role,
+            spot_index=spot_index,
+        )
+        if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config):
+            return data
+        if attempt == 0:
+            logger.warning("Normal Mode language guard rejected %s response; retrying once", surface)
+            current_prompt = f"{prompt}\n\n{_NORMAL_MODE_LANGUAGE_REPAIR}"
+            continue
+        raise ValueError(f"{surface} response violated Normal Mode language mix")
+
+    raise RuntimeError("unreachable language guard state")
+
+
 def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
     """Guarantee each ad has a distinct opener and at least one internal accent."""
     updated = list(parts)
@@ -2036,7 +2268,7 @@ Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2124,6 +2356,9 @@ Return JSON:
             if not (has_regular_before and has_regular_after):
                 raise ValueError("banter response did not frame guest-host line as a cameo")
             guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
+
+        if not _normal_mode_language_ok([text for _, text in result], config):
+            raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
@@ -2337,9 +2572,25 @@ def _localized_weather_arc(state: StationState, config: StationConfig) -> str:
 
 
 def _news_flash_fallback(config: StationConfig) -> str:
-    """The stock news-flash line in the station's language (English for any
-    non-Italian station, so an English station never airs an Italian fallback)."""
-    return _NEWS_FLASH_FALLBACK.get(config.station.language, _NEWS_FLASH_FALLBACK["en"])
+    """The stock news-flash line for the active spoken mode."""
+    return _NEWS_FLASH_FALLBACK[_spoken_fallback_language(config)]
+
+
+def _spoken_fallback_language(config: StationConfig) -> str:
+    """Return the stock spoken-copy language for the active host mode."""
+    return "it" if config.super_italian_mode else "en"
+
+
+def _transition_fallbacks(config: StationConfig) -> dict[str, str]:
+    if _spoken_fallback_language(config) == "it":
+        return {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
+    return {"banter": "All right...", "ad": "And now...", "news_flash": "Attention..."}
+
+
+def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
+    if _spoken_fallback_language(config) == "it":
+        return f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}"
+    return f"{brand.name}. Because you deserve it."
 
 
 async def write_news_flash(
@@ -2417,7 +2668,7 @@ Return JSON:
 {{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash", "callback_used": false}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2464,8 +2715,8 @@ async def write_transition(
     """
     if not has_script_llm(config):
         host = random.choice(_regular_hosts(config))
-        fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-        return (host, fallback.get(next_segment, "Allora..."))
+        fallback = _transition_fallbacks(config)
+        return (host, fallback.get(next_segment, fallback["banter"]))
 
     if song_cues is None:
         song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
@@ -2534,7 +2785,7 @@ Return JSON:
 {{"text": "the transition line"}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2549,8 +2800,8 @@ Return JSON:
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
-        fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-        text = _massage_transition_text(fallback.get(next_segment, "Allora..."), next_segment, recent_texts)
+        fallback = _transition_fallbacks(config)
+        text = _massage_transition_text(fallback.get(next_segment, fallback["banter"]), next_segment, recent_texts)
         return (host, text)
 
 
@@ -2572,7 +2823,7 @@ async def write_ad(
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=f"{brand.name}. {brand.tagline}")],
+            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config))],
             summary=brand.tagline,
             format=ad_format,
         )
@@ -2689,7 +2940,7 @@ Return JSON:
 }}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2766,11 +3017,7 @@ Return JSON:
 
     except Exception as e:
         logger.error("Ad generation failed: %s", e)
-        fallback = {
-            "it": f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}",
-            "en": f"{brand.name}. {brand.tagline or 'Because you deserve it.'}",
-        }
-        text = fallback.get(config.station.language, fallback["en"])
+        text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
             parts=[AdPart(type="voice", text=text)],

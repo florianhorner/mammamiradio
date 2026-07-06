@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -408,6 +408,10 @@ body[data-stopped="true"] .btn-util {
 .pl-row.record-hunt-match { background: rgba(244,208,72,0.08); border-left: 2px solid rgba(244,208,72,0.56); padding-left: 6px; border-radius: 4px; }
 .pl-row.record-hunt-match:hover { background: rgba(244,208,72,0.12); }
 .pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
+.pl-row.record-hunt-match { background: rgba(244,208,72,0.08); border-radius: 4px; box-shadow: inset 3px 0 0 var(--sun2); }
+.pl-row.record-hunt-match:hover { background: rgba(244,208,72,0.12); }
+.hunt-pick { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; white-space: nowrap; color: #14110F; background: var(--sun2); border: 1px solid rgba(244,208,72,0.72); }
+.pl-row.record-hunt-match .pl-a { opacity: 1; }
 .pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
 .pl-row.dragging { opacity: 0.4; }
 .pl-grip { cursor: grab; color: var(--muted); min-width: 44px; min-height: 44px; width: 44px; display: inline-flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
@@ -428,7 +432,6 @@ body[data-stopped="true"] .btn-util {
 .pl-src.charts  { color: var(--ok);  background: rgba(37,99,235,0.10);  border: 1px solid rgba(37,99,235,0.20); }
 .pl-src.jamendo { color: var(--cream-dk); background: rgba(245,237,216,0.06); border: 1px solid rgba(245,237,216,0.12); }
 .pl-src.local   { color: var(--muted); background: transparent; border: 1px solid rgba(245,237,216,0.10); }
-.hunt-pick { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; white-space: nowrap; color: #14110F; background: var(--sun2); border: 1px solid rgba(244,208,72,0.72); }
 .pl-a { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn { font-size: 10px; font-weight: 600; min-height: 44px; padding: 10px 12px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
@@ -1873,6 +1876,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span class="festival-slider"></span>
           </label>
         </div>
+        <div class="card-label" style="margin-top:12px">Super Italian Mode</div>
+        <div style="margin-bottom:14px">
+          <label class="super-italian-toggle">
+            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" aria-label="Toggle Super Italian Mode" onchange="toggleSuperItalian(this)">
+            <span><strong>Super Italian Mode</strong></span>
+          </label>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            On: hosts speak 100% Italian and the listener page stays in Italian. Off: hosts speak about 70% English with real Italian moments, and the listener page is in English.
+          </div>
+        </div>
       </div>
 
       <!-- Subgroup 3: Azioni rapide -->
@@ -2004,17 +2017,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <!-- Station configuration (below runtime diagnosis, above collapsible Setup) -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-config-h">
           <div class="ttl-eyebrow" id="eg-config-h">Configurazione</div>
-
-          <div class="card-label">Super Italian Mode</div>
-          <div style="margin-bottom:14px">
-            <label class="super-italian-toggle">
-              <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
-              <span><strong>Super Italian Mode</strong></span>
-            </label>
-            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-              On: hosts speak 100% Italian and the listener page stays in Italian. Off: hosts speak about 70% English with real Italian moments, and the listener page is in English.
-            </div>
-          </div>
 
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
@@ -2195,6 +2197,10 @@ function notifyExternalAddNotices(notices){
     }
     const msg=n.reason==='banned'
       ? '“'+name+'” is banned — unban it from the Banned list first, then add it.'
+      : n.reason==='non_music_audio'
+      ? '“'+name+'” looks like talk or non-music audio — choose a single-track song instead.'
+      : n.reason==='longform_audio'
+      ? '“'+name+'” looks like a set or long-form item — choose a single-track result instead.'
       : n.reason==='source_changed'
       ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
       : 'Couldn’t download “'+name+'” — try another result.';
@@ -3662,17 +3668,20 @@ function updatePl(tracks,page,force){
   _plRenderSig=renderSig;
   if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
+  const activeHeadingId=_st?.heading?.active?_st.heading.id:'';
   const filter=_plFilter.toLowerCase();
   const rows=_plRows.map((t,i)=>({t,idx:(_plPage.offset||0)+i}));
   const filtered=filter?rows.filter(row=>`${row.t.title} ${row.t.artist}`.toLowerCase().includes(filter)):rows;
-  const activeHeadingId=_st?.heading?.active?_st.heading.id:'';
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
     const prefControls=renderPreferenceControls(idx,Number(t.preference||0));
     const huntMatch=!!(activeHeadingId&&t.heading_id===activeHeadingId);
-    const huntPill=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
-    return `<div class="pl-row${huntMatch?' record-hunt-match':''}" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${huntPill}${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    const huntTitle='Favored for the current Record Hunt';
+    const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
+    const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
+    const rowTitle=huntMatch?` title="${huntTitle}"`:'';
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -3918,7 +3927,8 @@ async function addExternal(i){
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
-      toast(wayOut('add that to the queue'));
+      const msg=r.message||wayOut('add that to the queue');
+      if(typeof window.errorToast==='function')window.errorToast(msg);else toast(msg);
     }
   }catch(_){
     toast(offlineMsg());
@@ -4027,22 +4037,22 @@ function updatePaceCounters(pacing){
 
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
-const AX_LABEL={'energy':'Energia','chaos':'Caos','warmth':'Calore','verbosity':'Verbosità','nostalgia':'Nostalgia'};
-const AX_LOW ={'energy':'Calma','chaos':'Ordinato','warmth':'Distante','verbosity':'Conciso','nostalgia':'Presente'};
-const AX_HIGH={'energy':'Accesa','chaos':'Anarchico','warmth':'Intimo','verbosity':'Inarrestabile','nostalgia':'Viaggio nel tempo'};
+const AX_LABEL={'energy':'Energy','chaos':'Chaos','warmth':'Warmth','verbosity':'Verbosity','nostalgia':'Nostalgia'};
+const AX_LOW ={'energy':'Calm','chaos':'Ordered','warmth':'Distant','verbosity':'Concise','nostalgia':'Present'};
+const AX_HIGH={'energy':'Lit','chaos':'Anarchic','warmth':'Intimate','verbosity':'Nonstop','nostalgia':'Time travel'};
 const AX_WORDS={
-  energy:   ['Calma','Vivace','Energica','Accesa'],
-  chaos:    ['Ordinato','Spontaneo','Imprevedibile','Anarchico'],
-  warmth:   ['Distante','Cordiale','Caldo','Intimo'],
-  verbosity:['Conciso','Equilibrato','Loquace','Inarrestabile'],
-  nostalgia:['Presente','Retro','Nostalgico','Viaggio nel tempo'],
+  energy:   ['Calm','Lively','Energetic','Lit'],
+  chaos:    ['Ordered','Spontaneous','Unpredictable','Anarchic'],
+  warmth:   ['Distant','Friendly','Warm','Intimate'],
+  verbosity:['Concise','Balanced','Talkative','Nonstop'],
+  nostalgia:['Present','Retro','Nostalgic','Time travel'],
 };
 const HOST_PRESETS={
   Balanced:{energy:50,chaos:50,warmth:50,verbosity:50,nostalgia:50},
   Calm:{energy:25,chaos:25,warmth:65,verbosity:40,nostalgia:60},
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
-const PRESET_LABEL={Balanced:'EQUILIBRATO',Calm:'CALMO',Hype:'HYPE'};
+const PRESET_LABEL={Balanced:'Balanced',Calm:'Calm',Hype:'Hype'};
 const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
 
 function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
@@ -4059,10 +4069,10 @@ function buildHostPreview(block){
   block.querySelectorAll('input[type="range"]').forEach(sl=>{vals[sl.dataset.a]=+sl.value;});
   const v=vals;
   const energyLine=v.energy>70?"Cuts in before the song fades — no dead air, ever.":v.energy>40?"Picks moments carefully. Won't rush the music.":"Slow, deliberate. Long pauses after songs.";
-  const chaosLine=v.chaos>70?"Virate a metà frase e tangenti che atterrano comunque.":v.chaos>40?"Quasi in scaletta, con qualche deviazione.":"Stretto e strutturato. Ogni parola serve.";
-  const warmthLine=v.warmth>65?"Gli ascoltatori si sentono chiamati in causa.":v.warmth>35?"Cordiale senza diventare troppo familiare.":"Distanza professionale, da radio notturna.";
+  const chaosLine=v.chaos>70?"Swerves mid-sentence and still lands the tangent.":v.chaos>40?"Mostly on the rundown, with a few detours.":"Tight and structured. Every word has a job.";
+  const warmthLine=v.warmth>65?"Listeners feel personally pulled into the room.":v.warmth>35?"Friendly without getting too familiar.":"Professional distance, like a late-night station.";
   const verbosityLine=v.verbosity>70?"Three minutes of talk between tracks, minimum.":v.verbosity>40?"One or two lines between songs — enough to feel live.":"Barely speaks. Lets the music do it.";
-  const nostalgiaLine=v.nostalgia>65?"Aspettati riferimenti a Sanremo tra un brano e l’altro.":v.nostalgia>35?"Mescola riferimenti recenti e vecchi.":"Suona attuale, senza callback.";
+  const nostalgiaLine=v.nostalgia>65?"Expect Sanremo callbacks between songs.":v.nostalgia>35?"Mixes new references with old ones.":"Sounds current, without callbacks.";
   const entries=[
     {val:v.energy,line:energyLine},
     {val:v.chaos,line:chaosLine},
@@ -4160,6 +4170,15 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
+const LISTENER_SONG_ERROR_TEXT={
+  longform_audio:['not a single-track song','Not a single-track song'],
+  non_music_audio:['not a song','Not a song'],
+  banned:['banned song','Banned song'],
+  download_failed:['download failed','Download failed'],
+  download_cancelled:['cancelled','Cancelled'],
+};
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -4184,7 +4203,7 @@ function updateListenerRequests(reqs,consumed){
         status=statusInline('ready',r.song_track||'ready');
         actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
-        status=statusInline('blocked','not found');
+        status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
         status=statusInline('working','searching…');
       }
@@ -4203,7 +4222,7 @@ function updateListenerRequests(reqs,consumed){
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='song_not_found'
-        ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+        ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">

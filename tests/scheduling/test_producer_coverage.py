@@ -1662,6 +1662,8 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.path == norm_file
+    assert seg.duration_sec > 0
+    assert seg.metadata["duration_ms"] == round(seg.duration_sec * 1000)
     assert seg.metadata["title"] == "Cached"
     assert seg.metadata["artist"] == "Cache Artist"
     assert seg.metadata["queue_drain_recovery"] is True
