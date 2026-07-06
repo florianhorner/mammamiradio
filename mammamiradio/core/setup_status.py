@@ -101,6 +101,8 @@ def home_context_availability(config: StationConfig, state: StationState) -> Hom
         readiness = "disabled"
     elif not has_access:
         readiness = "access_missing"
+    elif not config.homeassistant.context_enabled:
+        readiness = "disabled"
     elif home_ready:
         readiness = "prompt_ready"
     elif state.ha_context_last_updated:
@@ -137,10 +139,10 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
 def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
     if state.session_stopped:
         return "stopped"
-    if golden_path is not None:
-        return "blocked" if golden_path.get("blocking") else "ready"
     if state.now_streaming or state.queued_segments or state.playlist or state.last_music_file:
         return "ready"
+    if golden_path is not None:
+        return "blocked" if golden_path.get("blocking") else "ready"
     return "checking" if config.allow_ytdlp else "blocked"
 
 
@@ -207,6 +209,45 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _home_context_copy(config: StationConfig, home_status: str) -> tuple[str, str]:
+    if home_status == "ready":
+        return (
+            "Home context is available.",
+            "Filtered Home Assistant context can be inspected and muted from the admin panel.",
+        )
+    if home_status == "not_configured":
+        return (
+            "Home Assistant isn't connected.",
+            "Optional — connect Home Assistant if you want the hosts to notice your house.",
+        )
+    if home_status == "blocked":
+        detail = (
+            "Check the add-on configuration so the station can reach Home Assistant."
+            if config.is_addon
+            else "Set HA_TOKEN and HA_URL, then recheck Home Assistant context."
+        )
+        return ("Home Assistant needs access.", detail)
+    if home_status == "empty":
+        return (
+            "Home Assistant is connected, but no prompt-safe context is available.",
+            "Review the Home context preview, muted entities, and prompt-safe devices.",
+        )
+    if home_status == "checking":
+        return (
+            "Home context is still collecting.",
+            "The next Home Assistant refresh will decide whether anything prompt-safe is available.",
+        )
+    if home_status == "waiting_ai":
+        return (
+            "Home context waits for AI hosts.",
+            "Add an Anthropic or OpenAI key before the hosts can use Home Assistant context.",
+        )
+    return (
+        "Review Home Assistant context.",
+        "Check Home Assistant access and the context preview.",
+    )
+
+
 def build_guided_setup(
     config: StationConfig,
     state: StationState,
@@ -247,25 +288,14 @@ def build_guided_setup(
         ),
         "action": "review" if ai_status == "ready" else "add_ai_key",
     }
+    home_headline, home_detail = _home_context_copy(config, home_status)
     home_context = {
         "id": "home_context",
         "status": home_status,
         "readiness": home_availability.readiness,
         "label": "Home context",
-        "headline": (
-            "Home context is available."
-            if home_status == "ready"
-            else "Home Assistant isn't connected."
-            if home_status == "not_configured"
-            else "Review home context after AI is ready."
-        ),
-        "detail": (
-            "Filtered Home Assistant context can be inspected and muted from the admin panel."
-            if home_status == "ready"
-            else "Optional — connect Home Assistant if you want the hosts to notice your house."
-            if home_status == "not_configured"
-            else ("Supervisor access is automatic in the add-on; AI hosts must be ready before home context is useful.")
-        ),
+        "headline": home_headline,
+        "detail": home_detail,
         "action": (
             "review_home_context"
             if home_status in {"ready", "empty"}

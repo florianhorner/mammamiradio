@@ -35,6 +35,7 @@ from mammamiradio.web.streamer import (
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
+    _copy_home_context_to_state,
     _persist_completed_music,
     _record_provider_verdict,
     _run_provider_verdict,
@@ -1729,6 +1730,30 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
+async def test_setup_recheck_bypasses_golden_path_ttl_cache(monkeypatch):
+    from mammamiradio.web import status_payload as status_payload_mod
+
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+
+    app = _make_test_app()
+    app.state.config.allow_ytdlp = False
+    app.state.station_state.playlist = []
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=[False, False, False, True]):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            status = (await client.get("/api/setup/status")).json()
+            recheck = (await client.post("/api/setup/recheck")).json()
+
+    assert recheck["guided_setup"]["stream"]["status"] == "ready"
+    assert status["guided_setup"]["stream"]["status"] == "blocked"
+    assert status["onboarding_required"] is True
+    assert recheck["onboarding_required"] is False
+
+
+@pytest.mark.asyncio
 async def test_status_includes_station_mode():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -2877,10 +2902,80 @@ async def test_homeassistant_context_candidates_returns_sanitized_admin_preview(
     assert "attributes" not in row
 
 
+def test_copy_home_context_to_state_projects_cached_context():
+    from collections import deque
+
+    from mammamiradio.home.ha_context import HomeContext, HomeEvent, ScoredEntity
+
+    state = StationState()
+    scored = ScoredEntity(
+        entity_id="light.hallway",
+        area="Hallway",
+        domain="light",
+        score=0.8,
+        raw_state={"state": "on", "attributes": {"friendly_name": "Hallway light"}},
+        label_it="Hallway light",
+        label_en="Hallway light",
+        summary_line="Hallway light: on",
+    )
+    context = HomeContext(
+        raw_states={"light.hallway": scored.raw_state},
+        summary="- Hallway light: on",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="light.hallway",
+                    label="Hallway light",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=321.0,
+                )
+            ],
+            maxlen=20,
+        ),
+        events_summary="- Hallway light: off -> on",
+        timestamp=123.0,
+        mood="awake",
+        weather_arc="clear",
+        mood_en="Awake",
+        weather_arc_en="Clear",
+        events_summary_en="- Hallway light turned on",
+        last_event_label_en="Hallway light",
+        scored=[scored],
+        catalog_hit_rate=1.0,
+        label_stats={"catalog_hit_rate": 1.0, "total": 1},
+        registry_source="cache",
+        denylist_hits={"user_muted": 1},
+    )
+
+    _copy_home_context_to_state(state, context)
+
+    assert state.ha_context == "- Hallway light: on"
+    assert state.ha_events_summary == "- Hallway light: off -> on"
+    assert state.ha_recent_event_count == 1
+    assert state.ha_last_event_label == "Hallway light"
+    assert state.ha_last_event_ts == 321.0
+    assert state.ha_scored_entities[0]["entity_id"] == "light.hallway"
+    assert state.ha_denylist_hits == {"user_muted": 1}
+    assert state.ha_catalog_hit_rate == 1.0
+    assert state.ha_label_stats == {"catalog_hit_rate": 1.0, "total": 1}
+    assert state.ha_registry_source == "cache"
+    assert state.ha_context_last_updated == 123.0
+    assert state.ha_context_entity_count == 1
+    assert state.ha_context_char_count == len("- Hallway light: on")
+
+
 @pytest.mark.asyncio
-async def test_homeassistant_entity_policy_mute_persists_and_clears_prompt_state(tmp_path):
+async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home_context(tmp_path):
+    from collections import deque
+
+    from mammamiradio.home.ha_context import HomeContext, HomeEvent, ScoredEntity
+
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
+    app.state.config.anthropic_api_key = "sk-ant"
+    app.state.config.homeassistant.enabled = True
+    app.state.config.ha_token = "ha-token"
     state = app.state.station_state
     state.ha_context = "- Coffee machine: on"
     state.ha_events_summary = "- Coffee machine: off -> on"
@@ -2889,8 +2984,8 @@ async def test_homeassistant_entity_policy_mute_persists_and_clears_prompt_state
     state.ha_last_event_label = "Coffee machine"
     state.ha_last_event_ts = time.time()
     state.ha_context_last_updated = time.time()
-    state.ha_context_entity_count = 1
-    state.ha_context_char_count = 20
+    state.ha_context_entity_count = 2
+    state.ha_context_char_count = 42
     state.ha_scored_entities = [
         {
             "entity_id": "switch.coffee_machine",
@@ -2901,28 +2996,89 @@ async def test_homeassistant_entity_policy_mute_persists_and_clears_prompt_state
             "summary": "Coffee machine: on",
         }
     ]
+    coffee = ScoredEntity(
+        entity_id="switch.coffee_machine",
+        area="Kitchen",
+        domain="switch",
+        score=0.9,
+        raw_state={"state": "on", "attributes": {"friendly_name": "Coffee machine"}},
+        label_it="Coffee machine",
+        label_en="Coffee machine",
+        summary_line="Coffee machine: on",
+    )
+    hallway = ScoredEntity(
+        entity_id="light.hallway",
+        area="Hallway",
+        domain="light",
+        score=0.8,
+        raw_state={"state": "on", "attributes": {"friendly_name": "Hallway light"}},
+        label_it="Hallway light",
+        label_en="Hallway light",
+        summary_line="Hallway light: on",
+    )
+    cached_context = HomeContext(
+        raw_states={
+            "switch.coffee_machine": coffee.raw_state,
+            "light.hallway": hallway.raw_state,
+        },
+        summary="- Coffee machine: on\n- Hallway light: on",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="switch.coffee_machine",
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                ),
+                HomeEvent(
+                    entity_id="light.hallway",
+                    label="Hallway light",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                ),
+            ],
+            maxlen=20,
+        ),
+        timestamp=time.time(),
+        scored=[coffee, hallway],
+    )
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.patch(
-            "/api/homeassistant/entity-policy",
-            json={"entity_id": "switch.coffee_machine", "muted": True},
-        )
-        preview = await client.get("/api/homeassistant/context-candidates")
+    with patch("mammamiradio.home.ha_context._ha_cache", cached_context):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "switch.coffee_machine", "muted": True},
+            )
+            preview = await client.get("/api/homeassistant/context-candidates")
+            setup_status = await client.get("/api/setup/status")
+            capabilities = await client.get("/api/capabilities")
 
     assert resp.status_code == 200
     assert resp.json()["muted"] is True
     policy = tmp_path / "state" / "ha_entity_policy.json"
     assert "switch.coffee_machine" in policy.read_text()
-    assert state.ha_context == ""
+    assert "Hallway light" in state.ha_context
+    assert "Coffee machine" not in state.ha_context
     assert state.ha_pending_directive == ""
     assert state.ha_running_gag == ""
-    assert state.ha_scored_entities == []
+    assert [row["entity_id"] for row in state.ha_scored_entities] == ["light.hallway"]
+    assert state.ha_context_last_updated > 0
+    assert state.ha_context_entity_count == 1
+    assert preview.json()["status"] == "ready"
     muted_rows = preview.json()["muted"]
     assert muted_rows[0]["entity_id"] == "switch.coffee_machine"
     assert muted_rows[0]["sent_to_prompt"] is False
     entity_rows = {row["entity_id"]: row for row in preview.json()["entities"]}
     assert entity_rows["switch.coffee_machine"]["row_state"] == "muted"
     assert entity_rows["switch.coffee_machine"]["muted"] is True
+    assert entity_rows["light.hallway"]["row_state"] == "used_by_hosts"
+    setup_home_context = setup_status.json()["guided_setup"]["home_context"]
+    assert setup_home_context["status"] == "ready"
+    assert setup_home_context["readiness"] == "prompt_ready"
+    assert setup_home_context["action"] == "review_home_context"
+    assert capabilities.json()["tier"] == "connected_home"
 
 
 @pytest.mark.asyncio
@@ -3007,6 +3163,68 @@ async def test_homeassistant_entity_policy_unmute_is_idempotent_for_existing_mut
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["muted"] is False
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_unmute_removes_live_muted_ledger_deny(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.evening_memory import EveningLedger
+    from mammamiradio.home.ha_context import HomeEvent
+
+    entity_id = "switch.coffee_machine"
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    set_entity_muted(tmp_path, entity_id, True, label="Coffee machine", domain="switch", area="Kitchen")
+    ledger = EveningLedger(entity_denylist=frozenset({entity_id}))
+    app.state.station_state.evening_ledger = ledger
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": entity_id, "muted": False},
+        )
+
+    assert resp.status_code == 200
+    assert entity_id not in ledger.entity_denylist
+    changed = ledger.observe(
+        [
+            HomeEvent(
+                entity_id=entity_id,
+                label="Coffee machine",
+                old_state="off",
+                new_state="on",
+                timestamp=time.time(),
+            )
+        ],
+        now=time.time(),
+    )
+    assert changed is True
+    assert any(bucket.entity_id == entity_id for bucket in ledger.buckets.values())
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_unmute_preserves_config_ledger_deny(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.evening_memory import EveningLedger
+
+    entity_id = "switch.noisy"
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.running_gags.entity_denylist = [entity_id]
+    set_entity_muted(tmp_path, entity_id, True, label="Noisy switch", domain="switch", area="Kitchen")
+    ledger = EveningLedger(entity_denylist=frozenset({entity_id}))
+    app.state.station_state.evening_ledger = ledger
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": entity_id, "muted": False},
+        )
+
+    assert resp.status_code == 200
+    assert entity_id in ledger.entity_denylist
 
 
 @pytest.mark.asyncio

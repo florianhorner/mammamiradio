@@ -1791,6 +1791,8 @@ async def run_producer(
                             }
                             timer_states: dict[str, dict] = {}
                             muted_ids = muted_entity_ids(config.cache_dir)
+                            for muted_id in muted_ids:
+                                _timer_old_states.pop(muted_id, None)
                             for eid in _timer_entity_ids:
                                 if eid in muted_ids:
                                     continue

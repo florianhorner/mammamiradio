@@ -755,14 +755,12 @@ def _apply_muted_policy_to_context(
     if not muted_ids:
         return context
     timestamp = time.time() if now is None else now
-    if not any(
-        entity_id in muted_ids
-        for entity_id in (
-            set(context.raw_states)
-            | {event.entity_id for event in context.events}
-            | {entity.entity_id for entity in context.scored}
-        )
-    ):
+    affected_ids = muted_ids & (
+        set(context.raw_states)
+        | {event.entity_id for event in context.events}
+        | {entity.entity_id for entity in context.scored}
+    )
+    if not affected_ids:
         return context
 
     context.raw_states = {
@@ -787,7 +785,7 @@ def _apply_muted_policy_to_context(
     context.catalog_hit_rate = float(label_stats["catalog_hit_rate"])
     context.label_stats = label_stats
     context.denylist_hits = dict(context.denylist_hits)
-    context.denylist_hits["user_muted"] = context.denylist_hits.get("user_muted", 0) + len(muted_ids)
+    context.denylist_hits["user_muted"] = max(context.denylist_hits.get("user_muted", 0), len(affected_ids))
     return context
 
 

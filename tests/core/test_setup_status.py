@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState, Track
 from mammamiradio.core.setup_status import (
+    _home_context_copy,
     _playlist_is_demo,
+    _stream_status,
     build_guided_setup,
     build_setup_status,
     classify_station_mode,
@@ -267,6 +272,23 @@ def test_guided_setup_standalone_station_without_ha_is_not_configured_not_blocke
     assert guided["strip"]["items"][2]["display_status"] == "Optional"
 
 
+def test_guided_setup_home_context_disabled_is_not_stuck_collecting():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "ha-token"
+    state = _real_state()
+
+    guided = build_guided_setup(config, state)
+
+    assert guided["home_context"]["status"] == "not_configured"
+    assert guided["home_context"]["readiness"] == "disabled"
+    assert guided["home_context"]["homeassistant_access"] is True
+    assert guided["home_context"]["action"] == "none"
+    assert guided["strip"]["items"][2]["display_status"] == "Optional"
+
+
 def test_guided_setup_ha_enabled_without_token_still_blocked():
     """An operator who DID turn on HA but hasn't finished configuring it
     keeps the real 'blocked' signal — only the never-configured case changes."""
@@ -279,6 +301,117 @@ def test_guided_setup_ha_enabled_without_token_still_blocked():
     guided = build_guided_setup(config, state)
     assert guided["home_context"]["status"] == "blocked"
     assert guided["home_context"]["readiness"] == "access_missing"
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        (
+            "blocked",
+            {
+                "status": "blocked",
+                "headline": "Home Assistant needs access.",
+                "detail": "Set HA_TOKEN",
+                "action": "wait",
+                "display_status": "Needs setup",
+            },
+        ),
+        (
+            "empty",
+            {
+                "status": "empty",
+                "headline": "Home Assistant is connected, but no prompt-safe context is available.",
+                "detail": "Home context preview",
+                "action": "review_home_context",
+                "display_status": "No safe context yet",
+            },
+        ),
+        (
+            "checking",
+            {
+                "status": "checking",
+                "headline": "Home context is still collecting.",
+                "detail": "next Home Assistant refresh",
+                "action": "wait",
+                "display_status": "Checking",
+            },
+        ),
+        (
+            "waiting_ai",
+            {
+                "status": "waiting_ai",
+                "headline": "Home context waits for AI hosts.",
+                "detail": "Add an Anthropic or OpenAI key",
+                "action": "wait",
+                "display_status": "Waiting for AI",
+            },
+        ),
+    ],
+)
+def test_guided_setup_home_context_copy_matches_state(case, expected):
+    config = load_config()
+    state = _real_state()
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
+    config.anthropic_api_key = "sk-ant"
+
+    if case == "blocked":
+        config.ha_token = ""
+    elif case == "empty":
+        state.ha_context_last_updated = 123.0
+    elif case == "waiting_ai":
+        config.anthropic_api_key = ""
+        config.openai_api_key = ""
+
+    guided = build_guided_setup(config, state)
+
+    home_context = guided["home_context"]
+    assert home_context["status"] == expected["status"]
+    assert home_context["headline"] == expected["headline"]
+    assert expected["detail"] in home_context["detail"]
+    assert home_context["action"] == expected["action"]
+    assert guided["strip"]["items"][2]["display_status"] == expected["display_status"]
+
+
+def test_home_context_copy_has_defensive_fallback():
+    config = load_config()
+
+    headline, detail = _home_context_copy(config, "unexpected_state")
+
+    assert headline == "Review Home Assistant context."
+    assert detail == "Check Home Assistant access and the context preview."
+
+
+def test_guided_setup_addon_blocked_copy_does_not_show_standalone_env_vars():
+    config = load_config()
+    config.is_addon = True
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.ha_token = ""
+
+    guided = build_guided_setup(config, _real_state())
+
+    assert guided["home_context"]["headline"] == "Home Assistant needs access."
+    assert "add-on configuration" in guided["home_context"]["detail"]
+    assert "HA_TOKEN" not in guided["home_context"]["detail"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("now_streaming", {"type": "music", "label": "On air"}),
+        ("queued_segments", [{"type": "music", "label": "Queued"}]),
+        ("playlist", [Track(title="Loaded", artist="Artist", duration_ms=180_000, spotify_id="loaded")]),
+        ("last_music_file", Path("cache/song.mp3")),
+    ],
+)
+def test_stream_status_playable_runtime_wins_over_blocking_golden_path(field, value):
+    config = load_config()
+    config.allow_ytdlp = False
+    state = StationState()
+    setattr(state, field, value)
+
+    assert _stream_status(config, state, golden_path={"blocking": True}) == "ready"
 
 
 def test_guided_setup_stream_stopped_and_no_source_states():

@@ -58,7 +58,7 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
     return _cache_size_mb_val
 
 
-def _golden_path_status(config, state) -> dict:
+def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
     global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
@@ -71,7 +71,8 @@ def _golden_path_status(config, state) -> dict:
         bool(getattr(state, "session_stopped", False)),
     )
     if (
-        _golden_path_cache is not None
+        not force_refresh
+        and _golden_path_cache is not None
         and _golden_path_cache_key == cache_key
         and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL
     ):

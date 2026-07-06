@@ -968,6 +968,44 @@ def test_get_cached_home_context_filters_muted_entities_on_copy(tmp_path):
     assert cached.scored
 
 
+def test_get_cached_home_context_user_muted_count_is_stable_across_serves(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    present_muted = "switch.bar_kaffeemaschine_steckdose"
+    absent_muted = "switch.absent"
+    set_entity_muted(tmp_path, present_muted, True, label="Coffee machine")
+    set_entity_muted(tmp_path, absent_muted, True, label="Absent switch")
+    cached = HomeContext(
+        raw_states={present_muted: {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}},
+        scored=[
+            ScoredEntity(
+                entity_id=present_muted,
+                area="Kitchen",
+                domain="switch",
+                score=0.7,
+                raw_state={"state": "on", "attributes": {"friendly_name": "Coffee machine"}},
+                label_it="Coffee machine",
+                label_en="Coffee machine",
+                summary_line="Coffee machine: on",
+            )
+        ],
+        denylist_hits={"user_muted": 1},
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", cached):
+        first = get_cached_home_context(tmp_path)
+        second = get_cached_home_context(tmp_path)
+
+    assert first is not None
+    assert second is not None
+    assert first.denylist_hits["user_muted"] == 1
+    assert second.denylist_hits["user_muted"] == 1
+    assert first.denylist_hits == second.denylist_hits
+    assert present_muted not in first.raw_states
+    assert absent_muted not in first.raw_states
+
+
 @pytest.mark.asyncio
 async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path):
     from mammamiradio.home.entity_policy import set_entity_muted

@@ -1174,7 +1174,8 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
     muted = [row for row in rows.values() if row["muted"]]
     candidates = [row for row in rows.values() if not row["sent_to_prompt"] and not row["muted"]]
     entities = [*sent_now[:24], *candidates[:24], *muted[:24]]
-    preview_status = "ready" if sent_now else "empty" if (ctx is not None or state.ha_scored_entities) else "checking"
+    has_reviewable_context = bool(ctx is not None or state.ha_scored_entities or muted)
+    preview_status = "ready" if sent_now else "empty" if has_reviewable_context else "checking"
     return {
         "ok": True,
         "status": preview_status,
@@ -1215,20 +1216,36 @@ def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[s
     return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
 
 
-def _clear_home_context_usage(state: StationState, entity_id: str | None = None) -> bool:
-    """Clear prompt-facing HA fields after a hard mute policy change.
+def _copy_home_context_to_state(state: StationState, context) -> None:
+    events = list(getattr(context, "events", []) or [])
+    newest_event = max(events, key=lambda event: event.timestamp) if events else None
+    state.ha_context = str(getattr(context, "summary", "") or "")
+    state.ha_events_summary = str(getattr(context, "events_summary", "") or "")
+    state.ha_home_mood = str(getattr(context, "mood", "") or "")
+    state.ha_weather_arc = str(getattr(context, "weather_arc", "") or "")
+    state.ha_recent_event_count = len(events)
+    state.ha_last_event_label = str(getattr(newest_event, "label", "") or "") if newest_event else ""
+    state.ha_last_event_ts = float(getattr(newest_event, "timestamp", 0.0) or 0.0) if newest_event else 0.0
+    state.ha_home_mood_en = str(getattr(context, "mood_en", "") or "")
+    state.ha_weather_arc_en = str(getattr(context, "weather_arc_en", "") or "")
+    state.ha_events_summary_en = str(getattr(context, "events_summary_en", "") or "")
+    state.ha_last_event_label_en = str(getattr(context, "last_event_label_en", "") or "")
+    state.ha_scored_entities = [entity.to_status_dict() for entity in getattr(context, "scored", [])]
+    state.ha_denylist_hits = dict(getattr(context, "denylist_hits", {}) or {})
+    state.ha_catalog_hit_rate = float(getattr(context, "catalog_hit_rate", 0.0) or 0.0)
+    state.ha_label_stats = dict(getattr(context, "label_stats", {}) or {})
+    state.ha_registry_source = str(getattr(context, "registry_source", "") or "")
+    timestamp = getattr(context, "timestamp", 0.0)
+    state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
+    state.ha_context_entity_count = len(getattr(context, "scored", []) or [])
+    state.ha_context_char_count = len(state.ha_context)
 
-    Returns True when the evening running-gag ledger was also purged and
-    needs `save_if_dirty()` — the caller owns persistence so this stays a
-    plain in-memory mutator (no synchronous disk I/O in an async route).
-    """
+
+def _blank_home_context_state(state: StationState) -> None:
     state.ha_context = ""
     state.ha_events_summary = ""
     state.ha_home_mood = ""
     state.ha_weather_arc = ""
-    state.ha_pending_directive = ""
-    state.ha_running_gag = ""
-    state.ha_running_gag_key = ""
     state.ha_recent_event_count = 0
     state.ha_last_event_label = ""
     state.ha_last_event_ts = 0.0
@@ -1237,11 +1254,46 @@ def _clear_home_context_usage(state: StationState, entity_id: str | None = None)
     state.ha_events_summary_en = ""
     state.ha_last_event_label_en = ""
     state.ha_scored_entities = []
-    state.ha_context_last_updated = 0.0
+    state.ha_denylist_hits = {}
+    state.ha_catalog_hit_rate = 0.0
+    state.ha_label_stats = {}
+    state.ha_registry_source = ""
     state.ha_context_entity_count = 0
     state.ha_context_char_count = 0
+
+
+def _set_live_gag_entity_denied(state: StationState, config, entity_id: str, muted: bool) -> bool:
+    ledger = state.evening_ledger
+    if ledger is None:
+        return False
+    denylist = set(ledger.entity_denylist)
+    if muted:
+        denylist.add(entity_id)
+    elif entity_id not in set(getattr(config.running_gags, "entity_denylist", []) or []):
+        denylist.discard(entity_id)
+    ledger.entity_denylist = frozenset(denylist)
+    return ledger.purge_entity(entity_id) if muted else False
+
+
+def _clear_home_context_usage(state: StationState, config, entity_id: str | None = None) -> bool:
+    """Clear prompt-facing HA fields after a hard mute policy change.
+
+    Returns True when the evening running-gag ledger was also purged and
+    needs `save_if_dirty()` — the caller owns persistence so this stays a
+    plain in-memory mutator (no synchronous disk I/O in an async route).
+    """
+    context = get_cached_home_context(config.cache_dir)
+    if context is not None:
+        _copy_home_context_to_state(state, context)
+    else:
+        _blank_home_context_state(state)
+    # These transient strings have no durable entity id in StationState, so a live
+    # mute clears them even when the rest of the filtered context can be preserved.
+    state.ha_pending_directive = ""
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
     if entity_id and state.evening_ledger is not None:
-        return state.evening_ledger.purge_entity(entity_id)
+        return _set_live_gag_entity_denied(state, config, entity_id, True)
     return False
 
 
@@ -1250,12 +1302,12 @@ def _runtime_monotonic() -> float:
     return time.monotonic()
 
 
-def _setup_projection(request: Request) -> dict[str, Any]:
+def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[str, Any]:
     """Build the shared onboarding snapshot used by setup and capability routes."""
     _sync_runtime_state(request)
     config = request.app.state.config
     state = request.app.state.station_state
-    golden_path = _golden_path_status(config, state)
+    golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
     provider_health = _provider_health_snapshot(config, state)
     setup = build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
     return {
@@ -2272,7 +2324,7 @@ async def setup_status(request: Request, _: None = Depends(require_admin_access)
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
     """Force a fresh setup snapshot."""
-    return _setup_projection(request)["setup"]
+    return _setup_projection(request, force_refresh=True)["setup"]
 
 
 @router.post("/api/setup/provider-check")
@@ -2554,9 +2606,11 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if muted:
-        ledger_dirty = _clear_home_context_usage(state, entity_id)
+        ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
+    else:
+        _set_live_gag_entity_denied(state, config, entity_id, False)
     return {
         "ok": True,
         "entity_id": entity_id,
