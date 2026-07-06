@@ -330,42 +330,54 @@ async def _render_music_track(
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
-async def _queue_drain_recovery_bridge(
+async def _queue_continuity_bridge(
     queue_segment: Callable[[Segment], Awaitable[bool]],
     state: StationState,
     config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+    canned_title: str,
+    canned_ephemeral: bool = True,
+    canned_metadata: dict | None = None,
 ) -> bool:
-    """Queue the best available continuity bridge when active playback drains."""
+    """Queue the best available producer-side continuity bridge."""
     fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
     if fallback:
-        logger.warning("Queue empty during active playback — inserting canned clip as bridge")
+        metadata = {
+            "type": "banter",
+            "canned": True,
+            bridge_flag: True,
+            "rescue": True,
+            "title": canned_title,
+        }
+        if canned_metadata:
+            protected_keys = {"type", "canned", bridge_flag, "rescue", "title"}
+            metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
+        logger.warning("%s bridge: inserting canned clip", bridge_type.capitalize())
         ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
-                metadata={
-                    "type": "banter",
-                    "canned": True,
-                    "queue_drain_recovery": True,
-                    "rescue": True,
-                    "title": "Recovery banter",
-                },
+                metadata=metadata,
+                ephemeral=canned_ephemeral,
             )
         )
         if ok:
-            _record_bridge_fire(state, "drain", "canned")
+            _record_bridge_fire(state, bridge_type, "canned")
         return ok
 
     norm_path = select_norm_cache_rescue(config.cache_dir, state)
     if norm_path:
         metadata, log_label = _norm_cache_bridge_payload(
             norm_path,
-            "queue_drain_recovery",
+            bridge_flag,
             config.display_station_name,
             bitrate_kbps=config.audio.bitrate,
         )
         logger.warning(
-            "Queue empty during active playback — inserting norm-cache bridge: %s",
+            "%s bridge: inserting norm-cache bridge: %s",
+            bridge_type.capitalize(),
             log_label,
         )
         ok = await queue_segment(
@@ -378,11 +390,13 @@ async def _queue_drain_recovery_bridge(
             )
         )
         if ok:
-            _record_bridge_fire(state, "drain", "norm_cache")
+            _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
-    tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
-    logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
+    tone_path = config.tmp_dir / f"{bridge_type}_tone_{uuid4().hex[:8]}.mp3"
+    logger.error(
+        "%s bridge: no canned clips or norm cache available — inserting emergency tone", bridge_type.capitalize()
+    )
     try:
         await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
     except Exception:
@@ -395,7 +409,7 @@ async def _queue_drain_recovery_bridge(
             metadata={
                 "title": "Station continuity",
                 "artist": "",
-                "queue_drain_recovery": True,
+                bridge_flag: True,
                 "rescue": True,
                 "audio_source": "emergency_tone",
             },
@@ -403,8 +417,24 @@ async def _queue_drain_recovery_bridge(
         )
     )
     if ok:
-        _record_bridge_fire(state, "drain", "emergency_tone")
+        _record_bridge_fire(state, bridge_type, "emergency_tone")
     return ok
+
+
+async def _queue_drain_recovery_bridge(
+    queue_segment: Callable[[Segment], Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+) -> bool:
+    """Queue the best available continuity bridge when active playback drains."""
+    return await _queue_continuity_bridge(
+        queue_segment,
+        state,
+        config,
+        bridge_type="drain",
+        bridge_flag="queue_drain_recovery",
+        canned_title="Recovery banter",
+    )
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -588,8 +618,8 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
     Front-insert is intentionally excluded by the caller: air-next changes head order, while
     speech-bed adjacency follows normal tail appends. A continuity-break fill (errored silence
     or the emergency tone) resolves to ``None`` via ``_adjacency_type_for``, so the next speech
-    never beds a song the break severed. ``prev_seg_type`` — which drives transition stings —
-    keeps its own value by design.
+    never beds a song the break severed. ``prev_seg_type`` uses the same classifier at
+    queue-time updates so transition stingers do not treat a rescue tone as real music either.
     """
     adj = _adjacency_type_for(segment)
     state.last_enqueued_type = adj
@@ -809,9 +839,12 @@ def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: Station
     """Infer the last audible segment when producer starts after prewarm/playback."""
     queued = list(getattr(queue, "_queue", ()))
     if queued:
-        return queued[-1].type
+        return _adjacency_type_for(queued[-1])
     now_type = _segment_type_from_value(state.now_streaming.get("type"))
     if now_type is not None:
+        now_meta = state.now_streaming.get("metadata") or {}
+        if "error" in now_meta or (now_type == SegmentType.MUSIC and now_meta.get("audio_source") == "emergency_tone"):
+            return None
         return now_type
     if state.current_track is not None:
         return SegmentType.MUSIC
@@ -1680,8 +1713,7 @@ async def run_producer(
             return False
         if not await _enqueue_with_egress(queue, state, config, segment):
             return False
-        if "error" not in segment.metadata:
-            prev_seg_type = segment.type
+        prev_seg_type = _adjacency_type_for(segment)
         return True
 
     # Home Assistant context cache
@@ -1847,45 +1879,15 @@ async def run_producer(
         if _was_stopped:
             _was_stopped = False
             if queue.empty():
-                bridge = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-                if bridge:
-                    if await _queue_segment(
-                        Segment(
-                            type=SegmentType.BANTER,
-                            path=bridge,
-                            metadata={
-                                "type": "banter",
-                                "canned": True,
-                                "resume_bridge": True,
-                                "rescue": True,
-                                "title": "Resume bridge",
-                            },
-                            ephemeral=False,
-                        )
-                    ):
-                        _record_bridge_fire(state, "resume", "canned")
-                else:
-                    # No canned clips — grab a recent-aware pre-normalized track
-                    # from the norm cache (already processed, no FFmpeg wait).
-                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-                    if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path,
-                            "resume_bridge",
-                            config.display_station_name,
-                            bitrate_kbps=config.audio.bitrate,
-                        )
-                        logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
-                        if await _queue_segment(
-                            Segment(
-                                type=SegmentType.MUSIC,
-                                path=norm_path,
-                                duration_sec=_duration_sec_from_metadata(metadata),
-                                metadata=metadata,
-                                ephemeral=False,
-                            )
-                        ):
-                            _record_bridge_fire(state, "resume", "norm_cache")
+                await _queue_continuity_bridge(
+                    _queue_segment,
+                    state,
+                    config,
+                    bridge_type="resume",
+                    bridge_flag="resume_bridge",
+                    canned_title="Resume bridge",
+                    canned_ephemeral=False,
+                )
 
         if state.listeners_active == 0:
             if not _producer_idle_logged:
@@ -1900,47 +1902,17 @@ async def run_producer(
             # Queue is empty after idle — immediately seed audio so the listener hears
             # something while the producer generates real content.
             if queue.empty():
-                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-                if fallback:
-                    # idle_bridge marks this as rescue audio so the fallback
-                    # classifier (is_fallback_active) does not report a warm-up
-                    # clip as the primary station. warmup stays for the existing
-                    # display contract.
-                    if await _queue_segment(
-                        Segment(
-                            type=SegmentType.BANTER,
-                            path=fallback,
-                            metadata={
-                                "type": "banter",
-                                "canned": True,
-                                "warmup": True,
-                                "idle_bridge": True,
-                                "rescue": True,
-                                "title": "Station warm-up",
-                            },
-                        )
-                    ):
-                        _record_bridge_fire(state, "idle", "canned")
-                else:
-                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-                    if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path,
-                            "idle_bridge",
-                            config.display_station_name,
-                            bitrate_kbps=config.audio.bitrate,
-                        )
-                        logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
-                        if await _queue_segment(
-                            Segment(
-                                type=SegmentType.MUSIC,
-                                path=norm_path,
-                                duration_sec=_duration_sec_from_metadata(metadata),
-                                metadata=metadata,
-                                ephemeral=False,
-                            )
-                        ):
-                            _record_bridge_fire(state, "idle", "norm_cache")
+                # idle_bridge marks canned warm-up clips as rescue audio so the
+                # fallback classifier does not report them as the primary station.
+                await _queue_continuity_bridge(
+                    _queue_segment,
+                    state,
+                    config,
+                    bridge_type="idle",
+                    bridge_flag="idle_bridge",
+                    canned_title="Station warm-up",
+                    canned_metadata={"warmup": True, "rescue": True},
+                )
             _was_idle = False
         _producer_idle_logged = False
 
@@ -2043,6 +2015,12 @@ async def run_producer(
         generation_source_revision = state.source_revision
         success_callback: Callable[[], None] | None = None
         banter_commit = None
+        post_failure_backoff: float | None = None
+
+        async def _sleep_post_failure_backoff(delay: float | None) -> None:
+            if delay is not None:
+                await asyncio.sleep(delay)
+
         # Per-iteration reset of the cross-domain-callback "landed" flag. The
         # flash/ad branches also reset it before generating, but resetting here
         # too keeps it provably scoped to one segment — a stale True from a
@@ -3403,9 +3381,12 @@ async def run_producer(
             # Backoff on persistent failures to avoid CPU-burning tight loop
             consecutive = state.failed_segments
             if consecutive > 1:
-                backoff = min(30.0, 2.0 ** min(consecutive, 5))
-                logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
-                await asyncio.sleep(backoff)
+                post_failure_backoff = min(30.0, 2.0 ** min(consecutive, 5))
+                logger.warning(
+                    "Consecutive failures: %d — backing off %.0fs after recovery audio queues",
+                    consecutive,
+                    post_failure_backoff,
+                )
             # Prefer a canned banter clip over raw silence — at least it sounds intentional
             fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
             if fallback_path:
@@ -3431,6 +3412,7 @@ async def run_producer(
                 except Exception as silence_err:
                     logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
                     await asyncio.sleep(0.5)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
                 segment = Segment(
                     type=seg_type,
@@ -3440,9 +3422,10 @@ async def run_producer(
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
-            actual_seg_type = segment.type
+            actual_seg_type = _adjacency_type_for(segment)
             if (
                 prev_seg_type is not None
+                and actual_seg_type is not None
                 and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type)
                 and not segment.metadata.get("has_music_tail")
             ):
@@ -3492,6 +3475,7 @@ async def run_producer(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
+                await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
@@ -3500,6 +3484,7 @@ async def run_producer(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
+                await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             # Stable per-segment id: stamped on the Segment metadata AND the
             # shadow-list entry so /api/queue/remove can target a segment by
@@ -3524,13 +3509,14 @@ async def run_producer(
                     queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
                 ):
                     _abandon_release_beat_commit(state, banter_commit)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
-                if "error" not in segment.metadata:
-                    # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
-                    prev_seg_type = segment.type
+                # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
+                prev_seg_type = _adjacency_type_for(segment)
             else:
                 if not await _queue_segment(segment):
                     _abandon_release_beat_commit(state, banter_commit)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
                 state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
@@ -3546,7 +3532,7 @@ async def run_producer(
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
-            if "error" not in segment.metadata:
+            if "error" not in segment.metadata and not segment.metadata.get("rescue"):
                 if success_callback:
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success
@@ -3575,3 +3561,4 @@ async def run_producer(
                 time.perf_counter() - _t_render,
                 queue.qsize(),
             )
+            await _sleep_post_failure_backoff(post_failure_backoff)
