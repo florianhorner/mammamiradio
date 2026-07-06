@@ -674,6 +674,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/status_payload.py` | Shared admin/listener status payload serializers re-exported by `streamer.py` |
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
