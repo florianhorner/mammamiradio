@@ -264,7 +264,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
-- **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) missing `_pick_canned_clip=None` test mock (empty-container silence untested), (3) missing `session_stopped` test (post-restart silence untested). Local: `bash scripts/check-release-invariants.sh`.
+- **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) missing `_pick_canned_clip=None` test mock (empty-container recovery untested), (3) missing `session_stopped` test (post-restart silence untested). Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 
 ## Protected UI elements
@@ -401,7 +401,7 @@ Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fal
 
 **Scenario 1 — Normal:** feature works as designed.
 
-**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `mammamiradio/assets/demo/banter/`. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `mammamiradio/assets/demo/banter/`. Producer exception recovery must synthesize a bounded branded recovery sweeper before falling through to final generated silence. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
 
 **Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
 
