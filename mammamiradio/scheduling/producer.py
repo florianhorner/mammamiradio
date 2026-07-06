@@ -31,7 +31,6 @@ from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
-    generate_silence,
     generate_station_id_bed,
     generate_tone,
     humanize_norm_filename,
@@ -40,9 +39,11 @@ from mammamiradio.audio.normalizer import (
     mix_quiet_bleed,
     mix_voice_with_bed,
     mix_voice_with_sting,
+    norm_cache_duration_sec,
     normalize,
     probe_duration_sec,
     reconcile_cached_music,
+    refresh_track_metadata,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -58,15 +59,21 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.catalog import schedule_label_generation
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
+    apply_entity_mute_policy,
     check_reactive_triggers,
     fetch_home_context,
     get_cached_home_context,
     push_state_to_ha,
 )
+from mammamiradio.home.ha_enrichment import HomeEvent
+from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
+from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_recipe_match
+from mammamiradio.home.scene_namer import resolve_home_mood
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
@@ -77,12 +84,14 @@ from mammamiradio.playlist.downloader import (
     reject_cached_download,
     validate_download,
 )
+from mammamiradio.playlist.music_admission import classify_youtube_candidate, is_youtube_music_candidate
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
 from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
+_REAL_ASYNCIO_SLEEP = asyncio.sleep
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
 CHAOS_AUDIO_FAILURE_LIMIT = 5
 
@@ -90,6 +99,13 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+RECOVERY_SWEEPER_TIMEOUT_SECONDS = 3.0
+RECOVERY_SWEEPER_LINES = (
+    "{station} resta in onda. La musica sta tornando.",
+    "Restate con noi. Stiamo rimettendo la puntina al posto giusto.",
+    "Un attimo in cabina. La musica torna tra pochissimo.",
+    "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
+)
 FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
     "FIRST CONNECTED HOME MOMENT: Use one or two concrete home details naturally. "
     "Do not list sensors. Make it feel like a host casually noticing the home."
@@ -106,6 +122,12 @@ _HA_CONTEXT_COLD_LOAD_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
+class _PendingRitualInterrupt:
+    match: RitualRecipeMatch
+    spec: InterruptSpec
+
+
+@dataclass(frozen=True)
 class RenderedMusicTrack:
     track: Track
     path: Path
@@ -114,18 +136,23 @@ class RenderedMusicTrack:
 
 
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
-    for _ in range(MUSIC_SELECTION_RETRIES):
+    rejected_keys = {track.cache_key for track in state.playlist if is_rejected_cache_key(track.cache_key)}
+    if state.pinned_track is not None and is_rejected_cache_key(state.pinned_track.cache_key):
+        rejected_keys.add(state.pinned_track.cache_key)
+    try:
         candidate = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
             artist_cooldown=config.playlist.artist_cooldown,
+            excluded_cache_keys=rejected_keys,
         )
-        if not is_rejected_cache_key(candidate.cache_key):
-            return candidate
-        logger.debug(
-            "Skipping denylisted track (already rejected this session): %s",
-            candidate.display,
-        )
-    return None
+    except RuntimeError as exc:
+        if not state.playlist or str(exc) == "Playlist is empty":
+            raise
+        if rejected_keys:
+            logger.debug("No eligible music tracks remain after excluding session-rejected cache keys")
+            return None
+        raise
+    return candidate
 
 
 def _arm_accepted_heading_announcement(state: StationState, track: Track) -> None:
@@ -184,9 +211,15 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
-def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: str) -> tuple[dict, str]:
+def _norm_cache_bridge_payload(
+    norm_path: Path,
+    bridge_flag: str,
+    station_name: str,
+    *,
+    bitrate_kbps: int | float | None = None,
+) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
-    raw_title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    raw_title = str(_meta.get("title") or humanize_norm_filename(norm_path.name))
     # Illusion guard: a poisoned sidecar (a foreign "Radio X" station name) must
     # never surface as the now-playing artist/title on the listener UI / Music
     # Assistant provider. Strip the artist (drop to title-only) and prefix-strip
@@ -195,18 +228,30 @@ def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: 
     # path, so every sidecar->metadata source scrubs at its origin instead of one
     # surface getting protected while a sibling bridge leaks.
     title = strip_foreign_station_name(raw_title, station_name, prefix_only=True) or raw_title
-    artist = strip_foreign_station_name(_meta.get("artist", ""), station_name)
+    artist = strip_foreign_station_name(str(_meta.get("artist") or ""), station_name)
+    duration_sec = norm_cache_duration_sec(norm_path, bitrate_kbps=bitrate_kbps)
+    duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
     detail = f"{artist} - {title}" if artist else title
     return (
         {
             "title": title,
             "artist": artist,
+            **duration_fields,
             bridge_flag: True,
             "rescue": True,
             "audio_source": "norm_cache",
         },
         f"{norm_path.name} ({detail})",
     )
+
+
+def _duration_sec_from_metadata(metadata: dict) -> float:
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, bool):
+        return 0.0
+    if isinstance(duration_ms, int | float) and duration_ms > 0:
+        return float(duration_ms) / 1000.0
+    return 0.0
 
 
 def _record_bridge_fire(state: StationState, bridge_type: str, source: str) -> None:
@@ -235,6 +280,7 @@ async def _render_music_track(
     context: str,
     cache_write_required: bool = False,
     background: bool = False,
+    playlist: list[Track] | None = None,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"), background=background)
@@ -246,6 +292,38 @@ async def _render_music_track(
         logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
         return None
 
+    try:
+        should_probe_actual = audio_path.exists()
+    except OSError:
+        should_probe_actual = False
+    actual_duration_ms: int | None = None
+    if should_probe_actual and is_youtube_music_candidate(track):
+        actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+        if actual_duration_sec > 0:
+            actual_duration_ms = round(actual_duration_sec * 1000)
+        envelope_playlist = (
+            [candidate for candidate in playlist if candidate.cache_key != track.cache_key]
+            if playlist is not None
+            else []
+        )
+        verdict = classify_youtube_candidate(
+            track,
+            envelope_playlist,
+            config.pacing,
+            actual_duration_sec=actual_duration_sec if actual_duration_sec > 0 else None,
+        )
+        if not verdict.accepted:
+            reject_cached_download(config.cache_dir, track.cache_key, verdict.reason)
+            logger.warning(
+                "Skipping %s track held out of rotation (%s): %s",
+                context,
+                verdict.reason,
+                track.display,
+            )
+            return None
+        if actual_duration_ms is not None:
+            track.duration_ms = actual_duration_ms
+
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
         logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
@@ -255,6 +333,10 @@ async def _render_music_track(
         # the sidecar marks it done, so steady-state cache hits stay instant.
         reconcile_fn = partial(reconcile_cached_music, norm_cached, background=background)
         await loop.run_in_executor(None, reconcile_fn)
+        await loop.run_in_executor(
+            None,
+            partial(refresh_track_metadata, norm_cached, track.title, track.artist, duration_ms=track.duration_ms),
+        )
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
@@ -275,57 +357,89 @@ async def _render_music_track(
             norm_path.unlink(missing_ok=True)
             raise
     else:
-        save_track_metadata(norm_cached, track.title, track.artist)
+        save_track_metadata(norm_cached, track.title, track.artist, duration_ms=track.duration_ms)
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
-async def _queue_drain_recovery_bridge(
+_RECOVERY_CLIP_SUBDIRS = ("recovery", "banter", "welcome")
+
+
+def _pick_recovery_clip(state: StationState) -> Path | None:
+    """Pick a packaged continuity clip for recovery ladders."""
+    for subdir in _RECOVERY_CLIP_SUBDIRS:
+        clip = _pick_canned_clip(subdir, state=state)
+        if clip:
+            return clip
+    return None
+
+
+async def _queue_continuity_bridge(
     queue_segment: Callable[[Segment], Awaitable[bool]],
     state: StationState,
     config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+    canned_title: str,
+    canned_ephemeral: bool = True,
+    canned_metadata: dict | None = None,
 ) -> bool:
-    """Queue the best available continuity bridge when active playback drains."""
-    fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+    """Queue the best available producer-side continuity bridge."""
+    fallback = _pick_recovery_clip(state)
     if fallback:
-        logger.warning("Queue empty during active playback — inserting canned clip as bridge")
+        metadata = {
+            "type": "banter",
+            "canned": True,
+            bridge_flag: True,
+            "rescue": True,
+            "title": canned_title,
+        }
+        if canned_metadata:
+            protected_keys = {"type", "canned", bridge_flag, "rescue", "title"}
+            metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
+        logger.warning("%s bridge: inserting packaged recovery clip", bridge_type.capitalize())
         ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
-                metadata={
-                    "type": "banter",
-                    "canned": True,
-                    "queue_drain_recovery": True,
-                    "rescue": True,
-                    "title": "Recovery banter",
-                },
+                metadata=metadata,
+                ephemeral=canned_ephemeral,
             )
         )
         if ok:
-            _record_bridge_fire(state, "drain", "canned")
+            _record_bridge_fire(state, bridge_type, "canned")
         return ok
 
     norm_path = select_norm_cache_rescue(config.cache_dir, state)
     if norm_path:
-        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery", config.display_station_name)
+        metadata, log_label = _norm_cache_bridge_payload(
+            norm_path,
+            bridge_flag,
+            config.display_station_name,
+            bitrate_kbps=config.audio.bitrate,
+        )
         logger.warning(
-            "Queue empty during active playback — inserting norm-cache bridge: %s",
+            "%s bridge: inserting norm-cache bridge: %s",
+            bridge_type.capitalize(),
             log_label,
         )
         ok = await queue_segment(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
+                duration_sec=_duration_sec_from_metadata(metadata),
                 metadata=metadata,
                 ephemeral=False,
             )
         )
         if ok:
-            _record_bridge_fire(state, "drain", "norm_cache")
+            _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
-    tone_path = config.tmp_dir / f"drain_tone_{uuid4().hex[:8]}.mp3"
-    logger.error("No canned clips or norm cache available — inserting emergency tone bridge")
+    tone_path = config.tmp_dir / f"{bridge_type}_tone_{uuid4().hex[:8]}.mp3"
+    logger.error(
+        "%s bridge: no canned clips or norm cache available — inserting emergency tone", bridge_type.capitalize()
+    )
     try:
         await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
     except Exception:
@@ -338,7 +452,7 @@ async def _queue_drain_recovery_bridge(
             metadata={
                 "title": "Station continuity",
                 "artist": "",
-                "queue_drain_recovery": True,
+                bridge_flag: True,
                 "rescue": True,
                 "audio_source": "emergency_tone",
             },
@@ -346,8 +460,136 @@ async def _queue_drain_recovery_bridge(
         )
     )
     if ok:
-        _record_bridge_fire(state, "drain", "emergency_tone")
+        _record_bridge_fire(state, bridge_type, "emergency_tone")
     return ok
+
+
+async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
+    """Build the best non-silent segment for broad producer exception recovery."""
+    fallback_path = _pick_recovery_clip(state)
+    if fallback_path:
+        logger.info("Error recovery: using packaged recovery clip")
+        return Segment(
+            type=SegmentType.BANTER,
+            path=fallback_path,
+            metadata={
+                "type": "banter",
+                "canned": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": "Station continuity",
+            },
+            ephemeral=False,
+        )
+
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
+        logger.warning("Error recovery: using norm-cache rescue instead of silence: %s", log_label)
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            metadata=metadata,
+            ephemeral=False,
+        )
+
+    last_good = _get_last_music_file(state)
+    last_good_title = ""
+    last_good_artist = ""
+    if last_good:
+        last_good_meta = load_track_metadata(last_good) or {}
+        last_good_raw_title = str(last_good_meta.get("title") or "").strip()
+        last_good_raw_artist = str(last_good_meta.get("artist") or "").strip()
+        if state.blocklist:
+            if last_good_raw_title and last_good_raw_artist:
+                last_good_key = (last_good_raw_artist.lower(), last_good_raw_title.lower())
+                if last_good_key in state.blocklist:
+                    logger.warning(
+                        "Error recovery: skipping blocklisted last-known-good music: %s - %s",
+                        last_good_raw_artist,
+                        last_good_raw_title,
+                    )
+                    last_good = None
+            else:
+                logger.warning(
+                    "Error recovery: skipping unidentified last-known-good music while blocklist is active: %s",
+                    last_good.name,
+                )
+                last_good = None
+        if last_good_raw_title:
+            last_good_title = strip_foreign_station_name(
+                last_good_raw_title, config.display_station_name, prefix_only=True
+            )
+        elif last_good:
+            last_good_title = last_good.name
+        last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
+    if last_good:
+        logger.warning(
+            "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
+            last_good.name,
+        )
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=last_good,
+            metadata={
+                "type": "music",
+                "recycled": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": last_good_title or last_good.name,
+                "artist": last_good_artist,
+                "title_only": last_good_title or last_good.name,
+                "audio_source": "last_known_good",
+            },
+            ephemeral=False,
+        )
+
+    try:
+        logger.warning(
+            "No packaged recovery clips, norm cache, or last-known-good music available — inserting recovery sweeper"
+        )
+        return await asyncio.wait_for(
+            _build_recovery_sweeper_segment(config, state),
+            timeout=RECOVERY_SWEEPER_TIMEOUT_SECONDS,
+        )
+    except Exception as sweeper_err:
+        logger.warning("Recovery sweeper failed — inserting emergency tone: %s", sweeper_err)
+
+    tone_path = config.tmp_dir / f"recovery_tone_{uuid4().hex[:8]}.mp3"
+    logger.error("No packaged recovery clips, norm cache, or recovery sweeper available — inserting emergency tone")
+    try:
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
+    except Exception:
+        logger.exception("Emergency tone recovery failed")
+        return None
+    return Segment(
+        type=SegmentType.MUSIC,
+        path=tone_path,
+        metadata={
+            "title": "Station continuity",
+            "artist": "",
+            "error_recovery": True,
+            "rescue": True,
+            "audio_source": "emergency_tone",
+        },
+        ephemeral=True,
+    )
+
+
+async def _queue_drain_recovery_bridge(
+    queue_segment: Callable[[Segment], Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+) -> bool:
+    """Queue the best available continuity bridge when active playback drains."""
+    return await _queue_continuity_bridge(
+        queue_segment,
+        state,
+        config,
+        bridge_type="drain",
+        bridge_flag="queue_drain_recovery",
+        canned_title="Station continuity",
+    )
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -481,8 +723,8 @@ def _adjacency_type_for(segment: Segment) -> SegmentType | None:
     """The tail-adjacency classification of a queued segment — the SINGLE rule shared by the
     enqueue funnel, the air-next tail recompute, and the producer-start seed.
 
-    Returns ``None`` for a continuity BREAK — a failed render that aired as brief silence, or
-    the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
+    Returns ``None`` for a continuity BREAK — a failed render that aired as recovery audio,
+    or the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
     treated as an adjacent song a later speech bed could bleed (#641). Otherwise returns the
     segment's real type.
     """
@@ -529,10 +771,10 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
       ``source_path`` is their pre-egress (clean) path. This is what closes #641.
 
     Front-insert is intentionally excluded by the caller: air-next changes head order, while
-    speech-bed adjacency follows normal tail appends. A continuity-break fill (errored silence
+    speech-bed adjacency follows normal tail appends. A continuity-break fill (recovery audio
     or the emergency tone) resolves to ``None`` via ``_adjacency_type_for``, so the next speech
-    never beds a song the break severed. ``prev_seg_type`` — which drives transition stings —
-    keeps its own value by design.
+    never beds a song the break severed. ``prev_seg_type`` uses the same classifier at
+    queue-time updates so transition stingers do not treat a rescue tone as real music either.
     """
     adj = _adjacency_type_for(segment)
     state.last_enqueued_type = adj
@@ -576,6 +818,24 @@ def _release_beat_metadata_from_commit(commit) -> dict:
         return {}
 
 
+def _memory_extraction_metadata_from_commit(commit, script_lines: list[dict]) -> dict:
+    memory_commit = getattr(commit, "memory_extraction", None)
+    if memory_commit is None:
+        return {}
+    try:
+        final_commit = replace(
+            memory_commit,
+            script_lines=[dict(line) for line in script_lines if isinstance(line, dict)],
+        )
+        payload = final_commit.to_metadata()
+        if not payload.get("script_lines"):
+            return {}
+        return {"memory_extraction": payload}
+    except Exception:
+        logger.warning("Memory extraction metadata extraction failed", exc_info=True)
+        return {}
+
+
 def _abandon_release_beat_commit(state: StationState, commit) -> None:
     release_commit = _release_beat_commit_from_banter(commit)
     if release_commit is None:
@@ -605,6 +865,34 @@ def _release_campaign_abandon_in_flight(state: StationState) -> None:
 def _schedule_restart_handoff_spool(state: StationState, config: StationConfig, segment: Segment) -> None:
     if segment.type is not SegmentType.MUSIC:
         return
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("youtube_id"):
+        duration_sec = (
+            segment.duration_sec
+            if segment.duration_sec and segment.duration_sec > 0
+            else _duration_sec_from_metadata(metadata)
+        )
+        track = Track(
+            title=str(metadata.get("title_only") or metadata.get("title") or "Music"),
+            artist=str(metadata.get("artist") or ""),
+            duration_ms=round(duration_sec * 1000) if duration_sec > 0 else 0,
+            youtube_id=str(metadata.get("youtube_id") or ""),
+            album_art=str(metadata.get("album_art") or ""),
+            source="youtube",
+        )
+        verdict = classify_youtube_candidate(
+            track,
+            [candidate for candidate in state.playlist if candidate.cache_key != track.cache_key],
+            config.pacing,
+            actual_duration_sec=duration_sec if duration_sec > 0 else None,
+        )
+        if not verdict.accepted:
+            logger.info(
+                "Skipping restart handoff spool for held music segment: %s (%s)",
+                track.display,
+                verdict.reason,
+            )
+            return
     try:
         candidate = RestartHandoffCandidate.from_segment(segment)
     except Exception:
@@ -706,9 +994,12 @@ def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: Station
     """Infer the last audible segment when producer starts after prewarm/playback."""
     queued = list(getattr(queue, "_queue", ()))
     if queued:
-        return queued[-1].type
+        return _adjacency_type_for(queued[-1])
     now_type = _segment_type_from_value(state.now_streaming.get("type"))
     if now_type is not None:
+        now_meta = state.now_streaming.get("metadata") or {}
+        if "error" in now_meta or (now_type == SegmentType.MUSIC and now_meta.get("audio_source") == "emergency_tone"):
+            return None
         return now_type
     if state.current_track is not None:
         return SegmentType.MUSIC
@@ -1108,7 +1399,7 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
 
     For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
     clips have been streamed to the listener, returns None to force TTS fallback.
-    Welcome clips are not subject to the limit.
+    Recovery and welcome clips are not subject to the limit.
     """
     # Shareware gate: stop serving canned banter after the trial limit
     if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
@@ -1128,6 +1419,93 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     pick = random.choice(eligible)
     _recently_played_clips.append(pick.name)
     return pick
+
+
+def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str]:
+    """Return voice, engine, and Edge fallback for sonic-brand sweepers."""
+    sb = config.sonic_brand
+    sweeper_voice = sb.sweeper_voice
+    sweeper_engine = sb.sweeper_engine
+    sweeper_fallback = sb.sweeper_edge_fallback_voice
+    if not sweeper_voice:
+        sweeper_host = random.choice(_sw._regular_hosts(config))
+        sweeper_voice = sweeper_host.voice
+        sweeper_engine = sweeper_host.engine
+        sweeper_fallback = sweeper_host.edge_fallback_voice
+    return sweeper_voice, sweeper_engine, sweeper_fallback
+
+
+async def _render_sweeper_audio(
+    text: str,
+    config: StationConfig,
+    state: StationState,
+    *,
+    prefix: str,
+    validate_dry: bool = False,
+) -> Path:
+    """Render a short station-imaging sweeper with the configured voice and sting."""
+    sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
+    audio_path = config.tmp_dir / f"{prefix}_{uuid4().hex[:8]}.mp3"
+    await synthesize(
+        text,
+        sweeper_voice,
+        audio_path,
+        engine=sweeper_engine,
+        edge_fallback_voice=sweeper_fallback,
+        state=state,
+    )
+    if validate_dry:
+        try:
+            await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+        except (AudioQualityError, AudioToolError):
+            audio_path.unlink(missing_ok=True)
+            raise
+    loop = asyncio.get_running_loop()
+    sting_path = config.tmp_dir / f"{prefix}_sting_{uuid4().hex[:8]}.mp3"
+    mixed_path = config.tmp_dir / f"{prefix}_mixed_{uuid4().hex[:8]}.mp3"
+    dry_sweeper_path = audio_path
+    try:
+        imaging_lib = _make_imaging_lib(config)
+        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
+        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
+    except Exception:
+        mixed_path.unlink(missing_ok=True)
+        dry_sweeper_path.unlink(missing_ok=True)
+        raise
+    finally:
+        sting_path.unlink(missing_ok=True)
+    dry_sweeper_path.unlink(missing_ok=True)
+    return mixed_path
+
+
+async def _build_recovery_sweeper_segment(config: StationConfig, state: StationState) -> Segment:
+    """Build a branded rescue sweeper before falling through to emergency tone."""
+    station_name = config.display_station_name or config.station.name
+    sweeper_text = random.choice(RECOVERY_SWEEPER_LINES).format(station=station_name)
+    audio_path = await _render_sweeper_audio(
+        sweeper_text,
+        config,
+        state,
+        prefix="recovery_sweeper",
+        validate_dry=True,
+    )
+    try:
+        await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+    except (AudioQualityError, AudioToolError):
+        audio_path.unlink(missing_ok=True)
+        raise
+    return Segment(
+        type=SegmentType.SWEEPER,
+        path=audio_path,
+        metadata={
+            "type": "sweeper",
+            "text": sweeper_text,
+            "title": "Recovery sweeper",
+            "error_recovery": True,
+            "rescue": True,
+        },
+        ephemeral=True,
+    )
 
 
 async def _prefetch_next(
@@ -1183,6 +1561,7 @@ async def _prefetch_next(
             context="prefetch",
             cache_write_required=True,
             background=True,
+            playlist=state.playlist,
         )
         if rendered is None:
             logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
@@ -1227,7 +1606,13 @@ async def prewarm_first_segment(
             artist_cooldown=config.playlist.artist_cooldown,
         )
         logger.info("Pre-warming first track: %s", track.display)
-        rendered = await _render_music_track(track, config, temp_prefix="music", context="prewarm")
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="prewarm",
+            playlist=state.playlist,
+        )
         if rendered is None:
             return False
         loop = asyncio.get_running_loop()
@@ -1462,7 +1847,7 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     )
 
 
-def _has_real_home_context(ctx: HomeContext | None) -> bool:
+def _has_refresh_budget_context(ctx: HomeContext | None) -> bool:
     """True only for a genuinely populated context — not the empty timeout fallback.
 
     A successful fetch stamps ``timestamp`` (and usually fills ``scored``/``summary``);
@@ -1473,6 +1858,11 @@ def _has_real_home_context(ctx: HomeContext | None) -> bool:
     slow registry/weather warm-up could time out forever until restart.
     """
     return ctx is not None and (ctx.timestamp > 0 or bool(ctx.scored) or bool((ctx.summary or "").strip()))
+
+
+def _has_real_home_context(ctx: HomeContext | None) -> bool:
+    """Backward-compatible alias for refresh-budget context readiness."""
+    return _has_refresh_budget_context(ctx)
 
 
 async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
@@ -1486,7 +1876,7 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
     longer warm-up budget so the registry/weather snapshot can populate; every
     steady-state refresh gets the tight ``context_refresh_timeout``.
     """
-    have_context = _has_real_home_context(ha_cache) or _has_real_home_context(get_cached_home_context())
+    have_context = _has_refresh_budget_context(ha_cache) or _has_refresh_budget_context(get_cached_home_context())
     budget = (
         config.homeassistant.context_refresh_timeout
         if have_context
@@ -1500,12 +1890,73 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
                 poll_interval=float(config.homeassistant.poll_interval),
                 _cache=ha_cache,
                 cache_dir=config.cache_dir,
+                radio_event_rules=config.radio_events,
             ),
             timeout=budget,
         )
     except TimeoutError:
         logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
-        return ha_cache or get_cached_home_context() or HomeContext()
+        stale = ha_cache or get_cached_home_context() or HomeContext()
+        # fetch_home_context() mute-filters on every return path; this fallback
+        # bypasses it entirely by reusing a context built before this call, so
+        # the live mute policy has to be re-applied here explicitly.
+        return apply_entity_mute_policy(stale, config.cache_dir)
+
+
+def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatch]) -> list[HomeEvent]:
+    """Apply configured HA radio-event matches to existing producer handoff paths."""
+    gag_events: list[HomeEvent] = []
+    for match in matches:
+        if match.mode == "gag":
+            gag_events.append(match.event)
+            continue
+        if match.mode != "directive" or not match.directive:
+            continue
+        if state.ha_pending_directive:
+            continue
+        state.ha_pending_directive = match.directive
+        commit_radio_event_directive(match)
+    return gag_events
+
+
+def _apply_ritual_recipe_matches(
+    state: StationState,
+    matches: list[RitualRecipeMatch],
+) -> tuple[list[HomeEvent], _PendingRitualInterrupt | None]:
+    """Apply bundled ritual recipe matches to existing delivery lanes."""
+    gag_events: list[HomeEvent] = []
+    interrupt: _PendingRitualInterrupt | None = None
+    for match in matches:
+        lane = match.recipe.delivery_lane
+        if lane == "running_gag":
+            gag_events.append(match.to_home_event())
+            continue
+        if lane == "ambient_context":
+            continue
+        if lane == "interrupt":
+            if (
+                interrupt is not None
+                or state.chaos_pending is not None
+                or state.operator_force_pending is not None
+                or state.force_next is not None
+            ):
+                continue
+            interrupt = _PendingRitualInterrupt(
+                match=match,
+                spec=InterruptSpec(
+                    directive=match.recipe.directive,
+                    urgency=match.recipe.interrupt_urgency,
+                    cooldown=match.recipe.cooldown_seconds,
+                ),
+            )
+            continue
+        if lane != "directive" or not match.recipe.directive:
+            continue
+        if state.ha_pending_directive:
+            continue
+        state.ha_pending_directive = match.recipe.directive
+        commit_ritual_recipe_match(match)
+    return gag_events, interrupt
 
 
 def _maybe_arm_first_home_context_moment(
@@ -1553,8 +2004,7 @@ async def run_producer(
             return False
         if not await _enqueue_with_egress(queue, state, config, segment):
             return False
-        if "error" not in segment.metadata:
-            prev_seg_type = segment.type
+        prev_seg_type = _adjacency_type_for(segment)
         return True
 
     # Home Assistant context cache
@@ -1632,7 +2082,12 @@ async def run_producer(
                                 "Content-Type": "application/json",
                             }
                             timer_states: dict[str, dict] = {}
+                            muted_ids = muted_entity_ids(config.cache_dir)
+                            for muted_id in muted_ids:
+                                _timer_old_states.pop(muted_id, None)
                             for eid in _timer_entity_ids:
+                                if eid in muted_ids:
+                                    continue
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if r.status_code == 200:
                                     timer_states[eid] = r.json()
@@ -1652,6 +2107,11 @@ async def run_producer(
                                 state_translations={},
                                 now=time.time(),
                             )
+                            if muted_ids:
+                                timer_events = deque(
+                                    (event for event in timer_events if event.entity_id not in muted_ids),
+                                    maxlen=timer_events.maxlen,
+                                )
                             _timer_old_states.update(timer_states)
                             if timer_events:
                                 result = check_reactive_triggers(
@@ -1720,41 +2180,15 @@ async def run_producer(
         if _was_stopped:
             _was_stopped = False
             if queue.empty():
-                bridge = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-                if bridge:
-                    if await _queue_segment(
-                        Segment(
-                            type=SegmentType.BANTER,
-                            path=bridge,
-                            metadata={
-                                "type": "banter",
-                                "canned": True,
-                                "resume_bridge": True,
-                                "rescue": True,
-                                "title": "Resume bridge",
-                            },
-                            ephemeral=False,
-                        )
-                    ):
-                        _record_bridge_fire(state, "resume", "canned")
-                else:
-                    # No canned clips — grab a recent-aware pre-normalized track
-                    # from the norm cache (already processed, no FFmpeg wait).
-                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-                    if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path, "resume_bridge", config.display_station_name
-                        )
-                        logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
-                        if await _queue_segment(
-                            Segment(
-                                type=SegmentType.MUSIC,
-                                path=norm_path,
-                                metadata=metadata,
-                                ephemeral=False,
-                            )
-                        ):
-                            _record_bridge_fire(state, "resume", "norm_cache")
+                await _queue_continuity_bridge(
+                    _queue_segment,
+                    state,
+                    config,
+                    bridge_type="resume",
+                    bridge_flag="resume_bridge",
+                    canned_title="Resume bridge",
+                    canned_ephemeral=False,
+                )
 
         if state.listeners_active == 0:
             if not _producer_idle_logged:
@@ -1769,43 +2203,17 @@ async def run_producer(
             # Queue is empty after idle — immediately seed audio so the listener hears
             # something while the producer generates real content.
             if queue.empty():
-                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-                if fallback:
-                    # idle_bridge marks this as rescue audio so the fallback
-                    # classifier (is_fallback_active) does not report a warm-up
-                    # clip as the primary station. warmup stays for the existing
-                    # display contract.
-                    if await _queue_segment(
-                        Segment(
-                            type=SegmentType.BANTER,
-                            path=fallback,
-                            metadata={
-                                "type": "banter",
-                                "canned": True,
-                                "warmup": True,
-                                "idle_bridge": True,
-                                "rescue": True,
-                                "title": "Station warm-up",
-                            },
-                        )
-                    ):
-                        _record_bridge_fire(state, "idle", "canned")
-                else:
-                    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-                    if norm_path:
-                        metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path, "idle_bridge", config.display_station_name
-                        )
-                        logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
-                        if await _queue_segment(
-                            Segment(
-                                type=SegmentType.MUSIC,
-                                path=norm_path,
-                                metadata=metadata,
-                                ephemeral=False,
-                            )
-                        ):
-                            _record_bridge_fire(state, "idle", "norm_cache")
+                # idle_bridge marks canned warm-up clips as rescue audio so the
+                # fallback classifier does not report them as the primary station.
+                await _queue_continuity_bridge(
+                    _queue_segment,
+                    state,
+                    config,
+                    bridge_type="idle",
+                    bridge_flag="idle_bridge",
+                    canned_title="Station warm-up",
+                    canned_metadata={"warmup": True, "rescue": True},
+                )
             _was_idle = False
         _producer_idle_logged = False
 
@@ -1898,6 +2306,12 @@ async def run_producer(
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
+        if seg_type == SegmentType.MUSIC and not state.playlist:
+            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
+            seg_type = SegmentType.BANTER
+            if is_operator_forced:
+                state.operator_force_pending = None
+                is_operator_forced = False
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         # source_revision bumps ONLY on a true source switch (switch_playlist),
@@ -1908,6 +2322,14 @@ async def run_producer(
         generation_source_revision = state.source_revision
         success_callback: Callable[[], None] | None = None
         banter_commit = None
+        post_failure_backoff: float | None = None
+
+        async def _sleep_post_failure_backoff(delay: float | None) -> None:
+            if delay is not None:
+                await asyncio.sleep(delay)
+                if asyncio.sleep is not _REAL_ASYNCIO_SLEEP:
+                    await _REAL_ASYNCIO_SLEEP(0.02)
+
         # Per-iteration reset of the cross-domain-callback "landed" flag. The
         # flash/ad branches also reset it before generating, but resetting here
         # too keeps it provably scoped to one segment — a stale True from a
@@ -1929,6 +2351,7 @@ async def run_producer(
         # poll interval, not made real-time — the TTL is deliberately unchanged.
         if (
             config.homeassistant.enabled
+            and config.homeassistant.context_enabled
             and config.ha_token
             and seg_type
             in (
@@ -1941,11 +2364,20 @@ async def run_producer(
             # segment production (INSTANT AUDIO). The state-copy below then runs on
             # whatever HomeContext we end up with — fresh, stale, or empty.
             ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
+            # Fail-soft: the scene namer is a mood garnish, and this block runs
+            # OUTSIDE the segment-render try below — an exception here would
+            # kill the producer task itself (INSTANT AUDIO). Same posture as
+            # the schedule_label_generation wrap further down.
+            try:
+                mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
+            except Exception:
+                logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
+                mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
-            state.ha_home_mood = ha_cache.mood
+            state.ha_home_mood = mood_it
             state.ha_weather_arc = ha_cache.weather_arc
-            state.ha_home_mood_en = ha_cache.mood_en
+            state.ha_home_mood_en = mood_en
             state.ha_weather_arc_en = ha_cache.weather_arc_en
             state.ha_events_summary_en = ha_cache.events_summary_en
             state.ha_scored_entities = [entity.to_status_dict() for entity in ha_cache.scored]
@@ -1955,6 +2387,13 @@ async def run_producer(
             state.ha_registry_source = str(getattr(ha_cache, "registry_source", "") or "")
             state.ha_context_entity_count = len(ha_cache.scored)
             state.ha_context_char_count = len(ha_cache.summary or "")
+            ritual_matches = list(getattr(ha_cache, "ritual_recipe_matches", []) or [])
+            state.ha_ritual_public_families = list(getattr(ha_cache, "ritual_public_families", []) or [])[:4]
+            state.ha_ritual_context = ", ".join(state.ha_ritual_public_families)
+            state.ha_ritual_matches = [
+                match.to_status_dict() for match in ritual_matches if hasattr(match, "to_status_dict")
+            ][:8]
+            state.ha_ritual_recipe_audit = list(getattr(ha_cache, "ritual_recipe_audit", []) or [])[:16]
             raw_states = getattr(ha_cache, "raw_states", {})
             if isinstance(raw_states, dict):
                 # Fail-soft: scheduling does synchronous preflight work before
@@ -2017,6 +2456,19 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+            radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
+            ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
+            if ritual_interrupt is not None:
+                fired = await _fire_interrupt(
+                    state,
+                    ritual_interrupt.spec,
+                    queue,
+                    skip_event,
+                    enforce_global_cooldown=True,
+                    bridge_tmp_dir=config.tmp_dir,
+                )
+                if fired:
+                    commit_ritual_recipe_match(ritual_interrupt.match)
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,
@@ -2030,7 +2482,7 @@ async def run_producer(
             # the addon's frequent restarts.
             if state.evening_ledger is not None:
                 _now = time.time()
-                state.evening_ledger.observe(ha_cache.events, now=_now)
+                state.evening_ledger.observe([*ha_cache.events, *radio_gag_events, *ritual_gag_events], now=_now)
                 if seg_type == SegmentType.BANTER:
                     # Offer (don't spend) — the cooldown is marked in the banter
                     # success callback only if generated banter actually airs, so
@@ -2069,7 +2521,13 @@ async def run_producer(
                 state.set_gen("finding", "music", f"Finding {track.display}")
                 _gen_ok = False
                 try:
-                    rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                    rendered = await _render_music_track(
+                        track,
+                        config,
+                        temp_prefix="music",
+                        context="music",
+                        playlist=state.playlist,
+                    )
                     _gen_ok = rendered is not None
                 finally:
                     state.end_gen(ok=_gen_ok)
@@ -2082,7 +2540,7 @@ async def run_producer(
 
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
-                # pre-bundled banter clip (when the rejection is due to silence — i.e. all
+                # packaged recovery clip (when the rejection is due to silence — i.e. all
                 # tracks are silence placeholders and playing them would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
@@ -2100,12 +2558,12 @@ async def run_producer(
                             if "silence" in str(exc).lower():
                                 # All available tracks are silence placeholders.  Playing
                                 # them would break the illusion with dead air.  Insert a
-                                # bundled banter clip instead so the stream stays alive.
-                                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                                # packaged recovery clip instead so the stream stays alive.
+                                fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
                                         "Quality gate circuit breaker: %d consecutive silence rejections — "
-                                        "inserting fallback banter to prevent dead air (%s: %s)",
+                                        "inserting packaged recovery clip to prevent dead air (%s: %s)",
                                         MUSIC_QUALITY_GATE_REJECTION_LIMIT,
                                         norm_path.name,
                                         exc,
@@ -2121,13 +2579,13 @@ async def run_producer(
                                                 "canned": True,
                                                 "silence_fallback": True,
                                                 "rescue": True,
-                                                "title": "Recovery banter",
+                                                "title": "Station continuity",
                                             },
                                             ephemeral=False,
                                         )
                                     )
                                     continue
-                                # No banter clips — recycle the last known-good music
+                                # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
                                 if last_good:
@@ -2154,7 +2612,7 @@ async def run_producer(
                                         )
                                     )
                                     continue
-                                # No banter, no last-known-good.  Drop this track and let
+                                # No recovery clip, no last-known-good.  Drop this track and let
                                 # the streamer's rescue path handle the gap — queueing a
                                 # silent file would break the illusion.
                                 logger.error(
@@ -2626,8 +3084,13 @@ async def run_producer(
 
                 banter_commit = listener_request_commit
                 release_beat_metadata = {}
+                memory_extraction_metadata = {}
                 if canned is None and not impossible_tts:
                     release_beat_metadata = _release_beat_metadata_from_commit(banter_commit)
+                    memory_extraction_metadata = _memory_extraction_metadata_from_commit(
+                        banter_commit,
+                        state.last_banter_script,
+                    )
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -2645,6 +3108,7 @@ async def run_producer(
                         "has_music_tail": bool(has_music_tail),
                         "ledger_segment_id": _banter_attempt_id or None,
                         **release_beat_metadata,
+                        **memory_extraction_metadata,
                     },
                     ephemeral=canned is None,
                 )
@@ -2788,7 +3252,7 @@ async def run_producer(
                 logger.info("Producing STATION ID")
                 sb = config.sonic_brand
                 # Use full ident text, or fall back to station name
-                ident_text = sb.full_ident or config.station.name
+                ident_text = sb.full_ident or config.display_station_name
 
                 try:
                     # Generate voice tag + musical sting in parallel
@@ -2838,42 +3302,8 @@ async def run_producer(
                 sb = config.sonic_brand
 
                 try:
-                    sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
-
-                    sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = sb.sweeper_engine
-                    sweeper_fallback = sb.sweeper_edge_fallback_voice
-                    if not sweeper_voice:
-                        sweeper_host = random.choice(_sw._regular_hosts(config))
-                        sweeper_voice = sweeper_host.voice
-                        sweeper_engine = sweeper_host.engine
-                        sweeper_fallback = sweeper_host.edge_fallback_voice
-
-                    audio_path = config.tmp_dir / f"sweeper_{uuid4().hex[:8]}.mp3"
-                    await synthesize(
-                        sweeper_text,
-                        sweeper_voice,
-                        audio_path,
-                        engine=sweeper_engine,
-                        edge_fallback_voice=sweeper_fallback,
-                        state=state,
-                    )
-                    loop = asyncio.get_running_loop()
-                    sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
-                    imaging_lib = _make_imaging_lib(config)
-                    mixed_path = config.tmp_dir / f"sweeper_mixed_{uuid4().hex[:8]}.mp3"
-                    dry_sweeper_path = audio_path
-                    try:
-                        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
-                        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
-                    except Exception:
-                        mixed_path.unlink(missing_ok=True)
-                        dry_sweeper_path.unlink(missing_ok=True)
-                        raise
-                    finally:
-                        sting_path.unlink(missing_ok=True)
-                    dry_sweeper_path.unlink(missing_ok=True)
-                    audio_path = mixed_path
+                    sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.display_station_name
+                    audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
                     continue
@@ -2890,7 +3320,7 @@ async def run_producer(
                 dt_now = datetime.datetime.now()
                 hour = dt_now.hour
                 minute = dt_now.minute
-                station_name = config.station.name
+                station_name = config.display_station_name
                 # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
                 hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
                 if minute == 0:
@@ -3000,9 +3430,10 @@ async def run_producer(
                     try:
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
                         if config.ads.voices:
-                            pvoice = config.ads.voices[0].voice
-                            pengine = "edge"
-                            pfallback = ""
+                            promo_voice = config.ads.voices[0]
+                            pvoice = promo_voice.voice
+                            pengine = promo_voice.engine
+                            pfallback = promo_voice.edge_fallback_voice
                         else:
                             pvoice = ihost.voice
                             pengine = ihost.engine
@@ -3235,7 +3666,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
+            # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -3245,48 +3676,27 @@ async def run_producer(
             # Backoff on persistent failures to avoid CPU-burning tight loop
             consecutive = state.failed_segments
             if consecutive > 1:
-                backoff = min(30.0, 2.0 ** min(consecutive, 5))
-                logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
-                await asyncio.sleep(backoff)
-            # Prefer a canned banter clip over raw silence — at least it sounds intentional
-            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback_path:
-                logger.info("Error recovery: using canned clip instead of silence")
-                segment = Segment(
-                    type=SegmentType.BANTER,
-                    path=fallback_path,
-                    metadata={
-                        "type": "banter",
-                        "canned": True,
-                        "error_recovery": True,
-                        "rescue": True,
-                        "title": "Recovery banter",
-                    },
-                    ephemeral=False,
+                post_failure_backoff = min(30.0, 2.0 ** min(consecutive, 5))
+                logger.warning(
+                    "Consecutive failures: %d — backing off %.0fs after recovery audio queues",
+                    consecutive,
+                    post_failure_backoff,
                 )
-            else:
-                logger.warning("No canned clips available — inserting silence (check assets/demo/banter/)")
-                silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-                try:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, partial(generate_silence, silence_path, 5.0, rescue=True))
-                except Exception as silence_err:
-                    logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                    await asyncio.sleep(0.5)
-                    continue
-                segment = Segment(
-                    type=seg_type,
-                    path=silence_path,
-                    metadata={"error": str(e), "rescue": True, "title": "Brief silence"},
-                )
+            segment = await _producer_error_recovery_segment(state, config)
+            if segment is None:
+                await asyncio.sleep(0.5)
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
-            actual_seg_type = segment.type
+            actual_seg_type = _adjacency_type_for(segment)
             if (
                 prev_seg_type is not None
+                and actual_seg_type is not None
                 and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type)
                 and not segment.metadata.get("has_music_tail")
+                and not segment.metadata.get("rescue")
             ):
                 try:
                     loop = asyncio.get_running_loop()
@@ -3334,6 +3744,7 @@ async def run_producer(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
+                await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
@@ -3342,6 +3753,7 @@ async def run_producer(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
+                await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             # Stable per-segment id: stamped on the Segment metadata AND the
             # shadow-list entry so /api/queue/remove can target a segment by
@@ -3366,13 +3778,14 @@ async def run_producer(
                     queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
                 ):
                     _abandon_release_beat_commit(state, banter_commit)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
-                if "error" not in segment.metadata:
-                    # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
-                    prev_seg_type = segment.type
+                # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
+                prev_seg_type = _adjacency_type_for(segment)
             else:
                 if not await _queue_segment(segment):
                     _abandon_release_beat_commit(state, banter_commit)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
                 state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
@@ -3388,7 +3801,7 @@ async def run_producer(
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
-            if "error" not in segment.metadata:
+            if "error" not in segment.metadata and not segment.metadata.get("rescue"):
                 if success_callback:
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success
@@ -3417,3 +3830,4 @@ async def run_producer(
                 time.perf_counter() - _t_render,
                 queue.qsize(),
             )
+            await _sleep_post_failure_backoff(post_failure_backoff)

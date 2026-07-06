@@ -1,0 +1,30 @@
+# uv.lock security bump — test evidence (2026-07-06T23:47:40Z)
+
+Targeted bump (uv lock --upgrade-package starlette --upgrade-package aiohttp --upgrade-package idna --upgrade-package pydantic-settings):
+  starlette          1.0.0  -> 1.3.1
+  aiohttp            3.13.5 -> 3.14.1
+  idna               3.11   -> 3.18
+  pydantic-settings  2.13.1 -> 2.14.2
+
+Closes 18 Dependabot alerts on uv.lock (2 high, 11 moderate, 5 low) — full GHSA list in PR body.
+
+$ make check
+4192 passed, 2 skipped, 21 deselected in 87.02s
+Coverage: 92.80%
+All checks passed
+
+$ uv lock --check
+Resolved 117 packages in 8ms
+
+$ uv sync --locked
+Resolved 117 packages in 0.85ms
+
+$ git diff --check
+no output
+
+$ bash scripts/check-version-sync.sh
+$ bash scripts/check-changelog-lint.sh
+$ bash scripts/check-changelog-sync.sh
+all passed
+
+Post-main refresh: after merging origin/main through #784, `uv lock` updated only the local editable project metadata from mammamiradio 2.15.0 to 2.17.0. The dependency bump remains limited to the targeted security updates above.

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
+from mammamiradio.web import status_payload as status_payload_mod
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _golden_path_status,
@@ -245,14 +246,14 @@ async def test_purge_segment_queue_ephemeral_unlinks(tmp_path):
 
 def test_golden_path_with_local_music(tmp_path, monkeypatch):
     """When local music/ directory contains MP3s, golden path shows music_available."""
-    import mammamiradio.web.streamer as streamer_mod
-
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
 
     config = MagicMock()
     config.anthropic_api_key = "key"
     config.openai_api_key = ""
+    config.allow_ytdlp = False
     state = MagicMock()
 
     music_dir = tmp_path / "music"
@@ -260,7 +261,7 @@ def test_golden_path_with_local_music(tmp_path, monkeypatch):
     (music_dir / "song.mp3").write_bytes(b"data")
 
     with (
-        patch("mammamiradio.web.streamer._has_any_mp3", side_effect=lambda p: "music" in str(p)),
+        patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=lambda p: "music" in str(p)),
     ):
         result = _golden_path_status(config, state)
 
@@ -268,22 +269,41 @@ def test_golden_path_with_local_music(tmp_path, monkeypatch):
 
 
 def test_golden_path_with_ytdlp(monkeypatch):
-    """When yt-dlp is enabled in env, it appears in fallback_sources."""
-    import mammamiradio.web.streamer as streamer_mod
-
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    """When yt-dlp is enabled in loaded config, it appears in fallback_sources."""
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
 
     config = MagicMock()
     config.anthropic_api_key = ""
     config.openai_api_key = ""
+    config.allow_ytdlp = True
     state = MagicMock()
+    state.playlist = []
 
-    with patch("mammamiradio.web.streamer._has_any_mp3", return_value=False):
+    with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         result = _golden_path_status(config, state)
 
     assert "yt-dlp downloads" in result["fallback_sources"]
+
+
+def test_golden_path_loaded_playlist_counts_as_music_source(monkeypatch):
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
+    config = MagicMock()
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.allow_ytdlp = False
+    state = MagicMock()
+    state.playlist = [object()]
+    state.playlist_source = None
+
+    with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
+        result = _golden_path_status(config, state)
+
+    assert result["blocking"] is False
+    assert "loaded playlist" in result["fallback_sources"]
 
 
 def test_source_options_reason():

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import os
 import re
 import shutil
+import threading
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,10 +63,15 @@ _elevenlabs_client: httpx.AsyncClient | None = None
 _elevenlabs_client_key: str = ""
 # XML 1.0 control characters illegal in SSML (strips before html.escape)
 _XML_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-# Runtime memoization: edge voices that failed synthesis in this session.
+# Runtime memoization: edge voices and cloud provider voices that failed synthesis
+# in this session.
 # Prevents repeated per-segment failures for the same voice ID when edge-tts
-# returns "Invalid voice" or similar. Reset via reset_voice_failures().
+# returns "Invalid voice" or a cloud provider returns a non-retryable auth/voice
+# error. Reset via reset_voice_failures().
 _failed_edge_voices: set[str] = set()
+_failed_cloud_voices: set[tuple[str, str, str]] = set()
+_cloud_voice_attempt_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+_cloud_voice_state_lock = threading.Lock()
 
 # Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
 # (e.g. Home Assistant Green — fanless ARM SoC). Two slots let one TTS+normalize and
@@ -84,8 +91,62 @@ def _looks_like_openai_voice(voice: str) -> bool:
 
 
 def reset_voice_failures() -> None:
-    """Clear the session-memoized edge voice failure set. Used by tests."""
+    """Clear the session-memoized voice failure sets. Used by tests."""
     _failed_edge_voices.clear()
+    with _cloud_voice_state_lock:
+        _failed_cloud_voices.clear()
+        _cloud_voice_attempt_locks.clear()
+
+
+def _secret_fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12] if value else ""
+
+
+def _cloud_failure_key(engine: str, voice: str) -> tuple[str, str, str]:
+    engine = engine.strip().lower()
+    if engine == "azure":
+        credential = f"{os.getenv('AZURE_SPEECH_REGION', '')}:{_secret_fingerprint(os.getenv('AZURE_SPEECH_KEY', ''))}"
+    elif engine == "elevenlabs":
+        credential = _secret_fingerprint(os.getenv("ELEVENLABS_API_KEY", ""))
+    else:
+        credential = ""
+    return (engine, voice.strip(), credential)
+
+
+def _cloud_voice_failed(cloud_key: tuple[str, str, str]) -> bool:
+    with _cloud_voice_state_lock:
+        return cloud_key in _failed_cloud_voices
+
+
+def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str]) -> None:
+    with _cloud_voice_state_lock:
+        _failed_cloud_voices.add(cloud_key)
+
+
+def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str]) -> asyncio.Lock:
+    """Return the per-key async lock for cloud attempts.
+
+    Locks are created lazily inside the running event loop and cleared by tests
+    through reset_voice_failures().
+    """
+    with _cloud_voice_state_lock:
+        lock = _cloud_voice_attempt_locks.get(cloud_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _cloud_voice_attempt_locks[cloud_key] = lock
+        return lock
+
+
+def _non_retryable_cloud_tts_error(exc: Exception) -> str:
+    """Return a compact reason for auth/config failures that should not repeat."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in {401, 403, 404}:
+            return f"HTTP {status}"
+        body = getattr(exc.response, "text", "").lower()
+        if status == 400 and ("invalid" in body or "voice" in body):
+            return f"HTTP {status}"
+    return ""
 
 
 def _coerce_edge_voice(voice: str, *, edge_fallback_voice: str = "") -> str:
@@ -382,34 +443,63 @@ async def synthesize(
         voice = fallback_voice
     elif engine == "azure":
         if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
-            try:
-                async with _HEAVY_SEM:
-                    result = await synthesize_azure(
-                        text,
-                        voice,
-                        output_path,
-                        rate=rate,
-                        pitch=pitch,
-                        loudnorm=loudnorm,
-                    )
-                _bill_tts()
-                return result
-            except Exception as e:
-                logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
+            cloud_key = _cloud_failure_key(engine, voice)
+            async with _cloud_voice_attempt_lock(cloud_key):
+                if _cloud_voice_failed(cloud_key):
+                    logger.debug("Azure TTS voice '%s' previously failed this session; using edge fallback", voice)
+                else:
+                    try:
+                        async with _HEAVY_SEM:
+                            result = await synthesize_azure(
+                                text,
+                                voice,
+                                output_path,
+                                rate=rate,
+                                pitch=pitch,
+                                loudnorm=loudnorm,
+                            )
+                        _bill_tts()
+                        return result
+                    except Exception as e:
+                        reason = _non_retryable_cloud_tts_error(e)
+                        if reason:
+                            _memoize_failed_cloud_voice(cloud_key)
+                            logger.warning(
+                                "Azure TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
+                                voice,
+                                reason,
+                            )
+                        else:
+                            logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
         else:
             logger.debug("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
         voice = fallback_voice
     elif engine == "elevenlabs":
         if os.getenv("ELEVENLABS_API_KEY", ""):
-            try:
-                async with _HEAVY_SEM:
-                    result = await synthesize_elevenlabs(
-                        text, voice, output_path, loudnorm=loudnorm, voice_settings=voice_settings
-                    )
-                _bill_tts()
-                return result
-            except Exception as e:
-                logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
+            cloud_key = _cloud_failure_key(engine, voice)
+            async with _cloud_voice_attempt_lock(cloud_key):
+                if _cloud_voice_failed(cloud_key):
+                    logger.debug("ElevenLabs TTS voice '%s' previously failed this session; using edge fallback", voice)
+                else:
+                    try:
+                        async with _HEAVY_SEM:
+                            result = await synthesize_elevenlabs(
+                                text, voice, output_path, loudnorm=loudnorm, voice_settings=voice_settings
+                            )
+                        _bill_tts()
+                        return result
+                    except Exception as e:
+                        reason = _non_retryable_cloud_tts_error(e)
+                        if reason:
+                            _memoize_failed_cloud_voice(cloud_key)
+                            logger.warning(
+                                "ElevenLabs TTS disabled for voice '%s' this session after %s; "
+                                "falling back to edge-tts",
+                                voice,
+                                reason,
+                            )
+                        else:
+                            logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
         else:
             logger.debug("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
         voice = fallback_voice

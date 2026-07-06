@@ -50,6 +50,35 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
+def test_radio_toml_brand_sonic_signatures_use_real_sfx_types():
+    """Every campaign sonic_signature component must be a real AVAILABLE_SFX_TYPES entry.
+
+    generate_brand_motif() (mammamiradio/audio/normalizer.py) splits sonic_signature
+    on "+" and renders each component via generate_sfx(). A component that isn't a
+    real SFX type (or a music-bed/environment name mistakenly reused here) silently
+    falls back to a generic chime for every airing of that brand's jingle — this is
+    exactly how "dust_hit", "espresso_hiss", "cheap_synth_romance" etc. shipped
+    unnoticed in radio.toml and produced repeated "Unknown SFX type" warnings on a
+    live station. Guards both the root radio.toml and its byte-for-byte HA addon
+    copy (they're synced; see test_addon_radio_sync.py).
+    """
+    from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
+
+    for rel_path in ("radio.toml", "ha-addon/mammamiradio/radio.toml"):
+        toml_path = Path(__file__).resolve().parents[2] / rel_path
+        config = load_config(str(toml_path))
+        for brand in config.ads.brands:
+            if not brand.campaign or not brand.campaign.sonic_signature:
+                continue
+            for component in brand.campaign.sonic_signature.split("+"):
+                component = component.strip()
+                assert component in AVAILABLE_SFX_TYPES, (
+                    f"{rel_path}: brand '{brand.name}' sonic_signature component "
+                    f"'{component}' is not in AVAILABLE_SFX_TYPES — it will silently "
+                    f"fall back to a generic chime"
+                )
+
+
 def test_load_config_parses_per_host_voice_settings():
     """Marco carries an ElevenLabs clarity override (stability); a host without a
     voice_settings table defaults to {} so its synthesis uses the house tuning."""
@@ -92,6 +121,7 @@ def test_load_config_running_gags_defaults_empty(tmp_path):
     assert config.running_gags.domain_allowlist == []
     assert config.running_gags.entity_allowlist == []
     assert config.running_gags.entity_denylist == []
+    assert config.radio_events == []
 
 
 def test_load_config_parses_running_gags_overrides(tmp_path):
@@ -119,6 +149,139 @@ def test_load_config_running_gags_malformed_degrades(tmp_path):
     custom_path.write_text(custom)
     config = load_config(str(custom_path))
     assert config.running_gags.domain_allowlist == []
+
+
+def test_load_config_parses_radio_event_rules(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+id = "tts_script_started"
+entity_glob = "script.*tts*"
+trigger = "state"
+from_state = "off"
+to_state = "on"
+mode = "directive"
+directive = "One of the house voices just spoke."
+cooldown_seconds = 120
+
+[[home.radio_event]]
+id = "tts_automation_fired"
+entity_glob = "automation.*tts*"
+trigger = "attribute"
+attribute = "last_triggered"
+mode = "directive"
+directive = "A Home Assistant voice automation just fired."
+
+[[home.radio_event]]
+id = "device_charging"
+label = "A household device started charging"
+domain = "binary_sensor"
+device_class = "battery_charging"
+trigger = "state"
+to_state = "on"
+mode = "gag"
+cooldown_seconds = true
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    config = load_config(str(custom_path))
+
+    assert len(config.radio_events) == 3
+    script_rule = config.radio_events[0]
+    assert script_rule.id == "tts_script_started"
+    assert script_rule.entity_glob == "script.*tts*"
+    assert script_rule.from_state == "off"
+    assert script_rule.to_state == "on"
+    assert script_rule.mode == "directive"
+    assert script_rule.cooldown_seconds == 120
+    automation_rule = config.radio_events[1]
+    assert automation_rule.trigger == "attribute"
+    assert automation_rule.attribute == "last_triggered"
+    charging_rule = config.radio_events[2]
+    assert charging_rule.mode == "gag"
+    assert charging_rule.device_class == "battery_charging"
+    assert charging_rule.label == "A household device started charging"
+    assert charging_rule.cooldown_seconds == 900
+
+
+def test_load_config_parses_radio_event_numeric_threshold(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+id = "washer_power"
+entity_id = "sensor.washer_power"
+trigger = "numeric_threshold"
+threshold = 50.5
+direction = "above"
+mode = "directive"
+directive = "The washer crossed the power threshold."
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    [rule] = load_config(str(custom_path)).radio_events
+
+    assert rule.threshold == 50.5
+    assert rule.direction == "above"
+    assert rule.cooldown_seconds == 900
+
+
+def test_load_config_radio_event_malformed_blocks_degrade(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = (
+        source.read_text()
+        + """
+
+[[home.radio_event]]
+entity_glob = "script.*tts*"
+trigger = "state"
+directive = "missing id"
+
+[[home.radio_event]]
+id = "bad_mode"
+entity_glob = "script.*tts*"
+mode = "interrupt"
+directive = "bad mode"
+
+[[home.radio_event]]
+id = "bad_threshold"
+entity_id = "sensor.power"
+trigger = "numeric_threshold"
+threshold = "hot"
+directive = "bad threshold"
+
+[[home.radio_event]]
+id = "valid"
+entity_id = "script.valid"
+trigger = "state"
+to_state = "on"
+directive = "valid directive"
+"""
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    rules = load_config(str(custom_path)).radio_events
+
+    assert [rule.id for rule in rules] == ["valid"]
+
+
+def test_load_config_radio_event_non_list_degrades(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text() + '\n[home]\nradio_event = "not a list"\n'
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    assert load_config(str(custom_path)).radio_events == []
 
 
 def test_load_config_parses_moderation_blocked_names(tmp_path):
@@ -243,6 +406,11 @@ def test_audio_section_loaded():
     assert config.audio.bitrate == 192
     # Model IDs now live in [models]; the audio section no longer carries them.
     assert resolve_model(config.models, "banter", "anthropic")
+    assert resolve_model(config.models, "memory_extract", "anthropic") == resolve_model(
+        config.models,
+        "transition",
+        "anthropic",
+    )
 
 
 def test_homeassistant_section_loaded():
@@ -252,7 +420,10 @@ def test_homeassistant_section_loaded():
 
     assert config.homeassistant.enabled is False
     assert config.homeassistant.url == ""
-    assert config.homeassistant.poll_interval == 60
+    assert config.homeassistant.context_enabled is True
+    assert config.homeassistant.poll_interval == 300
+    assert config.homeassistant.mood_llm_enabled is False
+    assert config.homeassistant.mood_ttl_seconds == 90.0
 
 
 def test_load_config_parses_homeassistant_timer_interrupts(tmp_path):
@@ -509,22 +680,23 @@ def test_is_addon_ignores_options_file_without_tokens(monkeypatch):
         assert _is_addon() is False
 
 
-def test_apply_addon_options(monkeypatch, tmp_path):
-    options = {"anthropic_api_key": "test_key"}
+def test_apply_addon_options(tmp_path):
+    options = {"anthropic_api_key": "test_key", "station_name": "Radio Addon"}
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps(options))
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
     import os
 
-    with patch("mammamiradio.core.config.Path") as mock_path_cls:
-        mock_path_cls.return_value = options_file
-        _apply_addon_options()
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("STATION_NAME", None)
 
-    assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
-    # Cleanup
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+
+        assert os.environ.get("ANTHROPIC_API_KEY") == "test_key"
+        assert os.environ.get("STATION_NAME") == "Radio Addon"
 
 
 def test_apply_addon_options_reads_provider_secrets_file(monkeypatch, tmp_path):
@@ -733,6 +905,74 @@ def test_apply_addon_options_super_italian_preset_env_wins(monkeypatch, tmp_path
         os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
 
 
+def test_pacing_env_override_applies(monkeypatch):
+    """MAMMAMIRADIO_PACING_* env values set config.pacing at load (the addon
+    run.sh export path and the standalone .env slider-persist path)."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "5")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "9")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "3")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == 5
+    assert config.pacing.songs_between_ads == 9
+    assert config.pacing.ad_spots_per_break == 3
+
+
+def test_pacing_env_override_wins_over_toml(monkeypatch):
+    """The persisted pacing env overrides whatever radio.toml [pacing] set —
+    this is what makes a slider save survive a restart."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    baseline = load_config(str(toml_path)).pacing.songs_between_banter
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", str(baseline + 3))
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == baseline + 3
+
+
+def test_pacing_env_override_clamps_out_of_range(monkeypatch):
+    """An out-of-range persisted env is clamped, never brick-boots (INSTANT AUDIO)."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "9999")
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "0")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_banter == 60
+    assert config.pacing.ad_spots_per_break == 1
+
+
+def test_pacing_env_override_ignores_non_int(monkeypatch):
+    """A non-integer pacing env is ignored, falling back to the toml/default value."""
+    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+    baseline = load_config(str(toml_path)).pacing.songs_between_ads
+    monkeypatch.setenv("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "not-a-number")
+    config = load_config(str(toml_path))
+    assert config.pacing.songs_between_ads == baseline
+
+
+def test_apply_addon_options_maps_pacing(monkeypatch, tmp_path):
+    """/data/options.json pacing reaches env via _apply_addon_options (the
+    non-run.sh add-on boot path), consistent with the other toggle keys."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3}))
+    keys = (
+        "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER",
+        "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS",
+        "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK",
+    )
+    for k in keys:
+        monkeypatch.delenv(k, raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ["MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"] == "5"
+        assert os.environ["MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"] == "9"
+        assert os.environ["MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"] == "3"
+    finally:
+        for k in keys:
+            os.environ.pop(k, None)
+
+
 def test_apply_addon_options_no_override(monkeypatch, tmp_path):
     """Existing env vars should not be overridden by options.json."""
     options = {"anthropic_api_key": "from_options"}
@@ -910,6 +1150,16 @@ def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
         load_config(str(custom_path))
 
 
+def test_load_config_rejects_zero_ha_context_poll_interval(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("poll_interval = 300", "poll_interval = 0", 1)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.poll_interval must be >= 1"):
+        load_config(str(custom_path))
+
+
 def test_load_config_rejects_non_positive_context_refresh_timeout(tmp_path):
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = source.read_text().replace("context_refresh_timeout = 2.0", "context_refresh_timeout = 0.0")
@@ -939,6 +1189,26 @@ def test_load_config_rejects_nan_context_refresh_timeout(tmp_path):
     custom_path.write_text(custom)
 
     with pytest.raises(ValueError, match="homeassistant\\.context_refresh_timeout must be a positive number"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_non_positive_mood_ttl_seconds(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("mood_ttl_seconds = 90.0", "mood_ttl_seconds = 0")
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.mood_ttl_seconds must be a positive number"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_non_bool_mood_llm_enabled(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("mood_llm_enabled = false", 'mood_llm_enabled = "yes"')
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.mood_llm_enabled must be true or false"):
         load_config(str(custom_path))
 
 
@@ -1019,7 +1289,7 @@ def test_loaded_sweepers_use_canonical_station_name(monkeypatch):
 
 
 def test_display_station_name_is_canonical_and_never_blank(monkeypatch):
-    """display_station_name resolves brand → station → default and never returns an empty string."""
+    """display_station_name is the compatibility alias for resolved identity."""
     monkeypatch.delenv("STATION_NAME", raising=False)
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(source))
@@ -1027,17 +1297,12 @@ def test_display_station_name_is_canonical_and_never_blank(monkeypatch):
     # Default shipped config resolves to the canonical name.
     assert config.display_station_name == "Mamma Mi Radio"
 
-    # Brand name wins when set.
-    config.brand.station_name = "Radio Sole"
+    # The alias reads the resolved identity, not a second brand/station path.
+    config.identity.station_name = "Radio Sole"
     assert config.display_station_name == "Radio Sole"
 
-    # Blank brand falls through to the station name.
-    config.brand.station_name = ""
-    config.station.name = "Engine Name"
-    assert config.display_station_name == "Engine Name"
-
-    # Both blank floors to the canonical default — never empty.
-    config.station.name = ""
+    # Blank identity floors to the canonical default — never empty.
+    config.identity.station_name = ""
     assert config.display_station_name == "Mamma Mi Radio"
 
 

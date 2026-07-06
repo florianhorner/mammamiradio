@@ -49,12 +49,16 @@ class ImagingLibrary:
             "motif_notes": self.motif_notes,
             "to": to_seg.value,
         }
+        variant = next_synth_variant("transition_sting", params)
         return materialize_synth_mp3(
             self.cache_dir,
             "transition_sting",
             output_path,
             params,
-            lambda path: generate_transition_sting(from_seg.value, to_seg.value, path, self.motif_notes),
+            lambda path: generate_transition_sting(
+                from_seg.value, to_seg.value, path, self.motif_notes, variant=variant
+            ),
+            variant=variant,
         )
 
     def pick_sweeper_sting(self, output_path: Path) -> Path:

@@ -24,9 +24,10 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from mammamiradio.core.config import DEFAULT_STATION_NAME, TimerInterruptConfig, is_absolute_http_url
+from mammamiradio.core.config import DEFAULT_STATION_NAME, RadioEventRule, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     HomeEvent,
@@ -34,6 +35,14 @@ from mammamiradio.home.ha_enrichment import (
     build_events_summary_en,
     diff_states,
     prune_events,
+)
+from mammamiradio.home.radio_events import RadioEventMatch, build_radio_event_baseline, match_radio_events
+from mammamiradio.home.ritual_recipes import (
+    RitualRecipeMatch,
+    audit_ritual_recipes,
+    build_ritual_recipe_baseline,
+    match_ritual_recipes,
+    public_family_labels,
 )
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
@@ -366,6 +375,10 @@ class HomeContext:
     raw_states: dict[str, dict] = field(default_factory=dict)
     summary: str = ""
     events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=EVENT_BUFFER_SIZE))
+    radio_events: list[RadioEventMatch] = field(default_factory=list)
+    ritual_recipe_matches: list[RitualRecipeMatch] = field(default_factory=list)
+    ritual_public_families: list[str] = field(default_factory=list)
+    ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     events_summary: str = ""
     timestamp: float = 0.0
     # Phase 2: mood classification
@@ -386,6 +399,34 @@ class HomeContext:
     @property
     def age_seconds(self) -> float:
         return time.time() - self.timestamp if self.timestamp else float("inf")
+
+
+def _copy_raw_state(state_data: dict) -> dict:
+    copied = dict(state_data)
+    attrs = copied.get("attributes")
+    if isinstance(attrs, dict):
+        copied["attributes"] = dict(attrs)
+    return copied
+
+
+def _copy_scored_entity(entity: ScoredEntity) -> ScoredEntity:
+    return replace(entity, raw_state=_copy_raw_state(entity.raw_state))
+
+
+def _copy_home_context(context: HomeContext) -> HomeContext:
+    """Copy mutable context containers before policy/view-specific filtering."""
+    return replace(
+        context,
+        raw_states={entity_id: _copy_raw_state(data) for entity_id, data in context.raw_states.items()},
+        events=deque(context.events, maxlen=context.events.maxlen or EVENT_BUFFER_SIZE),
+        radio_events=list(context.radio_events),
+        ritual_recipe_matches=list(context.ritual_recipe_matches),
+        ritual_public_families=list(context.ritual_public_families),
+        ritual_recipe_audit=[dict(item) for item in context.ritual_recipe_audit],
+        scored=[_copy_scored_entity(entity) for entity in context.scored],
+        label_stats=dict(context.label_stats),
+        denylist_hits=dict(context.denylist_hits),
+    )
 
 
 def _sanitize_state_value(value: str, max_len: int = 100) -> str:
@@ -707,6 +748,100 @@ def _build_budgeted_summary(scored: list[ScoredEntity]) -> str:
     # because that sanitizer is also used by the admin UI path where esc()
     # handles HTML escaping client-side.)
     return rendered.replace("<", "").replace(">", "")
+
+
+def _prune_muted_events(events: deque[HomeEvent] | None, muted_ids: set[str], *, now: float) -> deque[HomeEvent]:
+    if not events:
+        return deque(maxlen=EVENT_BUFFER_SIZE)
+    kept = [event for event in prune_events(events, now=now) if event.entity_id not in muted_ids]
+    return deque(kept, maxlen=EVENT_BUFFER_SIZE)
+
+
+def _apply_muted_policy_to_context(
+    context: HomeContext,
+    muted_ids: set[str],
+    *,
+    cache_dir: Path | None = None,
+    now: float | None = None,
+) -> HomeContext:
+    """Remove muted ids from an already-built context cache."""
+    if not muted_ids:
+        return context
+    timestamp = time.time() if now is None else now
+    affected_ids = muted_ids & (
+        set(context.raw_states)
+        | {event.entity_id for event in context.events}
+        | {entity.entity_id for entity in context.scored}
+    )
+    if not affected_ids and "weather.forecast_home" not in muted_ids:
+        return context
+
+    context.raw_states = {
+        entity_id: data for entity_id, data in context.raw_states.items() if entity_id not in muted_ids
+    }
+    context.events = _prune_muted_events(context.events, muted_ids, now=timestamp)
+    context.scored = [entity for entity in context.scored if entity.entity_id not in muted_ids]
+    _, labels_en = _build_entity_label_maps(context.raw_states, cache_dir=cache_dir)
+    context.summary = _build_budgeted_summary(context.scored)
+    context.events_summary = build_events_summary(context.events, now=timestamp)
+    context.events_summary_en = build_events_summary_en(context.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+    context.mood = classify_home_mood(context.raw_states)
+    context.mood_en = classify_home_mood_en(context.raw_states)
+    if "weather.forecast_home" in muted_ids:
+        context.weather_arc = ""
+        context.weather_arc_en = ""
+    context.last_event_label_en = ""
+    if context.events:
+        newest = max(context.events, key=lambda event: event.timestamp)
+        context.last_event_label_en = labels_en.get(newest.entity_id, newest.label)
+    label_stats = _label_stats(context.scored)
+    context.catalog_hit_rate = float(label_stats["catalog_hit_rate"])
+    context.label_stats = label_stats
+    context.denylist_hits = dict(context.denylist_hits)
+    context.denylist_hits["user_muted"] = max(context.denylist_hits.get("user_muted", 0), len(affected_ids))
+    return context
+
+
+def _serve_filtered_home_context(
+    context: HomeContext,
+    muted_ids: set[str],
+    *,
+    cache_dir: Path | None = None,
+    now: float | None = None,
+    update_global: bool = False,
+) -> HomeContext:
+    """Serve a cache/stale context through the live mute and summary policy."""
+    global _ha_cache
+    timestamp = time.time() if now is None else now
+    served = context if cache_dir is None else _copy_home_context(context)
+    served = _apply_muted_policy_to_context(served, muted_ids, cache_dir=cache_dir, now=timestamp)
+    # Cache returns still need live event ages and expired-event pruning; callers
+    # should not know which cached path they hit to receive prompt-safe context.
+    served.events = _prune_muted_events(served.events, muted_ids, now=timestamp)
+    served.events_summary = build_events_summary(served.events, now=timestamp)
+    _, labels_en = _build_entity_label_maps(served.raw_states, cache_dir=cache_dir)
+    served.events_summary_en = build_events_summary_en(served.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+    served.radio_events = []
+    served.ritual_recipe_matches = []
+    served.ritual_public_families = []
+    served.ritual_recipe_audit = []
+    if update_global:
+        _ha_cache = served
+    return served
+
+
+def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> HomeContext:
+    """Re-apply the live mute policy to a context obtained outside fetch_home_context.
+
+    ``fetch_home_context`` mute-filters on every return path, but a caller that
+    falls back to a previously-held context on its own (e.g. a timed-out
+    refresh reusing the caller's stale copy) bypasses that filtering. This is
+    the public entry point for those callers.
+    """
+    if cache_dir is None:
+        return context
+    muted_ids = muted_entity_ids(Path(cache_dir))
+    return _serve_filtered_home_context(context, muted_ids, cache_dir=cache_dir, now=time.time())
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -1138,6 +1273,8 @@ def check_reactive_triggers(
 
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
+_radio_event_state_cache: dict[str, dict] = {}
+_ritual_recipe_state_cache: dict[str, dict] = {}
 _ha_registry_snapshot_cache: HomeRegistrySnapshot | None = None
 _ha_registry_fetched_at: float = 0.0
 _HA_REGISTRY_TTL = 6 * 60 * 60
@@ -1419,6 +1556,7 @@ async def fetch_home_context(
     poll_interval: float = 60.0,
     _cache: HomeContext | None = None,
     cache_dir: Path | None = None,
+    radio_event_rules: list[RadioEventRule] | None = None,
 ) -> HomeContext:
     """Fetch current home state from HA REST API.
 
@@ -1426,19 +1564,18 @@ async def fetch_home_context(
     Uses module-level cache for persistence across calls, with the
     _cache parameter as a fallback for backward compatibility.
     """
-    global _ha_cache
+    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
+    muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
-        # Refresh event ages and prune expired entries even on cache hits, so
-        # "X min fa" timestamps stay accurate and stale events are dropped.
-        now = time.time()
-        effective_cache.events = prune_events(effective_cache.events, now=now)
-        effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
-        effective_cache.events_summary_en = build_events_summary_en(
-            effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=now
+        return _serve_filtered_home_context(
+            effective_cache,
+            muted_ids,
+            cache_dir=cache_dir,
+            now=time.time(),
+            update_global=cache_dir is None,
         )
-        return effective_cache
 
     try:
         client = _get_ha_client()
@@ -1455,21 +1592,80 @@ async def fetch_home_context(
         timestamp = time.time()
         denylist_hits: dict[str, int] = {}
         registry_snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
-        entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        # Re-read the mute policy after the awaited HA/registry calls above so an
+        # operator mute applied mid-refresh isn't served by a stale pre-await
+        # snapshot (TOCTOU — codex adversarial review).
+        if cache_dir is not None:
+            muted_ids = muted_entity_ids(Path(cache_dir))
+        all_entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        muted_present = set(all_entity_map) & muted_ids
+        # Muted ids are dropped from entity_map itself — not just the ambient
+        # "relevant" slice — so a configured radio_event rule can never fire a
+        # directive for an entity the operator explicitly excluded.
+        entity_map = (
+            {eid: data for eid, data in all_entity_map.items() if eid not in muted_ids}
+            if muted_present
+            else all_entity_map
+        )
+        enriched_entity_map = {
+            entity_id: _apply_registry_snapshot(entity_id, state_data, registry_snapshot)
+            for entity_id, state_data in entity_map.items()
+        }
+        radio_events: list[RadioEventMatch] = []
+        if radio_event_rules:
+            try:
+                radio_events = match_radio_events(
+                    radio_event_rules,
+                    _radio_event_state_cache,
+                    enriched_entity_map,
+                    now=timestamp,
+                )
+            except Exception as exc:  # pragma: no cover - defensive continuity guard
+                logger.warning("Failed to match configured HA radio events: %s", exc)
+                radio_events = []
+            try:
+                _radio_event_state_cache = build_radio_event_baseline(enriched_entity_map, radio_event_rules)
+            except Exception as exc:  # pragma: no cover - defensive continuity guard
+                logger.warning("Failed to update configured HA radio-event baseline: %s", exc)
+                _radio_event_state_cache = {}
+        else:
+            _radio_event_state_cache = {}
+        ritual_recipe_matches: list[RitualRecipeMatch] = []
+        try:
+            ritual_recipe_matches = match_ritual_recipes(
+                None,
+                _ritual_recipe_state_cache,
+                enriched_entity_map,
+                now=timestamp,
+            )
+        except Exception as exc:  # pragma: no cover - defensive continuity guard
+            logger.warning("Failed to match HA ritual recipes: %s", exc)
+            ritual_recipe_matches = []
+        try:
+            _ritual_recipe_state_cache = build_ritual_recipe_baseline(enriched_entity_map)
+        except Exception as exc:  # pragma: no cover - defensive continuity guard
+            logger.warning("Failed to update HA ritual recipe baseline: %s", exc)
+            _ritual_recipe_state_cache = {}
         relevant = {
             entity_id: filtered
-            for entity_id, state_data in entity_map.items()
+            for entity_id, state_data in enriched_entity_map.items()
             if (
                 filtered := _filter_state(
                     entity_id,
-                    _apply_registry_snapshot(entity_id, state_data, registry_snapshot),
+                    state_data,
                     denylist_hits,
                 )
             )
             is not None
         }
-        old_states = effective_cache.raw_states if effective_cache else {}
-        old_events = effective_cache.events if effective_cache else None
+        if muted_present:
+            denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present)
+        old_states = {
+            entity_id: state_data
+            for entity_id, state_data in (effective_cache.raw_states if effective_cache else {}).items()
+            if entity_id not in muted_ids
+        }
+        old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
         labels_it, labels_en = _build_entity_label_maps(relevant, cache_dir=cache_dir)
         events = diff_states(
             old_states,
@@ -1488,10 +1684,13 @@ async def fetch_home_context(
         label_stats = _label_stats(scored)
         mood = classify_home_mood(relevant)
         mood_en = classify_home_mood_en(relevant)
-        weather_arc = await fetch_weather_forecast(ha_url, ha_token)
+        weather_muted = "weather.forecast_home" in muted_ids
+        weather_arc = "" if weather_muted else await fetch_weather_forecast(ha_url, ha_token)
         summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
         events_summary_en = build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+        ritual_public_families = public_family_labels(ritual_recipe_matches)
+        ritual_recipe_audit = audit_ritual_recipes(states=enriched_entity_map)
         # Determine English label of the most recent event for admin display
         last_event_label_en = ""
         if events:
@@ -1501,12 +1700,16 @@ async def fetch_home_context(
             raw_states=relevant,
             summary=summary,
             events=events,
+            radio_events=radio_events,
+            ritual_recipe_matches=ritual_recipe_matches,
+            ritual_public_families=ritual_public_families,
+            ritual_recipe_audit=ritual_recipe_audit,
             events_summary=events_summary,
             mood=mood,
             weather_arc=weather_arc,
             timestamp=timestamp,
             mood_en=mood_en,
-            weather_arc_en=get_weather_arc_en(),
+            weather_arc_en="" if weather_muted else get_weather_arc_en(),
             events_summary_en=events_summary_en,
             last_event_label_en=last_event_label_en,
             scored=scored,
@@ -1517,11 +1720,12 @@ async def fetch_home_context(
         )
         _ha_cache = context
         logger.info(
-            "Fetched HA context: %d/%d entities, %d scored, %d events, mood=%r",
+            "Fetched HA context: %d/%d entities, %d scored, %d events, %d ritual matches, mood=%r",
             len(relevant),
             len(entity_map),
             len(scored),
             len(events),
+            len(ritual_recipe_matches),
             mood or "none",
         )
         return context
@@ -1531,23 +1735,41 @@ async def fetch_home_context(
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
-            effective_cache.events = prune_events(effective_cache.events, now=timestamp)
-            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
-            effective_cache.events_summary_en = build_events_summary_en(
-                effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
+            return _serve_filtered_home_context(
+                effective_cache,
+                muted_ids,
+                cache_dir=cache_dir,
+                now=timestamp,
+                update_global=cache_dir is None,
             )
-            return effective_cache
         return HomeContext()
 
 
-def get_cached_home_context() -> HomeContext | None:
-    """Return the module-level HA context cache for admin-triggered refreshes."""
+def get_cached_home_context(cache_dir: Path | None = None) -> HomeContext | None:
+    """Return the module-level HA context cache for admin-triggered refreshes.
+
+    The module cache is only refreshed by fetch_home_context()'s own poll
+    cycle — a caller reading it directly between polls could otherwise see a
+    just-muted entity that hasn't been purged from it yet (adversarial
+    review). Pass ``cache_dir`` to receive a live-policy-filtered copy; omit it
+    for callers that don't consume entity content.
+    """
+    if cache_dir is not None and _ha_cache is not None:
+        return apply_entity_mute_policy(_ha_cache, cache_dir)
     return _ha_cache
 
 
 _last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
 _last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
+_HA_ENTITY_RECOVERY_REPUBLISH_SECONDS = 300.0
+_HA_DEDUPED_ENTITY_IDS = {
+    "sensor.mammamiradio_segment_type",
+    "sensor.mammamiradio_listeners",
+    "binary_sensor.mammamiradio_on_air",
+}
+_ha_entity_payload_fingerprints: dict[str, str] = {}
+_ha_entity_last_push_at: dict[str, float] = {}
 
 # Absolute fallback logo for the HA media_player entity_picture. HA's
 # media-control card does NOT clear a removed entity_picture — it keeps the last
@@ -1557,6 +1779,23 @@ _ha_push_lock: asyncio.Lock | None = None
 _DEFAULT_STATION_ARTWORK_URL = (
     "https://raw.githubusercontent.com/florianhorner/mammamiradio/main/ha-addon/mammamiradio/logo.png"
 )
+_HA_SEGMENT_TYPE_ICONS = {
+    "music": "mdi:music-note",
+    "banter": "mdi:microphone",
+    "ad": "mdi:bullhorn",
+    "news_flash": "mdi:newspaper",
+    "station_id": "mdi:radio-tower",
+    "sweeper": "mdi:waveform",
+    "time_check": "mdi:clock-outline",
+    "off": "mdi:power-standby",
+}
+_HA_SEGMENT_TYPE_FALLBACK_ICON = "mdi:radio"
+
+
+def _segment_type_icon(segment_type: object) -> str:
+    """Return the HA icon for a pushed segment-type sensor state."""
+    key = str(segment_type or "").strip().lower()
+    return _HA_SEGMENT_TYPE_ICONS.get(key, _HA_SEGMENT_TYPE_FALLBACK_ICON)
 
 
 def _get_ha_push_lock() -> asyncio.Lock:
@@ -1569,6 +1808,36 @@ def _get_ha_push_lock() -> asyncio.Lock:
 
 _GHOST_MEDIA_PLAYER_EID = "media_player.mammamiradio"
 _media_player_ghost_purged = False
+
+
+def _ha_payload_fingerprint(payload: dict) -> str:
+    """Stable payload fingerprint for unchanged HA sensor writes."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _ha_entity_write_due(eid: str, payload: dict, now: float) -> bool:
+    """Return whether this entity should be written to HA this cycle.
+
+    The media player is intentionally not deduped: its playback position changes
+    over time and add-on-only installs expect a regular card refresh. The
+    auxiliary sensors are much cheaper to recover from a slower forced heartbeat,
+    so unchanged payloads wait for the recovery interval instead of writing every
+    30 seconds forever.
+    """
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return True
+    fingerprint = _ha_payload_fingerprint(payload)
+    if _ha_entity_payload_fingerprints.get(eid) != fingerprint:
+        return True
+    last_push = _ha_entity_last_push_at.get(eid, 0.0)
+    return now - last_push >= _HA_ENTITY_RECOVERY_REPUBLISH_SECONDS
+
+
+def _remember_ha_entity_write(eid: str, payload: dict, now: float) -> None:
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return
+    _ha_entity_payload_fingerprints[eid] = _ha_payload_fingerprint(payload)
+    _ha_entity_last_push_at[eid] = now
 
 
 def _media_player_push_enabled() -> bool:
@@ -1686,6 +1955,7 @@ async def push_state_to_ha(
 
         media_attrs: dict = {
             "friendly_name": station_name,
+            "icon": "mdi:radio",
             "supported_features": 0,
             "media_title": media_title,
             "media_artist": media_artist,
@@ -1721,7 +1991,10 @@ async def push_state_to_ha(
                 "sensor.mammamiradio_segment_type",
                 {
                     "state": segment_type,
-                    "attributes": {"friendly_name": f"{station_name} Segment Type"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} Segment Type",
+                        "icon": _segment_type_icon(segment_type),
+                    },
                 },
             ),
             (
@@ -1730,6 +2003,7 @@ async def push_state_to_ha(
                     "state": listeners_active,
                     "attributes": {
                         "friendly_name": f"{station_name} Listeners",
+                        "icon": "mdi:account-group",
                         "unit_of_measurement": "listeners",
                     },
                 },
@@ -1738,7 +2012,10 @@ async def push_state_to_ha(
                 "binary_sensor.mammamiradio_on_air",
                 {
                     "state": "off" if session_stopped else "on",
-                    "attributes": {"friendly_name": f"{station_name} On Air"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} On Air",
+                        "icon": "mdi:broadcast",
+                    },
                 },
             ),
         ]
@@ -1751,7 +2028,7 @@ async def push_state_to_ha(
             entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
             await _purge_ghost_media_player(base_url, headers, client)
 
-        async def _push_one(eid: str, p: dict) -> None:
+        async def _push_one(eid: str, p: dict) -> bool:
             # Always log the exception TYPE + repr. A bare str() on a timeout or
             # cancellation-style exception is empty, which is what produced the
             # unreadable "HA push failed for <eid>: " lines in production. Include
@@ -1779,18 +2056,28 @@ async def push_state_to_ha(
                             resp.status_code,
                             f" — {body}" if body else "",
                         )
-                    return
+                        return False
+                    return True
                 except httpx.TransportError as e:
                     last_exc = e
                     continue
                 except Exception as e:
                     logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
-                    return
+                    return False
             logger.warning(
                 "HA push failed for %s after retry: %s: %r",
                 eid,
                 type(last_exc).__name__,
                 last_exc,
             )
+            return False
 
-        await asyncio.gather(*(_push_one(eid, p) for eid, p in entities))
+        # Keep state writes ordered. Supervisor's API proxy can report noisy
+        # request-body errors when all entity updates hit it at once during HA
+        # slowness; the outer push lock already serializes push cycles, so this
+        # preserves freshness while smoothing each cycle.
+        for eid, payload in entities:
+            if not _ha_entity_write_due(eid, payload, now):
+                continue
+            if await _push_one(eid, payload):
+                _remember_ha_entity_write(eid, payload, now)

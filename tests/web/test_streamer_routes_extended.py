@@ -30,6 +30,21 @@ def _basic_auth_header(username: str = "admin", password: str = "secret") -> dic
     return {"Authorization": f"Basic {token}"}
 
 
+@pytest.fixture(autouse=True)
+def _no_real_dotenv_writes():
+    """Keep route tests off the developer's real .env.
+
+    The pacing clamp/mutation tests run standalone (is_addon=False), so a valid
+    PATCH now reaches ``_save_dotenv`` and would write a real .env. No-op it by
+    default. Tests that assert ON persistence (the pacing-persistence tests, the
+    credentials tests) nest their own ``with patch(...)`` which shadows this.
+    Only ``_save_dotenv`` is guarded — ``_save_addon_option`` is left real so the
+    add-on-mode tests that exercise its file write still work.
+    """
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        yield
+
+
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -375,7 +390,7 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_move_to_next_updates_public_upcoming_preview():
+async def test_move_to_next_does_not_fake_public_upcoming_preview():
     app = _make_test_app()
     app.state.station_state.segments_produced = 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -385,10 +400,11 @@ async def test_move_to_next_updates_public_upcoming_preview():
 
     assert move_resp.status_code == 200
     assert move_resp.json()["ok"] is True
-    upcoming = status_resp.json()["upcoming"]
-    assert upcoming[0]["type"] == "music"
-    assert upcoming[0]["label"] == "Artist C – Song C"
-    assert upcoming[0]["playlist_index"] == 2
+    body = status_resp.json()
+    assert body["upcoming"] == []
+    assert body["upcoming_mode"] == "building"
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.display == "Artist C – Song C"
 
 
 @pytest.mark.asyncio
@@ -602,6 +618,62 @@ async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_holds_longform_before_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Two Hour DJ Set",
+                    "artist": "The Selector",
+                    "duration_ms": 7_200_000,
+                    "album_art": "",
+                },
+            )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "longform_audio"
+    assert "single-track" in body["message"]
+    download_mock.assert_not_called()
+    assert not getattr(app.state, "background_tasks", set())
+
+
+@pytest.mark.asyncio
+async def test_add_external_track_rejects_non_music_before_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Morning Podcast Episode",
+                    "artist": "The Talker",
+                    "duration_ms": 180_000,
+                    "album_art": "",
+                },
+            )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "non_music_audio"
+    assert "single-track music result" in body["message"]
+    download_mock.assert_not_called()
+    assert not getattr(app.state, "background_tasks", set())
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path):
     """On an iTunes miss the track keeps its thumbnail rather than going blank —
     protects the now-playing tile from regressing to no image."""
@@ -664,6 +736,121 @@ async def test_listener_request_upgrades_thumbnail_to_cover(tmp_path):
         await _download_listener_song(req, app.state, state.source_revision)
     assert state.pinned_track is not None
     assert state.pinned_track.album_art == "https://is1.mzstatic.com/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_holds_lied_actual_duration_and_purges(tmp_path):
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"long audio placeholder")
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=7_200.0),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "held"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    assert raw_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_purges_after_source_switch_lock(tmp_path):
+    from mammamiradio.web import streamer
+
+    class ObservedLock:
+        def __init__(self) -> None:
+            self.locked = False
+
+        async def __aenter__(self):
+            self.locked = True
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            self.locked = False
+            return False
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    lock = ObservedLock()
+    app.state.source_switch_lock = lock
+    state = app.state.station_state
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"long audio placeholder")
+
+    def _reject_cached_download(cache_dir, cache_key, reason):
+        assert lock.locked is False
+        raw_path.unlink(missing_ok=True)
+        return True
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=7_200.0),
+        patch("mammamiradio.playlist.downloader.reject_cached_download", side_effect=_reject_cached_download),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "held"
+    assert raw_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp_path):
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "pinned"
+    assert state.pinned_track is track
+    assert track in state.playlist
+    assert raw_path.exists() is True
 
 
 @pytest.mark.asyncio
@@ -810,6 +997,7 @@ async def test_playlist_api_returns_paginated_track_page():
         )
         for i in range(6)
     ]
+    app.state.station_state.playlist[2].heading_id = "hunt-2"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/playlist?offset=2&limit=3")
@@ -820,6 +1008,7 @@ async def test_playlist_api_returns_paginated_track_page():
     assert body["tracks"][0]["source"] == "classic"
     assert body["tracks"][0]["year"] == 1982
     assert body["tracks"][0]["youtube_id"] == "ytid0000002"
+    assert body["tracks"][0]["heading_id"] == "hunt-2"
     assert body["total"] == 6
     assert body["offset"] == 2
     assert body["limit"] == 3
@@ -873,6 +1062,7 @@ async def test_status_playlist_page_preserves_admin_status_contract():
     assert body["playlist"][0]["source"] == "classic"
     assert body["playlist"][0]["year"] == 2090
     assert body["playlist"][0]["youtube_id"] == "ytid0000100"
+    assert body["playlist"][0]["heading_id"] == ""
     assert body["playlist_page"] == {
         "total": 205,
         "offset": 100,
@@ -1144,6 +1334,7 @@ async def test_get_listener_requests_returns_age():
             "type": "shoutout",
             "song_found": False,
             "song_error": False,
+            "song_error_reason": "",
             "song_track": None,
             "ts": now - 8,
         }
@@ -1155,6 +1346,7 @@ async def test_get_listener_requests_returns_age():
     body = resp.json()
     assert len(body["requests"]) == 1
     assert body["requests"][0]["age_s"] >= 8
+    assert body["requests"][0]["song_error_reason"] == ""
 
 
 @pytest.mark.asyncio
@@ -1176,6 +1368,7 @@ async def test_get_listener_requests_prunes_expired_recently_consumed():
             "message": "Metti Volare",
             "type": "song_request",
             "status": "song_not_found",
+            "song_error_reason": "longform_audio",
             "consumed_at": now - 10,
         },
     ]
@@ -1192,6 +1385,7 @@ async def test_get_listener_requests_prunes_expired_recently_consumed():
     assert recent["song_track"] is None
     assert recent["type"] == "song_request"
     assert recent["status"] == "song_not_found"
+    assert recent["song_error_reason"] == "longform_audio"
     assert 10 <= recent["age_s"] < 300
     assert [r["id"] for r in app.state.station_state.recently_consumed_requests] == ["fresh"]
 
@@ -1658,6 +1852,7 @@ async def test_admin_listener_requests_surfaces_phase2_fields():
             "type": "shoutout",
             "song_found": False,
             "song_error": False,
+            "song_error_reason": "",
             "song_track": None,
             "ts": now,
             "request_id": "11111111-1111-4111-8111-111111111111",
@@ -1674,6 +1869,7 @@ async def test_admin_listener_requests_surfaces_phase2_fields():
     assert rec["request_id"] == "11111111-1111-4111-8111-111111111111"
     assert rec["status"] == "queued"
     assert rec["evict_after"] is None
+    assert rec["song_error_reason"] == ""
     assert "submitter_ip_hash" not in rec
 
 
@@ -2338,6 +2534,7 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "banned"
     assert req["song_found"] is False
     # The banned song never joined rotation.
     assert len(state.playlist) == original_len
@@ -2432,8 +2629,75 @@ async def test_download_listener_song_no_results_marks_error(tmp_path):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "not_found"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_longform_result_marks_error_without_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "two hour set", "message": "two hour set", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {
+                    "title": "Two Hour DJ Set",
+                    "artist": "The Selector",
+                    "duration_ms": 7_200_000,
+                    "youtube_id": "set00000001",
+                    "album_art": "",
+                }
+            ],
+        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "longform_audio"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    download_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_non_music_result_marks_specific_error_without_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "podcast episode", "message": "podcast episode", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {
+                    "title": "Morning Podcast Episode",
+                    "artist": "The Talker",
+                    "duration_ms": 180_000,
+                    "youtube_id": "episode0001",
+                    "album_art": "",
+                }
+            ],
+        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "non_music_audio"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    download_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2489,6 +2753,7 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "download_failed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -2507,6 +2772,7 @@ async def test_download_listener_song_search_exception_marks_error(tmp_path):
 
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "download_failed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -2600,6 +2866,57 @@ async def test_load_playlist_success():
     assert body["tracks"] == 1
     assert body["persisted"] is True
     assert app.state.station_state.playlist[0].title == "New A"
+
+
+@pytest.mark.asyncio
+async def test_load_playlist_surfaces_source_changed_listener_request_in_admin_queue():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.pending_requests.append(
+        {
+            "request_id": "listener-req-1",
+            "name": "Luca",
+            "message": "Metti Volare",
+            "type": "song_request",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "ts": time.time(),
+        }
+    )
+    new_tracks = [Track(title="New A", artist="NA", duration_ms=200_000, spotify_id="na1")]
+    resolved_source = PlaylistSource(
+        kind="url",
+        source_id="xyz",
+        url="https://open.spotify.com/playlist/xyz",
+        label="New A",
+        track_count=1,
+        selected_at=1.0,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(new_tracks, resolved_source),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            load_resp = await client.post("/api/playlist/load", json={"url": resolved_source.url})
+            queue_resp = await client.get("/api/listener-requests")
+
+    assert load_resp.status_code == 200
+    assert load_resp.json()["ok"] is True
+    assert queue_resp.status_code == 200
+    body = queue_resp.json()
+    assert body["requests"] == []
+    assert len(body["recently_consumed"]) == 1
+    consumed = body["recently_consumed"][0]
+    assert consumed["id"] == "listener-req-1"
+    assert consumed["name"] == "Luca"
+    assert consumed["message"] == "Metti Volare"
+    assert consumed["type"] == "song_request"
+    assert consumed["status"] == "source_changed"
 
 
 @pytest.mark.asyncio
@@ -2899,6 +3216,26 @@ async def test_stream_returns_audio_headers():
             assert resp.headers["content-type"] == "audio/mpeg"
             assert "icy-name" in resp.headers
             assert "icy-br" in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_name_uses_resolved_identity_and_strips_crlf():
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Test\r\nX-Evil: 1"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio TestX-Evil: 1"
+            assert "\r" not in resp.headers["icy-name"]
+            assert "\n" not in resp.headers["icy-name"]
 
 
 @pytest.mark.asyncio
@@ -3347,6 +3684,117 @@ async def test_patch_pacing_rejects_invalid_json_without_mutating_config(content
     assert app.state.config.pacing.ad_spots_per_break == 3
 
 
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_standalone_all_keys_atomically():
+    """Standalone: a full save writes every present key in ONE _save_dotenv call."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/pacing",
+                json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+            )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    save_dotenv.assert_called_once_with(
+        {
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER": "3",
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS": "6",
+            "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK": "2",
+        }
+    )
+    assert app.state.config.pacing.songs_between_banter == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_addon_one_atomic_batch_write():
+    """Addon: pacing persists to /data/options.json via ONE batch write, not .env.
+
+    The single grouped write is what prevents partial-persist drift — three
+    single-key writes could half-update options.json if one failed midway.
+    """
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option_batch") as save_batch,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/pacing",
+                json={"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2},
+            )
+    assert resp.status_code == 200
+    save_batch.assert_called_once_with({"songs_between_banter": 3, "songs_between_ads": 6, "ad_spots_per_break": 2})
+    save_dotenv.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_only_present_keys():
+    """A partial save persists only the field(s) sent, not the untouched ones."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_ads": 8})
+    assert resp.status_code == 200
+    save_dotenv.assert_called_once_with({"MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS": "8"})
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persists_clamped_value_not_raw():
+    """An out-of-range input persists the CLAMPED value, so the saved value and the
+    live value are always identical — they can't drift on a bad input."""
+    app = _make_test_app(is_addon=False)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 0, "ad_spots_per_break": 99})
+    assert resp.status_code == 200
+    assert resp.json()["songs_between_banter"] == 2
+    assert resp.json()["ad_spots_per_break"] == 5
+    # The PERSISTED value is the clamped one, not the raw 0 / 99.
+    save_dotenv.assert_called_once_with(
+        {
+            "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER": "2",
+            "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK": "5",
+        }
+    )
+    assert app.state.config.pacing.songs_between_banter == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persist_failure_standalone_leaves_live_untouched():
+    """Standalone persist failure -> 500 and live config unchanged (persist-first).
+
+    A failed write must not move the live value, so it can never disagree with
+    what survives the restart.
+    """
+    app = _make_test_app(is_addon=False)
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 9})
+    assert resp.status_code == 500
+    assert resp.json()["ok"] is False
+    assert app.state.config.pacing.songs_between_banter == 4
+
+
+@pytest.mark.asyncio
+async def test_patch_pacing_persist_failure_addon_leaves_live_untouched():
+    """Addon persist failure -> 500 and live config unchanged (no options.json drift)."""
+    app = _make_test_app(is_addon=True)
+    app.state.config.pacing.ad_spots_per_break = 3
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._save_addon_option_batch", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"ad_spots_per_break": 5})
+    assert resp.status_code == 500
+    assert app.state.config.pacing.ad_spots_per_break == 3
+
+
 # ---------------------------------------------------------------------------
 # Credentials endpoint
 # ---------------------------------------------------------------------------
@@ -3645,6 +4093,30 @@ def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
 
     options = _json.loads(options_file.read_text())
     assert options == {"super_italian_mode": True}
+
+
+def test_save_addon_option_batch_preserves_other_keys_and_writes_all(tmp_path):
+    """The atomic batch write lands every pacing key in one pass AND leaves
+    unrelated options intact — the property that prevents partial-persist drift.
+    (The route test mocks the helper, so this is the only check of the real write.)"""
+    from mammamiradio.web.persistence import _save_addon_option_batch
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text('{"super_italian_mode": true, "quality_profile": "premium"}')
+
+    with patch("mammamiradio.web.persistence.Path") as mock_path:
+        mock_path.return_value = options_file
+        _save_addon_option_batch({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3})
+
+    import json as _json
+
+    options = _json.loads(options_file.read_text())
+    assert options["songs_between_banter"] == 5
+    assert options["songs_between_ads"] == 9
+    assert options["ad_spots_per_break"] == 3
+    # Pre-existing unrelated options survived the write.
+    assert options["super_italian_mode"] is True
+    assert options["quality_profile"] == "premium"
 
 
 # ---------------------------------------------------------------------------

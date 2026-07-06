@@ -60,6 +60,8 @@ def _write_release_check_repo(
         'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
+    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity.mp3", "x" * 2048)
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -705,7 +707,129 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
     result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
 
     assert result.returncode != 0
-    assert "options and schema key order differ" in result.stdout
+    assert "options keys must follow schema order" in result.stdout
+
+
+def test_validate_addon_allows_optional_schema_only_keys(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "stage: stable",
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  station_name: "Test"',
+                '  quality_profile: "balanced"',
+                "schema:",
+                "  station_name: str?",
+                "  quality_profile: list(premium|balanced|economy)?",
+                "  legacy_api_key: password?",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/rootfs/run.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'export MAMMAMIRADIO_PORT="8000"',
+                "station_name=${station_name:-}",
+                "quality_profile=${quality_profile:-}",
+                "legacy_api_key=${legacy_api_key:-}",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
+        "\n".join(
+            [
+                "configuration:",
+                "  station_name: key",
+                "  quality_profile: key",
+                "  legacy_api_key: key",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "options keys follow schema order; schema-only keys are optional" in result.stdout
+
+
+def test_validate_addon_rejects_required_schema_only_keys(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="""
+def _inject_ingress_prefix(html: str, prefix: str) -> str:
+    html = html.replace('href="/listen"', f'href="{prefix}/listen"')
+    return html
+""".strip()
+        + "\n",
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/config.yaml",
+        "\n".join(
+            [
+                'version: "1.1.0"',
+                "stage: stable",
+                "image: ghcr.io/florianhorner/mammamiradio-addon-{arch}",
+                "timeout: 300",
+                "host_network: true",
+                "ingress_port: 8000",
+                "options:",
+                '  station_name: "Test"',
+                "schema:",
+                "  station_name: str?",
+                "  hidden_required: str",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/rootfs/run.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'export MAMMAMIRADIO_PORT="8000"',
+                "station_name=${station_name:-}",
+                "hidden_required=${hidden_required:-}",
+                "",
+            ]
+        ),
+    )
+    _write(
+        tmp_path / "ha-addon/mammamiradio/translations/en.yaml",
+        "\n".join(
+            [
+                "configuration:",
+                "  station_name: key",
+                "  hidden_required: key",
+                "",
+            ]
+        ),
+    )
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "Schema-only keys must be optional: hidden_required" in result.stdout
 
 
 def test_validate_addon_falls_back_when_dotvenv_python_is_broken(tmp_path: Path) -> None:
@@ -981,3 +1105,46 @@ def test_dockerfile_port_matches_config() -> None:
         f"CMD --port={cmd_port}, "
         f"config.py default={py_port}"
     )
+
+
+def test_addon_schema_has_no_provider_secret_fields() -> None:
+    """Provider credentials must never reappear as Supervisor add-on options.
+
+    Keys live in /config/secrets.env (written by the admin setup panel);
+    Supervisor options are printed verbatim by `ha addons info`, so a provider
+    field in options/schema leaks the credential to routine diagnostics
+    (issue #688). run.sh keeps reading legacy options.json values as a boot
+    fallback, but the schema — stable and edge — must stay clean.
+    """
+    provider_fields = (
+        "anthropic_api_key",
+        "openai_api_key",
+        "azure_speech_key",
+        "azure_speech_region",
+        "elevenlabs_api_key",
+    )
+    surfaces = (
+        ROOT / "ha-addon" / "mammamiradio" / "config.yaml",
+        ROOT / "ha-addon" / "mammamiradio" / "translations" / "en.yaml",
+        ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml",
+        ROOT / "ha-addon" / "mammamiradio-edge" / "translations" / "en.yaml",
+    )
+    import re
+
+    leaks = [
+        f"{path.relative_to(ROOT)}: {field}"
+        for path in surfaces
+        for field in provider_fields
+        if re.search(rf'^\s*["\']?{field}["\']?\s*:', path.read_text(), re.MULTILINE)
+    ]
+    assert not leaks, (
+        "Provider secret fields must not be add-on options; "
+        "configure them via /config/secrets.env instead: " + ", ".join(leaks)
+    )
+
+    # The inverse contract: run.sh must keep reading these keys from legacy
+    # options.json so installs that predate the schema removal still boot
+    # with their credentials (secrets.env wins per key once populated).
+    run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    missing = [field for field in provider_fields if f"'{field}'" not in run_sh]
+    assert not missing, "run.sh lost the legacy options.json fallback for: " + ", ".join(missing)

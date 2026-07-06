@@ -39,6 +39,15 @@
     try { return (el && JSON.parse(el.textContent)) || {}; } catch { return {}; }
   })();
   function _t(key, fallback) { return COPY[key] || fallback || ''; }
+  function currentStationName() {
+    return (
+      (state.status && state.status.identity && state.status.identity.station_name) ||
+      (state.status && state.status.brand && state.status.brand.station_name) ||
+      localStorage.getItem('stationName') ||
+      document.title ||
+      'Mamma Mi Radio'
+    );
+  }
 
   /* ── State ── */
   const state = {
@@ -174,7 +183,7 @@
   /* ── Media Session (lock-screen / Bluetooth / Control Center) ── */
   function updateMediaSession(np) {
     if (!('mediaSession' in navigator) || !np) return;
-    const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
+    const stationName = currentStationName();
     // Album shows on lock screen / CarPlay alongside title+artist. Station
     // identity only \u2014 no city/frequency hardcoded here (those belong in
     // radio.toml [brand]; previously leaked stale city values through this
@@ -255,7 +264,7 @@
       artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : _t('seg_ad', 'Sponsored');
     } else if (np.type === 'welcome') {
       trackEl.textContent = _t('np_welcome', 'Welcome aboard');
-      artistEl.textContent = 'Mamma Mi Radio';
+      artistEl.textContent = currentStationName();
     } else if (np.type === 'stopped') {
       trackEl.textContent = _t('np_paused', 'Fermo');
       artistEl.textContent = '';
@@ -307,6 +316,7 @@
     const container = $('slots');
     if (!container) return;
     const stopped = status && status.session_stopped === true;
+    const noMusicSource = status && status.golden_path && status.golden_path.stage === 'needs_music_source';
     const upcoming = (status && status.upcoming) || [];
     const now = !stopped && status && status.now_streaming;
     const cards = [];
@@ -334,17 +344,28 @@
       });
     });
 
-    while (cards.length < 4) {
+    if (!stopped && noMusicSource && cards.length < 4) {
       cards.push({
-        when: '—',
+        status: true,
         current: false,
         type: 'idle',
-        label: _t('np_building', 'Building schedule…'),
+        label: _t('np_no_source', 'No records are loaded yet — check back once the crate is filled.'),
+        host: '',
+      });
+    } else if (!stopped && status && status.upcoming_mode === 'building' && cards.length < 4) {
+      cards.push({
+        status: true,
+        current: false,
+        type: 'idle',
+        label: _t('np_building', 'The next records are being cued…'),
         host: '',
       });
     }
 
     container.innerHTML = cards.slice(0, 4).map((c, i) => {
+      if (c.status) {
+        return `<li class="status" role="status"><div class="m"><div class="title">${escHtml(c.label || _t('np_building', 'The next records are being cued…'))}</div></div></li>`;
+      }
       const liClass = c.current ? 'now' : i > 0 || (i === 0 && !c.current) ? 'next' : '';
       const timingClass = c.current ? 'pill-current' : 'pill-next';
       const typeClass = segmentPillClass(c.type);
@@ -540,7 +561,7 @@
         try { await navigator.clipboard.writeText(shareUrl); copied = true; } catch (e) { /* best-effort */ }
       }
       const npEl = document.getElementById('np-track');
-      const stationName = localStorage.getItem('stationName') || 'Mamma Mi Radio';
+      const stationName = currentStationName();
       const title = (npEl && npEl.textContent && npEl.textContent.trim()) || stationName;
       if (navigator.share) {
         try {
@@ -585,6 +606,9 @@
       const r = await fetch(_base + '/public-status');
       if (!r.ok) return;
       const status = await r.json();
+      if (status.identity && status.identity.station_name) {
+        try { localStorage.setItem('stationName', status.identity.station_name); } catch (_) {}
+      }
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
       const caps = { capabilities: status.capabilities || {} };

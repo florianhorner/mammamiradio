@@ -11,9 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.normalizer import save_track_metadata
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.models import (
     HostPersonality,
+    InterruptSpec,
     PlaylistSource,
     Segment,
     SegmentLogEntry,
@@ -22,10 +23,16 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.evening_memory import EveningLedger
-from mammamiradio.hosts.ad_creative import AdScript, SonicWorld
-from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
+from mammamiradio.home.ha_enrichment import HomeEvent
+from mammamiradio.home.radio_events import RadioEventMatch
+from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
+from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
+from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
+    _apply_radio_event_matches,
+    _apply_ritual_recipe_matches,
     _pick_canned_clip,
     run_producer,
 )
@@ -139,6 +146,7 @@ async def test_banter_segment_queued():
     """Producer queues a BANTER segment with synthesized dialogue."""
     state = _make_state()
     config = _make_config()
+    config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
@@ -150,6 +158,7 @@ async def test_banter_segment_queued():
         patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -160,6 +169,50 @@ async def test_banter_segment_queued():
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("type") == "banter"
     assert list(state.recent_banter_paths) == []
+
+
+@pytest.mark.asyncio
+async def test_banter_segment_carries_memory_extraction_with_final_script():
+    state = _make_state()
+    config = _make_config()
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    commit = BanterCommit(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": host.name, "text": "draft"}],
+            persona_context="existing",
+            interaction_context={"listener_request": "none"},
+            youtube_id="yt-memory",
+            source_session=2,
+        )
+    )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Dedicato a te!")], commit),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    payload = seg.metadata["memory_extraction"]
+    assert payload["script_lines"] == [
+        {"host": host.name, "text": "Allora...", "type": "transition"},
+        {"host": host.name, "text": "Dedicato a te!"},
+    ]
+    assert payload["youtube_id"] == "yt-memory"
+    assert payload["source_session"] == 2
 
 
 @pytest.mark.asyncio
@@ -191,6 +244,8 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
 async def test_station_id_uses_configured_sweeper_engine():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
+    config.sonic_brand.full_ident = ""
     config.sonic_brand.sweeper_voice = "marin"
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
@@ -207,6 +262,7 @@ async def test_station_id_uses_configured_sweeper_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.STATION_ID
+    assert mock_synthesize.call_args.args[0] == "Radio Test"
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == "openai"
     assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
@@ -216,10 +272,11 @@ async def test_station_id_uses_configured_sweeper_engine():
 async def test_sweeper_uses_configured_sweeper_engine():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
     config.sonic_brand.sweeper_voice = "marin"
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
-    config.sonic_brand.sweepers = ["Mamma Mi Radio."]
+    config.sonic_brand.sweepers = []
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     imaging = MagicMock()
     imaging.pick_sweeper_sting.side_effect = _fake_path
@@ -235,15 +292,71 @@ async def test_sweeper_uses_configured_sweeper_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.SWEEPER
+    assert mock_synthesize.call_args.args[0] == "Radio Test"
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == "openai"
     assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
 
 
 @pytest.mark.asyncio
+async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    line = "{station} resta in onda."
+    imaging = MagicMock()
+
+    def _write_sting(output_path: Path) -> Path:
+        output_path.write_bytes(b"sting")
+        return output_path
+
+    def _mix_sweeper(_voice_path: Path, _sting_path: Path, output_path: Path) -> Path:
+        output_path.write_bytes(b"mixed")
+        return output_path
+
+    async def _write_voice(_text: str, _voice: str, output_path: Path, **_kwargs) -> None:
+        output_path.write_bytes(b"voice")
+
+    imaging.pick_sweeper_sting.side_effect = _write_sting
+    with (
+        patch(f"{PRODUCER_MODULE}.random.choice", return_value=line),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_mix_sweeper) as mock_mix,
+    ):
+        segment = await producer._build_recovery_sweeper_segment(config, state)
+
+    assert segment.type == SegmentType.SWEEPER
+    assert segment.ephemeral is True
+    assert segment.path.name.startswith("recovery_sweeper_mixed_")
+    assert segment.path.read_bytes() == b"mixed"
+    assert segment.metadata == {
+        "type": "sweeper",
+        "text": "Mamma Mi Radio resta in onda.",
+        "title": "Recovery sweeper",
+        "error_recovery": True,
+        "rescue": True,
+    }
+    mock_synthesize.assert_awaited_once()
+    assert mock_synthesize.call_args.args[:2] == ("Mamma Mi Radio resta in onda.", "marin")
+    assert mock_synthesize.call_args.kwargs["engine"] == "openai"
+    assert mock_synthesize.call_args.kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+    assert mock_synthesize.call_args.kwargs["state"] is state
+    imaging.pick_sweeper_sting.assert_called_once()
+    mock_mix.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -259,36 +372,105 @@ async def test_time_check_uses_host_engine_for_tts():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.TIME_CHECK
+    assert "Radio Test" in mock_synthesize.call_args.args[0]
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
 
 
+@pytest.mark.asyncio
+async def test_ad_promo_tag_uses_configured_ad_voice_engine():
+    """The promo tag must not pass a cloud ad voice ID to edge-tts."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.voices = [
+        AdVoice(
+            name="L'Annunciatore",
+            voice="elevenlabs-voice-id",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            style="classic",
+            role="hammer",
+        )
+    ]
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", SonicWorld(), ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.AD
+    promo_call = next(call for call in mock_synthesize.await_args_list if call.args[0] == "Messaggio promozionale.")
+    assert promo_call.args[1] == "elevenlabs-voice-id"
+    assert promo_call.kwargs["engine"] == "elevenlabs"
+    assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
+
+
 # ---------------------------------------------------------------------------
-# Error recovery — silence fallback
+# Error recovery — recovery sweeper fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_queues_silence():
-    """When download_track raises, producer inserts a silence segment and increments failed_segments."""
+async def test_error_recovery_queues_recovery_sweeper():
+    """When download_track raises, producer inserts a recovery sweeper before emergency tone."""
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    # Segment type matches what was attempted (MUSIC), but metadata has error
-    assert seg.type == SegmentType.MUSIC
-    assert "error" in seg.metadata
+    mock_silence.assert_not_called()
+    assert seg.type == SegmentType.SWEEPER
+    assert seg.metadata.get("title") == "Recovery sweeper"
+    assert seg.metadata.get("rescue") is True
     assert state.failed_segments >= 1
 
 
@@ -322,7 +504,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
         second_download_started.set()
         await asyncio.Event().wait()
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -370,7 +552,7 @@ async def test_stopped_session_discards_finished_segment_without_advancing_state
         await allow_download_finish.wait()
         return source_audio
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -413,7 +595,7 @@ async def test_stopped_session_remains_stopped_until_resume(tmp_path):
     source_audio = tmp_path / "source.mp3"
     source_audio.write_bytes(b"fake audio")
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -555,25 +737,32 @@ def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
-    """Outer run_producer handler falls through to silence when demo_assets/ is empty.
+async def test_error_recovery_inserts_recovery_sweeper_when_no_canned_clips(tmp_path):
+    """Outer run_producer handler falls through to recovery sweeper when demo_assets/ is empty.
 
     When produce_one_segment raises (music download fails), the outer handler
-    tries _pick_canned_clip("banter") then _pick_canned_clip("welcome") before
-    generating silence.  With both directories empty, silence is the last resort.
+    tries packaged recovery clips, then norm-cache music, then synthesizes a
+    branded recovery sweeper before the emergency tone last resort.
 
     Note: banter TTS failures use `continue` internally and never reach the outer
-    handler.  This test uses MUSIC (whose failures propagate out) to exercise the
-    outer silence path with no canned-clip safety net.
+    handler. This test uses MUSIC (whose failures propagate out) to exercise the
+    outer recovery path with no canned-clip safety net.
     """
     from mammamiradio.scheduling import producer
 
+    (tmp_path / "recovery").mkdir()
     (tmp_path / "banter").mkdir()
     (tmp_path / "welcome").mkdir()
 
     state = _make_state()
     config = _make_config()
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     orig = producer._DEMO_ASSETS_DIR
     producer._DEMO_ASSETS_DIR = tmp_path
@@ -588,7 +777,13 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network down"),
             ),
-            patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
             await _run_until_queued(queue, state, config)
@@ -599,35 +794,62 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    assert "error" in seg.metadata
+    mock_silence.assert_not_called()
+    assert seg.type == SegmentType.SWEEPER
+    assert seg.metadata.get("title") == "Recovery sweeper"
+    assert seg.metadata.get("rescue") is True
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(caplog):
-    """When canned banter+welcome are unavailable, producer logs the banter-dir hint and inserts silence."""
+async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_sweeper(caplog):
+    """When recovery/banter/welcome clips are unavailable, producer logs and inserts a sweeper."""
+    from mammamiradio.scheduling import producer
+
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     picked_subdirs: list[str] = []
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     def _pick_none(subdir: str, state=None):
         picked_subdirs.append(subdir)
         return None
 
     caplog.set_level(logging.WARNING, logger="mammamiradio.scheduling.producer")
-    with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path) as mock_silence,
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network down"),
+            ),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+    finally:
+        producer._last_music_file = orig_last_music
 
-    assert picked_subdirs[:2] == ["banter", "welcome"]
-    assert any("check assets/demo/banter/" in record.message for record in caplog.records)
-    assert mock_silence.call_count == 1
-    assert mock_silence.call_args.args[1] == 5.0
+    assert picked_subdirs[:3] == ["recovery", "banter", "welcome"]
+    assert any(
+        "No packaged recovery clips, norm cache, or last-known-good music available" in record.message
+        for record in caplog.records
+    )
+    mock_silence.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +1186,8 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 
     # canned path: _used_generated_banter is False, commit is None — request must remain
     assert req in state.pending_requests
+    seg = queue.get_nowait()
+    assert "memory_extraction" not in seg.metadata
 
 
 def _ha_ctx_mock():
@@ -973,13 +1197,310 @@ def _ha_ctx_mock():
     ctx.events_summary = ""
     ctx.events = []
     ctx.raw_states = {}
+    ctx.scored = []
+    ctx.timestamp = 0.0
     ctx.mood = ""
     ctx.weather_arc = ""
     ctx.mood_en = ""
     ctx.weather_arc_en = ""
     ctx.events_summary_en = ""
     ctx.last_event_label_en = ""
+    ctx.radio_events = []
+    ctx.ritual_recipe_matches = []
+    ctx.ritual_public_families = []
+    ctx.ritual_recipe_audit = []
     return ctx
+
+
+def test_radio_event_directive_uses_next_break_path():
+    state = _make_state()
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as commit:
+        gag_events = _apply_radio_event_matches(state, [match])
+
+    assert gag_events == []
+    assert state.ha_pending_directive == "One of the house voices just spoke."
+    commit.assert_called_once_with(match)
+
+
+def test_radio_event_directive_does_not_override_existing_directive():
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="new directive",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as commit:
+        gag_events = _apply_radio_event_matches(state, [match])
+
+    assert gag_events == []
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+def test_radio_event_gag_feeds_ledger_event_path():
+    state = _make_state()
+    event = HomeEvent(
+        "binary_sensor.phone_charging",
+        "A household device started charging",
+        "off",
+        "on",
+        time.time(),
+        force_gag_candidate=True,
+        gag_cooldown_seconds=120,
+    )
+    match = RadioEventMatch(
+        rule_id="device_charging",
+        mode="gag",
+        directive="",
+        event=event,
+        cooldown_seconds=120,
+        matched_at=time.time(),
+    )
+
+    assert _apply_radio_event_matches(state, [match]) == [event]
+    assert state.ha_pending_directive == ""
+
+
+def _ha_state(value: object, **attrs: object) -> dict:
+    return {"state": value, "attributes": attrs}
+
+
+def test_ritual_recipe_directive_uses_next_break_path():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        now=100.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is None
+    assert "Morning launch" in state.ha_pending_directive
+    commit.assert_called_once_with(matches[0])
+
+
+def test_ritual_recipe_directive_does_not_override_existing_directive():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    matches = match_ritual_recipes(
+        None,
+        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        now=100.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is None
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_cooldown():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.fridge_door": _ha_state("off", device_class="door", friendly_name="Kitchen fridge door")},
+        {"binary_sensor.fridge_door": _ha_state("on", device_class="door", friendly_name="Kitchen fridge door")},
+        now=200.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert interrupt is None
+    assert state.ha_pending_directive == ""
+    assert len(gag_events) == 1
+    assert gag_events[0].label == "Kitchen ritual"
+    assert gag_events[0].force_gag_candidate is True
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_safety_interrupt_preserves_interrupt_lane():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=300.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is not None
+    assert interrupt.match is matches[0]
+    assert isinstance(interrupt.spec, InterruptSpec)
+    assert interrupt.spec.urgency == "urgent"
+    assert "Safety moment" in interrupt.spec.directive
+    assert state.ha_pending_directive == ""
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_safety_interrupt_can_supersede_existing_directive():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=310.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is not None
+    assert interrupt.match is matches[0]
+    assert interrupt.spec.urgency == "urgent"
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_producer_commits_ritual_interrupt_cooldown_only_after_interrupt_fires():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=320.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True) as fire,
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    fire.assert_awaited_once()
+    assert isinstance(fire.await_args.args[1], InterruptSpec)
+    commit.assert_called_once_with(matches[0])
+
+
+@pytest.mark.asyncio
+async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_suppresses():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=330.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False) as fire,
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    fire.assert_awaited_once()
+    commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_producer_passes_radio_event_rules_and_applies_directive_match():
+    """Producer loop wires configured radio-event rules through HA refresh."""
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.radio_events = [
+        RadioEventRule(
+            id="tts_script_started",
+            label="Kitchen TTS",
+            mode="directive",
+            entity_glob="script.*tts*",
+            trigger="state",
+            from_state="off",
+            to_state="on",
+            cooldown_seconds=60,
+            directive="One of the house voices just spoke.",
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.radio_events = [match]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context) as mock_fetch,
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}.commit_radio_event_directive") as mock_commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert mock_fetch.await_args.kwargs["radio_event_rules"] == config.radio_events
+    assert state.ha_pending_directive == "One of the house voices just spoke."
+    mock_commit.assert_called_once_with(match)
 
 
 @pytest.mark.asyncio
@@ -1126,6 +1647,7 @@ async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit
     assert req in state.pending_requests
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
+    assert "memory_extraction" not in seg.metadata
 
 
 # ---------------------------------------------------------------------------
@@ -2099,6 +2621,52 @@ async def test_idle_bridge_queues_canned_clip_when_available(tmp_path):
     assert (last["bridge_type"], last["source"]) == ("idle", "canned")
 
 
+@pytest.mark.asyncio
+async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invariants(tmp_path):
+    """Extra canned metadata may add display markers but cannot weaken bridge flags."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio")
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment) -> bool:
+        queued.append(segment)
+        return True
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
+        ok = await producer._queue_continuity_bridge(
+            _capture,
+            state,
+            config,
+            bridge_type="idle",
+            bridge_flag="idle_bridge",
+            canned_title="Station warm-up",
+            canned_metadata={
+                "warmup": True,
+                "type": "music",
+                "canned": False,
+                "idle_bridge": False,
+                "rescue": False,
+                "title": "Override attempt",
+            },
+        )
+
+    assert ok is True
+    seg = queued[0]
+    assert seg.metadata["type"] == "banter"
+    assert seg.metadata["canned"] is True
+    assert seg.metadata["idle_bridge"] is True
+    assert seg.metadata["rescue"] is True
+    assert seg.metadata["title"] == "Station warm-up"
+    assert seg.metadata["warmup"] is True
+    assert state.bridge_events[-1]["bridge_type"] == "idle"
+
+
 # ---------------------------------------------------------------------------
 # P0: hot-reload import refactor invariants
 # ---------------------------------------------------------------------------
@@ -2226,6 +2794,8 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.metadata.get("resume_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Abc123"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache resume bridge fire is recorded.
@@ -2267,14 +2837,16 @@ async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path)
 
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Sogno Americano"
     assert seg.metadata.get("artist") == "Artie 5ive"
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_path):
+async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
     """When neither canned clips nor pre-normalized files exist, the bridge is a
-    no-op — the producer should not crash and should eventually queue real content."""
+    generated rescue tone so the resumed session does not wait on real content."""
     state = _make_state()
     state.session_stopped = True
     config = _make_config()
@@ -2282,22 +2854,23 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            # Wait long enough for the producer's 1s sleep to complete and run
-            # one more iteration (the bridge no-op path with no norm files).
-            await asyncio.sleep(1.5)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Resume emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
         finally:
             task.cancel()
             try:
@@ -2305,15 +2878,25 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
             except asyncio.CancelledError:
                 pass
 
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("resume_bridge") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("resume", "emergency_tone")
+
 
 @pytest.mark.asyncio
 async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
     """Audio-delivery Scenario 3 (post-restart): a banned song must not re-air even
     through the norm-cache resume bridge. The only cached file on disk is banned, so
-    the rescue selector returns None and the bridge fires nothing — it must never
-    queue the banned song. (The selector itself is unit-tested both ways in
-    tests/audio/test_norm_cache.py; this proves the blocklist filter composes with
-    the producer's resume-bridge guard end to end.)"""
+    the rescue selector returns None and the bridge falls through to emergency tone
+    instead. (The selector itself is unit-tested both ways in tests/audio/test_norm_cache.py;
+    this proves the blocklist filter composes with the producer's bridge guard end to end.)"""
     state = _make_state()
     state.session_stopped = True
     state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
@@ -2326,20 +2909,23 @@ async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(t
     banned_file.write_bytes(b"pre-normalized banned audio")
     save_track_metadata(banned_file, title="Ordinary", artist="Alex Warren")
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            await asyncio.sleep(1.5)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Resume emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
         finally:
             task.cancel()
             try:
@@ -2353,9 +2939,11 @@ async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(t
     while not queue.empty():
         queued.append(queue.get_nowait())
     assert all(seg.path != banned_file for seg in queued)
+    assert any(seg.metadata.get("audio_source") == "emergency_tone" for seg in queued)
     assert all(
         not (ev.get("bridge_type") == "resume" and ev.get("source") == "norm_cache") for ev in state.bridge_events
     )
+    assert any(ev.get("bridge_type") == "resume" and ev.get("source") == "emergency_tone" for ev in state.bridge_events)
 
 
 @pytest.mark.asyncio
@@ -2407,6 +2995,8 @@ async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_pat
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("audio_source") == "norm_cache"
     assert seg.path == norm_file
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Idle123"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache idle bridge fire is recorded.
@@ -2448,8 +3038,57 @@ async def test_idle_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
 
     seg = queue.get_nowait()
     assert seg.metadata.get("idle_bridge") is True
+    assert seg.duration_sec > 0
+    assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
     assert seg.metadata.get("title") == "Musica Leggera"
     assert seg.metadata.get("artist") == "Colapesce Dimartino"
+
+
+@pytest.mark.asyncio
+async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
+    """When a listener reconnects after idle and no instant audio source exists,
+    the idle bridge queues an emergency tone instead of waiting on production."""
+    state = _make_state()
+    state.listeners_active = 0
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.15)
+            state.listeners_active = 1
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Idle emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("idle_bridge") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("idle", "emergency_tone")
 
 
 @pytest.mark.asyncio

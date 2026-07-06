@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from mammamiradio.core.config import GUEST_HOST_NAME, load_config, resolve_model
@@ -55,6 +56,42 @@ def test_ha_enabled_false_override_blocks_auto_enable(monkeypatch):
     assert config.homeassistant.enabled is False
 
 
+def test_ha_context_enabled_env_disable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_enabled is False
+
+
+def test_ha_context_enabled_env_invalid_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "sometimes")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.context_enabled is True
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_ENABLED" in caplog.text
+
+
+def test_ha_context_poll_interval_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "600")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 600
+
+
+def test_ha_context_poll_interval_env_invalid_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "soon")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 300
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL" in caplog.text
+
+
+def test_ha_context_poll_interval_env_non_positive_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "0")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 300
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL" in caplog.text
+
+
 def test_ha_context_refresh_timeout_default():
     config = load_config(TOML_PATH)
     assert config.homeassistant.context_refresh_timeout == 2.0
@@ -85,6 +122,64 @@ def test_ha_context_refresh_timeout_env_infinite_ignored(monkeypatch):
     assert config.homeassistant.context_refresh_timeout == 2.0
 
 
+def test_ha_mood_llm_env_enable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is True
+
+
+def test_ha_mood_llm_env_disable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "false")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+
+
+def test_ha_mood_ttl_seconds_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "45")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 45
+
+
+def test_ha_mood_ttl_seconds_env_non_positive_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "0")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_ttl_seconds_env_non_integer_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "soon")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_ttl_seconds_env_infinite_ignored(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS", "inf")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_ttl_seconds == 90.0
+
+
+def test_ha_mood_llm_env_garbage_warns_and_keeps_default(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "ture")
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.core.config"):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.mood_llm_enabled is False
+    assert "Ignoring MAMMAMIRADIO_HA_MOOD_LLM='ture'" in caplog.text
+
+
+def test_ha_mood_llm_warns_when_enabled_without_anthropic_key(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MOOD_LLM", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.core.config"):
+        config = load_config(TOML_PATH)
+
+    assert config.homeassistant.mood_llm_enabled is True
+    assert config.openai_api_key == "sk-openai-test"
+    assert config.anthropic_api_key == ""
+    assert "Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY" in caplog.text
+
+
 def test_ha_auto_enable_with_token_and_url(monkeypatch):
     """HA should auto-enable when both token and URL are present."""
     monkeypatch.setenv("HA_TOKEN", "test-token")
@@ -106,6 +201,46 @@ def test_station_name_override(monkeypatch):
     monkeypatch.setenv("STATION_NAME", "Radio Test")
     config = load_config(TOML_PATH)
     assert config.station.name == "Radio Test"
+    assert config.brand.station_name == "Radio Test"
+    assert config.display_station_name == "Radio Test"
+    assert config.identity.station_name == "Radio Test"
+    assert config.identity.source == "env"
+    assert config.identity.custom_copy_preserved is False
+    assert "Radio Test" in config.sonic_brand.full_ident
+    assert any("Radio Test" in line for line in config.sonic_brand.sweepers)
+
+
+def test_station_name_override_sanitizes_controls(monkeypatch):
+    monkeypatch.setenv("STATION_NAME", "Radio Test\r\nX-Evil: 1")
+    config = load_config(TOML_PATH)
+    assert config.display_station_name == "Radio Test X-Evil: 1"
+    assert "\r" not in config.display_station_name
+    assert "\n" not in config.display_station_name
+
+
+def test_station_name_override_preserves_custom_sonic_copy(monkeypatch, tmp_path):
+    source = Path(TOML_PATH)
+    custom = source.read_text().replace(
+        'full_ident = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"',
+        'full_ident = "Old Custom Radio... handcrafted station id!"',
+    )
+    custom = custom.replace(
+        '"Mamma Mi Radio.",',
+        '"Old Custom Radio.",',
+        1,
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    config = load_config(str(custom_path))
+
+    assert config.display_station_name == "Radio Test"
+    assert config.brand.station_name == "Radio Test"
+    assert config.sonic_brand.full_ident == "Old Custom Radio... handcrafted station id!"
+    assert "Old Custom Radio." in config.sonic_brand.sweepers
+    assert config.identity.custom_copy_preserved is True
+    assert any("custom identity copy preserved" in warning for warning in config.brand_warnings)
 
 
 def test_station_theme_override(monkeypatch):

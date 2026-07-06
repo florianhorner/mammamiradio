@@ -1,7 +1,7 @@
 name: Mamma Mi Radio (Edge)
 description: Development channel — always the latest main-branch build. For testing only; use the stable Mamma Mi Radio add-on for daily listening.
 slug: mammamiradio-edge
-version: 4a15270
+version: 083f7c0
 stage: experimental
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
@@ -26,35 +26,34 @@ map:
   - addon_config:rw
 options:
   station_name: "Mamma Mi Radio"
-  jamendo_client_id: ""
-  anthropic_api_key: ""
-  openai_api_key: ""
-  azure_speech_key: ""
-  azure_speech_region: ""
-  elevenlabs_api_key: ""
-  quality_profile: "balanced"
   enable_home_assistant: true
+  ha_context_enabled: true
+  ha_context_poll_interval: 300
+  ha_media_player_push: true
+  quality_profile: "balanced"
   admin_token: ""
   super_italian_mode: false
   chaos_mode_active: false
   festival_mode: false
   broadcast_chain: false
-  ha_media_player_push: true
   guest_host: true
+  songs_between_banter: 2
+  songs_between_ads: 4
+  ad_spots_per_break: 2
 schema:
   station_name: str?
-  jamendo_client_id: password?
-  anthropic_api_key: password?
-  openai_api_key: password?
-  azure_speech_key: password?
-  azure_speech_region: str?
-  elevenlabs_api_key: password?
-  quality_profile: list(premium|balanced|economy)?
   enable_home_assistant: bool?
+  ha_context_enabled: bool?
+  ha_context_poll_interval: int(1,3600)?
+  ha_media_player_push: bool?
+  quality_profile: list(premium|balanced|economy)?
   admin_token: password?
   super_italian_mode: bool?
   chaos_mode_active: bool?
   festival_mode: bool?
   broadcast_chain: bool?
-  ha_media_player_push: bool?
   guest_host: bool?
+  songs_between_banter: int(2,60)?
+  songs_between_ads: int(1,60)?
+  ad_spots_per_break: int(1,5)?
+  jamendo_client_id: password?

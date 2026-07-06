@@ -5,7 +5,23 @@ from __future__ import annotations
 import pytest
 
 from mammamiradio.core.config import load_config
+from mammamiradio.hosts.prompt_world import language_mode_rule
 from mammamiradio.hosts.scriptwriter import _build_system_prompt, _get_system_prompt
+
+
+def test_language_mode_rule_unmapped_code_degrades_not_keyerror():
+    """The ON-mode rule must echo an unmapped language code raw, never KeyError.
+
+    super_italian_mode and station.language are independent config fields, so
+    Super Italian ON with station.language='de' is a reachable production config.
+    _LANGUAGE_NAMES.get(code, code) is the documented guard — this pins it so a
+    later refactor to _LANGUAGE_NAMES[code] can't reintroduce a KeyError inside
+    a live prompt build.
+    """
+    assert language_mode_rule(True, "it") == "ALL text in Italian."
+    assert language_mode_rule(True, "de") == "ALL text in de."
+    # OFF ignores the code entirely — the static 70/30 rule, no map lookup.
+    assert "70% English" in language_mode_rule(False, "de")
 
 
 @pytest.fixture()
@@ -20,16 +36,26 @@ def test_off_omits_full_italian_directive(config):
     """OFF mode must NOT promise full-Italian dialogue or full-immersion address."""
     config.super_italian_mode = False
     prompt = _build_system_prompt(config)
-    assert "ALL dialogue must be in" not in prompt
+    assert "100% in Italian" not in prompt
     assert "amici miei" not in prompt
 
 
+def test_off_targets_70_30_mix(config):
+    """OFF mode is the international mix: 70/30 with real Italian sentences allowed."""
+    config.super_italian_mode = False
+    prompt = _build_system_prompt(config)
+    assert "70% English" in prompt
+    assert "30% Italian" in prompt
+    assert "one line in three" in prompt
+
+
 def test_on_demands_full_italian_directive(config):
-    """ON mode must keep the all-Italian dialogue directive and full-immersion address."""
+    """ON mode must demand 100% Italian dialogue and full-immersion address."""
     config.super_italian_mode = True
     prompt = _build_system_prompt(config)
-    assert "ALL dialogue must be in" in prompt
+    assert "100% in Italian" in prompt
     assert "amici miei" in prompt
+    assert "70% English" not in prompt
 
 
 def test_cache_invalidates_on_mode_flip(config):

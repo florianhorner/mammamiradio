@@ -1,0 +1,17 @@
+make check now runs ruff format --check
+Branch: florianhorner/chore/make-check-ruff-format
+Base: origin/main @ 7a46d111
+
+$ make check   (lint + format-check + typecheck + deadcode + coverage-check)
+
+.venv/bin/ruff check .            : All checks passed!
+.venv/bin/ruff format --check .   : 250 files already formatted   <-- NEW gate
+.venv/bin/mypy mammamiradio/ tests/ : Success: no issues found in 223 source files
+pytest                            : 3813 passed, 2 skipped, 19 deselected
+coverage                          : all per-module floors held
+=> All checks passed
+
+Verification that the new gate actually catches format nits: on the prior
+language PR, a hand-wrapped line passed `make check` locally but failed CI's
+`ruff format --check`. With this change, `make check` reproduces that CI gate
+locally. format-check is declared .PHONY alongside its sibling targets.

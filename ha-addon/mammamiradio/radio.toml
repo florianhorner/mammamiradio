@@ -1,8 +1,8 @@
-# Station personality dial. ON (default): listener UI and hosts are Italian-first.
-# OFF: listener UI in English with Italian
-# headlines and station-feel words; AI hosts code-switch (English narrative +
-# Italian flavor). ON: full Italian throughout. Toggleable from the admin
-# Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
+# Station personality dial. OFF (default): listener UI in English with Italian
+# headlines and station-feel words; AI hosts speak roughly 70% English / 30%
+# Italian (English carries the information; Italian the greetings and punchlines).
+# ON: listener UI is Italian and hosts speak 100% Italian. Toggleable from the
+# admin Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
 super_italian_mode = false
 
 [station]
@@ -128,7 +128,7 @@ voice = "ybmyeTxbWSNXKmSrvUCk"  # Bavarian guest voice (ElevenLabs)
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"  # least-bad: config rejects non-IT edge voices → Italian-accented German on fallback
 voice_settings = { stability = 0.35, style = 0.55 }  # ↓stability = more boisterous, ↑style = more character (house default 0.42/0.45)
-style = "a Bavarian guest in his mid-twenties — Munich tech-scene sharp, fast and funny, Italian-first on air but unmistakably Bavarian in rhythm, swagger, and short pronounceable Boarisch phraselets rather than isolated particles; warm, a little chaotic, ribs the Italian hosts for their thimble-sized espressos and their uptight seriousness, brings Wiesn energy without the lederhosen cliché — more 'startup guy who grew up in Giesing' than oompah beer-tent uncle; a guest, never a regular: he bursts in, fills the studio, and is gone again"
+style = "a Bavarian guest in his mid-twenties — Munich tech-scene sharp, fast and funny, Italian-first on air but unmistakably Bavarian in rhythm, swagger, and short pronounceable Boarisch phraselets rather than isolated particles; warm, a little chaotic, ribs the Italian hosts for their precision, drama, and uptight seriousness, brings Wiesn energy without the lederhosen cliché — more 'startup guy who grew up in Giesing' than oompah beer-tent uncle; coffee jokes are occasional, never his default bit; a guest, never a regular: he bursts in, fills the studio, and is gone again"
 [hosts.personality]
 energy = 92
 chaos = 65
@@ -178,6 +178,8 @@ banter     = "creative"
 news_flash = "creative"
 ad         = "creative"
 transition = "fast"
+home_mood  = "fast"       # background HA scene namer (experimental, off by default)
+memory_extract = "fast"   # post-air banter memory extractor
 
 [models.profiles.premium]    # role → catalog key, per provider
 anthropic = { creative = "opus", fast = "haiku" }
@@ -194,9 +196,12 @@ openai    = { creative = "small", fast = "small" }
 [homeassistant]
 enabled = false
 url = ""
-poll_interval = 60           # seconds between full home-state refreshes
+context_enabled = true       # set false to keep HA entity pushes while disabling full prompt-context polling
+poll_interval = 300          # seconds between full home-state refreshes
 timer_poll_interval = 5      # seconds between lightweight timer-entity checks
 context_refresh_timeout = 2.0  # seconds a refresh may take before the producer airs on last-known home context (audio > HA freshness)
+mood_llm_enabled = false       # experimental: background AI scene-namer for home mood; heuristic mood stays the instant fallback
+mood_ttl_seconds = 90.0        # minimum seconds between background scene refresh attempts; the last scene keeps airing while a refresh runs (bounded staleness)
 
 # Timer interrupt: when a HA timer fires, hosts immediately interrupt and deliver
 # a pissed/urgent message. Add one [[homeassistant.timer_interrupt]] block per timer.
@@ -227,6 +232,41 @@ context_refresh_timeout = 2.0  # seconds a refresh may take before the producer 
 # domain_allowlist = ["switch", "fan", "lock", "vacuum", "binary_sensor"]  # replaces the default domain set
 # entity_allowlist = []   # if non-empty, restricts gags to these exact entity_ids
 # entity_denylist  = []   # silence chatty entities, e.g. a flapping presence sensor
+
+# Opt-in radio-worthy Home Assistant events. These rules do NOT add the matched
+# entity to the ambient prompt context; they only promote the configured label or
+# directive. Diagnostic signal strength, timestamps, and battery percentage
+# sensors are ignored even under broad globs.
+#
+# [[home.radio_event]]
+# id = "tts_script_started"
+# entity_glob = "script.*tts*"
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "directive"
+# directive = "One of the house voices just spoke. Mention it once in the next break without naming the source entity."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "tts_automation_fired"
+# entity_glob = "automation.*tts*"
+# trigger = "attribute"
+# attribute = "last_triggered"
+# mode = "directive"
+# directive = "A Home Assistant voice automation just fired. Make a short, playful next-break callout."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "device_charging"
+# label = "A household device started charging"
+# domain = "binary_sensor"
+# device_class = "battery_charging"  # or "plug" for plug sensors
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "gag"
+# cooldown_seconds = 900
 
 [persona]
 arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend
@@ -411,7 +451,7 @@ category = "tourism"
 recurring = true
 [ads.brands.campaign]
 premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
-sonic_signature = "overblown_epic"
+sonic_signature = "sweep"
 format_pool = ["institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced with deeper, more dignified sincerity"
@@ -507,7 +547,7 @@ category = "services"
 recurring = true
 [ads.brands.campaign]
 premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."
-sonic_signature = "espresso_hiss+ding"
+sonic_signature = "register_hit+ding"
 format_pool = ["institutional_psa", "classic_pitch", "duo_scene"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una tazzina più piccola."
@@ -519,7 +559,7 @@ category = "tech"
 recurring = true
 [ads.brands.campaign]
 premise = "Una sveglia che non si limita a suonare: passa dalla suoneria alla vendetta personale, con metodi di risveglio sempre più mirati."
-sonic_signature = "alarm_beep+startup_synth"
+sonic_signature = "hotline_beep+startup_synth"
 format_pool = ["classic_pitch", "duo_scene", "institutional_psa"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e implacabile."
@@ -531,7 +571,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Un ascensore condominiale che fa il terapeuta, il cronista di gossip e il testimone municipale, con la memoria di ogni silenzio imbarazzante."
-sonic_signature = "ding+cheap_synth_romance"
+sonic_signature = "ding+ice_clink"
 format_pool = ["duo_scene", "testimonial", "institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso le parti di qualcuno."
@@ -543,7 +583,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Un tappeto del soggiorno che ricorda feste, macchie e bugie, e vende il proprio silenzio con il tono di un testimone in tribunale."
-sonic_signature = "dust_hit+suspicious_jazz"
+sonic_signature = "register_hit+mandolin_sting"
 format_pool = ["testimonial", "duo_scene", "late_night_whisper"]
 spokesperson = "witness"
 escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più per tacere."
@@ -579,7 +619,7 @@ category = "home"
 recurring = true
 [ads.brands.campaign]
 premise = "Lo stesso frigorifero del Frigo Severo, sempre Tuttoegal AG, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
-sonic_signature = "startup_synth+tarantella_pop"
+sonic_signature = "startup_synth+mandolin_sting"
 format_pool = ["duo_scene"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."

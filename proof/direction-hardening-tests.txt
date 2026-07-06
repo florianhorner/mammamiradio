@@ -1,0 +1,19 @@
+# Direction-steering hardening — test proof
+# branch florianhorner/song-selection-plans @ dbaab053  (2026-07-03T22:28:43Z)
+
+## make check (ruff + mypy + full pytest + per-module coverage floors)
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 93.13%
+3687 passed, 2 skipped, 19 deselected, 1 warning in 73.58s (0:01:13)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
+
+## requires_ffmpeg suite
+19 passed, 3689 deselected in 4.32s
+
+## release invariants
+  Passed: 8  Failed: 0
+All invariants passed.
+
+## changelog lint
+Changelog lint clean.

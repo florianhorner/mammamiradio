@@ -37,7 +37,18 @@ PERSON = "person.florian_horner"  # person.* always excluded
 LIGHT = "light.magic_areas_light_groups_wohnzimmer_all_lights"  # light domain — excluded by default
 
 
-def ev(entity_id, raw_old, raw_new, ts, *, label="Etichetta", old="prima", new="dopo"):
+def ev(
+    entity_id,
+    raw_old,
+    raw_new,
+    ts,
+    *,
+    label="Etichetta",
+    old="prima",
+    new="dopo",
+    force_gag_candidate=False,
+    gag_cooldown_seconds=0.0,
+):
     return HomeEvent(
         entity_id=entity_id,
         label=label,
@@ -46,6 +57,8 @@ def ev(entity_id, raw_old, raw_new, ts, *, label="Etichetta", old="prima", new="
         timestamp=ts,
         raw_old_state=raw_old,
         raw_new_state=raw_new,
+        force_gag_candidate=force_gag_candidate,
+        gag_cooldown_seconds=gag_cooldown_seconds,
     )
 
 
@@ -216,6 +229,47 @@ def test_render_phrasing_by_count():
     assert "non si ferma" in _render_gag(heavy)
 
 
+def test_purge_entity_removes_matching_buckets_and_marks_dirty():
+    led = _ledger_with_hot_gag()
+    led._dirty = False
+    assert led.purge_entity(COFFEE) is True
+    assert led.buckets == {}
+    assert led._dirty is True
+
+
+def test_purge_entity_leaves_other_entities_untouched():
+    led = _ledger_with_hot_gag()
+    led.buckets["other"] = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
+    led.purge_entity(COFFEE)
+    assert "k" not in led.buckets
+    assert "other" in led.buckets
+
+
+def test_purge_entity_no_match_returns_false_and_stays_clean():
+    led = _ledger_with_hot_gag()
+    led._dirty = False
+    assert led.purge_entity(WASHER) is False
+    assert led._dirty is False
+
+
+def test_muted_entity_cannot_still_fire_a_gag_after_purge(monkeypatch):
+    """A gag observed before a mute must not still be offerable after it."""
+    monkeypatch.setattr("mammamiradio.home.evening_memory.GAG_INJECT_PROBABILITY", 1.0)
+    led = _ledger_with_hot_gag()
+    assert led.select_and_render(now=BASE, rng=random.Random(0))  # sanity: it would fire
+    led.buckets["k"].last_spoken_ts = 0.0  # reset cooldown to isolate the mute effect
+    led.purge_entity(COFFEE)
+    assert led.select_and_render(now=BASE, rng=random.Random(0)) == ""
+
+
+def test_denylisted_bucket_cannot_fire_even_if_still_in_memory(monkeypatch):
+    monkeypatch.setattr("mammamiradio.home.evening_memory.GAG_INJECT_PROBABILITY", 1.0)
+    led = _ledger_with_hot_gag()
+    led.entity_denylist = frozenset({COFFEE})
+
+    assert led.select_and_render(now=BASE, rng=random.Random(0)) == ""
+
+
 # --- S2 empty fallback -------------------------------------------------------
 
 
@@ -267,6 +321,19 @@ def test_load_missing_starts_fresh(tmp_path):
     led = EveningLedger.load(tmp_path)
     assert led.session_id == 0
     assert led.buckets == {}
+
+
+def test_load_purges_entity_denylist_buckets(tmp_path):
+    led = _ledger_with_hot_gag()
+    led.buckets["other"] = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
+    led._dirty = True
+    led.save_if_dirty(tmp_path)
+
+    restored = EveningLedger.load(tmp_path, entity_denylist={COFFEE})
+
+    assert "k" not in restored.buckets
+    assert "other" in restored.buckets
+    assert restored._dirty is True
 
 
 def test_load_corrupt_starts_fresh_without_crashing(tmp_path):
@@ -345,6 +412,70 @@ def test_domain_allowlist_override_replaces_default_set():
 def test_numeric_excluded_even_under_override():
     led = EveningLedger(domain_allowlist=frozenset({"light"}))
     assert not led._is_gag_candidate(ev("light.lamp", "10", "80", BASE + 1))
+
+
+def test_forced_radio_event_bypasses_domain_and_numeric_rejection():
+    led = EveningLedger()
+    event = ev(
+        "sensor.custom_threshold",
+        "10",
+        "80",
+        BASE + 1,
+        force_gag_candidate=True,
+        gag_cooldown_seconds=120,
+    )
+    assert led._is_gag_candidate(event)
+
+    led.observe([event], now=BASE + 1)
+    [bucket] = led.buckets.values()
+    assert bucket.cooldown_seconds == 120
+
+
+def test_forced_radio_event_still_honors_denylist_and_sentinels():
+    led = EveningLedger(entity_denylist=frozenset({"sensor.noisy"}))
+    assert not led._is_gag_candidate(ev("sensor.noisy", "10", "80", BASE + 1, force_gag_candidate=True))
+    assert not led._is_gag_candidate(
+        ev("sensor.custom_threshold", "unavailable", "80", BASE + 1, force_gag_candidate=True)
+    )
+    assert not led._is_gag_candidate(ev("person.someone", "away", "home", BASE + 1, force_gag_candidate=True))
+
+
+def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
+    monkeypatch.setattr(
+        "mammamiradio.home.evening_memory.weighted_offer",
+        lambda eligible, **_kwargs: eligible[0] if eligible else None,
+    )
+    led = EveningLedger()
+    led.observe(
+        [
+            ev(
+                "sensor.custom_threshold",
+                "10",
+                "80",
+                BASE + 1,
+                force_gag_candidate=True,
+                gag_cooldown_seconds=120,
+            ),
+            ev(
+                "sensor.custom_threshold",
+                "10",
+                "80",
+                BASE + 2,
+                force_gag_candidate=True,
+                gag_cooldown_seconds=120,
+            ),
+        ],
+        now=BASE + 2,
+    )
+
+    first = led.offer_gag(now=BASE + 3)
+    assert first is not None
+    assert led.offer_gag(now=BASE + 4) is not None
+
+    led.mark_spoken(first[0], now=BASE + 4)
+
+    assert led.offer_gag(now=BASE + 100) is None
+    assert led.offer_gag(now=BASE + 200) is not None
 
 
 def test_load_applies_policy_overrides(tmp_path):

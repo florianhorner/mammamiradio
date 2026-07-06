@@ -498,12 +498,16 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context) as mock_fetch,
+        patch(f"{MODULE}.resolve_home_mood", return_value=("Scena LLM", "LLM scene")) as mock_resolve_mood,
     ):
         await _run_until_queued(queue, state, config)
 
     mock_fetch.assert_called_once()
+    mock_resolve_mood.assert_called_once_with(config, state, mock_context)
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
+    assert state.ha_home_mood == "Scena LLM"
+    assert state.ha_home_mood_en == "LLM scene"
     assert state.ha_scored_entities[0]["label"] == "Coffee machine"
     assert state.ha_denylist_hits == {"privacy:person": 1}
     assert state.ha_context_entity_count == 1
@@ -511,6 +515,81 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     assert state.ha_context_last_updated == 1234.5
     assert state.ha_last_event_label == "La macchina del caffe"
     assert state.ha_last_event_label_en == "Coffee machine"
+
+
+@pytest.mark.asyncio
+async def test_ha_context_disabled_skips_full_state_refresh(tmp_path):
+    """Operators can keep HA entity publishing while disabling full /api/states prompt context."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Che bella giornata!")]
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock) as mock_fetch,
+        patch(f"{MODULE}.resolve_home_mood") as mock_resolve_mood,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    mock_fetch.assert_not_called()
+    mock_resolve_mood.assert_not_called()
+    assert state.ha_context == ""
+    assert state.ha_context_last_updated == 0.0
+
+
+@pytest.mark.asyncio
+async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
+    """resolve_home_mood runs outside the segment-render try — a raise there
+    must degrade to the ladder mood, not kill the producer (INSTANT AUDIO)."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    banter_lines = [(host, "Che bella giornata!")]
+
+    mock_context = MagicMock()
+    mock_context.summary = "Il tempo e' bello"
+    mock_context.events_summary = ""
+    mock_context.mood = "Caffe in preparazione"
+    mock_context.weather_arc = ""
+    mock_context.timestamp = 1234.5
+    mock_context.mood_en = "Coffee brewing"
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.scored = []
+    mock_context.denylist_hits = {}
+    mock_context.catalog_hit_rate = 0.0
+    mock_context.events = deque()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.resolve_home_mood", side_effect=RuntimeError("scene namer exploded")),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_home_mood == "Caffe in preparazione"
+    assert state.ha_home_mood_en == "Coffee brewing"
+    assert not queue.empty()
 
 
 @pytest.mark.asyncio
@@ -975,6 +1054,11 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
         if seg_type == SegmentType.BANTER:
             validate_calls.append({"path": path, **kwargs})
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    seg: Segment | None = None
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
@@ -987,9 +1071,11 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
@@ -997,7 +1083,14 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             state.session_stopped = False
             state.resume_event.set()
             deadline = asyncio.get_event_loop().time() + 8.0
-            while queue.empty():
+            while seg is None:
+                if not queue.empty():
+                    candidate = queue.get_nowait()
+                    if candidate.metadata.get("resume_bridge") is True:
+                        assert candidate.metadata.get("audio_source") == "emergency_tone"
+                        continue
+                    seg = candidate
+                    break
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not produce BANTER after resume")
                 await asyncio.sleep(0.05)
@@ -1008,12 +1101,13 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             except asyncio.CancelledError:
                 pass
 
-    seg = queue.get_nowait()
+    assert seg is not None
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is False
     assert validate_calls
     assert validate_calls[0]["expected_line_count"] == 7
     assert validate_calls[0]["expected_min_duration_sec"] > 0
+    mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1067,13 +1161,13 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Error recovery — silence generation also fails
+# Error recovery — emergency tone generation also fails
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_also_fails(tmp_path):
-    """When both download and silence generation fail, producer continues without crashing."""
+async def test_error_recovery_emergency_tone_failure_is_contained(tmp_path):
+    """When download, recovery sweeper, and emergency tone fail, producer continues."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -1097,14 +1191,27 @@ async def test_error_recovery_silence_also_fails(tmp_path):
                 _fake_path(),
             ],
         ),
-        patch(f"{MODULE}.generate_silence", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts down"),
+        ),
+        patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
+        patch(
+            f"{MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config, timeout=10.0)
 
-    # Should eventually get a segment (either silence from 2nd attempt or music)
+    mock_silence.assert_not_called()
+    # Should eventually get a segment (either tone from 2nd attempt or music)
     assert queue.qsize() >= 1
 
 
@@ -1115,18 +1222,43 @@ async def test_error_recovery_silence_also_fails(tmp_path):
 
 @pytest.mark.asyncio
 async def test_consecutive_failures_increment_counter(tmp_path):
+    from mammamiradio.scheduling import producer
+
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
-    with (
-        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
-        patch(f"{MODULE}.generate_silence", side_effect=_fake_path),
-        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
+            patch(f"{MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{MODULE}._get_last_music_file", return_value=None),
+            patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
+            patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+    finally:
+        producer._last_music_file = orig_last_music
 
+    mock_silence.assert_not_called()
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
     assert state.failed_segments >= 1
 
 
@@ -1298,6 +1430,7 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_reject),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
     ):
         await _run_until_queued(queue, state, config)
 
@@ -1310,9 +1443,9 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
-    """When all-silence rejections hit the circuit breaker AND a canned banter clip
-    is available, the breaker must queue BANTER instead of the silent track."""
+async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
+    """When all-silence rejections hit the circuit breaker, the breaker must use
+    the full recovery clip ladder instead of the older banter/welcome-only path."""
     state = _make_state()
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
@@ -1320,12 +1453,17 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    fake_banter = tmp_path / "fallback_banter.mp3"
-    fake_banter.write_bytes(b"fake")
+    recovery_clip = tmp_path / "continuity_1.mp3"
+    recovery_clip.write_bytes(b"fake")
+    picked_subdirs: list[str] = []
 
     def _always_silence(path, seg_type):
         if seg_type == SegmentType.MUSIC:
             raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _pick_recovery_only(subdir: str, *, state=None):
+        picked_subdirs.append(subdir)
+        return recovery_clip if subdir == "recovery" else None
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -1334,14 +1472,18 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-        patch(f"{MODULE}._pick_canned_clip", return_value=fake_banter),
+        patch(f"{MODULE}._pick_canned_clip", side_effect=_pick_recovery_only),
     ):
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
-    # Banter was available → circuit breaker must queue BANTER not the silent track
+    # Packaged recovery was available -> circuit breaker must queue BANTER not the silent track.
     assert seg.type == SegmentType.BANTER
+    assert seg.path == recovery_clip
     assert seg.metadata.get("silence_fallback") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("title") == "Station continuity"
+    assert picked_subdirs == ["recovery"]
 
 
 # ---------------------------------------------------------------------------
@@ -1624,7 +1766,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
     state = _make_state()
     state.session_stopped = True  # simulate post-restart stopped state
     config = _make_config(tmp_path)
-    config.cache_dir = tmp_path  # isolate from real norm cache so resume bridge is a no-op
+    config.cache_dir = tmp_path  # isolate from real norm cache so resume uses emergency bridge
     config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -1632,6 +1774,11 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
     flash_path = tmp_path / "flash.mp3"
     flash_path.write_bytes(b"\x00" * 2048)
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    seg: Segment | None = None
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
         patch(
@@ -1641,6 +1788,9 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -1648,7 +1798,14 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
             await asyncio.sleep(0.05)  # let producer enter the stopped loop
             state.session_stopped = False  # simulate operator resuming session
             deadline = asyncio.get_event_loop().time() + 8.0
-            while queue.empty():
+            while seg is None:
+                if not queue.empty():
+                    candidate = queue.get_nowait()
+                    if candidate.metadata.get("resume_bridge") is True:
+                        assert candidate.metadata.get("audio_source") == "emergency_tone"
+                        continue
+                    seg = candidate
+                    break
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not produce NEWS_FLASH after resume")
                 await asyncio.sleep(0.05)
@@ -1659,8 +1816,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    assert not queue.empty(), "Producer must have queued a segment after session resume"
-    seg = queue.get_nowait()
+    assert seg is not None, "Producer must have queued a segment after session resume"
     assert seg.type == SegmentType.NEWS_FLASH
     assert seg.metadata.get("category") == "traffic"
 
@@ -1821,6 +1977,170 @@ async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
         await _run_until_queued(queue, state, config)
 
     assert not queue.empty(), "Producer should queue a segment even when timer_interrupts are configured"
+
+
+@pytest.mark.asyncio
+async def test_timer_interrupt_poll_skips_muted_entity(tmp_path):
+    """A muted timer entity must not be polled or reach diff_states — entity_denylist-
+    style filtering has to hold for the reactive-trigger path too, not just fetch_home_context."""
+    from mammamiradio.core.config import TimerInterruptConfig
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_id = "timer.pasta_timer"
+    live_id = "timer.pizza_timer"
+    set_entity_muted(tmp_path, muted_id, True, label="Pasta timer")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 0.01
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(entity_id=muted_id, directive="La pasta scotta!", urgency="pissed", cooldown=60),
+        TimerInterruptConfig(entity_id=live_id, directive="La pizza e pronta!", urgency="pissed", cooldown=60),
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
+    mock_client.aclose = AsyncMock()
+
+    seen = asyncio.Event()
+
+    def _capture_diff_states(old_states, new_states, *_args, **_kwargs):
+        seen.new_states = dict(new_states)
+        seen.set()
+        return deque(maxlen=20)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch("mammamiradio.home.ha_enrichment.diff_states", side_effect=_capture_diff_states),
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(seen.wait(), timeout=2.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    requested_ids = {call.args[0].rsplit("/", 1)[-1] for call in mock_client.get.await_args_list}
+    assert muted_id not in requested_ids
+    assert live_id in requested_ids
+    assert muted_id not in seen.new_states
+
+
+@pytest.mark.asyncio
+async def test_timer_interrupt_poll_does_not_replay_finish_after_unmute(tmp_path):
+    import datetime
+
+    from mammamiradio.core.config import TimerInterruptConfig
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    timer_id = "timer.pasta_timer"
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.homeassistant.timer_poll_interval = 1
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(entity_id=timer_id, directive="La pasta scotta!", urgency="pissed", cooldown=60),
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+
+    mock_context = MagicMock()
+    mock_context.summary = ""
+    mock_context.events_summary = ""
+    mock_context.events = []
+    mock_context.raw_states = {}
+    mock_context.mood = ""
+    mock_context.weather_arc = ""
+    mock_context.mood_en = ""
+    mock_context.weather_arc_en = ""
+    mock_context.events_summary_en = ""
+    mock_context.last_event_label_en = ""
+
+    first_get = asyncio.Event()
+    second_get = asyncio.Event()
+    call_count = 0
+
+    async def _get_timer_state(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock()
+        if call_count == 1:
+            resp.status_code = 200
+            resp.json.return_value = {"entity_id": timer_id, "state": "active", "attributes": {}}
+            first_get.set()
+            return resp
+        resp.status_code = 200
+        resp.json.return_value = {
+            "entity_id": timer_id,
+            "state": "idle",
+            "attributes": {"finished_at": datetime.datetime.now(datetime.UTC).isoformat()},
+        }
+        second_get.set()
+        return resp
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(side_effect=_get_timer_state)
+    mock_client.aclose = AsyncMock()
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
+        patch(f"{MODULE}._fire_interrupt", new_callable=AsyncMock) as fire_interrupt,
+        patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(first_get.wait(), timeout=2.0)
+            set_entity_muted(tmp_path, timer_id, True, label="Pasta timer")
+            await asyncio.sleep(1.2)
+            set_entity_muted(tmp_path, timer_id, False, label="Pasta timer")
+            await asyncio.wait_for(second_get.wait(), timeout=2.5)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert call_count == 2
+    fire_interrupt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

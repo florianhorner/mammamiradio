@@ -72,6 +72,17 @@ check the status code before parsing the body.
 }
 ```
 
+`station.name` is the resolved station identity from the add-on's `station_name`
+option, environment override, or `radio.toml` fallback. It is safe to show to
+users as the station label. It is not a stable identifier; integrations should
+continue using the `mammamiradio` domain, `media_player.mammamiradio`, and
+`media-source://mammamiradio/live` for automation and routing.
+
+`up_next[].predicted` is the readiness boundary. `false` means the audio is
+actually queued; `true` is a scheduler guess that may appear even when the
+rendered queue is empty. If you are migrating from `/public-status.upcoming`
+and want the same honest rendered queue, filter to `predicted === false`.
+
 ### `segment_class` — display bucket (USE THIS)
 
 The stable bucket your UI branches on. Three classes, plus a sentinel:
@@ -224,5 +235,10 @@ from the live behavior.
 
 If you previously polled `/public-status` for now-playing data, see
 [migration-from-public-status.md](./migration-from-public-status.md) for
-the field-by-field mapping. `/public-status` keeps its current shape for
-the foreseeable future, so the migration is not blocking.
+the field-by-field mapping. `/public-status` keeps its legacy top-level
+fields for the foreseeable future, but `upcoming` now lists only
+render-ready queued audio. When it is empty with `upcoming_mode: "building"`,
+inspect `session_stopped` and `golden_path.stage` to distinguish stopped,
+no-source, and still-building states. `current_source`, when present, is the
+loaded playlist source; the migration guide includes the copy-paste decision
+table.

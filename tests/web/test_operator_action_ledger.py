@@ -257,3 +257,56 @@ async def test_persist_failure_records_no_row_and_no_drift(path, payload, unchan
     assert resp.status_code == 500
     assert _operator_rows(ledger) == []
     assert unchanged(app)  # runtime did not drift from the failed persist
+
+
+# Pacing is a PATCH endpoint (not a POST toggle), so it can't ride the POST-based
+# lists above — but it follows the same persist-first + operator_action contract.
+
+
+@pytest.mark.asyncio
+async def test_pacing_records_operator_action_old_and_new():
+    """A pacing slider save records one operator_action row per changed field."""
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger)
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 6})
+    assert resp.status_code == 200
+    rows = _operator_rows(ledger)
+    assert len(rows) == 1
+    assert rows[0]["action"] == "pacing_songs_between_banter"
+    assert rows[0]["old_value"] == 4
+    assert rows[0]["new_value"] == 6
+    assert rows[0]["source"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_pacing_noop_records_no_row():
+    """Re-saving the same pacing value records nothing (no phantom old==new row)."""
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger)
+    app.state.config.pacing.songs_between_ads = 5
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_ads": 5})
+    assert resp.status_code == 200
+    assert _operator_rows(ledger) == []
+
+
+@pytest.mark.asyncio
+async def test_pacing_persist_failure_records_no_row_and_no_drift():
+    """A failed pacing persist returns 500, records no row, and leaves live config
+    untouched — the same contract the station-wide toggles hold."""
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger)
+    app.state.config.pacing.songs_between_banter = 4
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer._save_dotenv", side_effect=OSError("disk full")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch("/api/pacing", json={"songs_between_banter": 6})
+    assert resp.status_code == 500
+    assert _operator_rows(ledger) == []
+    assert app.state.config.pacing.songs_between_banter == 4

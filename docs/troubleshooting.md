@@ -15,7 +15,7 @@ pip install -e .
 
 If you run tests or the app from the system Python and see missing modules like `dotenv`, you are not in the repo environment.
 
-If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on available API keys.
+If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on AI host keys and whether a prompt-safe Home Assistant context slice is available.
 
 Useful probe endpoints:
 
@@ -89,6 +89,27 @@ Check:
 - `/status` or the dashboard shows recent producer errors
 - `/api/capabilities` and `/status` now include `provider_health.anthropic` (`degraded`, `retry_after_s`, `auth_failures`)
 
+If generated banter airs but listener memory or song callbacks are not growing,
+check the post-air extractor path separately:
+
+- The extractor runs only after generated banter sends cleanly. Canned clips,
+  stock/impossible fallback copy, skipped segments, source switches, and partial
+  sends intentionally do not write memory.
+- The segment metadata must include `memory_extraction`, and the streamer must
+  reach EOF with bytes sent before scheduling `memory_extract`.
+- `memory_extract` uses the fast script role and appears in `/status`
+  consumption as the Memory row (`script_memory`). Missing provider keys make it
+  a warning-only no-op/fallback path, not a stream failure.
+- There is no separate toggle for this extra fast-role call, and the persona
+  store is initialized on normal startup. If generated banter has listener memory
+  metadata and airs cleanly, extraction is attempted automatically. Leave HA
+  context disabled to keep house state out of the extractor prompt; remove
+  script-provider credentials to prevent durable AI memory extraction entirely.
+- Persona writes require `state.persona_store`; if the store is absent,
+  extraction skips before the LLM call. Song-cue writes separately require a
+  pinned `youtube_id`; when it is missing, persona updates may still write but
+  no song-cue row is added.
+
 ## Host voice sounds different than expected
 
 If a host configured with `engine = "openai"` sounds like a different voice, OpenAI TTS likely failed and the host fell back to Edge TTS.
@@ -101,7 +122,7 @@ Check:
 
 Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall back to their own Edge voice rather than a stranger's.
 
-To inspect script-side OpenAI behavior (banter/ads/news/transitions), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_max_tokens_truncated`, `anthropic_nonretryable`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`). `anthropic_max_tokens_truncated` means the Anthropic response was cut off at the token budget (partial or empty JSON) and the call fell back to OpenAI — grep for it to measure how often the host writer runs long. Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
+To inspect script-side OpenAI behavior (banter/ads/news/transitions/post-air memory extraction), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_max_tokens_truncated`, `anthropic_max_tokens_truncated_retrying`, `anthropic_nonretryable`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`, `openai_empty_or_length`; the reason fields land in the provenance ledger / Show Memory rows — the default log format renders only the message line). A truncated Anthropic response (cut off at the token budget, partial or empty JSON) now gets ONE in-house retry at a ~1.75× budget before any provider fallback, and after a truncation-exhausted fallback OpenAI's visible-output floor inherits the escalated (not original) budget. The OpenAI side has its own single retry: a completion cut at its cap (`finish_reason="length"`, gpt-5.x reasoning tokens starving the visible JSON) or a genuinely empty one retries once with a bigger cap — unless the model reports it finished or refused (`stop`/`content_filter`), which a bigger budget can't fix — before the stock-copy fallback. When hosts sound generic, grep the log for `truncated at max_tokens`, `retrying with escalated budget`, `escalation retry succeeded`, and the early-warning `budget pressure` WARNING (fires when a successful generation used ≥80% of its budget — raise the budget before the next truncation, don't wait for it); with the ledger enabled, the Show Memory rows carry the `fallback_reason` values above. Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
 
 Voice validation now runs at config load, not at synthesis time:
 
@@ -117,8 +138,9 @@ Check:
 - `[homeassistant].enabled = true` in `radio.toml`
 - `homeassistant.url` is correct
 - `HA_TOKEN` is present in `.env`
+- the admin Home context preview has at least one prompt-safe entity available
 
-Even when configured correctly, HA references are opportunistic. The prompt only encourages one casual reference when it fits.
+Even when configured correctly, HA references are opportunistic. A saved token alone stays Full AI Radio until a prompt-safe context slice exists, and the prompt only encourages one casual reference when it fits.
 
 ## Admin access
 
