@@ -1023,6 +1023,11 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
         if seg_type == SegmentType.BANTER:
             validate_calls.append({"path": path, **kwargs})
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    seg: Segment | None = None
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
@@ -1035,9 +1040,11 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{MODULE}.concat_files", side_effect=_write_concat_output),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
@@ -1045,7 +1052,14 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             state.session_stopped = False
             state.resume_event.set()
             deadline = asyncio.get_event_loop().time() + 8.0
-            while queue.empty():
+            while seg is None:
+                if not queue.empty():
+                    candidate = queue.get_nowait()
+                    if candidate.metadata.get("resume_bridge") is True:
+                        assert candidate.metadata.get("audio_source") == "emergency_tone"
+                        continue
+                    seg = candidate
+                    break
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not produce BANTER after resume")
                 await asyncio.sleep(0.05)
@@ -1056,12 +1070,13 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             except asyncio.CancelledError:
                 pass
 
-    seg = queue.get_nowait()
+    assert seg is not None
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is False
     assert validate_calls
     assert validate_calls[0]["expected_line_count"] == 7
     assert validate_calls[0]["expected_min_duration_sec"] > 0
+    mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1672,7 +1687,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
     state = _make_state()
     state.session_stopped = True  # simulate post-restart stopped state
     config = _make_config(tmp_path)
-    config.cache_dir = tmp_path  # isolate from real norm cache so resume bridge is a no-op
+    config.cache_dir = tmp_path  # isolate from real norm cache so resume uses emergency bridge
     config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -1680,6 +1695,11 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
     flash_path = tmp_path / "flash.mp3"
     flash_path.write_bytes(b"\x00" * 2048)
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    seg: Segment | None = None
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
         patch(
@@ -1689,6 +1709,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -1696,7 +1717,14 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
             await asyncio.sleep(0.05)  # let producer enter the stopped loop
             state.session_stopped = False  # simulate operator resuming session
             deadline = asyncio.get_event_loop().time() + 8.0
-            while queue.empty():
+            while seg is None:
+                if not queue.empty():
+                    candidate = queue.get_nowait()
+                    if candidate.metadata.get("resume_bridge") is True:
+                        assert candidate.metadata.get("audio_source") == "emergency_tone"
+                        continue
+                    seg = candidate
+                    break
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not produce NEWS_FLASH after resume")
                 await asyncio.sleep(0.05)
@@ -1707,8 +1735,7 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    assert not queue.empty(), "Producer must have queued a segment after session resume"
-    seg = queue.get_nowait()
+    assert seg is not None, "Producer must have queued a segment after session resume"
     assert seg.type == SegmentType.NEWS_FLASH
     assert seg.metadata.get("category") == "traffic"
 
