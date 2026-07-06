@@ -2186,13 +2186,21 @@ def reset_ha_push_debounce():
     original = _hc._last_ha_push
     original_stop = _hc._last_ha_stop_push
     original_lock = _hc._ha_push_lock
+    original_fingerprints = dict(_hc._ha_entity_payload_fingerprints)
+    original_push_times = dict(_hc._ha_entity_last_push_at)
     _hc._last_ha_push = 0.0
     _hc._last_ha_stop_push = 0.0
     _hc._ha_push_lock = None
+    _hc._ha_entity_payload_fingerprints.clear()
+    _hc._ha_entity_last_push_at.clear()
     yield
     _hc._last_ha_push = original
     _hc._last_ha_stop_push = original_stop
     _hc._ha_push_lock = original_lock
+    _hc._ha_entity_payload_fingerprints.clear()
+    _hc._ha_entity_payload_fingerprints.update(original_fingerprints)
+    _hc._ha_entity_last_push_at.clear()
+    _hc._ha_entity_last_push_at.update(original_push_times)
 
 
 @pytest.mark.asyncio
@@ -2509,6 +2517,65 @@ async def test_push_state_to_ha_posts_entities_sequentially(reset_ha_push_deboun
 
     assert max_in_flight == 1
     assert [url.rsplit("/", 1)[-1] for url in urls] == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_dedupes_unchanged_auxiliary_entities(reset_ha_push_debounce):
+    """The 30s heartbeat keeps the media_player fresh without rewriting unchanged sensors forever."""
+    import mammamiradio.home.ha_context as _hc
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    payload = {
+        "type": "music",
+        "label": "Volare",
+        "started": time.time() - 10,
+        "metadata": {"title": "Volare"},
+    }
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+        _hc._last_ha_push = 0.0
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+
+    urls = [call.args[0].rsplit("/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert urls == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
+        "media_player.mammamiradio",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_republishes_auxiliary_entities_after_recovery_window(reset_ha_push_debounce):
+    """Unchanged sensors still get a forced heartbeat so HA restart recovery is bounded."""
+    import mammamiradio.home.ha_context as _hc
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    payload = {"type": "music", "label": "Volare", "started": time.time() - 10, "metadata": {"title": "Volare"}}
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+        stale_time = time.time() - _hc._HA_ENTITY_RECOVERY_REPUBLISH_SECONDS - 1.0
+        for eid in _hc._HA_DEDUPED_ENTITY_IDS:
+            _hc._ha_entity_last_push_at[eid] = stale_time
+        _hc._last_ha_push = 0.0
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+
+    urls = [call.args[0].rsplit("/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert urls == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
         "media_player.mammamiradio",
         "sensor.mammamiradio_segment_type",
         "sensor.mammamiradio_listeners",

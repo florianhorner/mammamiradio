@@ -80,6 +80,28 @@ async def test_unreachable_repair_needs_sustained_outage(hass: HomeAssistant) ->
     assert coordinator.consecutive_failures == 0
 
 
+async def test_coordinator_reuses_status_on_etag_304(hass: HomeAssistant) -> None:
+    coordinator = _coordinator(hass)
+    etag = 'W/"same"'
+
+    with aioresponses() as mock:
+        mock.get(URL, status=200, payload=load_payload("music"), headers={"ETag": etag})
+        first = await coordinator._async_update_data()
+        mock.get(URL, status=304, headers={"ETag": etag})
+        second = await coordinator._async_update_data()
+        requests = [
+            call
+            for (method, url), calls in mock.requests.items()
+            if method == "GET" and str(url) == URL
+            for call in calls
+        ]
+
+    assert second is first
+    assert "If-None-Match" not in requests[0].kwargs.get("headers", {})
+    assert requests[1].kwargs["headers"]["If-None-Match"] == etag
+    assert coordinator.consecutive_failures == 0
+
+
 def test_as_float_coercion() -> None:
     assert _as_float(True) is None  # bool is not a real number here
     assert _as_float(None) is None

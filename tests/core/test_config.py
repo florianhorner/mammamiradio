@@ -420,7 +420,8 @@ def test_homeassistant_section_loaded():
 
     assert config.homeassistant.enabled is False
     assert config.homeassistant.url == ""
-    assert config.homeassistant.poll_interval == 60
+    assert config.homeassistant.context_enabled is True
+    assert config.homeassistant.poll_interval == 300
     assert config.homeassistant.mood_llm_enabled is False
     assert config.homeassistant.mood_ttl_seconds == 90.0
 
