@@ -88,3 +88,74 @@ Modules with ratchet headroom (will auto-update on main):
   mammamiradio.integrations.now_playing: 92% (floor: 88%)
   mammamiradio.scheduling.producer: 88% (floor: 83%)
 All checks passed
+
+=== post-merge re-verification ===
+merged origin/main (includes #766 fix(scheduling): keep continuity bridges ahead of recovery backoff,
+which touched the same producer.py exception-recovery block) at commit: 4e10806e
+date: 2026-07-06T19:38:51Z
+
+--- pytest tests/scheduling/ tests/core/ tests/web/ (full regression on merged state) ---
+........................................................................ [  3%]
+........................................................................ [  7%]
+........................................................................ [ 10%]
+........................................................................ [ 14%]
+........................................................................ [ 17%]
+........................................................................ [ 21%]
+........................................................................ [ 25%]
+........................................................................ [ 28%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................................................................ [ 43%]
+........................................................................ [ 46%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 64%]
+........................................................................ [ 68%]
+........................................................................ [ 71%]
+........................................................................ [ 75%]
+........................................................................ [ 79%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+........................................................................ [ 89%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+.............................................................            [100%]
+2005 passed in 61.20s (0:01:01)
+
+--- bash scripts/check-release-invariants.sh ---
+
+=== mammamiradio release invariants ===
+
+1. FFmpeg music_eq filter chain (normalizer.py)
+  [PASS] music_eq_chain has 2 equalizer filters (de-mud 200Hz + presence 3kHz)
+
+2. Test coverage — empty fallback scenario
+  [PASS] _pick_canned_clip returning None is tested (10 test file(s))
+
+3. Test coverage — post-restart scenario
+  [PASS] session_stopped scenario is tested (50 test file(s))
+
+4. HA Green fallback performance gates
+  [PASS] queue fallback wait is 5.0s (<= 5s)
+  [PASS] norm-cache rescue avoids deterministic first-file selection
+  [PASS] HA Green perf smoke script and Make target are present
+  [PASS] HA Green cold-launch smoke script and Make target are present
+
+5. Release beat manifest
+release beat: no manifest at mammamiradio/assets/release/release_beat.toml; no-op
+  [PASS] release beat manifest is absent, disabled, or schema-valid
+
+6. Producer error-recovery rescue ladder
+  [PASS] producer.py does not import or call generate_silence
+
+=======================================
+  Passed: 9  Failed: 0
+=======================================
+
+All invariants passed.
+
+--- bash scripts/check-changelog-lint.sh ---
+Changelog lint clean.
