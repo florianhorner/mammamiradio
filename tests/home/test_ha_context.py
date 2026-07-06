@@ -2238,6 +2238,87 @@ def _media_player_attrs(mock_client):
     return mp_call.kwargs["json"]["attributes"]
 
 
+def _attrs_by_entity(mock_client):
+    return {c.args[0].rsplit("/", 1)[-1]: c.kwargs["json"]["attributes"] for c in mock_client.post.call_args_list}
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_pushed_entities_have_icons(reset_ha_push_debounce):
+    """Every pushed HA entity carries an icon so HA does not render generic rows."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming={
+                "type": "music",
+                "label": "Volare",
+                "started": time.time(),
+                "metadata": {"title": "Volare"},
+            },
+            current_track=None,
+            listeners_active=3,
+            session_stopped=False,
+        )
+
+    attrs = _attrs_by_entity(mock_client)
+    assert attrs["media_player.mammamiradio"]["icon"] == "mdi:radio"
+    assert attrs["sensor.mammamiradio_segment_type"]["icon"] == "mdi:music-note"
+    assert attrs["sensor.mammamiradio_listeners"]["icon"] == "mdi:account-group"
+    assert attrs["binary_sensor.mammamiradio_on_air"]["icon"] == "mdi:broadcast"
+
+
+@pytest.mark.parametrize(
+    ("segment_type", "expected_icon", "session_stopped"),
+    [
+        ("music", "mdi:music-note", False),
+        ("banter", "mdi:microphone", False),
+        ("ad", "mdi:bullhorn", False),
+        ("news_flash", "mdi:newspaper", False),
+        ("station_id", "mdi:radio-tower", False),
+        ("sweeper", "mdi:waveform", False),
+        ("time_check", "mdi:clock-outline", False),
+        ("off", "mdi:power-standby", True),
+        ("weather_break", "mdi:radio", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_state_to_ha_segment_type_icon_map(
+    reset_ha_push_debounce,
+    segment_type,
+    expected_icon,
+    session_stopped,
+):
+    """Segment-type sensor icons track known states and fall back safely."""
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    now_streaming = (
+        {}
+        if session_stopped
+        else {
+            "type": segment_type,
+            "label": "Segment",
+            "started": time.time(),
+            "metadata": {},
+        }
+    )
+
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha(
+            ha_url="http://ha.local:8123",
+            ha_token="test-token",
+            now_streaming=now_streaming,
+            current_track=None,
+            listeners_active=1,
+            session_stopped=session_stopped,
+        )
+
+    attrs = _attrs_by_entity(mock_client)
+    assert attrs["sensor.mammamiradio_segment_type"]["icon"] == expected_icon
+
+
 @pytest.mark.asyncio
 async def test_push_state_to_ha_music_keeps_legit_artist(reset_ha_push_debounce):
     """Scenario 1 — Normal: a real track artist passes through; the guard is a no-op."""
