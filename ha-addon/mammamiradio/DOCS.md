@@ -182,7 +182,14 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
-  |     HA_ENABLED (from enable_home_assistant)
+  |     HA_ENABLED (from enable_home_assistant),
+  |     MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
+  |     MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
+  |     MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS,
+  |     MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK,
+  |     JAMENDO_CLIENT_ID
   |
   +-- run.sh maps Supervisor token
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
