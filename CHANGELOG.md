@@ -6,6 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Recovery audio now gets in before the station slows down retries, without falling back to silence.** If segment generation fails repeatedly, the station queues backup audio first — a pre-recorded clip, a recently cached track, the last song that played, a short branded recovery sweeper, or a brief on-air tone — and only then backs off the retry loop. Resume and idle bridges share the same final emergency-tone fallback when no canned clip or cached song is ready.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip or cached music is available, the station now tries a short branded recovery sweeper before the emergency tone, so provider or download trouble feels intentional instead of like dead air.
+- **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
+
+## [2.15.0] - 2026-07-06
+
 ### Added
 
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
@@ -32,7 +40,6 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **Recovery audio now gets in before the station slows down retries, without falling back to silence.** If segment generation fails repeatedly, the station queues backup audio first — a pre-recorded clip, a recently cached track, the last song that played, or a brief on-air tone — and only then backs off the retry loop. Resume and idle bridges share the same final emergency-tone fallback when no canned clip or cached song is ready.
 - **The live add-on logs stay calmer when providers or downloads fail safely.** Ad promo tags now use the configured ad voice engine instead of handing ElevenLabs IDs to Edge TTS, Azure and ElevenLabs auth/config failures fall back once and then stay on the Edge fallback for the session, direction-download failures no longer dump traceback noise for ordinary YouTube blocks, and Home Assistant state pushes are smoothed into ordered writes.
 - **Hans Günther now stays a cameo instead of taking over a host break.** The station recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange instead of airing a one-line leftover. When the cameo is allowed, a regular host must set him up and take the break back afterward.
 - **Your pacing settings now stick.** The Diretta sliders — how many songs between host breaks, how many between ad breaks, and how many ads per break — used to snap back to their defaults whenever the station restarted. A change you make is now saved and comes back exactly as you left it, and if a save ever can't be written the panel says so and leaves the current setting untouched instead of half-applying it. In the Home Assistant add-on the three values are also on the Configuration screen.

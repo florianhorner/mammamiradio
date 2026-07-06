@@ -300,6 +300,7 @@ async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),

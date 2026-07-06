@@ -1,0 +1,22 @@
+Review/fix validation for the fake-scaletta public schedule change.
+Branch: florianhorner/fix/fake-scaletta
+Validation date: 2026-07-06
+
+Focused contract checks:
+- .venv/bin/python -m pytest tests/web/test_admin_status_invariants.py::test_system_health_rows_use_canonical_status_helpers tests/web/test_ui_control_contracts.py::TestStoppedStateQuietsTheUI::test_listener_building_schedule_is_single_placeholder tests/web/test_ui_control_contracts.py::TestStoppedStateQuietsTheUI::test_render_programme_has_distinct_stopped_empty_state tests/web/test_ui_control_contracts.py::TestStoppedStateQuietsTheUI::test_render_programme_memo_hash_tracks_id_and_stop_state tests/web/test_streamer_routes.py::test_public_status_upcoming_mode_building_when_queue_empty tests/web/test_shadow_queue_sync.py::test_public_status_hides_playlist_predictions_when_shadow_empty tests/scheduling/test_queue_commit_contract.py::test_operator_error_recovery_front_inserts_rescue_before_consecutive_failure_backoff tests/scheduling/test_queue_commit_contract.py::test_error_recovery_queues_canned_rescue_before_consecutive_failure_backoff -q
+  - 8 passed in 0.94s
+
+Review gate checks:
+- pyproject.toml version and ha-addon/mammamiradio/config.yaml version both 2.16.0.
+- /healthz and /readyz routes remain registered in mammamiradio/web/streamer.py.
+- No conductor.json is present in this workspace.
+- scripts/check-release-invariants.sh passed bash -n after merging origin/main.
+- Diff secret scan returned no matches.
+- git diff --check passed.
+
+Full gate:
+- make check (ruff lint + format-check + mypy + vulture + pytest with coverage gate)
+- All checks passed.
+- Required test coverage of 92.0% reached. Total coverage: 93.07%.
+- 3904 passed, 2 skipped, 19 deselected in 95.76s (0:01:35).
+- All coverage floors held. Total: 93% (floor: 92%).

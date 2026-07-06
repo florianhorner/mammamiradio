@@ -1168,6 +1168,7 @@ async def test_error_recovery_tone_also_fails(tmp_path):
                 ],
             ),
             patch(f"{MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
             patch(f"{MODULE}.normalize", side_effect=_fake_path),
             patch(f"{MODULE}.shutil.copy2"),
@@ -1203,6 +1204,7 @@ async def test_consecutive_failures_increment_counter(tmp_path):
             patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
             patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
             patch(f"{MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{MODULE}.generate_tone", side_effect=_fake_path),
             patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Recovery audio now gets in before the add-on slows down retries, without falling back to silence.** If segment generation fails repeatedly, the station queues backup audio first — a pre-recorded clip, a recently cached track, the last song that played, a short branded recovery sweeper, or a brief on-air tone — and only then backs off the retry loop. Resume and idle bridges share the same final emergency-tone fallback when no canned clip or cached song is ready.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip or cached music is available, the add-on now tries a short branded recovery sweeper before the emergency tone, so provider or download trouble feels intentional instead of like dead air.
+- **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
+
+## 2.16.0
+
+## 2.15.0 - 2026-07-06
+
 ### Added
 
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
@@ -21,7 +31,6 @@
 
 ### Fixed
 
-- **Recovery audio now gets in before the add-on slows down retries, without falling back to silence.** If segment generation fails repeatedly, the station queues backup audio first — a pre-recorded clip, a recently cached track, the last song that played, or a brief on-air tone — and only then backs off the retry loop. Resume and idle bridges share the same final emergency-tone fallback when no canned clip or cached song is ready.
 - **The add-on logs stay calmer when providers or downloads fail safely.** Ad promo tags now use the configured ad voice engine instead of handing ElevenLabs IDs to Edge TTS, Azure and ElevenLabs auth/config failures fall back once and then stay on the Edge fallback for the session, direction-download failures no longer dump traceback noise for ordinary YouTube blocks, and Home Assistant state pushes are smoothed into ordered writes.
 - **Hans Günther now stays a cameo instead of taking over a host break.** The add-on recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange if needed.
 - **Your pacing settings now stick.** The Diretta sliders in the admin panel — songs between host breaks, songs between ad breaks, and ads per break — used to reset to their defaults after a restart. They are now saved and restored, and the three values also appear on the add-on Configuration screen. If a save can't be written the panel says so and leaves the current setting untouched instead of half-applying it.
@@ -34,8 +43,6 @@
 
 - **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-
-## 2.15.0
 
 ## 2.14.1 - 2026-06-21
 

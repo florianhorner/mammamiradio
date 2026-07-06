@@ -185,6 +185,7 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
                 side_effect=RuntimeError("no audio"),
             ),
             patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=fake_tone) as mock_tone,
             patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         ):

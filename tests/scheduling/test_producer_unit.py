@@ -375,6 +375,37 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
 
 @pytest.mark.asyncio
+async def test_error_recovery_queues_recovery_sweeper_before_emergency_tone():
+    """When cached rescues are unavailable, a branded recovery sweeper is queued
+    before the final emergency-tone rung."""
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=AssertionError("tone should be final fallback")),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
+    assert seg.metadata.get("title") == "Recovery sweeper"
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("error_recovery") is True
+    assert state.failed_segments >= 1
+
+
+@pytest.mark.asyncio
 async def test_error_recovery_queues_emergency_tone_never_silence():
     """When download_track raises with no canned clips, norm cache, or last-known-good
     music available, producer inserts an emergency tone — never generated silence."""
@@ -394,6 +425,7 @@ async def test_error_recovery_queues_emergency_tone_never_silence():
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network down"),
             ),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
@@ -442,7 +474,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
         second_download_started.set()
         await asyncio.Event().wait()
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -681,9 +713,9 @@ async def test_error_recovery_inserts_tone_when_no_canned_clips(tmp_path):
 
     When produce_one_segment raises (music download fails), the outer handler
     tries _pick_canned_clip("banter") then _pick_canned_clip("welcome"), then the
-    norm-cache and last-known-good rungs, before generating an emergency tone.
-    With both canned directories empty and no cache/last-good music, the tone is
-    the last resort.
+    norm-cache, last-known-good, and recovery-sweeper rungs, before generating an
+    emergency tone. With both canned directories empty and no cache/last-good
+    music, and the sweeper unavailable, the tone is the last resort.
 
     Note: banter TTS failures use `continue` internally and never reach the outer
     handler.  This test uses MUSIC (whose failures propagate out) to exercise the
@@ -713,6 +745,7 @@ async def test_error_recovery_inserts_tone_when_no_canned_clips(tmp_path):
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network down"),
             ),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
@@ -756,6 +789,7 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_tone(caplog)
                 f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")
             ),
             patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
             patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path) as mock_tone,
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):

@@ -304,6 +304,7 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> tone rescue
     ):
@@ -342,6 +343,7 @@ async def test_error_recovery_queues_rescue_before_consecutive_failure_backoff(t
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
@@ -505,6 +507,7 @@ async def test_error_recovery_stale_discard_awaits_consecutive_failure_backoff(t
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_stale_probe),
@@ -548,6 +551,7 @@ async def test_error_recovery_enqueue_failure_awaits_consecutive_failure_backoff
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", side_effect=RuntimeError("tts down")),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
