@@ -56,6 +56,42 @@ def test_ha_enabled_false_override_blocks_auto_enable(monkeypatch):
     assert config.homeassistant.enabled is False
 
 
+def test_ha_context_enabled_env_disable(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.context_enabled is False
+
+
+def test_ha_context_enabled_env_invalid_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "sometimes")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.context_enabled is True
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_ENABLED" in caplog.text
+
+
+def test_ha_context_poll_interval_env_override(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "600")
+    config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 600
+
+
+def test_ha_context_poll_interval_env_invalid_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "soon")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 300
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL" in caplog.text
+
+
+def test_ha_context_poll_interval_env_non_positive_ignored(monkeypatch, caplog):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL", "0")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.homeassistant.poll_interval == 300
+    assert "Ignoring MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL" in caplog.text
+
+
 def test_ha_context_refresh_timeout_default():
     config = load_config(TOML_PATH)
     assert config.homeassistant.context_refresh_timeout == 2.0

@@ -420,7 +420,8 @@ def test_homeassistant_section_loaded():
 
     assert config.homeassistant.enabled is False
     assert config.homeassistant.url == ""
-    assert config.homeassistant.poll_interval == 60
+    assert config.homeassistant.context_enabled is True
+    assert config.homeassistant.poll_interval == 300
     assert config.homeassistant.mood_llm_enabled is False
     assert config.homeassistant.mood_ttl_seconds == 90.0
 
@@ -1145,6 +1146,16 @@ def test_load_config_rejects_zero_timer_poll_interval(tmp_path):
     custom_path.write_text(custom)
 
     with pytest.raises(ValueError, match="homeassistant\\.timer_poll_interval must be >= 1"):
+        load_config(str(custom_path))
+
+
+def test_load_config_rejects_zero_ha_context_poll_interval(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace("poll_interval = 300", "poll_interval = 0", 1)
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    with pytest.raises(ValueError, match="homeassistant\\.poll_interval must be >= 1"):
         load_config(str(custom_path))
 
 
