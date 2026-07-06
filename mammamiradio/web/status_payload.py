@@ -228,6 +228,7 @@ def _serialize_track(track: Track) -> dict:
         "year": track.year,
         "youtube_id": track.youtube_id,
         "duration_ms": track.duration_ms,
+        "heading_id": track.heading_id,
     }
 
 
