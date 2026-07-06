@@ -65,20 +65,45 @@ def test_rejected_tagged_candidate_then_auto_track_does_not_arm_heading():
     auto = _track("Auto")
     state = StationState(playlist=[tagged, auto], heading=heading)
 
+    def _choose(candidates, **kwargs):
+        return [candidates[0]]
+
     with (
-        patch.object(state, "select_next_track", side_effect=[tagged, auto]) as select_next,
         patch(
             "mammamiradio.scheduling.producer.is_rejected_cache_key",
             side_effect=lambda key: key == tagged.cache_key,
         ),
+        patch("mammamiradio.core.models.random.choices", side_effect=_choose),
     ):
         selected = _select_accepted_music_track(state, _producer_config())
 
     assert selected is auto
     _arm_accepted_heading_announcement(state, selected)
-    assert select_next.call_count == 2
     assert state.heading_pending_announcement == ""
     assert state.heading_announced_id == ""
+
+
+def test_rejected_weighted_candidate_cannot_starve_valid_sibling():
+    rejected = _track("Rejected")
+    accepted = _track("Accepted")
+    state = StationState(playlist=[rejected, accepted])
+    captured: list[list[Track]] = []
+
+    def _choose(candidates, **kwargs):
+        captured.append(list(candidates))
+        return [candidates[0]]
+
+    with (
+        patch(
+            "mammamiradio.scheduling.producer.is_rejected_cache_key",
+            side_effect=lambda key: key == rejected.cache_key,
+        ),
+        patch("mammamiradio.core.models.random.choices", side_effect=_choose),
+    ):
+        selected = _select_accepted_music_track(state, _producer_config())
+
+    assert selected is accepted
+    assert captured == [[accepted]]
 
 
 def test_non_tagged_accepted_selection_does_not_arm_heading():

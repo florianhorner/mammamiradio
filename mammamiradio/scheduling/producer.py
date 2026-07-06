@@ -128,18 +128,21 @@ class RenderedMusicTrack:
 
 
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
-    for _ in range(MUSIC_SELECTION_RETRIES):
+    rejected_keys = {track.cache_key for track in state.playlist if is_rejected_cache_key(track.cache_key)}
+    if state.pinned_track is not None and is_rejected_cache_key(state.pinned_track.cache_key):
+        rejected_keys.add(state.pinned_track.cache_key)
+    try:
         candidate = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
             artist_cooldown=config.playlist.artist_cooldown,
+            excluded_cache_keys=rejected_keys,
         )
-        if not is_rejected_cache_key(candidate.cache_key):
-            return candidate
-        logger.debug(
-            "Skipping denylisted track (already rejected this session): %s",
-            candidate.display,
-        )
-    return None
+    except RuntimeError:
+        if rejected_keys:
+            logger.debug("No eligible music tracks remain after excluding session-rejected cache keys")
+            return None
+        raise
+    return candidate
 
 
 def _arm_accepted_heading_announcement(state: StationState, track: Track) -> None:

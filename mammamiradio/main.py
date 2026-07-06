@@ -162,6 +162,8 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
     admission = admit_restart_handoff_entries(
         config.cache_dir,
         blocklist=state.blocklist,
+        playlist=state.playlist,
+        pacing=config.pacing,
     )
     accepted = 0
     for segment in admission.to_segments(config.cache_dir):
