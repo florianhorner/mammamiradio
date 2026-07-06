@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Refactored
+
+- **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
+
 ## [2.17.0] - 2026-07-07
 
 ### Added
@@ -74,10 +78,6 @@ The current version source of truth is `pyproject.toml`.
 - **Banter is shorter by default.** Hosts now keep most breaks to a quick beat between songs instead of talking at length every time. Longer breaks are saved for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode — so the occasional long break lands as "this one mattered".
 - **The Rotazione pool controls are now split into two clear rows.** Source buttons (Add: Classifiche, Jamendo, era decades) stay in their own row. Pool management (Shuffle, Banned, Clear pool) moves to a separate Pool row below.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
-
-### Refactored
-
-- **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
 
 ### Fixed
 
