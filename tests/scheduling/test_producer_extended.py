@@ -1115,15 +1115,19 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Error recovery — silence generation also fails
+# Error recovery — emergency tone generation also fails
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_also_fails(tmp_path):
-    """When both download and silence generation fail, producer continues without crashing."""
+async def test_error_recovery_tone_also_fails(tmp_path):
+    """When both download and emergency-tone generation fail, producer continues
+    without crashing and without ever queueing generated silence."""
+    from mammamiradio.scheduling import producer
+
     state = _make_state()
     config = _make_config(tmp_path)
+    config.cache_dir = tmp_path  # isolate from the real repo cache/ directory
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     call_count = 0
@@ -1135,24 +1139,31 @@ async def test_error_recovery_silence_also_fails(tmp_path):
             return SegmentType.MUSIC
         return SegmentType.MUSIC
 
-    with (
-        patch(f"{MODULE}.next_segment_type", side_effect=segment_type_with_recovery),
-        patch(
-            f"{MODULE}.download_track",
-            new_callable=AsyncMock,
-            side_effect=[
-                RuntimeError("network down"),
-                _fake_path(),
-            ],
-        ),
-        patch(f"{MODULE}.generate_silence", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
-        patch(f"{MODULE}.normalize", side_effect=_fake_path),
-        patch(f"{MODULE}.shutil.copy2"),
-        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config, timeout=10.0)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{MODULE}.next_segment_type", side_effect=segment_type_with_recovery),
+            patch(
+                f"{MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=[
+                    RuntimeError("network down"),
+                    _fake_path(),
+                ],
+            ),
+            patch(f"{MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
+            patch(f"{MODULE}.normalize", side_effect=_fake_path),
+            patch(f"{MODULE}.shutil.copy2"),
+            patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config, timeout=10.0)
+    finally:
+        producer._last_music_file = orig_last_music
 
-    # Should eventually get a segment (either silence from 2nd attempt or music)
+    # Should eventually get a segment (the retried download's music, since the
+    # emergency tone itself failed on the first attempt)
     assert queue.qsize() >= 1
 
 
@@ -1163,17 +1174,26 @@ async def test_error_recovery_silence_also_fails(tmp_path):
 
 @pytest.mark.asyncio
 async def test_consecutive_failures_increment_counter(tmp_path):
+    from mammamiradio.scheduling import producer
+
     state = _make_state()
     config = _make_config(tmp_path)
+    config.cache_dir = tmp_path  # isolate from the real repo cache/ directory
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    with (
-        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
-        patch(f"{MODULE}.generate_silence", side_effect=_fake_path),
-        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
+            patch(f"{MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{MODULE}.generate_tone", side_effect=_fake_path),
+            patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+    finally:
+        producer._last_music_file = orig_last_music
 
     assert state.failed_segments >= 1
 

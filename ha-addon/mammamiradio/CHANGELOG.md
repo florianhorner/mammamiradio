@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- **A rare production hiccup can no longer leave dead air.** If the add-on hits an unexpected error while putting together the next segment, it now reaches for real backup audio — a pre-recorded clip, a recently cached track, or the last song that played — before ever resorting to a brief on-air tone, instead of inserting silence.
 - **The add-on logs stay calmer when providers or downloads fail safely.** Ad promo tags now use the configured ad voice engine instead of handing ElevenLabs IDs to Edge TTS, Azure and ElevenLabs auth/config failures fall back once and then stay on the Edge fallback for the session, direction-download failures no longer dump traceback noise for ordinary YouTube blocks, and Home Assistant state pushes are smoothed into ordered writes.
 - **Hans Günther now stays a cameo instead of taking over a host break.** The add-on recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange if needed.
 - **Your pacing settings now stick.** The Diretta sliders in the admin panel — songs between host breaks, songs between ad breaks, and ads per break — used to reset to their defaults after a restart. They are now saved and restored, and the three values also appear on the add-on Configuration screen. If a save can't be written the panel says so and leaves the current setting untouched instead of half-applying it.

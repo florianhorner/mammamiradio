@@ -72,8 +72,8 @@ _RESCUE_METADATA_SHAPES = [
     {"warmup": True, "idle_bridge": True, "rescue": True},  # idle warm-up bridge
     {"silence_fallback": True, "rescue": True},  # quality-gate silence fallback
     {"recycled": True, "silence_fallback": True, "rescue": True},  # last-known-good recycle
-    {"error_recovery": True, "rescue": True},  # error-recovery canned
-    {"error": "boom", "rescue": True},  # brief-silence error segment
+    {"error_recovery": True, "rescue": True},  # error-recovery canned / norm-cache / recycled
+    {"error_recovery": True, "rescue": True, "audio_source": "emergency_tone", "error": "boom"},  # error-recovery tone
     {"canned": True, "queue_drain_recovery": True, "rescue": True},  # canned bridge
 ]
 

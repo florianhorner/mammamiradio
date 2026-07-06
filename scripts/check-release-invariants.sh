@@ -99,6 +99,16 @@ else
     fail "release beat manifest validation failed"
 fi
 
+# ── 6. Producer error recovery must never queue generated silence ────────────
+echo ""
+echo "6. Producer error-recovery rescue ladder"
+
+if grep -q 'generate_silence' mammamiradio/scheduling/producer.py; then
+    fail "producer.py imports or calls generate_silence — error recovery must rescue with real audio, never silence"
+else
+    ok "producer.py does not import or call generate_silence"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "======================================="

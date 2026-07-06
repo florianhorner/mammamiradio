@@ -294,7 +294,8 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
     """Outer error-recovery rescue (``rescue=True``) is built inside the main loop
     body and so flows through the epilogue — unlike a bridge it DOES append an
     up-next shadow row (``producer.py:3060``). Also exercises the empty-container
-    fallback (Scenario 2): no canned clip available, so the silence rescue fires."""
+    fallback (Scenario 2): no canned clip and no norm cache available, so the
+    emergency-tone rescue fires — never generated silence."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -302,14 +303,16 @@ async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> silence rescue
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> tone rescue
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await _wait_for(lambda: queue.qsize() > 0)
             seg = queue.get_nowait()
             assert seg.metadata.get("rescue") is True
+            assert seg.metadata.get("error_recovery") is True
+            assert seg.metadata.get("audio_source") == "emergency_tone"
             assert len(state.queued_segments) == 1  # rescue-via-epilogue DID add an up-next row
         finally:
             await _cancel(task)

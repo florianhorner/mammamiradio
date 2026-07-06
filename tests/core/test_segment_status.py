@@ -23,6 +23,10 @@ from mammamiradio.core import segment_status as ss
         # flag must classify them as rescue (else a warm-up clip reads as the
         # primary station). Regression guard for #547.
         {"idle_bridge": True},
+        # Producer's error-recovery rescue ladder (canned clip / norm-cache /
+        # last-known-good / emergency tone) stamps error_recovery — without this
+        # flag a rescue segment reads as a normal aired segment in the ledger.
+        {"error_recovery": True},
         {"audio_source": "fallback_demo_asset"},
         {"audio_source": "norm_cache"},
         {"audio_source": "emergency_tone"},

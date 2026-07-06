@@ -897,35 +897,163 @@ async def test_error_recovery_uses_canned_banter(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_generation_is_rescue(tmp_path):
-    """Generated error-recovery silence carries the admission bypass."""
+async def test_error_recovery_falls_back_to_norm_cache_rescue(tmp_path):
+    """No canned clips, but a norm-cache file exists — error recovery rescues with it, never silence."""
+    from mammamiradio.scheduling import producer
+
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_silence(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"silence")
+    norm_path = tmp_path / "norm_song_128k.mp3"
+    norm_path.write_bytes(b"cached audio")
+
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network failure"),
+            ),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        ):
+            await _run_until_n_queued(queue, state, config, n=1)
+    finally:
+        producer._last_music_file = orig_last_music
+
+    seg = queue.get_nowait()
+    assert seg.path == norm_path
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("audio_source") == "norm_cache"
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_recycles_last_known_good_music(tmp_path):
+    """No canned clips, no norm cache, but a last-known-good music file exists —
+    error recovery recycles it (rung 3 of the ladder), never silence."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    last_good = tmp_path / "music_last_good.mp3"
+    last_good.write_bytes(b"last known good audio")
+    state.last_music_file = last_good
+
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network failure"),
+            ),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        ):
+            await _run_until_n_queued(queue, state, config, n=1)
+    finally:
+        producer._last_music_file = orig_last_music
+
+    seg = queue.get_nowait()
+    assert seg.path == last_good
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("recycled") is True
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_uses_emergency_tone_never_silence(tmp_path):
+    """No canned clips, no norm cache, no last-known-good music — error recovery
+    generates an emergency tone (``rescue=True``) instead of silence."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
         return path
 
-    with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(
-            f"{PRODUCER_MODULE}.download_track",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("network failure"),
-        ),
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_silence) as mock_silence,
-    ):
-        await _run_until_n_queued(queue, state, config, n=1)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network failure"),
+            ),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+        ):
+            await _run_until_n_queued(queue, state, config, n=1)
+    finally:
+        producer._last_music_file = orig_last_music
 
-    mock_silence.assert_called_once()
-    assert mock_silence.call_args.kwargs["rescue"] is True
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
-    assert seg.metadata.get("title") == "Brief silence"
+    assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_tone_failure_never_queues_silence(tmp_path):
+    """If even emergency-tone generation fails, the producer must not fall back to
+    generated silence — it logs and continues the loop without queueing anything."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network failure"),
+            ),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=RuntimeError("ffmpeg broken")),
+        ):
+            task = asyncio.create_task(producer.run_producer(queue, state, config))
+            try:
+                await asyncio.sleep(0.3)
+                assert queue.qsize() == 0
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+    finally:
+        producer._last_music_file = orig_last_music
 
 
 # ---------------------------------------------------------------------------

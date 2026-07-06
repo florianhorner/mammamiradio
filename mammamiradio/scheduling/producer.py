@@ -31,7 +31,6 @@ from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
-    generate_silence,
     generate_station_id_bed,
     generate_tone,
     humanize_norm_filename,
@@ -351,6 +350,85 @@ async def _queue_drain_recovery_bridge(
     if ok:
         _record_bridge_fire(state, "drain", "emergency_tone")
     return ok
+
+
+async def _build_error_recovery_segment(
+    seg_type: SegmentType,
+    error: Exception,
+    state: StationState,
+    config: StationConfig,
+) -> Segment | None:
+    """Build the best available non-silent rescue segment after a producer exception.
+
+    Ladder: canned banter/welcome clip -> norm-cache rescue -> last-known-good
+    music file -> emergency tone. Silence is never queued (dead air is a product
+    failure, not a degraded-but-safe state) — the caller must skip queueing
+    anything when this returns ``None`` (every rung, including tone generation,
+    failed)."""
+    fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+    if fallback_path:
+        logger.info("Error recovery: using canned clip instead of silence")
+        return Segment(
+            type=SegmentType.BANTER,
+            path=fallback_path,
+            metadata={
+                "type": "banter",
+                "canned": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": "Recovery banter",
+            },
+            ephemeral=False,
+        )
+
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
+        logger.warning("Error recovery: no canned clips — inserting norm-cache rescue: %s", log_label)
+        return Segment(type=SegmentType.MUSIC, path=norm_path, metadata=metadata, ephemeral=False)
+
+    last_good = _get_last_music_file(state)
+    if last_good:
+        logger.warning(
+            "Error recovery: no canned clips or norm cache — recycling last-known-good music: %s",
+            last_good.name,
+        )
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=last_good,
+            metadata={
+                "type": "music",
+                "recycled": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": last_good.name,
+            },
+            ephemeral=False,
+        )
+
+    logger.error(
+        "No canned clips, norm cache, or last-known-good music available — inserting emergency tone "
+        "(check assets/demo/banter/)"
+    )
+    tone_path = config.tmp_dir / f"error_recovery_tone_{uuid4().hex[:8]}.mp3"
+    try:
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
+    except Exception as tone_err:
+        logger.error("Cannot generate emergency tone (ffmpeg broken?): %s", tone_err)
+        return None
+    return Segment(
+        type=seg_type,
+        path=tone_path,
+        metadata={
+            "title": "Station continuity",
+            "artist": "",
+            "error_recovery": True,
+            "rescue": True,
+            "audio_source": "emergency_tone",
+            "error": str(error),
+        },
+        ephemeral=True,
+    )
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -3290,7 +3368,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
+            # Recoverable: network/ffmpeg/disk/httpx errors — never queue silence
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -3303,37 +3381,12 @@ async def run_producer(
                 backoff = min(30.0, 2.0 ** min(consecutive, 5))
                 logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
                 await asyncio.sleep(backoff)
-            # Prefer a canned banter clip over raw silence — at least it sounds intentional
-            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback_path:
-                logger.info("Error recovery: using canned clip instead of silence")
-                segment = Segment(
-                    type=SegmentType.BANTER,
-                    path=fallback_path,
-                    metadata={
-                        "type": "banter",
-                        "canned": True,
-                        "error_recovery": True,
-                        "rescue": True,
-                        "title": "Recovery banter",
-                    },
-                    ephemeral=False,
-                )
-            else:
-                logger.warning("No canned clips available — inserting silence (check assets/demo/banter/)")
-                silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-                try:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, partial(generate_silence, silence_path, 5.0, rescue=True))
-                except Exception as silence_err:
-                    logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                    await asyncio.sleep(0.5)
-                    continue
-                segment = Segment(
-                    type=seg_type,
-                    path=silence_path,
-                    metadata={"error": str(e), "rescue": True, "title": "Brief silence"},
-                )
+            segment = await _build_error_recovery_segment(seg_type, e, state, config)
+            if segment is None:
+                # Every rung of the rescue ladder failed — never queue silence;
+                # back off briefly and let the next loop iteration try again.
+                await asyncio.sleep(0.5)
+                continue
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:

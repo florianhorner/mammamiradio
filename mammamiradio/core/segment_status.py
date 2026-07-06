@@ -29,6 +29,7 @@ _FALLBACK_FLAG_KEYS = (
     "resume_bridge",
     "silence_fallback",
     "idle_bridge",
+    "error_recovery",
 )
 
 # audio_source values that are themselves fallback sources even when no boolean
