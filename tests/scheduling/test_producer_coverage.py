@@ -919,8 +919,17 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts down"),
+        ),
         patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-        patch(f"{PRODUCER_MODULE}.generate_silence", create=True) as mock_silence,
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
     ):
         await _run_until_n_queued(queue, state, config, n=1)
 
@@ -930,6 +939,53 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_sweeper_timeout_falls_through_to_emergency_tone(tmp_path):
+    """A slow recovery sweeper must not block the final non-silent rescue."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    sweeper_started = asyncio.Event()
+
+    async def _slow_sweeper(*_args, **_kwargs):
+        sweeper_started.set()
+        await asyncio.Event().wait()
+
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(
+            f"{PRODUCER_MODULE}.download_track",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}.RECOVERY_SWEEPER_TIMEOUT_SECONDS", 0.01),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, side_effect=_slow_sweeper),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert sweeper_started.is_set()
+    mock_silence.assert_not_called()
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
 
 

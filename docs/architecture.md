@@ -615,7 +615,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions insert packaged recovery audio, norm-cache music, or an emergency tone instead of crashing the app
+- producer exceptions insert packaged recovery audio, norm-cache music, a bounded branded recovery sweeper, or an emergency tone instead of crashing the app; producer recovery must never generate or queue intentional silence
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks

@@ -92,6 +92,13 @@ MUSIC_SELECTION_RETRIES = 20
 MUSIC_QUALITY_GATE_REJECTION_LIMIT = 3
 CACHE_EVICTION_INTERVAL_SECONDS = 3600
 PLAYLIST_REFRESH_INTERVAL_SECONDS = 5400.0
+RECOVERY_SWEEPER_TIMEOUT_SECONDS = 3.0
+RECOVERY_SWEEPER_LINES = (
+    "{station} resta in onda. La musica sta tornando.",
+    "Restate con noi. Stiamo rimettendo la puntina al posto giusto.",
+    "Un attimo in cabina. La musica torna tra pochissimo.",
+    "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
+)
 FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
     "FIRST CONNECTED HOME MOMENT: Use one or two concrete home details naturally. "
     "Do not list sensors. Make it feel like a host casually noticing the home."
@@ -407,8 +414,17 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             ephemeral=False,
         )
 
+    try:
+        logger.warning("No packaged recovery clips or norm cache available — inserting recovery sweeper")
+        return await asyncio.wait_for(
+            _build_recovery_sweeper_segment(config, state),
+            timeout=RECOVERY_SWEEPER_TIMEOUT_SECONDS,
+        )
+    except Exception as sweeper_err:
+        logger.warning("Recovery sweeper failed — inserting emergency tone: %s", sweeper_err)
+
     tone_path = config.tmp_dir / f"recovery_tone_{uuid4().hex[:8]}.mp3"
-    logger.error("No canned clips or norm cache available — inserting emergency tone recovery")
+    logger.error("No packaged recovery clips, norm cache, or recovery sweeper available — inserting emergency tone")
     try:
         await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
     except Exception:
@@ -575,8 +591,8 @@ def _adjacency_type_for(segment: Segment) -> SegmentType | None:
     """The tail-adjacency classification of a queued segment — the SINGLE rule shared by the
     enqueue funnel, the air-next tail recompute, and the producer-start seed.
 
-    Returns ``None`` for a continuity BREAK — a failed render that aired as brief silence, or
-    the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
+    Returns ``None`` for a continuity BREAK — a failed render that aired as recovery audio,
+    or the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
     treated as an adjacent song a later speech bed could bleed (#641). Otherwise returns the
     segment's real type.
     """
@@ -623,7 +639,7 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
       ``source_path`` is their pre-egress (clean) path. This is what closes #641.
 
     Front-insert is intentionally excluded by the caller: air-next changes head order, while
-    speech-bed adjacency follows normal tail appends. A continuity-break fill (errored silence
+    speech-bed adjacency follows normal tail appends. A continuity-break fill (recovery audio
     or the emergency tone) resolves to ``None`` via ``_adjacency_type_for``, so the next speech
     never beds a song the break severed. ``prev_seg_type`` uses the same classifier at
     queue-time updates so transition stingers do not treat a rescue tone as real music either.
@@ -1243,6 +1259,75 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     pick = random.choice(eligible)
     _recently_played_clips.append(pick.name)
     return pick
+
+
+def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str]:
+    """Return voice, engine, and Edge fallback for sonic-brand sweepers."""
+    sb = config.sonic_brand
+    sweeper_voice = sb.sweeper_voice
+    sweeper_engine = sb.sweeper_engine
+    sweeper_fallback = sb.sweeper_edge_fallback_voice
+    if not sweeper_voice:
+        sweeper_host = random.choice(_sw._regular_hosts(config))
+        sweeper_voice = sweeper_host.voice
+        sweeper_engine = sweeper_host.engine
+        sweeper_fallback = sweeper_host.edge_fallback_voice
+    return sweeper_voice, sweeper_engine, sweeper_fallback
+
+
+async def _render_sweeper_audio(
+    text: str,
+    config: StationConfig,
+    state: StationState,
+    *,
+    prefix: str,
+) -> Path:
+    """Render a short station-imaging sweeper with the configured voice and sting."""
+    sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
+    audio_path = config.tmp_dir / f"{prefix}_{uuid4().hex[:8]}.mp3"
+    await synthesize(
+        text,
+        sweeper_voice,
+        audio_path,
+        engine=sweeper_engine,
+        edge_fallback_voice=sweeper_fallback,
+        state=state,
+    )
+    loop = asyncio.get_running_loop()
+    sting_path = config.tmp_dir / f"{prefix}_sting_{uuid4().hex[:8]}.mp3"
+    mixed_path = config.tmp_dir / f"{prefix}_mixed_{uuid4().hex[:8]}.mp3"
+    dry_sweeper_path = audio_path
+    try:
+        imaging_lib = _make_imaging_lib(config)
+        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
+        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
+    except Exception:
+        mixed_path.unlink(missing_ok=True)
+        dry_sweeper_path.unlink(missing_ok=True)
+        raise
+    finally:
+        sting_path.unlink(missing_ok=True)
+    dry_sweeper_path.unlink(missing_ok=True)
+    return mixed_path
+
+
+async def _build_recovery_sweeper_segment(config: StationConfig, state: StationState) -> Segment:
+    """Build a branded rescue sweeper before falling through to emergency tone."""
+    station_name = config.display_station_name or config.station.name
+    sweeper_text = random.choice(RECOVERY_SWEEPER_LINES).format(station=station_name)
+    audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="recovery_sweeper")
+    return Segment(
+        type=SegmentType.SWEEPER,
+        path=audio_path,
+        metadata={
+            "type": "sweeper",
+            "text": sweeper_text,
+            "title": "Recovery sweeper",
+            "error_recovery": True,
+            "rescue": True,
+        },
+        ephemeral=True,
+    )
 
 
 async def _prefetch_next(
@@ -2946,41 +3031,7 @@ async def run_producer(
 
                 try:
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
-
-                    sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = sb.sweeper_engine
-                    sweeper_fallback = sb.sweeper_edge_fallback_voice
-                    if not sweeper_voice:
-                        sweeper_host = random.choice(_sw._regular_hosts(config))
-                        sweeper_voice = sweeper_host.voice
-                        sweeper_engine = sweeper_host.engine
-                        sweeper_fallback = sweeper_host.edge_fallback_voice
-
-                    audio_path = config.tmp_dir / f"sweeper_{uuid4().hex[:8]}.mp3"
-                    await synthesize(
-                        sweeper_text,
-                        sweeper_voice,
-                        audio_path,
-                        engine=sweeper_engine,
-                        edge_fallback_voice=sweeper_fallback,
-                        state=state,
-                    )
-                    loop = asyncio.get_running_loop()
-                    sting_path = config.tmp_dir / f"sweeper_sting_{uuid4().hex[:8]}.mp3"
-                    imaging_lib = _make_imaging_lib(config)
-                    mixed_path = config.tmp_dir / f"sweeper_mixed_{uuid4().hex[:8]}.mp3"
-                    dry_sweeper_path = audio_path
-                    try:
-                        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
-                        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
-                    except Exception:
-                        mixed_path.unlink(missing_ok=True)
-                        dry_sweeper_path.unlink(missing_ok=True)
-                        raise
-                    finally:
-                        sting_path.unlink(missing_ok=True)
-                    dry_sweeper_path.unlink(missing_ok=True)
-                    audio_path = mixed_path
+                    audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
                     continue
@@ -3373,6 +3424,7 @@ async def run_producer(
                 and actual_seg_type is not None
                 and _crosses_music_speech_boundary(prev_seg_type, actual_seg_type)
                 and not segment.metadata.get("has_music_tail")
+                and not segment.metadata.get("rescue")
             ):
                 try:
                     loop = asyncio.get_running_loop()

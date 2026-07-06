@@ -1135,8 +1135,8 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_tone_failure_is_contained(tmp_path):
-    """When both download and emergency tone generation fail, producer continues without crashing."""
+async def test_error_recovery_emergency_tone_failure_is_contained(tmp_path):
+    """When download, recovery sweeper, and emergency tone fail, producer continues."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -1162,8 +1162,13 @@ async def test_error_recovery_tone_failure_is_contained(tmp_path):
         ),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
         patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, side_effect=RuntimeError("tts down")),
         patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
-        patch(f"{MODULE}.generate_silence", create=True) as mock_silence,
+        patch(
+            f"{MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -1185,19 +1190,32 @@ async def test_consecutive_failures_increment_counter(tmp_path):
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
         patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
-        patch(f"{MODULE}.generate_tone", side_effect=_fake_path),
-        patch(f"{MODULE}.generate_silence", create=True) as mock_silence,
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(
+            f"{MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
     mock_silence.assert_not_called()
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
     assert state.failed_segments >= 1
 
 
