@@ -118,6 +118,12 @@ _HA_CONTEXT_COLD_LOAD_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
+class _PendingRitualInterrupt:
+    match: RitualRecipeMatch
+    spec: InterruptSpec
+
+
+@dataclass(frozen=True)
 class RenderedMusicTrack:
     track: Track
     path: Path
@@ -1660,10 +1666,10 @@ def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatc
 def _apply_ritual_recipe_matches(
     state: StationState,
     matches: list[RitualRecipeMatch],
-) -> tuple[list[HomeEvent], InterruptSpec | None]:
+) -> tuple[list[HomeEvent], _PendingRitualInterrupt | None]:
     """Apply bundled ritual recipe matches to existing delivery lanes."""
     gag_events: list[HomeEvent] = []
-    interrupt: InterruptSpec | None = None
+    interrupt: _PendingRitualInterrupt | None = None
     for match in matches:
         lane = match.recipe.delivery_lane
         if lane == "running_gag":
@@ -1674,18 +1680,19 @@ def _apply_ritual_recipe_matches(
         if lane == "interrupt":
             if (
                 interrupt is not None
-                or state.ha_pending_directive
                 or state.chaos_pending is not None
                 or state.operator_force_pending is not None
                 or state.force_next is not None
             ):
                 continue
-            interrupt = InterruptSpec(
-                directive=match.recipe.directive,
-                urgency=match.recipe.interrupt_urgency,
-                cooldown=match.recipe.cooldown_seconds,
+            interrupt = _PendingRitualInterrupt(
+                match=match,
+                spec=InterruptSpec(
+                    directive=match.recipe.directive,
+                    urgency=match.recipe.interrupt_urgency,
+                    cooldown=match.recipe.cooldown_seconds,
+                ),
             )
-            commit_ritual_recipe_match(match)
             continue
         if lane != "directive" or not match.recipe.directive:
             continue
@@ -2180,14 +2187,16 @@ async def run_producer(
             radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
             ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
             if ritual_interrupt is not None:
-                await _fire_interrupt(
+                fired = await _fire_interrupt(
                     state,
-                    ritual_interrupt,
+                    ritual_interrupt.spec,
                     queue,
                     skip_event,
                     enforce_global_cooldown=True,
                     bridge_tmp_dir=config.tmp_dir,
                 )
+                if fired:
+                    commit_ritual_recipe_match(ritual_interrupt.match)
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,

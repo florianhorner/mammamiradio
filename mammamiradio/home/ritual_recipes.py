@@ -34,6 +34,7 @@ _RITUAL_COOLDOWNS: dict[str, float] = {}
 _INJECTION_RE = re.compile(r"(ignore previous|disregard|system override|forget your)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 @dataclass(frozen=True)
@@ -249,7 +250,12 @@ def audit_ritual_recipes(
     for recipe in selected_recipes:
         evidence: list[str] = []
         for pattern in recipe.evidence_patterns:
-            if any(_pattern_selects_entity(pattern, entity_id, data) for entity_id, data in state_map.items()):
+            if any(
+                isinstance(data, Mapping)
+                and not _is_denied_entity(entity_id, data)
+                and _pattern_selects_entity(pattern, entity_id, data)
+                for entity_id, data in state_map.items()
+            ):
                 evidence.append(pattern.label)
                 continue
             if event_texts and any(_pattern_keywords_match(pattern, text) for text in event_texts):
@@ -307,7 +313,25 @@ def _pattern_selects_entity(pattern: RitualEvidencePattern, entity_id: str, stat
 def _pattern_keywords_match(pattern: RitualEvidencePattern, text: str) -> bool:
     if not pattern.keywords:
         return False
-    return any(keyword.casefold() in text for keyword in pattern.keywords)
+    text_tokens = _tokenize_keyword_text(text)
+    if not text_tokens:
+        return False
+    return any(_contains_token_phrase(text_tokens, _tokenize_keyword_text(keyword)) for keyword in pattern.keywords)
+
+
+def _tokenize_keyword_text(text: str) -> tuple[str, ...]:
+    return tuple(_WORD_RE.findall(text.replace("_", " ").replace("-", " ").casefold()))
+
+
+def _contains_token_phrase(text_tokens: tuple[str, ...], keyword_tokens: tuple[str, ...]) -> bool:
+    if not keyword_tokens:
+        return False
+    if len(keyword_tokens) == 1:
+        return keyword_tokens[0] in text_tokens
+    phrase_len = len(keyword_tokens)
+    return any(
+        text_tokens[index : index + phrase_len] == keyword_tokens for index in range(len(text_tokens) - phrase_len + 1)
+    )
 
 
 def _match_pattern_transition(
@@ -579,8 +603,20 @@ DEFAULT_RITUAL_RECIPES: tuple[RitualRecipe, ...] = (
             RitualEvidencePattern(
                 id="sleep_state_changed",
                 label="sleep state changes",
-                domains=("binary_sensor", "sensor", "input_select"),
-                keywords=("sleep", "schlaf", "bed", "bett", "wake"),
+                domains=("sensor", "input_select", "select"),
+                keywords=("sleep", "sleeping", "asleep", "schlaf", "bed", "bett", "wake", "awake"),
+                to_states=(
+                    "asleep",
+                    "sleeping",
+                    "sleep",
+                    "schlafen",
+                    "occupied",
+                    "awake",
+                    "waking",
+                    "wake",
+                    "woke",
+                    "up",
+                ),
                 confidence=0.7,
             ),
             RitualEvidencePattern(
@@ -799,7 +835,7 @@ DEFAULT_RITUAL_RECIPES: tuple[RitualRecipe, ...] = (
             RitualEvidencePattern(
                 id="away_mode_enabled",
                 label="away mode enabled",
-                domains=("alarm_control_panel", "input_select", "select"),
+                domains=("input_select", "select"),
                 keywords=("away", "abwesend", "alarm", "mode"),
                 to_states=("armed_away", "away", "on"),
                 confidence=0.65,

@@ -1159,6 +1159,8 @@ def _ha_ctx_mock():
     ctx.events_summary = ""
     ctx.events = []
     ctx.raw_states = {}
+    ctx.scored = []
+    ctx.timestamp = 0.0
     ctx.mood = ""
     ctx.weather_arc = ""
     ctx.mood_en = ""
@@ -1166,6 +1168,9 @@ def _ha_ctx_mock():
     ctx.events_summary_en = ""
     ctx.last_event_label_en = ""
     ctx.radio_events = []
+    ctx.ritual_recipe_matches = []
+    ctx.ritual_public_families = []
+    ctx.ritual_recipe_audit = []
     return ctx
 
 
@@ -1312,11 +1317,102 @@ def test_ritual_recipe_safety_interrupt_preserves_interrupt_lane():
         gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
 
     assert gag_events == []
-    assert isinstance(interrupt, InterruptSpec)
-    assert interrupt.urgency == "urgent"
-    assert "Safety moment" in interrupt.directive
+    assert interrupt is not None
+    assert interrupt.match is matches[0]
+    assert isinstance(interrupt.spec, InterruptSpec)
+    assert interrupt.spec.urgency == "urgent"
+    assert "Safety moment" in interrupt.spec.directive
     assert state.ha_pending_directive == ""
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_safety_interrupt_can_supersede_existing_directive():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=310.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is not None
+    assert interrupt.match is matches[0]
+    assert interrupt.spec.urgency == "urgent"
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_producer_commits_ritual_interrupt_cooldown_only_after_interrupt_fires():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=320.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True) as fire,
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    fire.assert_awaited_once()
+    assert isinstance(fire.await_args.args[1], InterruptSpec)
     commit.assert_called_once_with(matches[0])
+
+
+@pytest.mark.asyncio
+async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_suppresses():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=330.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False) as fire,
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    fire.assert_awaited_once()
+    commit.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -91,6 +91,103 @@ def test_safety_recipe_uses_interrupt_lane_and_public_coarse_label():
     assert match.to_status_dict()["entity_id"] == "binary_sensor.sink_leak"
 
 
+def test_sleep_wake_ignores_incidental_bedroom_entities():
+    previous = {
+        "binary_sensor.bedroom_window": _state(
+            "off",
+            device_class="window",
+            friendly_name="Bedroom window",
+        ),
+        "sensor.bedroom_temperature": _state("20", friendly_name="Bedroom temperature"),
+    }
+    current = {
+        "binary_sensor.bedroom_window": _state(
+            "on",
+            device_class="window",
+            friendly_name="Bedroom window",
+        ),
+        "sensor.bedroom_temperature": _state("21", friendly_name="Bedroom temperature"),
+    }
+
+    matches = match_ritual_recipes(None, previous, current, now=350.0)
+
+    assert all(match.recipe.id != "sleep_wake" for match in matches)
+
+
+def test_sleep_wake_still_matches_sleep_helpers_and_bed_occupancy():
+    previous = {
+        "input_select.sleep_mode": _state("awake", friendly_name="Sleep mode"),
+        "binary_sensor.bed_occupancy": _state(
+            "off",
+            device_class="occupancy",
+            friendly_name="Bed occupancy",
+        ),
+    }
+    current = {
+        "input_select.sleep_mode": _state("asleep", friendly_name="Sleep mode"),
+        "binary_sensor.bed_occupancy": _state(
+            "on",
+            device_class="occupancy",
+            friendly_name="Bed occupancy",
+        ),
+    }
+
+    matches = match_ritual_recipes(None, previous, current, now=360.0)
+
+    assert [match.recipe.id for match in matches] == ["sleep_wake"]
+    assert matches[0].pattern.id in {"sleep_state_changed", "bed_occupancy_changed"}
+
+
+def test_keyword_matching_requires_word_or_phrase_boundary():
+    previous = {"binary_sensor.plant_watering": _state("off", friendly_name="Plant watering")}
+    current = {"binary_sensor.plant_watering": _state("on", friendly_name="Plant watering")}
+
+    matches = match_ritual_recipes(None, previous, current, now=370.0)
+
+    assert all(match.recipe.id != "vacuum_doorbell_protocol" for match in matches)
+    assert any(match.recipe.id == "pets_plants_optional" for match in matches)
+
+
+def test_multiword_keyword_recipes_still_match():
+    previous = {
+        "binary_sensor.front_door": _state("off", device_class="door", friendly_name="Front door"),
+        "media_player.music_assistant": _state(
+            "playing",
+            friendly_name="Music Assistant speaker",
+            source="Mamma Mi Radio",
+        ),
+        "input_select.house_sitter_mode": _state("home", friendly_name="House sitter mode"),
+    }
+    current = {
+        "binary_sensor.front_door": _state("on", device_class="door", friendly_name="Front door"),
+        "media_player.music_assistant": _state(
+            "playing",
+            friendly_name="Music Assistant speaker",
+            source="Suspicious Other Station",
+        ),
+        "input_select.house_sitter_mode": _state("housesitter", friendly_name="House sitter mode"),
+    }
+
+    matches = match_ritual_recipes(None, previous, current, now=380.0)
+    matched_ids = {match.recipe.id for match in matches}
+
+    assert {"safety_saves", "media_betrayal", "vacation_house_sitter"}.issubset(matched_ids)
+
+
+def test_away_mode_ignores_alarm_panel_but_matches_select_helpers():
+    alarm_previous = {"alarm_control_panel.home": _state("disarmed", friendly_name="Home alarm")}
+    alarm_current = {"alarm_control_panel.home": _state("armed_away", friendly_name="Home alarm")}
+
+    assert match_ritual_recipes(None, alarm_previous, alarm_current, now=390.0) == []
+
+    helper_previous = {"input_select.house_mode": _state("home", friendly_name="House away mode")}
+    helper_current = {"input_select.house_mode": _state("away", friendly_name="House away mode")}
+
+    matches = match_ritual_recipes(None, helper_previous, helper_current, now=391.0)
+
+    assert [match.recipe.id for match in matches] == ["vacation_house_sitter"]
+
+
 def test_noise_device_classes_do_not_become_recipe_moments():
     previous = {
         "sensor.router_rssi": _state("-60", device_class="signal_strength", friendly_name="Kitchen RSSI"),
@@ -131,3 +228,21 @@ def test_audit_reports_instrumented_and_opportunity_recipes():
     assert chores["status"] == "instrumented"
     assert "mailbox opens" in chores["local_evidence"]
     assert pets["status"] == "opportunity"
+
+
+def test_recipe_audit_ignores_privacy_denied_alarm_panel_entities():
+    alarm_audit = audit_ritual_recipes(
+        states={
+            "alarm_control_panel.home": _state("armed_away", friendly_name="Home alarm"),
+        }
+    )
+    alarm_item = next(item for item in alarm_audit if item["recipe_id"] == "vacation_house_sitter")
+    assert alarm_item["status"] == "opportunity"
+
+    helper_audit = audit_ritual_recipes(
+        states={
+            "input_select.house_mode": _state("away", friendly_name="House away mode"),
+        }
+    )
+    helper_item = next(item for item in helper_audit if item["recipe_id"] == "vacation_house_sitter")
+    assert helper_item["status"] == "instrumented"
