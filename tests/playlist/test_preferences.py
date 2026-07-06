@@ -27,6 +27,11 @@ def test_corrupt_or_non_dict_json_returns_empty(tmp_path, raw):
     assert load_preferences(tmp_path) == {}
 
 
+def test_invalid_utf8_file_returns_empty(tmp_path):
+    preferences_path(tmp_path).write_bytes(b"\xff\xfe not valid utf-8")
+    assert load_preferences(tmp_path) == {}
+
+
 def test_save_then_load_roundtrip_uses_unit_separator_keys(tmp_path):
     preferences = {
         ("mina", "se telefonando"): preference_meta(

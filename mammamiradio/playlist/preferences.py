@@ -187,7 +187,7 @@ def load_preferences(cache_dir: Path | str) -> dict[PreferenceKey, PreferenceMet
     path = preferences_path(cache_dir)
     try:
         raw = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
         return {}
     try:
         data = json.loads(raw)

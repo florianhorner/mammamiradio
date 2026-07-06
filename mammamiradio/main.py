@@ -349,6 +349,7 @@ async def startup():
             pre_blocklist_count - len(tracks),
         )
     song_preferences = load_preferences(config.cache_dir)
+    logger.info("Song preferences: loaded %d preference(s)", len(song_preferences))
 
     persisted_heading = read_persisted_heading(config.cache_dir)
     pending_direction_targets: list[dict[str, str]] = []

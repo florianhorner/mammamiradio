@@ -226,6 +226,78 @@ async def test_post_preference_targets_playlist_index_without_interrupting_playb
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("index", [-1, 99])
+async def test_post_preference_rejects_out_of_range_index(tmp_path: Path, index: int) -> None:
+    app = _make_app(tmp_path)
+    before = _seed_non_destructive_boundary(app)
+
+    async with _client(app) as client:
+        response = await client.post("/api/track/preference", json={"index": index, "vote": "up"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"] == "Invalid song index."
+    assert app.state.station_state.song_preferences == {}
+    _assert_preference_kept_playback_intact(app, before)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"vote": "up"},
+        {"now_playing": True, "index": 0, "vote": "up"},
+    ],
+)
+async def test_post_preference_rejects_missing_or_ambiguous_target(tmp_path: Path, payload: dict[str, Any]) -> None:
+    app = _make_app(tmp_path)
+    before = _seed_non_destructive_boundary(app)
+
+    async with _client(app) as client:
+        response = await client.post("/api/track/preference", json=payload)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"] == "Choose exactly one preference target."
+    assert app.state.station_state.song_preferences == {}
+    _assert_preference_kept_playback_intact(app, before)
+
+
+@pytest.mark.asyncio
+async def test_post_preference_rejects_invalid_vote_without_side_effects(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    before = _seed_non_destructive_boundary(app)
+
+    async with _client(app) as client:
+        response = await client.post("/api/track/preference", json={"index": 1, "vote": "maybe"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"] == "Preference vote must be up, down, or clear."
+    assert app.state.station_state.song_preferences == {}
+    _assert_preference_kept_playback_intact(app, before)
+
+
+@pytest.mark.asyncio
+async def test_repeated_identical_vote_does_not_bump_revision(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    before = _seed_non_destructive_boundary(app)
+
+    async with _client(app) as client:
+        first = await _post_preference(client, {"index": 1, "vote": "down"})
+        second = await _post_preference(client, {"index": 1, "vote": "down"})
+
+    assert first["preference_revision"] == 1
+    assert second["preference_revision"] == 1
+    assert second["score"] == -1
+    assert app.state.station_state.song_preferences[("al bano", "felicita")]["score"] == -1
+    _assert_preference_kept_playback_intact(app, before)
+
+
+@pytest.mark.asyncio
 async def test_post_preference_targets_explicit_key_without_interrupting_playback(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     before = _seed_non_destructive_boundary(app)
