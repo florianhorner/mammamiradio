@@ -4798,7 +4798,7 @@ def _public_status_payload(request: Request) -> dict:
     upcoming_mode = "queued" if upcoming else "building"
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
-    if state.ha_context:
+    if state.ha_context or state.ha_ritual_public_families:
         ha_moments = {
             "connected": True,
             "mood": state.ha_home_mood or None,
@@ -4810,8 +4810,15 @@ def _public_status_payload(request: Request) -> dict:
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+        if state.ha_ritual_public_families:
+            ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         # Hide card if nothing interesting to show
-        if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
+        if (
+            not ha_moments.get("mood")
+            and not ha_moments.get("weather")
+            and not ha_moments.get("last_event_label")
+            and not ha_moments.get("ritual_families")
+        ):
             ha_moments = None
 
     playback = _status_now_playback(state.now_streaming, now_ts)
