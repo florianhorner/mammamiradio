@@ -272,6 +272,7 @@ def test_switch_playlist_clears_listener_request_state():
     assert consumed["message"] == "ciao"
     assert consumed["type"] == "shoutout"
     assert consumed["status"] == "source_changed"
+    assert consumed["song_error_reason"] == ""
     assert list(state.pending_actions) == []
     assert state._listener_request_rl == {}
     assert state.pinned_track is None

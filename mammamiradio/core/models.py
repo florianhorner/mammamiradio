@@ -950,6 +950,7 @@ class StationState:
                     "song_track": request.get("song_track"),
                     "type": request.get("type"),
                     "status": "source_changed",
+                    "song_error_reason": "",
                     "consumed_at": now,
                 }
             )
