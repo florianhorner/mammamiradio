@@ -67,6 +67,7 @@ def test_paginated_tracks_serializes_page_and_revision():
                 "year": 2001,
                 "youtube_id": "",
                 "duration_ms": 180_000,
+                "heading_id": "",
             }
         ],
         "total": 3,
@@ -75,6 +76,14 @@ def test_paginated_tracks_serializes_page_and_revision():
         "has_more": True,
         "revision": 7,
     }
+
+
+def test_serialize_track_includes_heading_id_for_admin_hunt_rows():
+    track = Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="id-1", heading_id="hunt-1")
+
+    payload = status_payload._serialize_track(track)
+
+    assert payload["heading_id"] == "hunt-1"
 
 
 def test_status_now_playback_redacts_internal_metadata_and_reports_progress():

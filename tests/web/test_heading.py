@@ -286,7 +286,9 @@ async def test_direction_sets_existing_track_heading_and_persists(tmp_path):
     assert state.heading.targets == [{"artist": "Britney Spears", "title": "Toxic"}]
     assert read_persisted_heading(tmp_path) == state.heading
     assert status.json()["heading"]["label"] == "2000s female vocals"
+    assert status.json()["heading"]["tagged_count"] == 1
     assert status.json()["heading"]["selection_remaining"] == 1
+    assert status.json()["playlist"][0]["heading_id"] == state.heading.id
 
 
 @pytest.mark.asyncio
