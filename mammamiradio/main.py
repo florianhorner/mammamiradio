@@ -112,8 +112,12 @@ async def _restore_direction_targets_background(app_state, heading_id: str, raw_
         targets = target_dicts_to_targets(raw_targets)
         if not targets:
             return
-        resolved_tracks = await resolve_direction_tracks(targets)
         state = app_state.station_state
+        resolved_tracks = await resolve_direction_tracks(
+            targets,
+            playlist=list(state.playlist),
+            pacing=app_state.config.pacing,
+        )
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
         download_tracks = []
         async with app_state.source_switch_lock:
@@ -158,6 +162,8 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
     admission = admit_restart_handoff_entries(
         config.cache_dir,
         blocklist=state.blocklist,
+        playlist=state.playlist,
+        pacing=config.pacing,
     )
     accepted = 0
     for segment in admission.to_segments(config.cache_dir):

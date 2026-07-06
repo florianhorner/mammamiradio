@@ -101,6 +101,19 @@ def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
     assert "Course:" not in block
 
 
+def test_record_hunt_matches_are_visible_in_rotation_rows() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "updatePl")
+
+    assert "const activeHeadingId=_st?.heading?.active?_st.heading.id:''" in block
+    assert "t.heading_id" in block
+    assert "record-hunt-match" in block
+    assert "Hunt pick" in block
+    assert "Favored for the current Record Hunt" in block
+    assert ".pl-row.record-hunt-match" in html
+    assert ".pl-row.record-hunt-match .pl-a { opacity: 1; }" in html
+
+
 def test_record_hunt_busywork_rotates_fake_back_room_status() -> None:
     html = _read_admin_html()
 
@@ -332,11 +345,21 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
 
     for expected in (
         "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
-        "statusInline('blocked','not found')",
+        "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
+    html = _read_admin_html()
+    assert "not a single-track song" in html
+    assert "not a song" in html
+    assert "Not a song" in html
+    assert "Banned song" in html
+    assert "download failed" in html
+    assert "Download failed" in html
+    assert "cancelled" in html
+    assert "Cancelled" in html
     # ensure double-glyph pattern is gone
     assert "'▶ '" not in block
 

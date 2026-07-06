@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mammamiradio.core.config import load_config
-from mammamiradio.core.models import StationState
+from mammamiradio.core.config import PacingSection, load_config
+from mammamiradio.core.models import StationState, Track
+from mammamiradio.playlist import direction as direction_module
 from mammamiradio.playlist.direction import (
     DirectionTarget,
     expand_direction,
@@ -89,6 +90,29 @@ def test_resolve_direction_tracks_sync_uses_canonical_target_artist_title(monkey
     assert tracks[0].youtube_id == "abc12345678"
 
 
+def test_resolve_direction_tracks_sync_skips_bad_resolution(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert max_results == 1
+        return [
+            {"youtube_id": f"{query[:3].lower()}12345678", "title": query, "artist": "Uploader", "duration_ms": 180_000}
+        ]
+
+    def fake_resolve(target: DirectionTarget, metadata: list[dict], **_kwargs):
+        assert metadata
+        if target.artist == "Bad":
+            raise RuntimeError("malformed metadata")
+        return direction_module.DirectionResolution(
+            track=Track(title=target.title, artist=target.artist, youtube_id="good1234567", duration_ms=180_000)
+        )
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+    monkeypatch.setattr(direction_module, "resolve_direction_search_results", fake_resolve)
+
+    tracks = resolve_direction_tracks_sync([DirectionTarget("Bad", "Song"), DirectionTarget("Good", "Song")])
+
+    assert [(track.artist, track.title) for track in tracks] == [("Good", "Song")]
+
+
 @pytest.mark.asyncio
 async def test_resolve_direction_tracks_concurrent_dedupes(monkeypatch):
     """The async (background-restore) resolver searches targets concurrently, keeps
@@ -107,6 +131,68 @@ async def test_resolve_direction_tracks_concurrent_dedupes(monkeypatch):
     tracks = await resolve_direction_tracks(targets)
 
     assert {(t.artist, t.title) for t in tracks} == {("Artist One", "Song One"), ("Artist Two", "Song Two")}
+
+
+@pytest.mark.asyncio
+async def test_resolve_direction_tracks_searches_deeper_and_skips_longform(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert query == "FKJ Tadow"
+        assert max_results == 5
+        return [
+            {
+                "youtube_id": "set00000001",
+                "title": "FKJ - Tadow DJ Set Full Album",
+                "artist": "FKJ",
+                "duration_ms": 7_200_000,
+            },
+            {
+                "youtube_id": "song0000001",
+                "title": "FKJ - Tadow official audio",
+                "artist": "FKJ",
+                "duration_ms": 240_000,
+            },
+        ]
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+
+    tracks = await resolve_direction_tracks(
+        [DirectionTarget("FKJ", "Tadow")],
+        playlist=[Track(title="Base", artist="Base", duration_ms=200_000, youtube_id="base0000001")],
+        pacing=PacingSection(songs_between_banter=2),
+    )
+
+    assert [track.youtube_id for track in tracks] == ["song0000001"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_direction_tracks_skips_unknown_duration_when_admission_enabled(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert query == "FKJ Tadow"
+        assert max_results == 5
+        return [
+            {
+                "youtube_id": "unknown0001",
+                "title": "FKJ - Tadow",
+                "artist": "FKJ",
+                "duration_ms": None,
+            },
+            {
+                "youtube_id": "song0000001",
+                "title": "FKJ - Tadow official audio",
+                "artist": "FKJ",
+                "duration_ms": 240_000,
+            },
+        ]
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+
+    tracks = await resolve_direction_tracks(
+        [DirectionTarget("FKJ", "Tadow")],
+        playlist=[Track(title="Base", artist="Base", duration_ms=200_000, youtube_id="base0000001")],
+        pacing=PacingSection(songs_between_banter=2),
+    )
+
+    assert [track.youtube_id for track in tracks] == ["song0000001"]
 
 
 @pytest.mark.asyncio
