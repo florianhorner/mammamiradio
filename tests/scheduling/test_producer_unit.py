@@ -793,6 +793,8 @@ async def test_error_recovery_inserts_recovery_sweeper_when_no_canned_clips(tmp_
 @pytest.mark.asyncio
 async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_sweeper(caplog):
     """When recovery/banter/welcome clips are unavailable, producer logs and inserts a sweeper."""
+    from mammamiradio.scheduling import producer
+
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -808,23 +810,35 @@ async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_swe
         return None
 
     caplog.set_level(logging.WARNING, logger="mammamiradio.scheduling.producer")
-    with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
-        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
-        patch(
-            f"{PRODUCER_MODULE}.generate_silence",
-            side_effect=AssertionError("silence should never be a producer recovery fallback"),
-            create=True,
-        ) as mock_silence,
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
-    ):
-        await _run_until_queued(queue, state, config)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network down"),
+            ),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+    finally:
+        producer._last_music_file = orig_last_music
 
     assert picked_subdirs[:3] == ["recovery", "banter", "welcome"]
-    assert any("No packaged recovery clips or norm cache available" in record.message for record in caplog.records)
+    assert any(
+        "No packaged recovery clips, norm cache, or last-known-good music available" in record.message
+        for record in caplog.records
+    )
     mock_silence.assert_not_called()
 
 
