@@ -4795,13 +4795,8 @@ def _public_status_payload(request: Request) -> dict:
     start_time = getattr(request.app.state, "start_time", None) or 0
     uptime_sec = round(time.time() - start_time) if start_time else 0
     now_ts = time.time()
-    if state.queued_segments:
-        upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
-    else:
-        upcoming = [
-            {**item, "source": "predicted_from_playlist"}
-            for item in preview_upcoming(state, config.pacing, state.playlist, count=8)
-        ]
+    upcoming = [{**item, "source": "rendered_queue"} for item in state.queued_segments[:8]]
+    upcoming_mode = "queued" if upcoming else "building"
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
     if state.ha_context:
@@ -4832,7 +4827,7 @@ def _public_status_payload(request: Request) -> dict:
         "session_stopped": state.session_stopped,
         "stream_log": [_serialize_stream_log_entry(e) for e in state.stream_log],
         "upcoming": upcoming,
-        "upcoming_mode": "queued" if upcoming else "building",
+        "upcoming_mode": upcoming_mode,
         "stream": {
             "frequency": config.brand.frequency,
             "bitrate_kbps": audio_format["bitrate_kbps"],
@@ -5150,7 +5145,7 @@ async def readyz(request: Request):
 
 @router.get("/public-status")
 async def public_status(request: Request):
-    """Return listener-safe station metadata and upcoming segment previews."""
+    """Return listener-safe station metadata and render-ready upcoming segments."""
     return _public_status_payload(request)
 
 

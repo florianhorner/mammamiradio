@@ -448,21 +448,26 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
     )
     original_sleep = asyncio.sleep
     backoff_snapshots: list[tuple[int, SegmentType | None, int]] = []
+    backoff_seen = asyncio.Event()
 
     async def _record_sleep(delay: float, *_args, **_kwargs):
         if delay == EXPECTED_CONSECUTIVE_FAILURE_BACKOFF:
             backoff_snapshots.append((queue.qsize(), state.operator_force_pending, len(state.queued_segments)))
+            backoff_seen.set()
         await original_sleep(0)
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        # This test is about operator recovery queue ordering. Keep the unrelated
+        # transition-stinger path from trying to inspect the fake MP3 fixture.
+        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await _wait_for(lambda: bool(backoff_snapshots))
+            await asyncio.wait_for(backoff_seen.wait(), timeout=5.0)
             assert backoff_snapshots[0] == (2, None, 2)
             rescue = queue.get_nowait()
             placeholder = queue.get_nowait()

@@ -5,9 +5,22 @@ party UI (Music Assistant provider, custom HA card, etc.), the v1
 contract gives you a stable shape that's allowed to evolve without
 breaking listener-facing UI.
 
-`/public-status` keeps its current shape — migration is not time-critical.
+`/public-status` keeps its legacy top-level fields — migration is not time-critical.
+Its `upcoming` list now contains only render-ready queued audio. When no
+rendered segment is ready, it is empty with `upcoming_mode: "building"`; inspect
+`session_stopped` and `golden_path.stage` to distinguish stopped, no-source, and
+still-building states. `current_source`, when present, is the loaded playlist
+source.
 But every new third-party integration should target the v1 contract from
 day one.
+
+## Empty queue decision table
+
+| Signal | Meaning | UI action |
+| --- | --- | --- |
+| `session_stopped == true` | Operator paused the station. | Show stopped/off-air copy. |
+| `golden_path.stage == "needs_music_source"` | No music source is configured. | Prompt the operator to add a source. |
+| `upcoming_mode == "building"` and `golden_path.stage != "needs_music_source"` | Producer is preparing render-ready audio. | Show a temporary building/preparing state. |
 
 ## Field-by-field mapping
 
@@ -28,10 +41,10 @@ day one.
 | `now_streaming.metadata.youtube_id` | `now_playing.external_ids.youtube` | Same — provider keyed, no `_id` suffix. |
 | `now_streaming.metadata.host` | `now_playing.host` | Lifted; only populated for `segment_class: "voice"`. |
 | `now_streaming.metadata.*` (other internal fields) | (filtered) | **Internal fields no longer leak.** Allowlist locks the set of forwarded keys. |
-| `upcoming[]` | `up_next[]` | Renamed; shape simplified. |
+| `upcoming[]` | `up_next[]` filtered to `predicted === false` | Renamed; shape simplified. |
 | `upcoming[].type` | `up_next[].segment_type` | Same rename. |
 | `upcoming[].label` | `up_next[].title` | Same rename. |
-| `upcoming[].source` (`"rendered_queue"`/`"predicted_from_playlist"`) | `up_next[].predicted` (bool) | Reshaped to a single bool. `false` = queued for real, `true` = scheduler's best guess. |
+| `upcoming[].source` (`"rendered_queue"`) | `up_next[].predicted` (bool) | `/public-status` only lists queued-for-real audio. For the same honest queue in v1, use only `predicted === false` rows. Rows with `predicted: true` are scheduler guesses and may appear even when no rendered audio is ready. |
 | `session_stopped` (bool) | `session_state` (`"live"`/`"stopped"`/`"empty_queue"`) | Lifted to an enum that distinguishes "stopped" from "still booting / empty queue". |
 | `stream.audio_format` | `stream.audio_format` | Same shape. |
 | (none) | `stream.relative_url` | **New.** Canonical path component; resolve against your mammamiradio host. |
@@ -67,15 +80,35 @@ New code:
 
 ```python
 import requests
-r = requests.get("http://host:8000/api/integrations/v1/now-playing")
+r = requests.get("http://host:8000/api/integrations/v1/now-playing", timeout=5)
+r.raise_for_status()
 data = r.json()
 np = data["now_playing"]
+rendered_queue = [item for item in data["up_next"] if not item["predicted"]]
 if np and np["segment_class"] == "music":
     show_track(np["title"], np["artist"], np["artwork"])
 elif np and np["segment_class"] == "voice":
     show_host_card(np["host"])
 elif data["session_state"] == "stopped":
     show_off_air()
+if rendered_queue:
+    show_up_next(rendered_queue)
+elif data["session_state"] != "stopped":
+    show_building_queue()
+```
+
+JavaScript queue-only equivalent:
+
+```js
+const r = await fetch('/api/integrations/v1/now-playing');
+if (!r.ok) throw new Error(`mammamiradio status failed: ${r.status}`);
+const data = await r.json();
+const renderedQueue = data.up_next.filter((item) => item.predicted === false);
+if (renderedQueue.length) {
+  showUpNext(renderedQueue);
+} else if (data.session_state !== 'stopped') {
+  showBuildingQueue();
+}
 ```
 
 ## Drift detection
