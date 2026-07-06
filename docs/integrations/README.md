@@ -45,8 +45,10 @@ voice/interstitial segments without faking music metadata.
 
 ## Auth model
 
-- **v1:** unauthenticated. Same as `/public-status`. The endpoint returns
-  the same data any listener can see via the public stream.
+- **v1:** unauthenticated. Same trust boundary as `/public-status`: it only
+  returns listener-safe status. Its `up_next` list may include scheduler
+  predictions, so consumers that need render-ready audio should filter to
+  `predicted === false`.
 - **v1.1 (reserved):** an optional `X-Integration-Token` header may be
   added for rate-limit lifting and access to consumer-specific telemetry.
   Unauthenticated clients will continue to work.
@@ -55,8 +57,13 @@ voice/interstitial segments without faking music metadata.
 
 If you are an existing consumer polling `/public-status` for now-playing,
 read [migration-from-public-status.md](./migration-from-public-status.md)
-for the field-by-field mapping. `/public-status` will keep its current
-shape for the foreseeable future, so the migration is not time-critical.
+for the field-by-field mapping. `/public-status` will keep its legacy
+top-level fields for the foreseeable future, but `upcoming` now lists only
+render-ready queued audio. When it is empty with `upcoming_mode: "building"`,
+inspect `session_stopped` and `golden_path.stage` to distinguish stopped,
+no-source, and still-building states. `current_source`, when present, is the
+loaded playlist source; the migration guide includes the copy-paste decision
+table.
 
 ## Future endpoints
 

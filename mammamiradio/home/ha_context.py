@@ -1624,6 +1624,23 @@ _ha_push_lock: asyncio.Lock | None = None
 _DEFAULT_STATION_ARTWORK_URL = (
     "https://raw.githubusercontent.com/florianhorner/mammamiradio/main/ha-addon/mammamiradio/logo.png"
 )
+_HA_SEGMENT_TYPE_ICONS = {
+    "music": "mdi:music-note",
+    "banter": "mdi:microphone",
+    "ad": "mdi:bullhorn",
+    "news_flash": "mdi:newspaper",
+    "station_id": "mdi:radio-tower",
+    "sweeper": "mdi:waveform",
+    "time_check": "mdi:clock-outline",
+    "off": "mdi:power-standby",
+}
+_HA_SEGMENT_TYPE_FALLBACK_ICON = "mdi:radio"
+
+
+def _segment_type_icon(segment_type: object) -> str:
+    """Return the HA icon for a pushed segment-type sensor state."""
+    key = str(segment_type or "").strip().lower()
+    return _HA_SEGMENT_TYPE_ICONS.get(key, _HA_SEGMENT_TYPE_FALLBACK_ICON)
 
 
 def _get_ha_push_lock() -> asyncio.Lock:
@@ -1753,6 +1770,7 @@ async def push_state_to_ha(
 
         media_attrs: dict = {
             "friendly_name": station_name,
+            "icon": "mdi:radio",
             "supported_features": 0,
             "media_title": media_title,
             "media_artist": media_artist,
@@ -1788,7 +1806,10 @@ async def push_state_to_ha(
                 "sensor.mammamiradio_segment_type",
                 {
                     "state": segment_type,
-                    "attributes": {"friendly_name": f"{station_name} Segment Type"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} Segment Type",
+                        "icon": _segment_type_icon(segment_type),
+                    },
                 },
             ),
             (
@@ -1797,6 +1818,7 @@ async def push_state_to_ha(
                     "state": listeners_active,
                     "attributes": {
                         "friendly_name": f"{station_name} Listeners",
+                        "icon": "mdi:account-group",
                         "unit_of_measurement": "listeners",
                     },
                 },
@@ -1805,7 +1827,10 @@ async def push_state_to_ha(
                 "binary_sensor.mammamiradio_on_air",
                 {
                     "state": "off" if session_stopped else "on",
-                    "attributes": {"friendly_name": f"{station_name} On Air"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} On Air",
+                        "icon": "mdi:broadcast",
+                    },
                 },
             ),
         ]

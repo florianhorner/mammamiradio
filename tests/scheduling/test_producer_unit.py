@@ -294,6 +294,60 @@ async def test_sweeper_uses_configured_sweeper_engine():
 
 
 @pytest.mark.asyncio
+async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.sonic_brand.sweeper_voice = "marin"
+    config.sonic_brand.sweeper_engine = "openai"
+    config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+    line = "{station} resta in onda."
+    imaging = MagicMock()
+
+    def _write_sting(output_path: Path) -> Path:
+        output_path.write_bytes(b"sting")
+        return output_path
+
+    def _mix_sweeper(_voice_path: Path, _sting_path: Path, output_path: Path) -> Path:
+        output_path.write_bytes(b"mixed")
+        return output_path
+
+    async def _write_voice(_text: str, _voice: str, output_path: Path, **_kwargs) -> None:
+        output_path.write_bytes(b"voice")
+
+    imaging.pick_sweeper_sting.side_effect = _write_sting
+    with (
+        patch(f"{PRODUCER_MODULE}.random.choice", return_value=line),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_mix_sweeper) as mock_mix,
+    ):
+        segment = await producer._build_recovery_sweeper_segment(config, state)
+
+    assert segment.type == SegmentType.SWEEPER
+    assert segment.ephemeral is True
+    assert segment.path.name.startswith("recovery_sweeper_mixed_")
+    assert segment.path.read_bytes() == b"mixed"
+    assert segment.metadata == {
+        "type": "sweeper",
+        "text": "Mamma Mi Radio resta in onda.",
+        "title": "Recovery sweeper",
+        "error_recovery": True,
+        "rescue": True,
+    }
+    mock_synthesize.assert_awaited_once()
+    assert mock_synthesize.call_args.args[:2] == ("Mamma Mi Radio resta in onda.", "marin")
+    assert mock_synthesize.call_args.kwargs["engine"] == "openai"
+    assert mock_synthesize.call_args.kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
+    assert mock_synthesize.call_args.kwargs["state"] is state
+    imaging.pick_sweeper_sting.assert_called_once()
+    mock_mix.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()
     config = _make_config()
@@ -373,30 +427,37 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
 
 # ---------------------------------------------------------------------------
-# Error recovery — silence fallback
+# Error recovery — recovery sweeper fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_queues_silence():
-    """When download_track raises, producer inserts a silence segment and increments failed_segments."""
+async def test_error_recovery_queues_recovery_sweeper():
+    """When download_track raises, producer inserts a recovery sweeper before silence."""
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    # Segment type matches what was attempted (MUSIC), but metadata has error
-    assert seg.type == SegmentType.MUSIC
-    assert "error" in seg.metadata
+    assert seg.type == SegmentType.SWEEPER
+    assert seg.metadata.get("title") == "Recovery sweeper"
+    assert seg.metadata.get("rescue") is True
     assert state.failed_segments >= 1
 
 
@@ -430,7 +491,7 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
         second_download_started.set()
         await asyncio.Event().wait()
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -478,7 +539,7 @@ async def test_stopped_session_discards_finished_segment_without_advancing_state
         await allow_download_finish.wait()
         return source_audio
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -521,7 +582,7 @@ async def test_stopped_session_remains_stopped_until_resume(tmp_path):
     source_audio = tmp_path / "source.mp3"
     source_audio.write_bytes(b"fake audio")
 
-    def fake_normalize(src: Path, dst: Path) -> None:
+    def fake_normalize(src: Path, dst: Path, *_args, **_kwargs) -> None:
         dst.write_bytes(Path(src).read_bytes())
 
     with (
@@ -663,16 +724,17 @@ def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
-    """Outer run_producer handler falls through to silence when demo_assets/ is empty.
+async def test_error_recovery_inserts_recovery_sweeper_when_no_canned_clips(tmp_path):
+    """Outer run_producer handler falls through to recovery sweeper when demo_assets/ is empty.
 
     When produce_one_segment raises (music download fails), the outer handler
     tries _pick_canned_clip("banter") then _pick_canned_clip("welcome") before
-    generating silence.  With both directories empty, silence is the last resort.
+    synthesizing a branded recovery sweeper. Silence is reserved for failure of
+    that recovery sweeper.
 
     Note: banter TTS failures use `continue` internally and never reach the outer
-    handler.  This test uses MUSIC (whose failures propagate out) to exercise the
-    outer silence path with no canned-clip safety net.
+    handler. This test uses MUSIC (whose failures propagate out) to exercise the
+    outer recovery path with no canned-clip safety net.
     """
     from mammamiradio.scheduling import producer
 
@@ -682,6 +744,11 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     orig = producer._DEMO_ASSETS_DIR
     producer._DEMO_ASSETS_DIR = tmp_path
@@ -696,7 +763,10 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network down"),
             ),
-            patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")
+            ),
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
             await _run_until_queued(queue, state, config)
@@ -707,16 +777,23 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    assert "error" in seg.metadata
+    assert seg.type == SegmentType.SWEEPER
+    assert seg.metadata.get("title") == "Recovery sweeper"
+    assert seg.metadata.get("rescue") is True
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(caplog):
-    """When canned banter+welcome are unavailable, producer logs the banter-dir hint and inserts silence."""
+async def test_error_recovery_logs_missing_canned_clips_and_uses_recovery_sweeper(caplog):
+    """When canned banter+welcome are unavailable, producer logs and inserts a recovery sweeper."""
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     picked_subdirs: list[str] = []
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
 
     def _pick_none(subdir: str, state=None):
         picked_subdirs.append(subdir)
@@ -727,15 +804,14 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(capl
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path) as mock_silence,
+        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
     assert picked_subdirs[:2] == ["banter", "welcome"]
-    assert any("check assets/demo/banter/" in record.message for record in caplog.records)
-    assert mock_silence.call_count == 1
-    assert mock_silence.call_args.args[1] == 5.0
+    assert any("No canned clips available" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

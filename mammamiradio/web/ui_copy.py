@@ -58,7 +58,8 @@ COPY: dict[str, dict[str, str]] = {
         "np_on_air": "On Air",
         "np_now": "On now",
         "np_next": "Next",
-        "np_building": "Building schedule…",
+        "np_building": "The next records are being cued…",
+        "np_no_source": "No records are loaded yet — check back once the crate is filled.",
         "np_live": "Live",
         # Clip sharing — warm, in-character, and every error names the way out
         # (leadership principle #5). {s} is filled with the retry seconds by JS.
@@ -107,7 +108,8 @@ COPY: dict[str, dict[str, str]] = {
         "np_on_air": "In onda",
         "np_now": "Ora in onda",
         "np_next": "Prossimo",
-        "np_building": "In costruzione…",
+        "np_building": "I prossimi dischi sono in scaletta…",
+        "np_no_source": "Nessun disco pronto per ora — ripassa quando la scaletta è pronta.",
         "np_live": "In diretta",
         "clip_saving": "Sto salvando la clip…",
         "clip_copied": "Link copiato — incollalo dove vuoi per condividerlo.",
