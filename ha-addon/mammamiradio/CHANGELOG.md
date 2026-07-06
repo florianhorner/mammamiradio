@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
+
+## 2.16.0
+
+## 2.15.0 - 2026-07-06
+
 ### Added
 
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
@@ -33,8 +41,6 @@
 
 - **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-
-## 2.15.0
 
 ## 2.14.1 - 2026-06-21
 
