@@ -891,21 +891,22 @@ async def test_error_recovery_uses_canned_banter(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("error_recovery") is True
-    # failed_segments is reset to 0 after the recovery segment is queued successfully;
-    # confirming it is 0 here verifies the full success-reset path ran.
-    assert state.failed_segments == 0
+    # Recovery audio keeps the station on air, but it does not count as a true
+    # producer success: persistent primary failures still need backoff pressure.
+    assert state.failed_segments >= 1
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_generation_is_rescue(tmp_path):
-    """Generated error-recovery silence carries the admission bypass."""
+async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
+    """Generated error-recovery tone carries the admission bypass and replaces silence."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_silence(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"silence")
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
         return path
 
     with (
@@ -917,15 +918,19 @@ async def test_error_recovery_silence_generation_is_rescue(tmp_path):
         ),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_silence) as mock_silence,
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+        patch(f"{PRODUCER_MODULE}.generate_silence", create=True) as mock_silence,
     ):
         await _run_until_n_queued(queue, state, config, n=1)
 
-    mock_silence.assert_called_once()
-    assert mock_silence.call_args.kwargs["rescue"] is True
+    mock_silence.assert_not_called()
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
-    assert seg.metadata.get("title") == "Brief silence"
+    assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
 
 
 # ---------------------------------------------------------------------------

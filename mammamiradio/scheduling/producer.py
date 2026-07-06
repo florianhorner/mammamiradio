@@ -31,7 +31,6 @@ from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
-    generate_silence,
     generate_station_id_bed,
     generate_tone,
     humanize_norm_filename,
@@ -282,15 +281,27 @@ async def _render_music_track(
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
+_RECOVERY_CLIP_SUBDIRS = ("recovery", "banter", "welcome")
+
+
+def _pick_recovery_clip(state: StationState) -> Path | None:
+    """Pick a packaged continuity clip for recovery ladders."""
+    for subdir in _RECOVERY_CLIP_SUBDIRS:
+        clip = _pick_canned_clip(subdir, state=state)
+        if clip:
+            return clip
+    return None
+
+
 async def _queue_drain_recovery_bridge(
     queue_segment: Callable[[Segment], Awaitable[bool]],
     state: StationState,
     config: StationConfig,
 ) -> bool:
     """Queue the best available continuity bridge when active playback drains."""
-    fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+    fallback = _pick_recovery_clip(state)
     if fallback:
-        logger.warning("Queue empty during active playback — inserting canned clip as bridge")
+        logger.warning("Queue empty during active playback — inserting packaged recovery clip as bridge")
         ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
@@ -300,7 +311,7 @@ async def _queue_drain_recovery_bridge(
                     "canned": True,
                     "queue_drain_recovery": True,
                     "rescue": True,
-                    "title": "Recovery banter",
+                    "title": "Station continuity",
                 },
             )
         )
@@ -351,6 +362,56 @@ async def _queue_drain_recovery_bridge(
     if ok:
         _record_bridge_fire(state, "drain", "emergency_tone")
     return ok
+
+
+async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
+    """Build the best non-silent segment for broad producer exception recovery."""
+    fallback_path = _pick_recovery_clip(state)
+    if fallback_path:
+        logger.info("Error recovery: using packaged recovery clip")
+        return Segment(
+            type=SegmentType.BANTER,
+            path=fallback_path,
+            metadata={
+                "type": "banter",
+                "canned": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": "Station continuity",
+            },
+            ephemeral=False,
+        )
+
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
+        logger.warning("Error recovery: using norm-cache rescue instead of silence: %s", log_label)
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            metadata=metadata,
+            ephemeral=False,
+        )
+
+    tone_path = config.tmp_dir / f"recovery_tone_{uuid4().hex[:8]}.mp3"
+    logger.error("No canned clips or norm cache available — inserting emergency tone recovery")
+    try:
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
+    except Exception:
+        logger.exception("Emergency tone recovery failed")
+        return None
+    return Segment(
+        type=SegmentType.MUSIC,
+        path=tone_path,
+        metadata={
+            "title": "Station continuity",
+            "artist": "",
+            "error_recovery": True,
+            "rescue": True,
+            "audio_source": "emergency_tone",
+        },
+        ephemeral=True,
+    )
 
 
 def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
@@ -1129,7 +1190,7 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
 
     For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
     clips have been streamed to the listener, returns None to force TTS fallback.
-    Welcome clips are not subject to the limit.
+    Recovery and welcome clips are not subject to the limit.
     """
     # Shareware gate: stop serving canned banter after the trial limit
     if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
@@ -1591,7 +1652,7 @@ async def run_producer(
             return False
         if not await _enqueue_with_egress(queue, state, config, segment):
             return False
-        if "error" not in segment.metadata:
+        if "error" not in segment.metadata and not segment.metadata.get("error_recovery"):
             prev_seg_type = segment.type
         return True
 
@@ -1936,6 +1997,12 @@ async def run_producer(
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
+        if seg_type == SegmentType.MUSIC and not state.playlist:
+            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
+            seg_type = SegmentType.BANTER
+            if is_operator_forced:
+                state.operator_force_pending = None
+                is_operator_forced = False
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         # source_revision bumps ONLY on a true source switch (switch_playlist),
@@ -3290,7 +3357,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — use canned banter or silence
+            # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -3303,37 +3370,10 @@ async def run_producer(
                 backoff = min(30.0, 2.0 ** min(consecutive, 5))
                 logger.warning("Consecutive failures: %d — backing off %.0fs", consecutive, backoff)
                 await asyncio.sleep(backoff)
-            # Prefer a canned banter clip over raw silence — at least it sounds intentional
-            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback_path:
-                logger.info("Error recovery: using canned clip instead of silence")
-                segment = Segment(
-                    type=SegmentType.BANTER,
-                    path=fallback_path,
-                    metadata={
-                        "type": "banter",
-                        "canned": True,
-                        "error_recovery": True,
-                        "rescue": True,
-                        "title": "Recovery banter",
-                    },
-                    ephemeral=False,
-                )
-            else:
-                logger.warning("No canned clips available — inserting silence (check assets/demo/banter/)")
-                silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-                try:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, partial(generate_silence, silence_path, 5.0, rescue=True))
-                except Exception as silence_err:
-                    logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                    await asyncio.sleep(0.5)
-                    continue
-                segment = Segment(
-                    type=seg_type,
-                    path=silence_path,
-                    metadata={"error": str(e), "rescue": True, "title": "Brief silence"},
-                )
+            segment = await _producer_error_recovery_segment(state, config)
+            if segment is None:
+                await asyncio.sleep(0.5)
+                continue
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
@@ -3443,7 +3483,7 @@ async def run_producer(
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
-            if "error" not in segment.metadata:
+            if "error" not in segment.metadata and not segment.metadata.get("error_recovery"):
                 if success_callback:
                     success_callback()
                 state.failed_segments = 0  # Reset backoff on success

@@ -337,13 +337,14 @@ Before merging ANY change that touches addon files:
 
 ## Release invariants gate (2026-04-27 onward)
 
-`scripts/check-release-invariants.sh` runs on every PR via `quality.yml`. It catches audio delivery invariants that have caused production silence incidents, plus (new) a release-beat manifest check:
+`scripts/check-release-invariants.sh` runs on every PR via `quality.yml`. It catches audio delivery invariants that have caused production silence incidents, plus a release-beat manifest check:
 
 1. **FFmpeg `music_eq_chain` eq count**: must be exactly 2. A 3rd `equalizer=` filter in `mammamiradio/audio/normalizer.py` triggers FFmpeg 8.x SIGABRT on Pi aarch64. Local: `bash scripts/check-release-invariants.sh`.
-2. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container silence scenario that happens in production (Pi container ships only README stubs in `mammamiradio/assets/demo/banter/`).
-3. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
-4. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist.
-5. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
+2. **Packaged recovery audio**: at least one MP3 must ship under `mammamiradio/assets/demo/recovery/`, and `producer.py` must not call `generate_silence` in recovery paths.
+3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the missing-packaged-clip scenario that can happen in a broken image.
+4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
+5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist.
+6. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.
 

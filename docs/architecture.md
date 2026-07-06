@@ -398,7 +398,7 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
-Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
+Once playback is running, the producer's recovery layers (packaged recovery clip, last-known-good music recycle, emergency tone, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
 ### Operator song blocklist
 
@@ -615,7 +615,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions insert a short silence segment instead of crashing the app
+- producer exceptions insert packaged recovery audio, norm-cache music, or an emergency tone instead of crashing the app
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks

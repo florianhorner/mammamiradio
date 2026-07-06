@@ -290,26 +290,40 @@ async def test_prewarm_airs_without_shadow_row(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_rescue_appends_shadow_row(tmp_path):
+async def test_error_recovery_uses_norm_cache_rescue_and_appends_shadow_row(tmp_path):
     """Outer error-recovery rescue (``rescue=True``) is built inside the main loop
     body and so flows through the epilogue — unlike a bridge it DOES append an
     up-next shadow row (``producer.py:3060``). Also exercises the empty-container
-    fallback (Scenario 2): no canned clip available, so the silence rescue fires."""
+    fallback (Scenario 2): no canned clip available, so recovery must still use
+    real audio instead of generated silence."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    norm_file = tmp_path / "norm_cached_192k.mp3"
+    norm_file.write_bytes(b"fake norm audio" * 100)
+    producer.save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
+
+    def fake_silence(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"silence")
+        return path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=lambda p, *_a, **_kw: Path(p).write_bytes(b"x")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> silence rescue
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=fake_silence, create=True) as mock_silence,
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),  # empty container -> norm-cache rescue
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await _wait_for(lambda: queue.qsize() > 0)
             seg = queue.get_nowait()
+            mock_silence.assert_not_called()
+            assert seg.type == SegmentType.MUSIC
+            assert seg.path == norm_file
             assert seg.metadata.get("rescue") is True
+            assert seg.metadata.get("error_recovery") is True
+            assert seg.metadata.get("audio_source") == "norm_cache"
             assert len(state.queued_segments) == 1  # rescue-via-epilogue DID add an up-next row
         finally:
             await _cancel(task)

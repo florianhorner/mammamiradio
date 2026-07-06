@@ -370,13 +370,13 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
 
 # ---------------------------------------------------------------------------
-# Error recovery — silence fallback
+# Error recovery — non-silent fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_queues_silence():
-    """When download_track raises, producer inserts a silence segment and increments failed_segments."""
+async def test_error_recovery_queues_emergency_tone():
+    """When download_track raises, producer inserts a non-silent rescue segment."""
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -384,16 +384,21 @@ async def test_error_recovery_queues_silence():
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.generate_silence", create=True) as mock_silence,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    # Segment type matches what was attempted (MUSIC), but metadata has error
     assert seg.type == SegmentType.MUSIC
-    assert "error" in seg.metadata
+    assert seg.metadata["audio_source"] == "emergency_tone"
+    assert seg.metadata["error_recovery"] is True
+    assert seg.metadata["rescue"] is True
+    mock_silence.assert_not_called()
     assert state.failed_segments >= 1
 
 
@@ -660,24 +665,27 @@ def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
-    """Outer run_producer handler falls through to silence when demo_assets/ is empty.
+async def test_error_recovery_uses_tone_when_no_canned_clips_or_norm_cache(tmp_path):
+    """Outer run_producer handler falls through to tone when demo_assets/ is empty.
 
     When produce_one_segment raises (music download fails), the outer handler
-    tries _pick_canned_clip("banter") then _pick_canned_clip("welcome") before
-    generating silence.  With both directories empty, silence is the last resort.
+    tries packaged recovery clips before using a norm-cache track and finally a
+    rescue-priority emergency tone. With every packaged/cache source empty, tone
+    is the technical last resort; generated silence is never used.
 
     Note: banter TTS failures use `continue` internally and never reach the outer
     handler.  This test uses MUSIC (whose failures propagate out) to exercise the
-    outer silence path with no canned-clip safety net.
+    outer non-silent path with no canned-clip safety net.
     """
     from mammamiradio.scheduling import producer
 
+    (tmp_path / "recovery").mkdir()
     (tmp_path / "banter").mkdir()
     (tmp_path / "welcome").mkdir()
 
     state = _make_state()
     config = _make_config()
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     orig = producer._DEMO_ASSETS_DIR
@@ -693,7 +701,9 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("network down"),
             ),
-            patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path) as mock_tone,
+            patch(f"{PRODUCER_MODULE}.generate_silence", create=True) as mock_silence,
             patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         ):
             await _run_until_queued(queue, state, config)
@@ -704,12 +714,15 @@ async def test_error_recovery_inserts_silence_when_no_canned_clips(tmp_path):
 
     assert queue.qsize() >= 1
     seg = queue.get_nowait()
-    assert "error" in seg.metadata
+    assert seg.metadata["audio_source"] == "emergency_tone"
+    assert seg.metadata["error_recovery"] is True
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    mock_silence.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(caplog):
-    """When canned banter+welcome are unavailable, producer logs the banter-dir hint and inserts silence."""
+async def test_error_recovery_logs_missing_recovery_assets_and_uses_tone(caplog):
+    """When recovery/banter/welcome clips are unavailable, producer logs the recovery ladder and inserts tone."""
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -724,15 +737,18 @@ async def test_error_recovery_logs_demo_assets_banter_hint_and_uses_silence(capl
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", side_effect=_pick_none),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_path) as mock_silence,
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path) as mock_tone,
+        patch(f"{PRODUCER_MODULE}.generate_silence", create=True) as mock_silence,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
-    assert picked_subdirs[:2] == ["banter", "welcome"]
-    assert any("check assets/demo/banter/" in record.message for record in caplog.records)
-    assert mock_silence.call_count == 1
-    assert mock_silence.call_args.args[1] == 5.0
+    assert picked_subdirs[:3] == ["recovery", "banter", "welcome"]
+    assert any("No canned clips or norm cache available" in record.message for record in caplog.records)
+    assert mock_tone.call_count == 1
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    mock_silence.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
