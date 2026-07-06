@@ -4241,7 +4241,9 @@ function updateListenerRequests(reqs,consumed){
     html+=`<div class="lr-consumed-label">Recently handled</div>`;
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
-      const badge=r.status==='song_not_found'
+      const badge=r.status==='source_changed'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
+        :r.status==='song_not_found'
         ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';

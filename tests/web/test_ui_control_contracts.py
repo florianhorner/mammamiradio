@@ -11,15 +11,15 @@ Disconnects targeted (findings from UI audit):
  - Skip on nothing: rejected, state unchanged
  - Stop: clears queue (both real and shadow), sets session_stopped, writes
    now_streaming type="stopped" — all in one atomic response
- - Resume: clears session_stopped ONLY — does NOT reset now_streaming, queue,
-   or producer state (documented gap: UI flips to ON AIR but now_streaming
-   still says "stopped" until the playback loop overwrites it)
+ - Resume: clears session_stopped and removes the stopped now_streaming sentinel
+   in the same response so status polls cannot say ON AIR and stopped at once
  - Purge: clears both real queue and shadow list, reports count
  - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
    health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
    renders three states — connected / suspended / not configured — so the
    dot no longer lies while the API is suspended after a 401 (Item 11).
- - Pending requests: cleared silently on playlist switch (request can be lost)
+ - Pending requests: moved to a recently handled source-change outcome on
+   playlist switch instead of disappearing silently
  - Trigger: sets force_next, not consumed until next producer cycle
 """
 
@@ -394,25 +394,36 @@ class TestResumeEndpoint:
         assert app.state.station_state.session_stopped is False
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_reset_now_streaming(self):
-        """DOCUMENTED GAP: Resume does NOT clear now_streaming.
-
-        After stop, now_streaming.type == 'stopped'.  After resume, it stays
-        'stopped' until the playback loop picks up the next segment and calls
-        on_stream_segment().  This means the UI will briefly show the stopped
-        banner even after clicking Resume — potentially for several seconds.
-
-        Any UI fix (e.g., resetting now_streaming on resume) must be done in
-        the endpoint; the playback loop cannot be relied on for immediate UI update.
-        """
+    async def test_resume_clears_stopped_now_streaming_sentinel(self):
+        """Resume clears the stopped sentinel before the next status poll."""
         stopped_state = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
         app = _make_app(session_stopped=True, now_streaming=stopped_state)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/resume", headers=AUTH)
+            public_status = (await c.get("/public-status")).json()
+            admin_status = (await c.get("/status", headers=AUTH)).json()
+
+        assert resp.json()["ok"] is True
+        assert app.state.station_state.session_stopped is False
+        assert app.state.station_state.now_streaming == {}
+        assert public_status["session_stopped"] is False
+        assert public_status["now_streaming"] == {}
+        assert public_status["playback_actions"]["skip_ready"] is False
+        assert admin_status["session_stopped"] is False
+        assert admin_status["now_streaming"] == {}
+        assert admin_status["playback_actions"]["skip_ready"] is False
+
+    @pytest.mark.asyncio
+    async def test_resume_keeps_non_stopped_now_streaming(self):
+        """Idempotent resume must not erase a real in-flight segment."""
+        live_state = {"type": "music", "label": "Song", "started": time.time(), "metadata": {}}
+        app = _make_app(session_stopped=False, now_streaming=live_state)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/resume", headers=AUTH)
 
-        # now_streaming is still "stopped" — the gap
-        assert app.state.station_state.now_streaming["type"] == "stopped"
+        assert app.state.station_state.now_streaming == live_state
 
     @pytest.mark.asyncio
     async def test_resume_does_not_re_populate_queue(self):
@@ -847,25 +858,39 @@ class TestTriggerEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Pending requests — silently cleared on playlist switch
+# Pending requests — source-change outcome on playlist switch
 # ---------------------------------------------------------------------------
 
 
 class TestPendingRequestLifecycle:
-    def test_pending_requests_cleared_on_switch_playlist(self):
-        """DOCUMENTED GAP: A pending listener request is silently discarded when
-        the admin loads a new playlist.  The listener sees 'Canzone in arrivo!'
-        but the request is lost and never played.
-        """
+    def test_pending_requests_marked_source_changed_on_switch_playlist(self):
+        """Playlist switches keep an admin-visible outcome for accepted requests."""
         state = StationState(
             playlist=[Track(title="Old Song", artist="A", duration_ms=1000, spotify_id="o1")],
-            pending_requests=[{"type": "song_wish", "text": "Play Ti Amo"}],
+            pending_requests=[
+                {
+                    "request_id": "request-1",
+                    "name": "Luca",
+                    "message": "Play Ti Amo",
+                    "type": "song_request",
+                    "song_track": "Umberto Tozzi — Ti Amo",
+                }
+            ],
         )
         new_tracks = [Track(title="New Song", artist="B", duration_ms=1000, spotify_id="n1")]
 
         state.switch_playlist(new_tracks)
 
         assert state.pending_requests == []
+        assert len(state.recently_consumed_requests) == 1
+        consumed = state.recently_consumed_requests[0]
+        assert consumed["id"] == "request-1"
+        assert consumed["name"] == "Luca"
+        assert consumed["message"] == "Play Ti Amo"
+        assert consumed["song_track"] == "Umberto Tozzi — Ti Amo"
+        assert consumed["type"] == "song_request"
+        assert consumed["status"] == "source_changed"
+        assert time.time() - consumed["consumed_at"] < 5
 
     def test_pinned_track_cleared_on_switch_playlist(self):
         """Pinned track from old playlist is discarded on source switch."""

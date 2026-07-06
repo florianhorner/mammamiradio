@@ -649,6 +649,8 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
     state.session_stopped = False
+    if isinstance(state.now_streaming, dict) and state.now_streaming.get("type") == "stopped":
+        state.now_streaming = {}
     state.last_state_change_at = time.time()
     state.resume_event.set()
     _persist_session_stopped(config, False)

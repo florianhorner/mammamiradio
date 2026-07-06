@@ -36,6 +36,8 @@ After installing, go to the add-on's **Configuration** tab:
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
+- **Guest host**: Keep the rotating guest host in the line-up, or turn him off for regular hosts only. Takes effect after restart.
+- **Pacing**: Set songs between host breaks, songs between ad breaks, and ads per break. These are the same Diretta controls from the admin panel, saved across restarts.
 - **On-air media player push**: On by default — the station appears in Home Assistant as a media player automatically. Turn it off if you install the HACS integration (which provides a controllable media player and would otherwise fight this push); the station's sensors keep working either way.
 
 ### Provider keys (not in the Configuration tab)

@@ -348,6 +348,8 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "r.status==='source_changed'",
+        "Playlist changed",
         "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
