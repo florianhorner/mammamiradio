@@ -9,8 +9,10 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import SegmentType, StationState, Track
+from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.scheduling.producer import (
     _abandon_release_beat_commit,
+    _memory_extraction_metadata_from_commit,
     _release_beat_metadata_from_commit,
     _release_campaign_should_force_first_banter,
     run_producer,
@@ -87,6 +89,67 @@ def test_release_beat_metadata_and_abandon_helpers():
 
     _abandon_release_beat_commit(state, commit)
     assert state.release_campaign.abandoned == ["attempt-1"]
+
+
+def test_memory_extraction_metadata_helper_uses_final_aired_script():
+    commit = SimpleNamespace(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            persona_context="existing memory",
+            interaction_context={"reactive_directive": "door opened"},
+            youtube_id="yt-final",
+            source_session=3,
+        )
+    )
+
+    metadata = _memory_extraction_metadata_from_commit(
+        commit,
+        [
+            {"host": "Sofia", "text": "Allora...", "type": "transition"},
+            {"host": "Marco", "text": "final aired line"},
+        ],
+    )
+
+    payload = metadata["memory_extraction"]
+    assert payload["script_lines"] == [
+        {"host": "Sofia", "text": "Allora...", "type": "transition"},
+        {"host": "Marco", "text": "final aired line"},
+    ]
+    assert payload["youtube_id"] == "yt-final"
+    assert payload["source_session"] == 3
+    assert commit.memory_extraction.script_lines == [{"host": "Marco", "text": "draft"}]
+
+
+def test_memory_extraction_metadata_helper_returns_empty_without_commit():
+    assert _memory_extraction_metadata_from_commit(SimpleNamespace(), []) == {}
+    assert _memory_extraction_metadata_from_commit(SimpleNamespace(memory_extraction=None), []) == {}
+
+
+def test_memory_extraction_metadata_helper_returns_empty_when_final_script_has_no_lines():
+    commit = SimpleNamespace(
+        memory_extraction=MemoryExtractionCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            youtube_id="yt-final",
+        )
+    )
+
+    assert _memory_extraction_metadata_from_commit(commit, [{}]) == {}
+    assert commit.memory_extraction.script_lines == [{"host": "Marco", "text": "draft"}]
+
+
+def test_memory_extraction_metadata_helper_returns_empty_on_serialization_failure():
+    class _BrokenMemoryCommit(MemoryExtractionCommit):
+        def to_metadata(self):
+            raise RuntimeError("metadata broke")
+
+    commit = SimpleNamespace(
+        memory_extraction=_BrokenMemoryCommit(
+            script_lines=[{"host": "Marco", "text": "draft"}],
+            youtube_id="yt-final",
+        )
+    )
+
+    assert _memory_extraction_metadata_from_commit(commit, [{"host": "Marco", "text": "final"}]) == {}
 
 
 @pytest.mark.asyncio

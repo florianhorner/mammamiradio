@@ -18,6 +18,7 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -47,12 +48,30 @@ _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 _ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
 
+PACING_BOUNDS: dict[str, tuple[int, int]] = {
+    "songs_between_banter": (2, 60),
+    "songs_between_ads": (1, 60),
+    "ad_spots_per_break": (1, 5),
+}
+
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
 # fallbacks) references this so the name cannot drift the way "Radio MammaMia",
 # "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
 # identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
 DEFAULT_STATION_NAME = "Mamma Mi Radio"
+_MAX_STATION_NAME_LEN = 80
+
+_DEFAULT_SONIC_TAGLINE = "Da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_GEOGRAPHY = "Windor, Vergen"
+_DEFAULT_SONIC_FULL_IDENT = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_SWEEPERS = (
+    "Mamma Mi Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Mamma Mi Radio.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+)
 
 
 def coerce_bool(value: object, default: bool = False) -> bool:
@@ -116,7 +135,7 @@ class PacingSection:
 
     songs_between_banter: int = 2
     songs_between_ads: int = 4
-    ad_spots_per_break: int = 1
+    ad_spots_per_break: int = 2
     lookahead_segments: int = 4
 
 
@@ -177,6 +196,8 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "news_flash": "creative",
     "ad": "creative",
     "transition": "fast",
+    "home_mood": "fast",
+    "memory_extract": "fast",
 }
 _DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "premium": {
@@ -400,7 +421,8 @@ class HomeAssistantSection:
 
     enabled: bool = False
     url: str = ""
-    poll_interval: int = 60  # seconds between state refreshes
+    context_enabled: bool = True  # full /api/states prompt-context ingest
+    poll_interval: int = 300  # seconds between full state refreshes
     timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
     # Wall-clock budget (seconds) the producer gives a single HA context refresh
     # before it airs on last-known context instead of blocking segment production.
@@ -408,6 +430,10 @@ class HomeAssistantSection:
     # the one-time cold registry/weather warm-up gets a longer budget in the
     # producer (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
     context_refresh_timeout: float = 2.0
+    # Experimental LLM scene-namer for the home mood. The heuristic ladder stays
+    # the always-instant fallback and the default remains off.
+    mood_llm_enabled: bool = False
+    mood_ttl_seconds: float = 90.0
     timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
 
 
@@ -426,6 +452,29 @@ class EveningGagsSection:
     domain_allowlist: list[str] = field(default_factory=list)
     entity_allowlist: list[str] = field(default_factory=list)
     entity_denylist: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RadioEventRule:
+    """Opt-in HA event promotion rule from ``[[home.radio_event]]``."""
+
+    id: str
+    label: str = ""
+    mode: str = "directive"  # "directive" | "gag"
+    entity_id: str = ""
+    entity_glob: str = ""
+    domain: str = ""
+    device_class: str = ""
+    trigger: str = "state"  # "state" | "attribute" | "numeric_threshold"
+    from_state: str = ""
+    to_state: str = ""
+    attribute: str = ""
+    from_value: str = ""
+    to_value: str = ""
+    threshold: float | None = None
+    direction: str = "above"  # "above" | "below"
+    cooldown_seconds: int = 900
+    directive: str = ""
 
 
 @dataclass
@@ -592,6 +641,16 @@ class BrandSection:
 
 
 @dataclass
+class IdentitySection:
+    """Resolved station identity shared by every human-facing surface."""
+
+    station_name: str = DEFAULT_STATION_NAME
+    source: str = "default"
+    custom_copy_preserved: bool = False
+    generated: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class StationConfig:
     """Fully resolved application configuration used at runtime."""
 
@@ -606,8 +665,10 @@ class StationConfig:
     models: ModelsSection = field(default_factory=_build_default_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
+    radio_events: list[RadioEventRule] = field(default_factory=list)
     moderation: ModerationSection = field(default_factory=ModerationSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
+    identity: IdentitySection = field(default_factory=IdentitySection)
     brand: BrandSection = field(default_factory=BrandSection)
     brand_warnings: list[str] = field(default_factory=list)
     cache_dir: Path = Path("cache")
@@ -651,13 +712,8 @@ class StationConfig:
 
     @property
     def display_station_name(self) -> str:
-        """Canonical listener-facing station name — the single resolver, never blank.
-
-        Every user-visible surface (HA entities, clip sidecar, etc.) reads this
-        instead of re-deriving the name, so the value stays consistent. Resolves
-        brand → station → the canonical default.
-        """
-        return self.brand.station_name or self.station.name or DEFAULT_STATION_NAME
+        """Compatibility alias for the resolved listener-facing station name."""
+        return self.identity.station_name or DEFAULT_STATION_NAME
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
@@ -919,6 +975,7 @@ def _apply_addon_options() -> None:
             os.environ[env_key] = val
 
     env_map = {
+        "station_name": "STATION_NAME",
         "admin_password": "ADMIN_PASSWORD",
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
@@ -945,6 +1002,20 @@ def _apply_addon_options() -> None:
     legacy_claude_model = options.get("claude_model") if not qp else None
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
+
+    # Pacing (mirrors the toggles above): map persisted /data/options.json values
+    # to env for the non-run.sh add-on boot path. run.sh normally exports these
+    # first, and the `not os.getenv` guard keeps that export authoritative; the
+    # load-time override loop clamps to range, so no clamp is needed here. bool is
+    # excluded because it is an int subclass.
+    for opt_key, env_key in (
+        ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+        ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+        ("ad_spots_per_break", "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ):
+        pv = options.get(opt_key)
+        if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
+            os.environ[env_key] = str(pv)
 
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
@@ -1174,22 +1245,18 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
-    # Floors and ceilings here mirror the PATCH /api/pacing clamps so that
-    # config-load and the admin runtime path enforce the same valid range.
-    if config.pacing.songs_between_banter < 2:
-        errors.append(_err("pacing.songs_between_banter", "must be >= 2"))
-    if config.pacing.songs_between_banter > 60:
-        errors.append(_err("pacing.songs_between_banter", "must be <= 60"))
-    if config.pacing.songs_between_ads < 1:
-        errors.append(_err("pacing.songs_between_ads", "must be >= 1"))
-    if config.pacing.songs_between_ads > 60:
-        errors.append(_err("pacing.songs_between_ads", "must be <= 60"))
-    if config.pacing.ad_spots_per_break < 1:
-        errors.append(_err("pacing.ad_spots_per_break", "must be >= 1"))
-    if config.pacing.ad_spots_per_break > 5:
-        errors.append(_err("pacing.ad_spots_per_break", "must be <= 5"))
+    # Bounds are shared with env-load clamping and PATCH /api/pacing so the
+    # accepted range cannot drift between boot and live admin changes.
+    for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
+        _value = getattr(config.pacing, _pacing_attr)
+        if _value < _lo:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be >= {_lo}"))
+        if _value > _hi:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
     if config.pacing.lookahead_segments < 1:
         errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
+    if config.homeassistant.poll_interval < 1:
+        errors.append(_err("homeassistant.poll_interval", "must be >= 1"))
     if config.homeassistant.timer_poll_interval < 1:
         errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
     _ctx_timeout = config.homeassistant.context_refresh_timeout
@@ -1200,6 +1267,16 @@ def _validate(config: StationConfig) -> None:
         or _ctx_timeout <= 0
     ):
         errors.append(_err("homeassistant.context_refresh_timeout", "must be a positive number"))
+    if not isinstance(config.homeassistant.mood_llm_enabled, bool):
+        errors.append(_err("homeassistant.mood_llm_enabled", "must be true or false"))
+    _mood_ttl = config.homeassistant.mood_ttl_seconds
+    if (
+        isinstance(_mood_ttl, bool)
+        or not isinstance(_mood_ttl, int | float)
+        or not math.isfinite(_mood_ttl)
+        or _mood_ttl <= 0
+    ):
+        errors.append(_err("homeassistant.mood_ttl_seconds", "must be a positive number"))
     _allowed_urgencies = {"pissed", "urgent", "gentle"}
     for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
         if timer_cfg.cooldown < 1:
@@ -1239,6 +1316,8 @@ def _validate(config: StationConfig) -> None:
 
     if not (config.anthropic_api_key or config.openai_api_key):
         log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
+        log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
         log.warning("Home Assistant enabled but no HA_TOKEN in environment")
     if not config.ads.brands:
@@ -1252,6 +1331,271 @@ def _validate(config: StationConfig) -> None:
 
     if errors:
         raise ValueError("Config errors:\n  " + "\n  ".join(errors))
+
+
+def _env_positive_float(name: str) -> float | None:
+    """Parse a positive finite float from an env var; warn and return None on invalid.
+
+    Shared by the `[homeassistant]` numeric env overrides so the
+    parse/validate/warn behavior can't drift between knobs.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not a number)", name, raw)
+        return None
+    if math.isfinite(value) and value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
+
+
+def _env_positive_int(name: str) -> int | None:
+    """Parse a positive integer from an env var; warn and return None on invalid."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer)", name, raw)
+        return None
+    if value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be > 0)", name, raw)
+    return None
+
+
+def _clean_str(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def sanitize_station_name(value: object) -> str:
+    """Return a safe, bounded station name for human-facing surfaces."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", " ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:_MAX_STATION_NAME_LEN].rstrip()
+
+
+def _is_default_station_name(value: object) -> bool:
+    return sanitize_station_name(value).casefold() == DEFAULT_STATION_NAME.casefold()
+
+
+def _default_identity_pack(station_name: str, sonic_brand: SonicBrandSection | None = None) -> dict[str, Any]:
+    """Deterministic station-copy pack derived from the chosen station name."""
+    name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    tagline = (
+        sanitize_station_name(getattr(sonic_brand, "tagline", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_TAGLINE
+    ) or _DEFAULT_SONIC_TAGLINE
+    geography = (
+        sanitize_station_name(getattr(sonic_brand, "geography", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_GEOGRAPHY
+    ) or _DEFAULT_SONIC_GEOGRAPHY
+    sweepers = [
+        f"{name}.",
+        f"{geography}... e tutto il mondo che ascolta.",
+        f"Sei su {name}.",
+        "La radio che tua nonna non approverebbe.",
+        "Da Windor a Vergen, nessuno è al sicuro.",
+    ]
+    return {
+        "spoken_ident": f"{name}... {tagline}",
+        "sweepers": sweepers,
+        "listener_title": name,
+        "share_title": f"{name} - live radio",
+        "home_assistant_name": name,
+    }
+
+
+def _resolve_identity(
+    *,
+    station_raw: dict,
+    brand: BrandSection,
+    sonic_brand: SonicBrandSection,
+    addon_mode: bool,
+    env_station_name: str,
+    brand_warnings: list[str],
+) -> IdentitySection:
+    """Resolve one station identity after TOML, env, and add-on inputs are known."""
+    station_raw_name = sanitize_station_name(station_raw.get("name"))
+    brand_name = sanitize_station_name(brand.station_name)
+
+    if env_station_name:
+        station_name = env_station_name
+        source = "ha_addon" if addon_mode else "env"
+    elif station_raw_name and not _is_default_station_name(station_raw_name):
+        station_name = station_raw_name
+        source = "station"
+    elif brand_name and not _is_default_station_name(brand_name):
+        station_name = brand_name
+        source = "brand"
+    else:
+        station_name = station_raw_name or brand_name or DEFAULT_STATION_NAME
+        source = "default"
+
+    station_name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    station_raw["name"] = station_name
+    pack = _default_identity_pack(station_name, sonic_brand)
+
+    custom_copy_preserved = False
+    if brand_name and not _is_default_station_name(brand_name) and brand_name != station_name:
+        custom_copy_preserved = True
+    brand.station_name = station_name
+
+    full_ident = str(sonic_brand.full_ident or "")
+    if not full_ident or full_ident == _DEFAULT_SONIC_FULL_IDENT:
+        sonic_brand.full_ident = str(pack["spoken_ident"])
+    elif station_name not in full_ident:
+        custom_copy_preserved = True
+
+    if not sonic_brand.sweepers or tuple(sonic_brand.sweepers) == _DEFAULT_SONIC_SWEEPERS:
+        sonic_brand.sweepers = list(pack["sweepers"])
+    elif not any(station_name in line for line in sonic_brand.sweepers):
+        custom_copy_preserved = True
+
+    if custom_copy_preserved:
+        brand_warnings.append(
+            "custom identity copy preserved; regenerate it deliberately if it should use the current station name"
+        )
+
+    return IdentitySection(
+        station_name=station_name,
+        source=source,
+        custom_copy_preserved=custom_copy_preserved,
+        generated=pack,
+    )
+
+
+def _parse_radio_event_rules(value: object) -> list[RadioEventRule]:
+    """Parse ``[[home.radio_event]]`` rules.
+
+    Bad rule blocks are ignored with a warning. This feature is opt-in and
+    operator-facing, so a malformed custom event must not stop the station.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        log.warning("Ignoring [home.radio_event]: expected an array of tables")
+        return []
+
+    rules: list[RadioEventRule] = []
+    seen_ids: set[str] = set()
+    for idx, raw_rule in enumerate(value):
+        if not isinstance(raw_rule, dict):
+            log.warning("Ignoring home.radio_event[%d]: expected a table", idx)
+            continue
+        rule_id = _clean_str(raw_rule.get("id"))
+        if not rule_id:
+            log.warning("Ignoring home.radio_event[%d]: id is required", idx)
+            continue
+        if rule_id in seen_ids:
+            log.warning("Ignoring home.radio_event[%d]: duplicate id %r", idx, rule_id)
+            continue
+
+        mode = _clean_str(raw_rule.get("mode")) or "directive"
+        trigger = _clean_str(raw_rule.get("trigger")) or "state"
+        direction = _clean_str(raw_rule.get("direction")) or "above"
+        if mode not in {"directive", "gag"}:
+            log.warning("Ignoring home.radio_event[%d] %r: mode must be directive or gag", idx, rule_id)
+            continue
+        if trigger not in {"state", "attribute", "numeric_threshold"}:
+            log.warning(
+                "Ignoring home.radio_event[%d] %r: trigger must be state, attribute, or numeric_threshold",
+                idx,
+                rule_id,
+            )
+            continue
+        if direction not in {"above", "below"}:
+            log.warning("Ignoring home.radio_event[%d] %r: direction must be above or below", idx, rule_id)
+            continue
+
+        entity_id = _clean_str(raw_rule.get("entity_id"))
+        entity_glob = _clean_str(raw_rule.get("entity_glob"))
+        domain = _clean_str(raw_rule.get("domain"))
+        device_class = _clean_str(raw_rule.get("device_class"))
+        if not any((entity_id, entity_glob, domain)):
+            log.warning("Ignoring home.radio_event[%d] %r: one selector is required", idx, rule_id)
+            continue
+
+        label = _clean_str(raw_rule.get("label"))
+        directive = _clean_str(raw_rule.get("directive"))
+        if mode == "directive" and not directive:
+            log.warning("Ignoring home.radio_event[%d] %r: directive is required for directive mode", idx, rule_id)
+            continue
+        if mode == "gag" and not label:
+            log.warning("Ignoring home.radio_event[%d] %r: label is required for gag mode", idx, rule_id)
+            continue
+
+        attribute = _clean_str(raw_rule.get("attribute"))
+        if trigger == "attribute" and not attribute:
+            log.warning("Ignoring home.radio_event[%d] %r: attribute is required", idx, rule_id)
+            continue
+
+        threshold: float | None = None
+        if trigger == "numeric_threshold":
+            raw_threshold = raw_rule.get("threshold")
+            if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, int | float | str):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            try:
+                threshold = float(raw_threshold)
+            except (TypeError, ValueError):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            if not math.isfinite(threshold):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be finite", idx, rule_id)
+                continue
+
+        cooldown_raw = raw_rule.get("cooldown_seconds", 900)
+        cooldown_seconds = 900
+        if not isinstance(cooldown_raw, bool):
+            try:
+                parsed_cooldown = int(cooldown_raw)
+            except (TypeError, ValueError):
+                parsed_cooldown = 900
+            if parsed_cooldown >= 1:
+                cooldown_seconds = parsed_cooldown
+
+        rules.append(
+            RadioEventRule(
+                id=rule_id,
+                label=label,
+                mode=mode,
+                entity_id=entity_id,
+                entity_glob=entity_glob,
+                domain=domain,
+                device_class=device_class,
+                trigger=trigger,
+                from_state=_clean_str(raw_rule.get("from_state")),
+                to_state=_clean_str(raw_rule.get("to_state")),
+                attribute=attribute,
+                from_value=_clean_str(raw_rule.get("from_value")),
+                to_value=_clean_str(raw_rule.get("to_value")),
+                threshold=threshold,
+                direction=direction,
+                cooldown_seconds=cooldown_seconds,
+                directive=directive,
+            )
+        )
+        seen_ids.add(rule_id)
+    return rules
 
 
 def load_config(path: str = "radio.toml") -> StationConfig:
@@ -1370,25 +1714,43 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         ha_raw["enabled"] = True
     elif ha_force_disabled:
         ha_raw["enabled"] = False
-    # Env override for the HA context refresh budget. Reject non-float / non-positive
-    # values (keep the toml/default) rather than letting a typo disable the deadline.
-    _ha_timeout_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT", "").strip()
-    if _ha_timeout_env:
-        import logging as _ha_logging
+    _ha_context_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "").strip().lower()
+    if _ha_context_env in _TRUTHY:
+        ha_raw["context_enabled"] = True
+    elif _ha_context_env in _FALSY:
+        ha_raw["context_enabled"] = False
+    elif _ha_context_env:
+        import logging as _ha_context_logging
 
-        _ha_log = _ha_logging.getLogger(__name__)
-        try:
-            _ha_timeout_val = float(_ha_timeout_env)
-        except ValueError:
-            _ha_log.warning("Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (not a number)", _ha_timeout_env)
-        else:
-            if math.isfinite(_ha_timeout_val) and _ha_timeout_val > 0:
-                ha_raw["context_refresh_timeout"] = _ha_timeout_val
-            else:
-                _ha_log.warning(
-                    "Ignoring MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT=%r (must be a finite number > 0)",
-                    _ha_timeout_env,
-                )
+        _ha_context_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_CONTEXT_ENABLED=%r (use true/1/yes or false/0/no)",
+            _ha_context_env,
+        )
+    _ha_mood_llm_env = os.getenv("MAMMAMIRADIO_HA_MOOD_LLM", "").strip().lower()
+    if _ha_mood_llm_env in _TRUTHY:
+        ha_raw["mood_llm_enabled"] = True
+    elif _ha_mood_llm_env in _FALSY:
+        ha_raw["mood_llm_enabled"] = False
+    elif _ha_mood_llm_env:
+        # A typo ("ture") must not silently leave the experiment off while the
+        # operator believes it is on.
+        import logging as _mood_logging
+
+        _mood_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_MOOD_LLM=%r (use true/1/yes or false/0/no)",
+            _ha_mood_llm_env,
+        )
+    # Env overrides for positive-float HA knobs. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable them.
+    _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
+    if _ctx_override is not None:
+        ha_raw["context_refresh_timeout"] = _ctx_override
+    _poll_override = _env_positive_int("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL")
+    if _poll_override is not None:
+        ha_raw["poll_interval"] = _poll_override
+    _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
+    if _mood_ttl_override is not None:
+        ha_raw["mood_ttl_seconds"] = _mood_ttl_override
     # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
     timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
     timer_interrupts = [
@@ -1413,6 +1775,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
     home_raw = raw.get("home", {})
+    radio_events_raw = home_raw.get("radio_event", []) if isinstance(home_raw, dict) else []
+    radio_events = _parse_radio_event_rules(radio_events_raw)
     gags_raw = home_raw.get("running_gags", {}) if isinstance(home_raw, dict) else {}
     if not isinstance(gags_raw, dict):
         gags_raw = {}
@@ -1435,8 +1799,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
 
     # Env-var overrides for Docker/HA add-on: station identity and playlist
-    if os.getenv("STATION_NAME"):
-        station_raw["name"] = os.getenv("STATION_NAME")
+    env_station_name = sanitize_station_name(os.getenv("STATION_NAME", ""))
+    if env_station_name:
+        station_raw["name"] = env_station_name
     if os.getenv("STATION_THEME"):
         station_raw["theme"] = os.getenv("STATION_THEME")
     # Dynamic LLM routing: model IDs live in [models], never in code. Parse the
@@ -1479,6 +1844,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     # Validation is graceful — invalid values fall back to Volare Refined defaults
     # and surface as brand_warnings for the operator (Engine Room panel).
     brand, brand_warnings = _parse_brand(raw, hosts)
+    identity = _resolve_identity(
+        station_raw=station_raw,
+        brand=brand,
+        sonic_brand=sonic_brand,
+        addon_mode=addon_mode,
+        env_station_name=env_station_name,
+        brand_warnings=brand_warnings,
+    )
     if brand_warnings:
         import logging as _log
 
@@ -1498,8 +1871,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         models=models_section,
         homeassistant=ha_section,
         running_gags=running_gags,
+        radio_events=radio_events,
         moderation=moderation,
         persona=PersonaSection(**raw.get("persona", {})),
+        identity=identity,
         brand=brand,
         brand_warnings=brand_warnings,
         cache_dir=cache_dir,
@@ -1550,6 +1925,26 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
     if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
         config.ledger_retention_days = int(_ledger_retention)
+
+    # Env overrides for pacing (HA addon pacing options -> MAMMAMIRADIO_PACING_*
+    # via run.sh; also the admin slider persistence path writing standalone .env).
+    # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
+    # stale or hand-edited env can never brick boot — audio continuity wins over a
+    # strict reject (INSTANT AUDIO).
+    for _pacing_env, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "ad_spots_per_break"),
+    ):
+        _pacing_raw = os.getenv(_pacing_env, "").strip()
+        if not _pacing_raw:
+            continue
+        try:
+            _pacing_val = int(_pacing_raw)
+        except ValueError:
+            continue
+        _lo, _hi = PACING_BOUNDS[_pacing_attr]
+        setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
 
     # Quality dial: pick the active model profile (premium|balanced|economy).
     # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its

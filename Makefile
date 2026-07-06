@@ -1,4 +1,4 @@
-.PHONY: help dev test test-fast test-watch lint format typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke pre-release edge-release
+.PHONY: help dev test test-fast test-watch lint format format-check typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke pre-release edge-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -31,13 +31,16 @@ lint: ## Lint with ruff
 format: ## Format with ruff
 	$(RUFF) format .
 
+format-check: ## Check formatting with ruff (no changes; mirrors CI)
+	$(RUFF) format --check .
+
 typecheck: ## Type-check with mypy
 	$(MYPY) mammamiradio/ tests/
 
 deadcode: ## Find unused code with vulture
 	.venv/bin/vulture mammamiradio/
 
-check: lint typecheck deadcode coverage-check ## Run all checks (lint + typecheck + deadcode + coverage gate)
+check: lint format-check typecheck deadcode coverage-check ## Run all checks (lint + format check + typecheck + deadcode + coverage gate)
 	@echo "All checks passed"
 
 validate: ## Validate HA addon config (pre-merge gate)

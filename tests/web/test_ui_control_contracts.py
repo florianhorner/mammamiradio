@@ -11,15 +11,15 @@ Disconnects targeted (findings from UI audit):
  - Skip on nothing: rejected, state unchanged
  - Stop: clears queue (both real and shadow), sets session_stopped, writes
    now_streaming type="stopped" — all in one atomic response
- - Resume: clears session_stopped ONLY — does NOT reset now_streaming, queue,
-   or producer state (documented gap: UI flips to ON AIR but now_streaming
-   still says "stopped" until the playback loop overwrites it)
+ - Resume: clears session_stopped and removes the stopped now_streaming sentinel
+   in the same response so status polls cannot say ON AIR and stopped at once
  - Purge: clears both real queue and shadow list, reports count
  - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
    health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
    renders three states — connected / suspended / not configured — so the
    dot no longer lies while the API is suspended after a 401 (Item 11).
- - Pending requests: cleared silently on playlist switch (request can be lost)
+ - Pending requests: moved to a recently handled source-change outcome on
+   playlist switch instead of disappearing silently
  - Trigger: sets force_next, not consumed until next producer cycle
 """
 
@@ -269,6 +269,23 @@ class TestBanNowPlayingEndpoint:
         assert "doBanNowPlaying(this)" in html
         assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
 
+    def test_admin_direction_control_has_busy_and_keyboard_guards(self):
+        html = ADMIN_HTML.read_text()
+        handler = _admin_function_block("setDirectionText")
+        key_handler = _admin_function_block("handleDirectionKey")
+        assert 'id="directionInput"' in html
+        assert 'aria-label="Direction"' in html
+        assert 'class="btn btn-util btn-direction"' in html
+        assert "font-size: 16px" in html
+        assert "min-height: 44px" in html
+        assert "let _directionPending=false" in html
+        assert "if(_directionPending)return" in handler
+        assert "input.disabled=true" in handler
+        assert "el.disabled=true" in handler
+        assert "aria-busy" in handler
+        assert "event.repeat" in key_handler
+        assert "event.isComposing" in key_handler
+
 
 # ---------------------------------------------------------------------------
 # Stop endpoint
@@ -377,25 +394,36 @@ class TestResumeEndpoint:
         assert app.state.station_state.session_stopped is False
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_reset_now_streaming(self):
-        """DOCUMENTED GAP: Resume does NOT clear now_streaming.
-
-        After stop, now_streaming.type == 'stopped'.  After resume, it stays
-        'stopped' until the playback loop picks up the next segment and calls
-        on_stream_segment().  This means the UI will briefly show the stopped
-        banner even after clicking Resume — potentially for several seconds.
-
-        Any UI fix (e.g., resetting now_streaming on resume) must be done in
-        the endpoint; the playback loop cannot be relied on for immediate UI update.
-        """
+    async def test_resume_clears_stopped_now_streaming_sentinel(self):
+        """Resume clears the stopped sentinel before the next status poll."""
         stopped_state = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
         app = _make_app(session_stopped=True, now_streaming=stopped_state)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post("/api/resume", headers=AUTH)
+            public_status = (await c.get("/public-status")).json()
+            admin_status = (await c.get("/status", headers=AUTH)).json()
+
+        assert resp.json()["ok"] is True
+        assert app.state.station_state.session_stopped is False
+        assert app.state.station_state.now_streaming == {}
+        assert public_status["session_stopped"] is False
+        assert public_status["now_streaming"] == {}
+        assert public_status["playback_actions"]["skip_ready"] is False
+        assert admin_status["session_stopped"] is False
+        assert admin_status["now_streaming"] == {}
+        assert admin_status["playback_actions"]["skip_ready"] is False
+
+    @pytest.mark.asyncio
+    async def test_resume_keeps_non_stopped_now_streaming(self):
+        """Idempotent resume must not erase a real in-flight segment."""
+        live_state = {"type": "music", "label": "Song", "started": time.time(), "metadata": {}}
+        app = _make_app(session_stopped=False, now_streaming=live_state)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/resume", headers=AUTH)
 
-        # now_streaming is still "stopped" — the gap
-        assert app.state.station_state.now_streaming["type"] == "stopped"
+        assert app.state.station_state.now_streaming == live_state
 
     @pytest.mark.asyncio
     async def test_resume_does_not_re_populate_queue(self):
@@ -830,25 +858,39 @@ class TestTriggerEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Pending requests — silently cleared on playlist switch
+# Pending requests — source-change outcome on playlist switch
 # ---------------------------------------------------------------------------
 
 
 class TestPendingRequestLifecycle:
-    def test_pending_requests_cleared_on_switch_playlist(self):
-        """DOCUMENTED GAP: A pending listener request is silently discarded when
-        the admin loads a new playlist.  The listener sees 'Canzone in arrivo!'
-        but the request is lost and never played.
-        """
+    def test_pending_requests_marked_source_changed_on_switch_playlist(self):
+        """Playlist switches keep an admin-visible outcome for accepted requests."""
         state = StationState(
             playlist=[Track(title="Old Song", artist="A", duration_ms=1000, spotify_id="o1")],
-            pending_requests=[{"type": "song_wish", "text": "Play Ti Amo"}],
+            pending_requests=[
+                {
+                    "request_id": "request-1",
+                    "name": "Luca",
+                    "message": "Play Ti Amo",
+                    "type": "song_request",
+                    "song_track": "Umberto Tozzi — Ti Amo",
+                }
+            ],
         )
         new_tracks = [Track(title="New Song", artist="B", duration_ms=1000, spotify_id="n1")]
 
         state.switch_playlist(new_tracks)
 
         assert state.pending_requests == []
+        assert len(state.recently_consumed_requests) == 1
+        consumed = state.recently_consumed_requests[0]
+        assert consumed["id"] == "request-1"
+        assert consumed["name"] == "Luca"
+        assert consumed["message"] == "Play Ti Amo"
+        assert consumed["song_track"] == "Umberto Tozzi — Ti Amo"
+        assert consumed["type"] == "song_request"
+        assert consumed["status"] == "source_changed"
+        assert time.time() - consumed["consumed_at"] < 5
 
     def test_pinned_track_cleared_on_switch_playlist(self):
         """Pinned track from old playlist is discarded on source switch."""
@@ -1301,6 +1343,33 @@ class TestStoppedStateQuietsTheUI:
                 "radio.toml / /public-status."
             )
 
+    def test_listener_building_schedule_is_single_placeholder(self):
+        """An empty rendered queue should not look like four fake future slots."""
+        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        css = (WEB_ROOT / "static" / "listener.css").read_text()
+
+        assert "status.upcoming_mode === 'building'" in js
+        assert "The next records are being cued" in js
+        assert "status: true" in js
+        assert 'li class="status" role="status"' in js
+        assert "status.golden_path && status.golden_path.stage === 'needs_music_source'" in js
+        assert "np_no_source" in js
+        assert js.index("noMusicSource") < js.index("status.upcoming_mode === 'building'"), (
+            "listener schedule must render no-source copy before falling through to generic building copy."
+        )
+        assert "while (cards.length < 4)" not in js, (
+            "listener schedule must not pad every missing future slot with the building copy."
+        )
+        assert "if (!stopped && noMusicSource && cards.length < 4)" in js, (
+            "the no-source placeholder must be gated behind '!stopped' so a paused station "
+            "never shows 'no music source' instead of the stopped card."
+        )
+        assert "} else if (!stopped && status && status.upcoming_mode === 'building' && cards.length < 4)" in js, (
+            "the generic building placeholder must be gated behind '!stopped' for the same reason."
+        )
+        assert ".mmr-schedule li.status" in css
+        assert ".mmr-schedule li.status .m .title" in css
+
     def test_admin_station_card_uses_status_stream_metadata(self):
         html = ADMIN_HTML.read_text()
         assert "96.7" not in html
@@ -1327,9 +1396,23 @@ class TestStoppedStateQuietsTheUI:
             "Scaletta distinguishes a paused station from one building its queue."
         )
         assert "Station paused" in block, "renderProgramme() stopped branch must render the paused-state copy."
-        assert "Preparing the next segment" in block, (
+        assert "The next item is being cued for air." in block, (
             "renderProgramme() must keep the building-queue copy for the running-but-empty case."
         )
+        assert "No music source selected. Add a source to build the rundown." in block, (
+            "renderProgramme() must distinguish no-source from active producer building."
+        )
+        assert "st?.golden_path?.stage==='needs_music_source'" in block, (
+            "renderProgramme() must use golden_path as the no-source authority, not just source objects."
+        )
+        assert "needsMusicSource||!hasMusicSource" in block, (
+            "renderProgramme() must still show no-source copy when startup has a fallback playlist_source."
+        )
+        assert "No '+segmentText(_programmeFilter)+' ready in this rundown." in block, (
+            "renderProgramme() must distinguish a filtered-empty rendered queue from a building queue."
+        )
+        assert 'aria-live="polite"' in html
+        assert 'aria-atomic="true"' in html
 
     def test_render_programme_memo_hash_tracks_id_and_stop_state(self):
         """The renderProgramme() memoization hash must include each row's queue
@@ -1346,6 +1429,9 @@ class TestStoppedStateQuietsTheUI:
         hash_line = next(line for line in block.splitlines() if "const hash=" in line)
         assert "u.id" in hash_line, "renderProgramme() memo hash must include each row's queue id."
         assert "session_stopped" in hash_line, "renderProgramme() memo hash must include the session_stopped flag."
+        assert "current_source" in hash_line and "playlist_source" in hash_line and "golden_path" in hash_line, (
+            "renderProgramme() memo hash must include source/golden-path state so no-source/building copy refreshes."
+        )
 
     def test_refresh_fast_syncs_stop_state_from_status_poll(self):
         """The status poll must drive `data-stopped` from `session_stopped` so a
@@ -1383,7 +1469,7 @@ class TestFaderDownEmptyRoomUI:
         assert "The record is cued. Waiting for someone to tune in." in html
         assert "Fader Down — the record is cued for the next listener." in programme
         assert "Station paused — press Start to resume." in programme
-        assert "Preparing the next segment..." in programme
+        assert "The next item is being cued for air." in programme
 
     def test_fader_down_freezes_elapsed_timer_without_waiting_for_stop(self):
         freeze = _admin_function_block("freezeFaderDownProgress")

@@ -36,6 +36,12 @@ now-playing contract; this integration is the HA-native face of it.
   Mamma Mi Radio → ⋮ → **Reconfigure**) — no need to delete and re-add the
   entity. A failed change keeps what you typed instead of reverting.
 
+The add-on's `station_name` option changes the entity's friendly name, media
+titles, listener UI, stream metadata, and default generated imaging copy. The
+integration domain, entity ID, and media-source ID stay stable:
+`mammamiradio`, `media_player.mammamiradio`, and
+`media-source://mammamiradio/live`.
+
 ## Install (HACS custom repository)
 
 1. HACS → three-dot menu → **Custom repositories**.
@@ -52,11 +58,11 @@ now-playing contract; this integration is the HA-native face of it.
 
 ## Turn off the add-on's media_player push (when using this integration)
 
-The add-on pushes a `media_player.mammamiradio` "ghost" every few seconds over
-the REST API — **on by default**, so an add-on-only setup gets a basic
-media-player tile automatically. Once this integration owns that entity, the push
-fights it (the HA state machine is last-writer-wins) and flaps the card. So when
-you install this integration:
+The add-on pushes a `media_player.mammamiradio` "ghost" after segment changes
+and on its heartbeat — **on by default**, so an add-on-only setup gets a basic
+media-player tile automatically. Once this integration owns that entity, the
+push fights it (the HA state machine is last-writer-wins) and flaps the card. So
+when you install this integration:
 
 **Add-on → Configuration → turn off `On-air media player push`
 (`ha_media_player_push`).**

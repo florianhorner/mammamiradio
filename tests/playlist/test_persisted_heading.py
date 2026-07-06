@@ -47,6 +47,58 @@ def test_persisted_heading_round_trip_announced(tmp_path):
     assert restored.announced is True
 
 
+def test_persisted_heading_round_trip_direction_targets(tmp_path):
+    heading = Heading(
+        id="h-direction",
+        seed="direction://2000s female vocals",
+        label="2000s female vocals",
+        set_at=123.4,
+        set_by="operator",
+        selection_budget=5,
+        selection_spent=2,
+        targets=[{"artist": "Britney Spears", "title": "Toxic"}],
+        phase="steering",
+        hunt_started_announced=True,
+        first_found_at=124.0,
+        last_narrated_at=125.0,
+        narration_count=2,
+    )
+
+    write_persisted_heading(tmp_path, heading)
+
+    restored = read_persisted_heading(tmp_path)
+    assert restored == heading
+    assert restored is not None
+    assert restored.selection_budget == 5
+    assert restored.selection_spent == 2
+    assert restored.targets == [{"artist": "Britney Spears", "title": "Toxic"}]
+    assert restored.phase == "steering"
+    assert restored.hunt_started_announced is True
+    assert restored.first_found_at == 124.0
+    assert restored.last_narrated_at == 125.0
+    assert restored.narration_count == 2
+
+
+def test_persisted_heading_defaults_legacy_direction_to_hunting(tmp_path):
+    (tmp_path / "heading.json").write_text(
+        """{
+  "id": "h-direction",
+  "seed": "direction://2000s",
+  "label": "2000s",
+  "set_at": 1.0,
+  "set_by": "operator",
+  "selection_budget": 0,
+  "selection_spent": 0,
+  "targets": [{"artist": "Britney Spears", "title": "Toxic"}]
+}"""
+    )
+
+    restored = read_persisted_heading(tmp_path)
+
+    assert restored is not None
+    assert restored.phase == "hunting"
+
+
 def test_persisted_heading_missing_returns_none(tmp_path):
     assert read_persisted_heading(tmp_path) is None
 
@@ -58,7 +110,7 @@ def test_persisted_heading_corrupt_returns_none(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_startup_drops_persisted_heading_when_restore_adds_no_new_tracks(tmp_path):
+async def test_startup_retags_persisted_heading_when_restore_matches_existing_track(tmp_path):
     config = load_config(TOML_PATH)
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path / "tmp"
@@ -106,10 +158,12 @@ async def test_startup_drops_persisted_heading_when_restore_adds_no_new_tracks(t
         await main_module.app.state.playback_task
 
     state = main_module.app.state.station_state
-    assert state.heading is None
+    assert state.heading is not None
+    assert state.heading.id == heading.id
+    assert state.heading.selection_budget == 1
     assert state.playlist == [base_track]
-    assert state.playlist[0].heading_id == ""
-    assert read_persisted_heading(tmp_path) is None
+    assert state.playlist[0].heading_id == heading.id
+    assert read_persisted_heading(tmp_path) is not None
 
 
 @pytest.mark.asyncio
@@ -158,6 +212,11 @@ async def test_startup_restores_announced_heading_without_rearming(tmp_path):
     state = main_module.app.state.station_state
     restored_heading_track = next(track for track in state.playlist if track.title == "Estate")
     state._arm_heading_announcement_if_needed(restored_heading_track)
-    assert state.heading == heading
+    assert state.heading is not None
+    assert state.heading.id == heading.id
+    assert state.heading.seed == heading.seed
+    assert state.heading.label == heading.label
+    assert state.heading.announced is True
+    assert state.heading.selection_budget == 1
     assert state.heading_announced_id == heading.id
     assert state.heading_pending_announcement == ""

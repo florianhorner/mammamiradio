@@ -81,6 +81,94 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
+def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "updateHeadingBanner")
+    style = re.search(r"\.course-banner\s*\{([^}]*)\}", html, re.DOTALL)
+
+    assert style is not None
+    assert "min-width: 0" in style.group(1)
+    assert "overflow-wrap: break-word" in style.group(1)
+    assert 'class="record-hunt-truth"' in html
+    assert 'class="record-hunt-stage" aria-hidden="true"' in html
+    assert "Record Hunt: <b>Auto rotation</b>" in html
+    assert "Record Hunt:" in block
+    assert "Record Hunt is searching for" in block
+    assert "Record Hunt is opening the back room for" in html
+    assert "is shaping the next stretch" in block
+    assert "Hunt pick" in block
+    assert "played through. Back on auto." in block
+    assert "Course:" not in block
+
+
+def test_record_hunt_matches_are_visible_in_rotation_rows() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "updatePl")
+
+    assert "const activeHeadingId=_st?.heading?.active?_st.heading.id:''" in block
+    assert "t.heading_id" in block
+    assert "record-hunt-match" in block
+    assert "Hunt pick" in block
+    assert "Favored for the current Record Hunt" in block
+    assert ".pl-row.record-hunt-match" in html
+    assert ".pl-row.record-hunt-match .pl-a { opacity: 1; }" in html
+
+
+def test_record_hunt_busywork_rotates_fake_back_room_status() -> None:
+    html = _read_admin_html()
+
+    for line in (
+        "shopping for records...",
+        "undusting the LPs...",
+        "buying a new CD-RW writer...",
+        "checking the bargain bin...",
+        "reading suspicious liner notes...",
+        "arguing with the jukebox...",
+        "rewinding a mixtape nobody asked for...",
+        "pricing imports with a tiny sticker gun...",
+        "borrowing a crate from the night host...",
+        "testing whether the B-side still has magic...",
+    ):
+        assert line in html
+    assert "setInterval(()=>{" in html
+    assert "},1800)" in html
+    assert "prefers-reduced-motion: reduce" in html
+
+
+def test_record_hunt_pending_guard_blocks_stale_auto_rotation_poll() -> None:
+    block = _function_block(_read_admin_html(), "updateHeadingBanner")
+
+    assert "}else if(_recordHuntOptimistic.active){" in block
+    assert "Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
+    assert "renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>')" in block
+    assert block.index("_recordHuntOptimistic.active") < block.index("Record Hunt: <b>Auto rotation</b>")
+
+
+def test_failed_direction_clears_pending_record_hunt_before_refresh() -> None:
+    block = _function_block(_read_admin_html(), "setDirectionText")
+
+    assert (
+        "if(!r.ok){\n"
+        "      clearRecordHuntOptimistic();\n"
+        "      toast(r.message||wayOut('shape that set'));\n"
+        "      await refreshFast();\n"
+        "      return;\n"
+        "    }"
+    ) in block
+
+
+def test_direction_timeout_clears_stale_pending_record_hunt_before_refresh() -> None:
+    block = _function_block(_read_admin_html(), "setDirectionText")
+
+    assert (
+        "if(e&&e.name==='AbortError'){\n"
+        "      clearRecordHuntOptimistic();\n"
+        "      toast('Still hunting records - check the banner in a moment.');\n"
+        "      try{await refreshFast();}catch(_){}\n"
+        "    }"
+    ) in block
+
+
 def test_pipeline_status_uses_canonical_status_chips() -> None:
     block = _function_block(_read_admin_html(), "updatePipelineStatus")
 
@@ -240,6 +328,14 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "musicState='ready'" in update_systems
     assert "musicState='working'" in update_systems
     assert "musicState='blocked'" in update_systems
+    assert "const needsMusicSource=gp.stage==='needs_music_source'" in update_systems
+    assert "const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source)" in update_systems
+    assert "if(needsMusicSource||!hasMusicSource)" in update_systems
+    assert "musicLabel='Needs source'" in update_systems
+    assert "Add a source from Rotazione to build the rundown." in update_systems
+    assert "else if(st?.session_stopped===true)" in update_systems
+    assert "else if(st?.upcoming_mode==='building')" in update_systems
+    assert update_systems.index("st?.session_stopped===true") < update_systems.index("st?.upcoming_mode==='building'")
     assert "statusRow('Scrittura AI',aiState,aiLabel,aiDetail)" in update_systems
     assert "statusRow('Fonti musica',musicState,musicLabel,musicDetail)" in update_systems
 
@@ -249,11 +345,23 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
 
     for expected in (
         "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
-        "statusInline('blocked','not found')",
+        "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "r.status==='source_changed'",
+        "Playlist changed",
+        "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
+    html = _read_admin_html()
+    assert "not a single-track song" in html
+    assert "not a song" in html
+    assert "Not a song" in html
+    assert "Banned song" in html
+    assert "download failed" in html
+    assert "Download failed" in html
+    assert "cancelled" in html
+    assert "Cancelled" in html
     # ensure double-glyph pattern is gone
     assert "'▶ '" not in block
 

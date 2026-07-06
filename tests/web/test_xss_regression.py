@@ -85,6 +85,27 @@ def test_programme_actions_do_not_interpolate_ids_into_inline_handlers() -> None
     assert "getAttribute('data-playlist-index')" in init_block
 
 
+def test_home_preview_actions_do_not_interpolate_entity_ids_into_inline_handlers() -> None:
+    """HA preview entity IDs must cross the DOM as data attributes, not onclick JS."""
+    html = ADMIN_HTML.read_text()
+    render_block = html[
+        html.index("function renderHomeContextPreview") : html.index("async function loadHomeContextPreview")
+    ]
+
+    assert 'onclick="setHaEntityMuted' not in render_block
+    assert "setHaEntityMuted('${" not in render_block
+    assert 'data-ha-entity-id="${esc(row.entity_id)}"' in render_block
+    assert 'data-ha-muted-next="${muted?' in render_block
+
+    listener_block = html[
+        html.index(
+            "document.addEventListener('click',event=>{\n  const btn=event.target.closest('[data-ha-entity-id]"
+        ) : html.index("function renderSetup", html.index("async function setHaEntityMuted"))
+    ]
+    assert "getAttribute('data-ha-entity-id')" in listener_block
+    assert "getAttribute('data-ha-muted-next')" in listener_block
+
+
 def test_focus_playlist_track_escapes_data_id_selector() -> None:
     """The data-id fallback selector in focusPlaylistTrack() must use CSS.escape().
 

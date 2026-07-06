@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Heading, PlaylistSource, Track
+from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
@@ -266,7 +267,7 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
 
 
 def _normalized_track_key(track: Track) -> tuple[str, str]:
-    return (track.artist.strip().lower(), track.title.strip().lower())
+    return _core_normalized_track_key(track)
 
 
 # Public alias: the single canonical (artist, title) identity used for both
@@ -616,6 +617,19 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
         label = str(payload.get("label", "")).strip()
         if not heading_id or not seed or not label:
             return None
+        targets: list[dict[str, str]] = []
+        raw_targets = payload.get("targets", [])
+        if isinstance(raw_targets, list):
+            for raw_target in raw_targets:
+                if not isinstance(raw_target, dict):
+                    continue
+                artist = str(raw_target.get("artist", "")).strip()
+                title = str(raw_target.get("title", "")).strip()
+                if artist and title:
+                    targets.append({"artist": artist, "title": title})
+        phase = str(payload.get("phase", "")).strip()
+        if phase not in {"hunting", "steering", "complete"}:
+            phase = "hunting" if targets and int(payload.get("selection_budget", 0) or 0) <= 0 else "steering"
         return Heading(
             id=heading_id,
             seed=seed,
@@ -623,6 +637,14 @@ def read_persisted_heading(cache_dir: Path) -> Heading | None:
             set_at=float(payload.get("set_at", 0.0) or 0.0),
             set_by=str(payload.get("set_by", "")),
             announced=bool(payload.get("announced", False)),
+            selection_budget=max(0, int(payload.get("selection_budget", 0) or 0)),
+            selection_spent=max(0, int(payload.get("selection_spent", 0) or 0)),
+            targets=targets,
+            phase=phase,
+            hunt_started_announced=bool(payload.get("hunt_started_announced", False)),
+            first_found_at=max(0.0, float(payload.get("first_found_at", 0.0) or 0.0)),
+            last_narrated_at=max(0.0, float(payload.get("last_narrated_at", 0.0) or 0.0)),
+            narration_count=max(0, int(payload.get("narration_count", 0) or 0)),
         )
     except (TypeError, ValueError):
         logger.warning("Persisted heading has invalid fields: %s", path)
@@ -639,6 +661,18 @@ def write_persisted_heading(cache_dir: Path, heading: Heading) -> None:
         "set_at": heading.set_at,
         "set_by": heading.set_by,
         "announced": heading.announced,
+        "selection_budget": max(0, int(heading.selection_budget or 0)),
+        "selection_spent": max(0, int(heading.selection_spent or 0)),
+        "phase": heading.phase if heading.phase in {"hunting", "steering", "complete"} else "steering",
+        "hunt_started_announced": bool(heading.hunt_started_announced),
+        "first_found_at": max(0.0, float(heading.first_found_at or 0.0)),
+        "last_narrated_at": max(0.0, float(heading.last_narrated_at or 0.0)),
+        "narration_count": max(0, int(heading.narration_count or 0)),
+        "targets": [
+            {"artist": str(target.get("artist", "")).strip(), "title": str(target.get("title", "")).strip()}
+            for target in heading.targets
+            if str(target.get("artist", "")).strip() and str(target.get("title", "")).strip()
+        ],
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))

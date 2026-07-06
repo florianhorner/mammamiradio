@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -62,6 +63,8 @@ def _mock_all(monkeypatch):
         tts_mod._elevenlabs_client = None
         tts_mod._elevenlabs_client_key = ""
         tts_mod._failed_edge_voices.clear()  # edge-failure memoization leaks across tests otherwise
+        tts_mod._failed_cloud_voices.clear()
+        tts_mod._cloud_voice_attempt_locks.clear()
 
     _reset_provider_clients()
 
@@ -526,6 +529,204 @@ class _HttpErrorClient:
 
     async def post(self, url, **kwargs):
         return httpx.Response(500, content=b"upstream boom", request=httpx.Request("POST", url))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_auth_error_is_memoized_for_session(_mock_all, tmp_path, monkeypatch, caplog):
+    """A non-retryable Azure auth/config failure warns once, then skips cloud retry."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "revoked-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+    seen = {"posts": 0}
+
+    class _AuthErrorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            return httpx.Response(401, content=b"unauthorized", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _AuthErrorClient)
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.audio.tts"):
+        await synthesize(
+            "Ciao",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "first.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+        await synthesize(
+            "Ancora",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "second.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert seen["posts"] == 1
+    assert caplog.text.count("Azure TTS disabled for voice 'it-IT-Isabella:DragonHDLatestNeural'") == 1
+    assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
+    assert _mock_all["Communicate"].call_args_list[1].args[1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_auth_error_lock_collapses_concurrent_attempts(_mock_all, tmp_path, monkeypatch, caplog):
+    """Concurrent calls for the same bad Azure voice should not duplicate the cloud POST."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "revoked-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+    post_started = asyncio.Event()
+    release_post = asyncio.Event()
+    seen = {"posts": 0}
+
+    class _SlowAuthErrorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            post_started.set()
+            await release_post.wait()
+            return httpx.Response(401, content=b"unauthorized", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _SlowAuthErrorClient)
+
+    async def _call(text: str, name: str):
+        return await synthesize(
+            text,
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / f"{name}.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.audio.tts"):
+        first = asyncio.create_task(_call("Ciao", "first"))
+        await asyncio.wait_for(post_started.wait(), timeout=1.0)
+        second = asyncio.create_task(_call("Ancora", "second"))
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if seen["posts"] > 1:
+                break
+        assert seen["posts"] == 1
+        assert _mock_all["Communicate"].call_count == 0
+
+        release_post.set()
+        await asyncio.gather(first, second)
+
+    assert seen["posts"] == 1
+    assert caplog.text.count("Azure TTS disabled for voice 'it-IT-Isabella:DragonHDLatestNeural'") == 1
+    assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == [
+        "it-IT-DiegoNeural",
+        "it-IT-DiegoNeural",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_auth_error_is_memoized_for_session(_mock_all, tmp_path, monkeypatch, caplog):
+    """A non-retryable ElevenLabs auth/config failure warns once, then skips cloud retry."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "revoked-key")
+    seen = {"posts": 0}
+
+    class _AuthErrorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            return httpx.Response(401, content=b"unauthorized", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _AuthErrorClient)
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.audio.tts"):
+        await synthesize(
+            "Ciao",
+            "elevenlabs-voice-id",
+            tmp_path / "first.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+        await synthesize(
+            "Ancora",
+            "elevenlabs-voice-id",
+            tmp_path / "second.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert seen["posts"] == 1
+    assert caplog.text.count("ElevenLabs TTS disabled for voice 'elevenlabs-voice-id'") == 1
+    assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
+    assert _mock_all["Communicate"].call_args_list[1].args[1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_auth_error_lock_collapses_concurrent_attempts(
+    _mock_all, tmp_path, monkeypatch, caplog
+):
+    """Concurrent calls for the same bad ElevenLabs voice should not duplicate the cloud POST."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "revoked-key")
+    post_started = asyncio.Event()
+    release_post = asyncio.Event()
+    seen = {"posts": 0}
+
+    class _SlowAuthErrorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            post_started.set()
+            await release_post.wait()
+            return httpx.Response(401, content=b"unauthorized", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _SlowAuthErrorClient)
+
+    async def _call(text: str, name: str):
+        return await synthesize(
+            text,
+            "elevenlabs-voice-id",
+            tmp_path / f"{name}.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.audio.tts"):
+        first = asyncio.create_task(_call("Ciao", "first"))
+        await asyncio.wait_for(post_started.wait(), timeout=1.0)
+        second = asyncio.create_task(_call("Ancora", "second"))
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if seen["posts"] > 1:
+                break
+        assert seen["posts"] == 1
+        assert _mock_all["Communicate"].call_count == 0
+
+        release_post.set()
+        await asyncio.gather(first, second)
+
+    assert seen["posts"] == 1
+    assert caplog.text.count("ElevenLabs TTS disabled for voice 'elevenlabs-voice-id'") == 1
+    assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == [
+        "it-IT-DiegoNeural",
+        "it-IT-DiegoNeural",
+    ]
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,8 @@ def _write_release_check_repo(
         'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
+    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity.mp3", "x" * 2048)
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -1103,3 +1105,46 @@ def test_dockerfile_port_matches_config() -> None:
         f"CMD --port={cmd_port}, "
         f"config.py default={py_port}"
     )
+
+
+def test_addon_schema_has_no_provider_secret_fields() -> None:
+    """Provider credentials must never reappear as Supervisor add-on options.
+
+    Keys live in /config/secrets.env (written by the admin setup panel);
+    Supervisor options are printed verbatim by `ha addons info`, so a provider
+    field in options/schema leaks the credential to routine diagnostics
+    (issue #688). run.sh keeps reading legacy options.json values as a boot
+    fallback, but the schema — stable and edge — must stay clean.
+    """
+    provider_fields = (
+        "anthropic_api_key",
+        "openai_api_key",
+        "azure_speech_key",
+        "azure_speech_region",
+        "elevenlabs_api_key",
+    )
+    surfaces = (
+        ROOT / "ha-addon" / "mammamiradio" / "config.yaml",
+        ROOT / "ha-addon" / "mammamiradio" / "translations" / "en.yaml",
+        ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml",
+        ROOT / "ha-addon" / "mammamiradio-edge" / "translations" / "en.yaml",
+    )
+    import re
+
+    leaks = [
+        f"{path.relative_to(ROOT)}: {field}"
+        for path in surfaces
+        for field in provider_fields
+        if re.search(rf'^\s*["\']?{field}["\']?\s*:', path.read_text(), re.MULTILINE)
+    ]
+    assert not leaks, (
+        "Provider secret fields must not be add-on options; "
+        "configure them via /config/secrets.env instead: " + ", ".join(leaks)
+    )
+
+    # The inverse contract: run.sh must keep reading these keys from legacy
+    # options.json so installs that predate the schema removal still boot
+    # with their credentials (secrets.env wins per key once populated).
+    run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    missing = [field for field in provider_fields if f"'{field}'" not in run_sh]
+    assert not missing, "run.sh lost the legacy options.json fallback for: " + ", ".join(missing)

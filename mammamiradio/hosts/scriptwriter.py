@@ -53,6 +53,7 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
 )
+from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
     _EXPRESSION_BANK,
     _HOST_FINGERPRINTS,
@@ -62,6 +63,8 @@ from mammamiradio.hosts.prompt_world import (
     CHAOS_SUBTYPE_BLOCKS,
     COURSE_CHANGE_MOOD_NOTICE_TEMPLATE,
     FESTIVAL_MODE_BLOCK,
+    language_mode_directive,
+    language_mode_rule,
 )
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
@@ -87,16 +90,53 @@ _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
 # output. This small residual buffer covers minimal-reasoning + JSON framing
 # without inflating every short fallback into a multi-thousand-token request.
 _OPENAI_REASONING_HEADROOM = 512
+# A max_tokens-truncated response is a budget problem, not a provider-health
+# problem: retry once with a larger budget before falling back to the other
+# provider. One retry, not unbounded — the stock-copy ladder stays the floor.
+_ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR = 1.75
+_ANTHROPIC_MAX_TOKENS_RETRY_LIMIT = 1
+# Wall-clock ceiling across ALL escalation retries of one generation. Only the
+# escalations are skipped past the deadline — the base OpenAI fallback (and the
+# terminal stock copy) always run, so the existing rescue ladder never shrinks.
+_SCRIPT_TOTAL_DEADLINE = 180.0
 # Serializes Anthropic attempts so concurrent async tasks can't all race past
 # the block check and issue parallel 401 floods before the first failure trips
 # the circuit. Created lazily inside the running event loop.
 _anthropic_attempt_lock: asyncio.Lock | None = None
 
+
+def _attempt_timeout(max_tokens: int) -> float:
+    """Per-attempt wall clock scaled to the requested budget.
+
+    Live logs show opus emits ~50-70 tok/s including overhead: 1200 tokens fits
+    45s, but 2400 needs ~90s and an escalated 4200 would die by TimeoutError
+    inside a fixed 45s — the escalation retry would be dead on arrival."""
+    return max(45.0, min(120.0, 45.0 * max_tokens / 1200))
+
+
+def _warn_budget_pressure(output_tokens: object, budget: object, caller: str | None) -> None:
+    """Tripwire: the next output-contract growth spurt should announce itself in
+    logs while generations still succeed, before it becomes an on-air truncation
+    (600 tokens truncated pre-2.8.0, 1200 truncated 2026-07). Best-effort
+    telemetry: a non-numeric usage value must never raise into generation."""
+    if not isinstance(output_tokens, int) or not isinstance(budget, int):
+        return
+    if budget > 0 and output_tokens >= 0.8 * budget:
+        logger.warning(
+            "Script output used %d/%d tokens (>=80%%) for caller=%s — budget pressure, consider raising",
+            output_tokens,
+            budget,
+            caller,
+        )
+
+
 _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "banter": "script_banter",
+    "direction": "script_banter",
     "news_flash": "script_banter",
     "transition": "script_transition",
     "ad": "script_ads",
+    MEMORY_EXTRACT_CALLER: "script_memory",
 }
 
 
@@ -117,6 +157,11 @@ _cached_system_prompt_hash: str = ""
 # Imported from config so the roster gate (MAMMAMIRADIO_GUEST_HOST) and the
 # prompt logic share one spelling of the name.
 _LOCAL_BALLOON_GUEST_HOST = GUEST_HOST_NAME
+_LOCAL_BALLOON_GUEST_HOST_CI = _LOCAL_BALLOON_GUEST_HOST.casefold()
+_LOCAL_BALLOON_GUEST_HOST_FIRST_CI = _LOCAL_BALLOON_GUEST_HOST.split()[0].casefold()
+_HOST_TAG_STRIP_CHARS = " \t\r\n\"'`“”‘’:："
+_GUEST_HOST_CAMEO_PROBABILITY = 1 / 6
+_GUEST_HOST_CAMEO_COOLDOWN_BREAKS = 1
 
 
 @dataclass
@@ -136,6 +181,8 @@ class ListenerRequestCommit:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
         if self.mark_song_error:
             self.request["song_error"] = True
+            if not self.request.get("song_error_reason"):
+                self.request["song_error_reason"] = "not_found"
         if self.consume:
             now = time.time()
             state.recently_consumed_requests.append(
@@ -146,6 +193,7 @@ class ListenerRequestCommit:
                     "song_track": self.request.get("song_track"),
                     "type": self.request.get("type"),
                     "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "song_error_reason": self.request.get("song_error_reason") or "",
                     "consumed_at": now,
                 }
             )
@@ -161,15 +209,25 @@ class HeadingAnnouncementCommit:
     """Deferred heading notice update, applied only after banter queues."""
 
     heading: Heading
+    kind: str = "first_found"
 
     def apply(self, state: StationState, config: StationConfig) -> None:
-        state.heading_announced_id = self.heading.id
         if state.heading is not None and state.heading.id == self.heading.id:
-            state.heading.announced = True
+            now = time.time()
+            if self.kind == "hunt_start":
+                state.heading.hunt_started_announced = True
+            elif self.kind == "first_found":
+                state.heading_announced_id = self.heading.id
+                state.heading.announced = True
+                state.heading.phase = "steering"
+                if state.heading.first_found_at <= 0:
+                    state.heading.first_found_at = now
+            state.heading.last_narrated_at = now
+            state.heading.narration_count += 1
             try:
                 write_persisted_heading(config.cache_dir, state.heading)
             except Exception:
-                logger.warning("Failed to persist consumed heading mood notice", exc_info=True)
+                logger.warning("Failed to persist consumed record hunt notice", exc_info=True)
 
 
 @dataclass
@@ -207,12 +265,29 @@ class ReleaseBeatBanterCommit:
 
 
 @dataclass
+class GuestHostBanterCooldownCommit:
+    """Deferred guest-host cooldown update, applied only after generated banter queues."""
+
+    invited_guest: bool = False
+    decrement_existing: bool = False
+
+    def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
+        del config, queue_id
+        if self.invited_guest:
+            state.guest_host_banter_cooldown_remaining = _GUEST_HOST_CAMEO_COOLDOWN_BREAKS
+        elif self.decrement_existing:
+            state.guest_host_banter_cooldown_remaining = max(0, state.guest_host_banter_cooldown_remaining - 1)
+
+
+@dataclass
 class BanterCommit:
     """Deferred banter state updates, applied only after banter queues."""
 
     listener_request: ListenerRequestCommit | None = None
     heading_announcement: HeadingAnnouncementCommit | None = None
     release_beat: ReleaseBeatBanterCommit | None = None
+    guest_host_cooldown: GuestHostBanterCooldownCommit | None = None
+    memory_extraction: MemoryExtractionCommit | None = None
 
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
         if self.listener_request is not None:
@@ -221,19 +296,30 @@ class BanterCommit:
             self.heading_announcement.apply(state, config)
         if self.release_beat is not None:
             self.release_beat.apply(state, config, queue_id=queue_id)
+        if self.guest_host_cooldown is not None:
+            self.guest_host_cooldown.apply(state, config, queue_id=queue_id)
 
 
 def _banter_commit(
     listener_request: ListenerRequestCommit | None,
     heading_announcement: HeadingAnnouncementCommit | None,
     release_beat: ReleaseBeatBanterCommit | None = None,
+    guest_host_cooldown: GuestHostBanterCooldownCommit | None = None,
+    memory_extraction: MemoryExtractionCommit | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
-    if heading_announcement is None and release_beat is None:
+    if (
+        heading_announcement is None
+        and release_beat is None
+        and guest_host_cooldown is None
+        and memory_extraction is None
+    ):
         return listener_request
     return BanterCommit(
         listener_request=listener_request,
         heading_announcement=heading_announcement,
         release_beat=release_beat,
+        guest_host_cooldown=guest_host_cooldown,
+        memory_extraction=memory_extraction,
     )
 
 
@@ -324,12 +410,17 @@ def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
 
 
 def _get_openai_client(api_key: str):
-    """Return a reusable OpenAI client, creating one if needed."""
+    """Return a reusable OpenAI client, creating one if needed.
+
+    max_retries=0: script generation does its own budget-aware retrying, and
+    the SDK default (2) would let a wait_for-abandoned executor thread fire two
+    more full-price completions that nothing records. Scoped to script calls
+    only — TTS has its own client in audio/tts.py."""
     global _openai_client, _openai_key
     if _openai_client is None or _openai_key != api_key:
         from openai import OpenAI
 
-        _openai_client = OpenAI(api_key=api_key)
+        _openai_client = OpenAI(api_key=api_key, max_retries=0)
         _openai_key = api_key
     return _openai_client
 
@@ -348,6 +439,42 @@ def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
     hosts = list(config.hosts)
     regular = [h for h in hosts if h.name != _LOCAL_BALLOON_GUEST_HOST]
     return regular or hosts
+
+
+def _normalize_host_tag(name: str) -> str:
+    return name.strip(_HOST_TAG_STRIP_CHARS).casefold()
+
+
+def _is_local_guest_host_name(name: str) -> bool:
+    """Return true only for the configured guest host's exact name, case-insensitive."""
+    return _normalize_host_tag(name) == _LOCAL_BALLOON_GUEST_HOST_CI
+
+
+def _is_local_guest_host_tag(name: str) -> bool:
+    """Return true for raw model tags that are attempts to speak as the guest."""
+    tag = _normalize_host_tag(name)
+    return tag in {_LOCAL_BALLOON_GUEST_HOST_CI, _LOCAL_BALLOON_GUEST_HOST_FIRST_CI}
+
+
+def _guest_host_regulars(config: StationConfig) -> list[HostPersonality]:
+    """Regular hosts available to carry an exchange when the guest exists."""
+    if not any(_is_local_guest_host_name(h.name) for h in config.hosts):
+        return []
+    regulars = _regular_hosts(config)
+    if any(_is_local_guest_host_name(h.name) for h in regulars):
+        return []
+    return regulars
+
+
+def _host_names_text(hosts: list[HostPersonality]) -> str:
+    names = [h.name for h in hosts]
+    if not names:
+        return "the regular hosts"
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])}, and {names[-1]}"
 
 
 def reset_provider_backoff() -> None:
@@ -462,6 +589,12 @@ async def _generate_json_response(
     system_prompt = _get_system_prompt(config)
     fallback_reason = "anthropic_absent"
     cost_category = _script_cost_category(caller)
+    # Escalation retries (Anthropic and OpenAI) stop past this wall-clock
+    # deadline; the base fallback ladder below is never deadline-gated.
+    deadline = time.monotonic() + _SCRIPT_TOTAL_DEADLINE
+    # The OpenAI visible-output floor. Stays at the caller's budget unless
+    # Anthropic exhausted its escalated retries on truncation.
+    final_anthropic_max_tokens = max_tokens
 
     if config.anthropic_api_key:
         now = time.time()
@@ -491,24 +624,34 @@ async def _generate_json_response(
                 max(1, int(_anthropic_auth_blocked_until - now)),
             )
         else:
-            async with _get_anthropic_attempt_lock():
-                # Re-check inside the lock: a sibling task may have just 401'd and
-                # set the block while we were waiting to acquire.
-                now = time.time()
-                block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
-                blocked_now = (
-                    _anthropic_auth_blocked_key == config.anthropic_api_key
-                    and now < _anthropic_auth_blocked_until
-                    and block_applies_to_model
-                )
-                if blocked_now:
-                    state.anthropic_disabled_until = _anthropic_auth_blocked_until
-                    if not config.openai_api_key:
-                        raise RuntimeError(
-                            f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
-                        )
-                    fallback_reason = _anthropic_blocked_fallback_reason()
-                else:
+            # Escalation retry loop. The loop sits OUTSIDE the lock so each
+            # attempt acquires it freshly — a long retry must not hold the
+            # 401-flood serialization lock across two generations (the
+            # concurrent write_transition on the fast path interleaves between
+            # attempts). Only a max_tokens truncation iterates; every other
+            # outcome exits the loop explicitly (break / raise / return).
+            current_max_tokens = max_tokens
+            truncated_prior_attempt = False
+            for attempt in range(_ANTHROPIC_MAX_TOKENS_RETRY_LIMIT + 1):
+                async with _get_anthropic_attempt_lock():
+                    # Re-check inside the lock: a sibling task may have just 401'd and
+                    # set the block while we were waiting to acquire (or between our
+                    # attempts).
+                    now = time.time()
+                    block_applies_to_model = not _anthropic_blocked_model or _anthropic_blocked_model == model
+                    blocked_now = (
+                        _anthropic_auth_blocked_key == config.anthropic_api_key
+                        and now < _anthropic_auth_blocked_until
+                        and block_applies_to_model
+                    )
+                    if blocked_now:
+                        state.anthropic_disabled_until = _anthropic_auth_blocked_until
+                        if not config.openai_api_key:
+                            raise RuntimeError(
+                                f"Anthropic {_anthropic_blocked_reason} previously failed; provider is temporarily disabled"
+                            )
+                        fallback_reason = _anthropic_blocked_fallback_reason()
+                        break
                     block_expired = (
                         _anthropic_auth_blocked_key == config.anthropic_api_key and now >= _anthropic_auth_blocked_until
                     )
@@ -520,27 +663,32 @@ async def _generate_json_response(
                         _anthropic_block_expired_logged = True
                     _t_anthropic = time.perf_counter()
                     _anthropic_stop_reason: str | None = None
+                    _anthropic_in = _anthropic_out = 0
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
                             client.messages.create(
                                 model=model,
-                                max_tokens=max_tokens,
+                                max_tokens=current_max_tokens,
                                 system=system_prompt,
                                 messages=[{"role": "user", "content": prompt}],
                             ),
-                            timeout=45.0,
+                            timeout=_attempt_timeout(current_max_tokens),
                         )
                         # Read stop_reason before indexing content: a max_tokens cut can
                         # return an empty content list, which would raise IndexError below
                         # and lose the truncation signal if captured after.
                         _anthropic_stop_reason = getattr(resp, "stop_reason", None)
-                        _anthropic_in = _anthropic_out = 0
                         if hasattr(resp, "usage") and resp.usage:
                             _anthropic_in = resp.usage.input_tokens
                             _anthropic_out = resp.usage.output_tokens
                             state.record_llm_usage(cost_category, model, _anthropic_in, _anthropic_out)
                         raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+                        # Receipt of a response proves provider HEALTH (auth, quota,
+                        # availability) — clear the circuit here, before parse. A
+                        # truncated-but-received response is a budget problem, not a
+                        # provider problem; clearing post-parse would let it pin
+                        # healthy-Anthropic traffic onto OpenAI.
                         state.anthropic_disabled_until = 0.0
                         state.anthropic_last_error = ""
                         clears_current_block = not _anthropic_auth_blocked_key or (
@@ -554,6 +702,13 @@ async def _generate_json_response(
                             _anthropic_blocked_model = ""
                             _anthropic_block_expired_logged = False
                         parsed = json.loads(_strip_fences(raw))
+                        if truncated_prior_attempt:
+                            logger.info(
+                                "Anthropic escalation retry succeeded (max_tokens=%d, caller=%s)",
+                                current_max_tokens,
+                                caller,
+                            )
+                        _warn_budget_pressure(_anthropic_out, current_max_tokens, caller)
                         provider_event = state.update_runtime_provider(
                             "script_provider",
                             current_provider="anthropic",
@@ -594,10 +749,16 @@ async def _generate_json_response(
                         # fails to parse (JSONDecodeError) or an empty content list that
                         # fails to index (IndexError). Label both honestly so the ledger
                         # measures truncation frequency instead of hiding it behind a
-                        # generic exception name. Behaviour is unchanged — we still fall
-                        # back to OpenAI; only the telemetry/log reason differs.
+                        # generic exception name.
                         _max_tokens_truncated = _anthropic_stop_reason == "max_tokens" and isinstance(
                             exc, json.JSONDecodeError | IndexError
+                        )
+                        # Decide the retry BEFORE the no-OpenAI-key raise below can fire:
+                        # an Anthropic-only install must still get its escalated retry.
+                        will_retry = (
+                            _max_tokens_truncated
+                            and attempt < _ANTHROPIC_MAX_TOKENS_RETRY_LIMIT
+                            and time.monotonic() < deadline
                         )
                         _emit_llm_call(
                             state=state,
@@ -611,15 +772,30 @@ async def _generate_json_response(
                             raw_output=None,
                             ok=False,
                             fallback_reason=(
-                                "anthropic_max_tokens_truncated"
+                                "anthropic_max_tokens_truncated_retrying"
+                                if will_retry
+                                else "anthropic_max_tokens_truncated"
                                 if _max_tokens_truncated
                                 else f"anthropic_{type(exc).__name__}"
                             ),
-                            input_tokens=0,
-                            output_tokens=0,
+                            # Real per-attempt spend: record_llm_usage above already
+                            # billed these tokens, so this row must not claim 0/0.
+                            input_tokens=_anthropic_in,
+                            output_tokens=_anthropic_out,
                             duration_ms=int((time.perf_counter() - _t_anthropic) * 1000),
-                            openai_fallback=True,
+                            openai_fallback=not will_retry,
                         )
+                        if will_retry:
+                            escalated = round(current_max_tokens * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+                            logger.warning(
+                                "Anthropic truncated at max_tokens=%d; retrying with escalated budget %d (caller=%s)",
+                                current_max_tokens,
+                                escalated,
+                                caller,
+                            )
+                            current_max_tokens = escalated
+                            truncated_prior_attempt = True
+                            continue
                         if _is_anthropic_auth_error(exc):
                             _trip_anthropic_circuit_and_fallback(
                                 exc,
@@ -674,6 +850,14 @@ async def _generate_json_response(
                             else:
                                 fallback_reason = "anthropic_exception"
                                 logger.warning("Anthropic %s, falling back to OpenAI: %s", type(exc).__name__, exc)
+                        break
+            if truncated_prior_attempt or fallback_reason == "anthropic_max_tokens_truncated":
+                # Attempt 0 proved the content is long — the OpenAI fallback
+                # inherits the LAST (escalated) budget as its visible-output
+                # floor even when the escalated attempt then died on something
+                # ELSE (timeout, sibling-tripped circuit). The original small
+                # floor is how the live incident's second half happened.
+                final_anthropic_max_tokens = current_max_tokens
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
@@ -685,44 +869,126 @@ async def _generate_json_response(
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
-    # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and require
-    # `max_completion_tokens`. Sending the old name silently broke the entire
-    # OpenAI fallback whenever Anthropic was unavailable.
-    openai_kwargs = dict(
-        model=openai_model,
-        max_completion_tokens=max_tokens + _OPENAI_REASONING_HEADROOM,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-    )
-
-    def _call_openai():
-        try:
-            # "minimal" reasoning keeps these short snippets from spending the
-            # completion cap on hidden reasoning tokens (which would starve the
-            # visible JSON) while keeping the request — and its TPM footprint —
-            # small and low-latency.
-            return client.chat.completions.create(reasoning_effort="minimal", **openai_kwargs)
-        except Exception as exc:
-            # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
-            # that rejects `reasoning_effort` with a 400. Retry once without it
-            # rather than re-introducing the total-failure mode this path fixes.
-            if "reasoning_effort" not in str(exc):
-                raise
-            return client.chat.completions.create(**openai_kwargs)
-
-    t_start = time.perf_counter()
-    resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=45.0)
-    latency_ms = int((time.perf_counter() - t_start) * 1000)
+    # Visible-output floor for the fallback: when Anthropic exhausted its
+    # escalated retries on truncation, the same long content is coming here —
+    # the original small floor is how the live incident's second half happened
+    # (gpt-5.5 returned an EMPTY completion, reasoning tokens starving the
+    # visible JSON). The raised TPM reservation is confined to that path.
+    visible_budget = final_anthropic_max_tokens
+    raw = ""
+    finish_reason: str | None = None
+    latency_ms = 0
     prompt_tokens = 0
     completion_tokens = 0
-    if getattr(resp, "usage", None):
-        prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
-        completion_tokens = getattr(resp.usage, "completion_tokens", 0)
-        state.record_llm_usage(cost_category, openai_model, prompt_tokens, completion_tokens)
-    raw = (resp.choices[0].message.content or "").strip()  # type: ignore[attr-defined]
+    for oa_attempt in range(2):  # base attempt + at most one escalated retry
+        # Newer OpenAI models (gpt-5.x) reject `max_tokens` with a 400 and require
+        # `max_completion_tokens`. Sending the old name silently broke the entire
+        # OpenAI fallback whenever Anthropic was unavailable. Rebuilt fresh per
+        # attempt — never mutated — and the headroom is re-added once per build,
+        # so an escalation can't compound it.
+        # Deadline-capped so the tail is bounded (a truncated Anthropic chain
+        # can arrive here late), but floored at 45s — the base fallback ladder
+        # always gets a real shot, never strangled by the deadline.
+        oa_timeout = max(
+            45.0,
+            min(_attempt_timeout(visible_budget + _OPENAI_REASONING_HEADROOM), deadline - time.monotonic()),
+        )
+        openai_kwargs = dict(
+            model=openai_model,
+            max_completion_tokens=visible_budget + _OPENAI_REASONING_HEADROOM,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            # SDK-level timeout: asyncio.wait_for around run_in_executor abandons
+            # (does not cancel) the sync SDK thread — the HTTP-layer timeout plus
+            # the client's max_retries=0 are what actually stop a runaway request
+            # from billing unrecorded tokens.
+            timeout=oa_timeout,
+        )
+
+        def _call_openai(kwargs=openai_kwargs):
+            try:
+                # "minimal" reasoning keeps these short snippets from spending the
+                # completion cap on hidden reasoning tokens (which would starve the
+                # visible JSON) while keeping the request — and its TPM footprint —
+                # small and low-latency.
+                return client.chat.completions.create(reasoning_effort="minimal", **kwargs)
+            except Exception as exc:
+                # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
+                # that rejects `reasoning_effort` with a 400. Retry once without it
+                # rather than re-introducing the total-failure mode this path fixes.
+                if "reasoning_effort" not in str(exc):
+                    raise
+                return client.chat.completions.create(**kwargs)
+
+        t_start = time.perf_counter()
+        resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
+        latency_ms = int((time.perf_counter() - t_start) * 1000)
+        prompt_tokens = 0
+        completion_tokens = 0
+        if getattr(resp, "usage", None):
+            prompt_tokens = getattr(resp.usage, "prompt_tokens", 0)
+            completion_tokens = getattr(resp.usage, "completion_tokens", 0)
+            state.record_llm_usage(cost_category, openai_model, prompt_tokens, completion_tokens)
+        choice = resp.choices[0]  # type: ignore[attr-defined]
+        raw = (choice.message.content or "").strip()
+        finish_reason = getattr(choice, "finish_reason", None)
+        # Retry gate for the OTHER half of the live incident: a completion cut at
+        # the cap (`finish_reason == "length"`, reasoning tokens included) or a
+        # genuinely empty one gets ONE escalated retry. An empty completion with
+        # finish_reason "stop" (model finished on purpose) or "content_filter"
+        # (refusal) is an outcome a bigger budget cannot fix — that raises below,
+        # exactly as before, without spending a paid retry on it.
+        needs_bigger_budget = finish_reason == "length" or (not raw and finish_reason not in ("stop", "content_filter"))
+        if needs_bigger_budget and oa_attempt == 0 and time.monotonic() < deadline:
+            logger.info(
+                "openai_script_call",
+                extra={
+                    "event": "openai_script_call",
+                    "model": openai_model,
+                    "caller": caller,
+                    "fallback_reason": fallback_reason,
+                    "latency_ms": latency_ms,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "json_ok": False,
+                    "finish_reason": finish_reason,
+                    "raw_preview": raw[:500],
+                },
+            )
+            # Attempt-failure reason stays separate from the provider-level
+            # fallback_reason so provider-switch telemetry keeps carrying the
+            # Anthropic-side reason (e.g. anthropic_max_tokens_truncated).
+            _emit_llm_call(
+                state=state,
+                config=config,
+                caller=caller,
+                role=role,
+                spot_index=spot_index,
+                provider="openai",
+                model=openai_model,
+                prompt=prompt,
+                raw_output=raw,
+                ok=False,
+                fallback_reason="openai_empty_or_length",
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                duration_ms=latency_ms,
+                openai_fallback=fallback_reason != "anthropic_absent",
+            )
+            escalated_budget = round(visible_budget * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
+            logger.warning(
+                "OpenAI returned %s at max_completion_tokens=%d; retrying with escalated budget %d (caller=%s)",
+                finish_reason or "empty content",
+                visible_budget + _OPENAI_REASONING_HEADROOM,
+                escalated_budget + _OPENAI_REASONING_HEADROOM,
+                caller,
+            )
+            visible_budget = escalated_budget
+            continue
+        break
     try:
         parsed = json.loads(_strip_fences(raw))
     except json.JSONDecodeError:
@@ -758,6 +1024,7 @@ async def _generate_json_response(
             openai_fallback=fallback_reason != "anthropic_absent",
         )
         raise
+    _warn_budget_pressure(completion_tokens, visible_budget + _OPENAI_REASONING_HEADROOM, caller)
     logger.info(
         "openai_script_call",
         extra={
@@ -1007,6 +1274,235 @@ def _strip_fences(raw: str) -> str:
     return raw
 
 
+_LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")
+
+_NORMAL_MODE_LANGUAGE_REPAIR = """
+NORMAL MODE LANGUAGE REPAIR:
+The previous JSON was too Italian for Normal Mode. Rewrite the same content as
+English-led host speech: roughly 70% English / 30% Italian. English carries the
+information and full sentences; Italian is only greetings, reactions, punchlines,
+and colour. Keep the same JSON schema and valid host names.
+""".strip()
+
+_NORMAL_MODE_ENGLISH_MARKERS = frozenset(
+    {
+        "a",
+        "about",
+        "after",
+        "again",
+        "all",
+        "and",
+        "anyway",
+        "are",
+        "back",
+        "be",
+        "because",
+        "been",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "english",
+        "exactly",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "here",
+        "in",
+        "is",
+        "it",
+        "keep",
+        "little",
+        "more",
+        "music",
+        "next",
+        "no",
+        "not",
+        "now",
+        "of",
+        "on",
+        "or",
+        "out",
+        "room",
+        "say",
+        "song",
+        "stay",
+        "still",
+        "that",
+        "the",
+        "then",
+        "there",
+        "this",
+        "to",
+        "track",
+        "was",
+        "we",
+        "what",
+        "with",
+        "you",
+    }
+)
+
+_NORMAL_MODE_ITALIAN_MARKERS = frozenset(
+    {
+        "abbiamo",
+        "adesso",
+        "allora",
+        "anche",
+        "ancora",
+        "ascolta",
+        "bene",
+        "benissimo",
+        "calma",
+        "canzone",
+        "casa",
+        "che",
+        "ci",
+        "come",
+        "con",
+        "continua",
+        "cosa",
+        "cosi",
+        "così",
+        "da",
+        "dai",
+        "della",
+        "di",
+        "e",
+        "era",
+        "finisce",
+        "fretta",
+        "in",
+        "italiano",
+        "la",
+        "lo",
+        "ma",
+        "musica",
+        "nel",
+        "nella",
+        "nessuna",
+        "non",
+        "ora",
+        "piano",
+        "poi",
+        "questa",
+        "questo",
+        "qui",
+        "respira",
+        "restiamo",
+        "senza",
+        "si",
+        "sì",
+        "studio",
+        "tutti",
+        "un",
+        "una",
+        "va",
+    }
+)
+
+_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS = frozenset({"a", "in", "no"})
+
+
+def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
+    """Extract model-authored speech fields from script JSON for language checks."""
+    if not isinstance(data, dict):
+        return []
+    if surface == "banter":
+        texts: list[str] = []
+        raw_lines = data.get("lines")
+        if isinstance(raw_lines, list):
+            for line in raw_lines:
+                if isinstance(line, dict) and isinstance(line.get("text"), str):
+                    texts.append(line["text"])
+                elif isinstance(line, str):
+                    texts.append(line)
+        return texts
+    if surface == "ad":
+        texts = []
+        raw_parts = data.get("parts")
+        if isinstance(raw_parts, list):
+            for part in raw_parts:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type", "voice") == "voice"
+                    and isinstance(part.get("text"), str)
+                ):
+                    texts.append(part["text"])
+        if not texts and isinstance(data.get("text"), str):
+            texts.append(data["text"])
+        return texts
+    text = data.get("text")
+    return [text] if isinstance(text, str) else []
+
+
+def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
+    """Return false only for clearly all-Italian generated speech in Normal Mode."""
+    if config.super_italian_mode:
+        return True
+    combined = " ".join(text.strip() for text in texts if text and text.strip())
+    if not combined:
+        return True
+    tokens = [token.casefold() for token in _LANGUAGE_TOKEN_RE.findall(combined)]
+    if len(tokens) < 12:
+        return True
+
+    english_hits = sum(
+        token in _NORMAL_MODE_ENGLISH_MARKERS and token not in _NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS
+        for token in tokens
+    )
+    italian_hits = sum(
+        token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù") for token in tokens
+    )
+    english_floor = max(2, len(tokens) // 10)
+    if english_hits >= english_floor:
+        return True
+
+    italian_floor = max(4, len(tokens) // 4)
+    return italian_hits < italian_floor
+
+
+async def _generate_json_response_with_language_guard(
+    *,
+    prompt: str,
+    config: StationConfig,
+    state: StationState,
+    model: str,
+    max_tokens: int,
+    caller: str | None = None,
+    role: str | None = None,
+    spot_index: int | None = None,
+) -> dict:
+    """Generate JSON and enforce Normal Mode's English-led output invariant."""
+    surface = caller or "script"
+    current_prompt = prompt
+    for attempt in range(2):
+        data = await _generate_json_response(
+            prompt=current_prompt,
+            config=config,
+            state=state,
+            model=model,
+            max_tokens=max_tokens,
+            caller=caller,
+            role=role,
+            spot_index=spot_index,
+        )
+        if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config):
+            return data
+        if attempt == 0:
+            logger.warning("Normal Mode language guard rejected %s response; retrying once", surface)
+            current_prompt = f"{prompt}\n\n{_NORMAL_MODE_LANGUAGE_REPAIR}"
+            continue
+        raise ValueError(f"{surface} response violated Normal Mode language mix")
+
+    raise RuntimeError("unreachable language guard state")
+
+
 def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
     """Guarantee each ad has a distinct opener and at least one internal accent."""
     updated = list(parts)
@@ -1033,6 +1529,11 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 # station tight and makes the occasional long break land as "this one mattered".
 _BANTER_EXCHANGE_COUNT: str = "2-3"
 _BANTER_EXCHANGE_COUNT_WARRANTED: str = "4-6"
+# Raised from 1200 (600 pre-2.8.0) after live truncation recurred 2026-07:
+# warranted 4-6 exchanges plus `new_joke` and `release_beat_used` can still
+# pressure the hot JSON contract. Paired with the escalation retry in
+# _generate_json_response, not a standalone fix.
+_BANTER_MAX_TOKENS = 2400
 
 
 def _banter_exchange_count(*, warranted: bool) -> str:
@@ -1187,24 +1688,20 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     code-switch modes so the guest is governed consistently — without it he is listed
     among the hosts but given no guest framing, and the LLM treats him as a regular
     Italian co-host. The only mode-dependent clause is the station's conversation
-    language (Italian-only under Super Italian, Italian/English otherwise).
+    language (Italian-only under Super Italian, mostly English with Italian
+    colour otherwise).
     """
     if not any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in config.hosts):
         return ""
-    regulars = _regular_hosts(config)
+    regulars = _guest_host_regulars(config)
     # Only-guest roster: _regular_hosts falls back to the full list, so the guest
     # shows up among the "regulars". With no real regular hosts to play off, guest
     # framing ("hand the floor back to Hans Günther") would point him at himself —
     # emit nothing and let him host as the sole voice.
-    if any(h.name == _LOCAL_BALLOON_GUEST_HOST for h in regulars):
+    if not regulars:
         return ""
-    regular_host_names = [h.name for h in regulars]
-    regular_hosts_text = (
-        f"{regular_host_names[0]} and {regular_host_names[1]}"
-        if len(regular_host_names) >= 2
-        else regular_host_names[0]
-    )
-    station_conversation_lang = "Italian" if super_italian else "Italian/English"
+    regular_hosts_text = _host_names_text(regulars)
+    station_conversation_lang = "Italian" if super_italian else "mostly English with Italian colour"
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
         "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
@@ -1214,8 +1711,8 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
         "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
         "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
         "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
-        "'geh weida col caffè', 'des is ned normale', 'a bissl troppo piccolo', "
-        "'wia schee questa radio', 'des is fei a Witz', 'passt wie Arsch auf Eimer'. "
+        "'des is ned normale', 'wia schee questa radio', 'des is fei a Witz', "
+        "'passt wie Arsch auf Eimer'. "
         "Prefer one phraselet in a Hans line, "
         "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
         "Italian banter. No German monologues. Full German is rare and only works as an "
@@ -1227,12 +1724,12 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
         "roasting or misunderstanding the flavor without formally translating every line. "
         "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
         "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
-        "Hans Günther is a GUEST STAR, not "
-        "a co-host: when he is on, he bursts in for a few loud lines and then hands "
-        f"the floor back to {regular_hosts_text} — unmistakably present, never carrying the "
-        "whole exchange. He has the fewest lines of the three, but he is not silent. "
-        'Always tag his lines with the exact host name "Hans Günther" (never just '
-        '"Hans") so they attribute to him, not to an Italian host.'
+        "Hans Günther is a GUEST STAR, not a co-host: he is available only when a "
+        "specific banter prompt explicitly opens the guest-host gate. When the gate "
+        "is closed, he stays off-mic and the regular hosts carry the exchange. "
+        "When invited, he makes one short interruption and hands the floor back to "
+        f"{regular_hosts_text}. Tag that invited line with the exact host name "
+        '"Hans Günther" (never just "Hans") so it attributes to him, not to an Italian host.'
     )
 
 
@@ -1282,28 +1779,13 @@ Use these sparingly (1-2 references per script at most). They should feel like i
 jokes between the hosts, not exposition. The listener should feel like they're
 overhearing a world that exists with or without them."""
 
-    if config.super_italian_mode:
-        mode_directive = (
-            f"The station language is {config.station.language}. ALL dialogue must be in "
-            f"{config.station.language}. Lean fully into Italian idioms — address listeners "
-            "as 'amici miei', 'cari ascoltatori', drop English crutches. Italian phrases "
-            "land without translation. English is rare and intentional."
-        )
-    else:
-        mode_directive = (
-            "You broadcast to a mixed international audience. Code-switch charmingly: "
-            "English carries the narrative — the heart of each segment is English the "
-            "audience can follow. Italian phrases sprinkle in for color (ciao, amore, "
-            "che bello, ecco, dai, mamma mia, allora, basta). Open and close with "
-            "Italian flair. Think 'Italian DJ on tour speaking to the world,' not "
-            "'RAI domestic broadcast.' The natural Italian fillers below still apply "
-            "as sprinkles, never as full sentences."
-        )
+    mode_directive = language_mode_directive(config.super_italian_mode)
     # Test balloon: if the Bavarian guest is in the roster, keep him inside the
     # show as a guest star in either language mode (never described without a brief).
     mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
+    station_name = config.display_station_name
 
-    return f"""You write scripts for a fake AI radio station called "{config.station.name}".
+    return f"""You write scripts for a fake AI radio station called "{station_name}".
 {mode_directive}
 Theme: {config.station.theme}{geography}
 {station_world}
@@ -1330,14 +1812,14 @@ Rules:
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
-- STATION NAME: drop "{config.station.name}" naturally about once every 3-4 exchanges —
-  the way a real DJ does. Not an announcement, just woven in. "...siamo su {config.station.name},
-  che altro?" or just "{config.station.name}." at the end of a thought. Never more than once
+- STATION NAME: drop "{station_name}" naturally about once every 3-4 exchanges —
+  the way a real DJ does. Not an announcement, just woven in. "...siamo su {station_name},
+  che altro?" or just "{station_name}." at the end of a thought. Never more than once
   per banter block. Never forced.
 - CRITICAL — STATION NAME ONLY: The ONLY radio station name you may ever write is
-  "{config.station.name}". Never write any other real or invented station name — not
+  "{station_name}". Never write any other real or invented station name — not
   Kiss Kiss, not RDS, not RTL, not Radio Italia, not any variant. If you feel the urge
-  to mention a station, use "{config.station.name}" or skip it entirely. Writing the wrong
+  to mention a station, use "{station_name}" or skip it entirely. Writing the wrong
   station name is the single most damaging thing you can do to the listener's experience.
 - CONFLICT IS MANDATORY. Hosts must disagree at least once per exchange. Not just
   "beh, forse..." — actual opposition. "No, ma che stai dicendo?" levels. They never
@@ -1402,9 +1884,9 @@ async def write_banter(
 
     Always returns ``(lines, commit)`` where ``commit`` is a deferred state
     mutation for any pending listener request, or ``None`` if no request was
-    injected.  When a PersonaStore is available on state, loads the listener
-    persona into the prompt and requests persona_updates from the LLM.  The
-    returned updates are persisted asynchronously so sessions compound.
+    injected. When a PersonaStore is available on state, loads the listener
+    persona into the prompt and captures a memory-extraction commit. The actual
+    memory write happens later, only after the segment finishes airing cleanly.
     """
     if not has_script_llm(config):
         if chaos_subtype is not None:
@@ -1448,7 +1930,7 @@ async def write_banter(
             logger.warning("Failed to bump song cue usage", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
-    host_names_ci = {h.name.lower(): h for h in config.hosts}
+    host_names_ci = {h.name.casefold(): h for h in config.hosts}
 
     # Home Assistant context — hosts may casually reference home state
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
@@ -1459,6 +1941,8 @@ async def write_banter(
         home_state_sections.append(state.ha_context)
     if state.ha_events_summary:
         home_state_sections.append("EVENTI RECENTI:\n" + state.ha_events_summary)
+    if state.ha_ritual_context:
+        home_state_sections.append("RITUALI DI CASA:\n" + _sanitize_prompt_data(state.ha_ritual_context, max_len=160))
     if state.ha_weather_arc:
         home_state_sections.append("WEATHER ARC: " + state.ha_weather_arc)
 
@@ -1547,6 +2031,8 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
     # Compounding listener memory — persona built across sessions
     persona_block = ""
     arc_phase_block = ""
+    persona_ctx = ""
+    persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
     if persona_store:
         try:
@@ -1554,6 +2040,7 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
 
             persona = await persona_store.get_persona()
             persona_ctx = persona.to_prompt_context()
+            persona_session_count = persona.session_count
 
             # Arc phase directive — relationship stage shapes host behavior
             phase = persona.arc_phase
@@ -1620,35 +2107,16 @@ Make this the focus of this banter break. It happened just now — react natural
             state.ha_pending_directive = ""
             consumed_pending_directive = True
 
-    # Operator course changes have their own one-shot slot so a music-heading
-    # notice never clobbers a real Home Assistant impossible moment.
+    # Record Hunt narration has its own one-shot slot. It is planned after the
+    # higher-priority prompt opportunities below, so it never clobbers a real
+    # Home Assistant impossible moment, listener request, release beat, or chaos cut.
     course_change_block = ""
     heading_announcement_commit: HeadingAnnouncementCommit | None = None
     raw_heading_announcement = state.heading_pending_announcement
+    raw_heading_narration_kind = state.heading_pending_narration_kind
     raw_heading = state.heading
     raw_heading_announcement_id = raw_heading.id if raw_heading is not None else ""
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
-    if heading_announcement and raw_heading is not None and raw_heading_announcement_id:
-        language_line = (
-            "Super Italian Mode is active: lead in Italian and keep the whole notice Italian-first."
-            if config.super_italian_mode
-            else "Use English narrative with a little Italian flavor where it sounds natural."
-        )
-        course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
-            heading_label=heading_announcement,
-            language_line=language_line,
-        )
-        state.heading_pending_announcement = ""
-        heading_announcement_commit = HeadingAnnouncementCommit(
-            Heading(
-                id=raw_heading.id,
-                seed=raw_heading.seed,
-                label=raw_heading.label,
-                set_at=raw_heading.set_at,
-                set_by=raw_heading.set_by,
-                announced=True,
-            )
-        )
 
     # Listener request injection
     listener_request_block, listener_request_commit = _plan_listener_request_block(state)
@@ -1694,27 +2162,87 @@ beat in the lines you wrote. Otherwise set it false.
 """
             release_beat_schema = ', "release_beat_used": false'
 
-    # If persona is active, request persona_updates in the response
-    persona_update_schema = ""
-    if persona_block:
-        # Only include song_cues field when we have a real youtube_id to echo back.
-        # Without it the LLM hallucinates IDs that can never be retrieved from the DB.
-        song_cues_schema = ""
-        if state.played_tracks:
-            _last = list(state.played_tracks)[-1]
-            _yt = getattr(_last, "youtube_id", "") or ""
-            if _yt:
-                song_cues_schema = (
-                    f',\n    "song_cues": [{{"youtube_id": "{_yt}", '
-                    '"cue_text": "what the hosts said/did about it", "cue_type": "reaction"}}]'
-                )
-        persona_update_schema = f""",
-  "persona_updates": {{
-    "new_theories": ["new theory about the listener based on this interaction, or empty"],
-    "new_personality_guesses": ["one guess about who this listener is, or empty"],
-    "new_jokes": ["any new running joke to carry across sessions, or empty"],
-    "callbacks_used": [{{"song": "title", "context": "why you referenced it"}}]{song_cues_schema}
-  }}"""
+    record_hunt_blocked = any(
+        (
+            pending_directive,
+            chaos_subtype is not None,
+            listener_request_block,
+            release_beat_block,
+            new_listener_block,
+        )
+    )
+    if heading_announcement and raw_heading is not None and raw_heading_announcement_id and not record_hunt_blocked:
+        narration_kind = raw_heading_narration_kind if raw_heading_narration_kind else "first_found"
+        if narration_kind not in {"hunt_start", "first_found", "crate_beat"}:
+            narration_kind = "first_found"
+        narration_line = {
+            "hunt_start": "Mention the hunt has begun: they are digging through the right crate now, not promising what lands.",
+            "first_found": "Mention that the first record has turned up and the show can lean into it.",
+            "crate_beat": "Mention the ongoing crate-digging briefly, like a live booth aside.",
+        }[narration_kind]
+        language_line = language_mode_rule(config.super_italian_mode, config.station.language)
+        course_change_block = COURSE_CHANGE_MOOD_NOTICE_TEMPLATE.format(
+            heading_label=heading_announcement,
+            narration_line=narration_line,
+            language_line=language_line,
+        )
+        state.heading_pending_announcement = ""
+        state.heading_pending_narration_kind = ""
+        heading_announcement_commit = HeadingAnnouncementCommit(
+            Heading(
+                id=raw_heading.id,
+                seed=raw_heading.seed,
+                label=raw_heading.label,
+                set_at=raw_heading.set_at,
+                set_by=raw_heading.set_by,
+                announced=raw_heading.announced,
+                selection_budget=raw_heading.selection_budget,
+                selection_spent=raw_heading.selection_spent,
+                targets=list(raw_heading.targets),
+                phase=raw_heading.phase,
+                hunt_started_announced=raw_heading.hunt_started_announced,
+                first_found_at=raw_heading.first_found_at,
+                last_narrated_at=raw_heading.last_narrated_at,
+                narration_count=raw_heading.narration_count,
+            ),
+            kind=narration_kind,
+        )
+
+    guest_host_block = ""
+    guest_host_invited = False
+    guest_host_cooldown_commit: GuestHostBanterCooldownCommit | None = None
+    guest_regulars = _guest_host_regulars(config)
+    guest_gate_eligible = bool(guest_regulars) and not any(
+        (
+            chaos_subtype is not None,
+            bool(pending_directive),
+            bool(course_change_block),
+            bool(listener_request_block),
+            bool(release_beat_block),
+            bool(new_listener_block),
+        )
+    )
+    if guest_regulars:
+        regular_hosts_text = _host_names_text(guest_regulars)
+        if guest_gate_eligible:
+            if state.guest_host_banter_cooldown_remaining > 0:
+                guest_host_cooldown_commit = GuestHostBanterCooldownCommit(decrement_existing=True)
+            else:
+                guest_host_invited = random.random() < _GUEST_HOST_CAMEO_PROBABILITY
+        if guest_host_invited:
+            guest_host_block = f"""
+GUEST HOST CAMEO:
+- This break MAY include Hans Günther once.
+- Hans Günther may have at most one short interruption, tagged exactly as "Hans Günther".
+- {regular_hosts_text} carry the exchange before and after him.
+- If there is no natural interruption, leave Hans Günther out.
+"""
+        else:
+            guest_host_block = f"""
+GUEST HOST GATE:
+- This break is CLOSED to Hans Günther. Use only the regular hosts: {regular_hosts_text}.
+- Do not return any line tagged "Hans Günther"; he is off-mic for this break.
+"""
 
     # Stretch the break only when something warrants the extra airtime.
     warranted_long = bool(
@@ -1736,17 +2264,17 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{listener_block}{arc_phase_block}{persona_block}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{persona_update_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
             model=resolve_model(config.models, "banter", "anthropic"),
-            max_tokens=1200,
+            max_tokens=_BANTER_MAX_TOKENS,
             caller="banter",
         )
 
@@ -1755,13 +2283,19 @@ Return JSON:
         if not isinstance(raw_lines, list):
             raw_lines = []
         str_line_idx = 0
+        accepted_guest_host_line = False
+        regular_host_line_count = 0
+        dropped_guest_host_line = False
         # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
         for line in raw_lines:
             if isinstance(line, dict):
-                raw_name = str(line.get("host", ""))
-                host = host_names.get(raw_name) or host_names_ci.get(raw_name.lower(), fallback_hosts[0])
+                raw_name = str(line.get("host", "")).strip()
+                raw_guest_host_tag = _is_local_guest_host_tag(raw_name)
+                host = host_names.get(raw_name) or host_names_ci.get(_normalize_host_tag(raw_name), fallback_hosts[0])
+                if raw_guest_host_tag:
+                    host = host_names_ci.get(_LOCAL_BALLOON_GUEST_HOST_CI, host)
                 raw_text = line.get("text", "")
                 # Only real strings are airable. A null/list/dict text would otherwise
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
@@ -1775,17 +2309,30 @@ Return JSON:
                 # two-host banter instead of crashing to stock copy.
                 host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
+                raw_guest_host_tag = False
             else:
                 continue
             if not text.strip():
                 continue
             if isinstance(line, str):
                 str_line_idx += 1
+            if raw_guest_host_tag or _is_local_guest_host_name(host.name):
+                if not guest_host_invited or accepted_guest_host_line:
+                    logger.warning("Dropped gated guest-host banter line: %r", text[:60])
+                    dropped_guest_host_line = True
+                    continue
+                accepted_guest_host_line = True
+            else:
+                regular_host_line_count += 1
             result.append((host, text))
 
         # Genuinely unusable shape (no airable lines) → fall to stock copy via except.
         if not result:
             raise ValueError("banter response contained no usable lines")
+        if accepted_guest_host_line and regular_host_line_count == 0:
+            raise ValueError("banter response contained no regular host lines")
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate")
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
         deduped: list[tuple[HostPersonality, str]] = []
@@ -1795,9 +2342,27 @@ Return JSON:
                 continue
             deduped.append(entry)
         result = deduped
+        deduped_has_guest_host_line = any(_is_local_guest_host_name(host.name) for host, _ in result)
+        deduped_has_regular_host_line = any(not _is_local_guest_host_name(host.name) for host, _ in result)
+        if dropped_guest_host_line and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after guest-host gate after dedup")
+        if accepted_guest_host_line and not deduped_has_regular_host_line:
+            raise ValueError("banter response contained no regular host lines after dedup")
+        if deduped_has_guest_host_line:
+            guest_host_index = next(idx for idx, (host, _) in enumerate(result) if _is_local_guest_host_name(host.name))
+            has_regular_before = any(not _is_local_guest_host_name(host.name) for host, _ in result[:guest_host_index])
+            has_regular_after = any(
+                not _is_local_guest_host_name(host.name) for host, _ in result[guest_host_index + 1 :]
+            )
+            if not (has_regular_before and has_regular_after):
+                raise ValueError("banter response did not frame guest-host line as a cameo")
+            guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
+
+        if not _normal_mode_language_ok([text for _, text in result], config):
+            raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
-        result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]
+        result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
@@ -1811,44 +2376,47 @@ Return JSON:
                 state.add_joke(gag_text)
                 state.pending_verbal_gag = {"text": gag_text, "punch": gag_punch}
 
-        # Persist persona updates from the LLM response (fire-and-forget)
-        if persona_store and data.get("persona_updates"):
-            try:
-                await persona_store.update_persona(data["persona_updates"])
-            except Exception:
-                logger.warning("Failed to persist persona updates", exc_info=True)
+        if release_beat_commit is not None:
+            release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
 
-            # Persist LLM-generated song cues (fire-and-forget)
-            # Pin youtube_id to the known value from played_tracks — never trust
-            # the LLM to echo it correctly (hallucinated IDs create orphan rows).
-            llm_cues = data["persona_updates"].get("song_cues", [])
+        memory_extraction_commit: MemoryExtractionCommit | None = None
+        if persona_store and persona_block:
             known_yt = ""
             if state.played_tracks:
                 _last_track = list(state.played_tracks)[-1]
                 known_yt = getattr(_last_track, "youtube_id", "") or ""
-            if isinstance(llm_cues, list) and llm_cues and known_yt:
-                try:
-                    from mammamiradio.playlist.song_cues import add_cue
-
-                    db_path = config.cache_dir / "mammamiradio.db"
-                    persona = await persona_store.get_persona()
-                    for cue in llm_cues:
-                        if isinstance(cue, dict) and cue.get("cue_text"):
-                            await add_cue(
-                                db_path,
-                                known_yt,
-                                cue.get("cue_type", "reaction"),
-                                cue["cue_text"],
-                                source_session=persona.session_count,
-                            )
-                except Exception:
-                    logger.warning("Failed to persist LLM song cues", exc_info=True)
-
-        if release_beat_commit is not None:
-            release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
+            memory_extraction_commit = MemoryExtractionCommit(
+                script_lines=[{"host": host.name, "text": text} for host, text in result],
+                persona_context=persona_ctx,
+                interaction_context={
+                    "recent_tracks": recent,
+                    "running_jokes": jokes,
+                    "track_memory": track_rules_block,
+                    "home_context": ha_block,
+                    "home_mood": mood_block,
+                    "context_awareness": context_block,
+                    "listener_request": listener_request_block,
+                    "reactive_directive": reactive_block,
+                    "course_change": course_change_block,
+                    "new_listener": new_listener_block,
+                    "listener_behavior": listener_block,
+                    "arc_phase": arc_phase_block,
+                    "release_beat": release_beat_block,
+                    "chaos": chaos_block,
+                    "festival": festival_block,
+                },
+                youtube_id=known_yt,
+                source_session=persona_session_count,
+            )
 
         logger.info("Generated banter: %d lines", len(result))
-        return result, _banter_commit(listener_request_commit, heading_announcement_commit, release_beat_commit)
+        return result, _banter_commit(
+            listener_request_commit,
+            heading_announcement_commit,
+            release_beat_commit,
+            guest_host_cooldown_commit,
+            memory_extraction_commit,
+        )
 
     except Exception as e:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
@@ -1856,6 +2424,11 @@ Return JSON:
             release_beat_commit.abandon(state)
         if consumed_pending_directive and not state.ha_pending_directive:
             state.ha_pending_directive = raw_pending_directive
+        if heading_announcement_commit is not None and raw_heading is not None:
+            current_heading = state.heading
+            if current_heading is not None and current_heading.id == raw_heading.id:
+                state.heading_pending_announcement = raw_heading_announcement
+                state.heading_pending_narration_kind = raw_heading_narration_kind
         # The running-gag callback never reached air (we're falling back to stock
         # copy), so release its cooldown bucket. The producer spends the cooldown
         # only when ha_running_gag_key is still set; clearing it here keeps a failed
@@ -1870,7 +2443,7 @@ Return JSON:
         hosts = _regular_hosts(config)
         h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
         h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
-        if config.station.language == "it":
+        if config.super_italian_mode and config.station.language == "it":
             # Pre-written short exchanges — sound like real radio, not a shutdown line
             _fallback_pools = [
                 [
@@ -2000,9 +2573,25 @@ def _localized_weather_arc(state: StationState, config: StationConfig) -> str:
 
 
 def _news_flash_fallback(config: StationConfig) -> str:
-    """The stock news-flash line in the station's language (English for any
-    non-Italian station, so an English station never airs an Italian fallback)."""
-    return _NEWS_FLASH_FALLBACK.get(config.station.language, _NEWS_FLASH_FALLBACK["en"])
+    """The stock news-flash line for the active spoken mode."""
+    return _NEWS_FLASH_FALLBACK[_spoken_fallback_language(config)]
+
+
+def _spoken_fallback_language(config: StationConfig) -> str:
+    """Return the stock spoken-copy language for the active host mode."""
+    return "it" if config.super_italian_mode else "en"
+
+
+def _transition_fallbacks(config: StationConfig) -> dict[str, str]:
+    if _spoken_fallback_language(config) == "it":
+        return {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
+    return {"banter": "All right...", "ad": "And now...", "news_flash": "Attention..."}
+
+
+def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
+    if _spoken_fallback_language(config) == "it":
+        return f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}"
+    return f"{brand.name}. Because you deserve it."
 
 
 async def write_news_flash(
@@ -2042,7 +2631,7 @@ async def write_news_flash(
         if home_mood:
             mood_line = "\nHome mood: " + _sanitize_prompt_data(home_mood, max_len=120)
         cat_desc = (
-            f"Weather report delivered in {config.station.language} that GROUNDS itself in the "
+            "Weather report that GROUNDS itself in the "
             "listener's REAL local forecast (provided below), then spins it with absurd local color — "
             "gelato logic, coffee dependency, seaside optimism, umbrella superstition. State the REAL "
             "condition from the forecast first so it is unmistakable you know the actual weather "
@@ -2074,13 +2663,13 @@ RULES:
 - For sports: sound like an informed radio sports desk. Keep the update measured and followable.
 - For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
 - Must feel like a real Italian radio news flash interrupting the programming.
-- ALL text in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 
 Return JSON:
 {{"text": "the news flash text", "intro_jingle": "notizie flash|traffico flash|sport flash|meteo flash", "callback_used": false}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2089,7 +2678,9 @@ Return JSON:
             caller="news_flash",
         )
 
-        text = sanitize_spoken_station_name(data.get("text") or _news_flash_fallback(config), config.station.name)
+        text = sanitize_spoken_station_name(
+            data.get("text") or _news_flash_fallback(config), config.display_station_name
+        )
         if callback_gag:
             # Model-reported: did it actually land the cross-domain gag? The
             # producer retires the gag only when this is true (queue-time != used).
@@ -2127,8 +2718,8 @@ async def write_transition(
     """
     if not has_script_llm(config):
         host = random.choice(_regular_hosts(config))
-        fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-        return (host, fallback.get(next_segment, "Allora..."))
+        fallback = _transition_fallbacks(config)
+        return (host, fallback.get(next_segment, fallback["banter"]))
 
     if song_cues is None:
         song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
@@ -2190,14 +2781,14 @@ RULES:
 - Recent opener stems to avoid repeating: {banned_openers}
 - BANNED openers — never start with: "Che pezzo", "Che ritmo", "Che musica", "Che canzone",
   "Che bomba", "Ah che", "Bella canzone", "Bella musica". These sound like a broken record.
-- ALL text in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 - {style_instruction}
 
 Return JSON:
 {{"text": "the transition line"}}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2212,8 +2803,8 @@ Return JSON:
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
-        fallback = {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-        text = _massage_transition_text(fallback.get(next_segment, "Allora..."), next_segment, recent_texts)
+        fallback = _transition_fallbacks(config)
+        text = _massage_transition_text(fallback.get(next_segment, fallback["banter"]), next_segment, recent_texts)
         return (host, text)
 
 
@@ -2235,7 +2826,7 @@ async def write_ad(
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=f"{brand.name}. {brand.tagline}")],
+            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config))],
             summary=brand.tagline,
             format=ad_format,
         )
@@ -2333,7 +2924,7 @@ RULES:
 - You may interleave sound effect cues and environment cues between voice lines.
 - Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
 - Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or environment name above, never invent new ones: {sfx_types}
-- ALL text must be in {config.station.language}.
+- {language_mode_rule(config.super_italian_mode, config.station.language)}
 - You may reference what the hosts said, what other ads claimed, or current music.
 
 Return JSON:
@@ -2352,7 +2943,7 @@ Return JSON:
 }}"""
 
     try:
-        data = await _generate_json_response(
+        data = await _generate_json_response_with_language_guard(
             prompt=prompt,
             config=config,
             state=state,
@@ -2373,7 +2964,7 @@ Return JSON:
             parts.append(
                 AdPart(
                     type=p.get("type", "voice"),
-                    text=sanitize_spoken_station_name(p.get("text", ""), config.station.name),
+                    text=sanitize_spoken_station_name(p.get("text", ""), config.display_station_name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
                     role=p.get("role", ""),
@@ -2429,11 +3020,7 @@ Return JSON:
 
     except Exception as e:
         logger.error("Ad generation failed: %s", e)
-        fallback = {
-            "it": f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}",
-            "en": f"{brand.name}. {brand.tagline or 'Because you deserve it.'}",
-        }
-        text = fallback.get(config.station.language, fallback["en"])
+        text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
             parts=[AdPart(type="voice", text=text)],

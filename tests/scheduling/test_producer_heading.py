@@ -65,20 +65,61 @@ def test_rejected_tagged_candidate_then_auto_track_does_not_arm_heading():
     auto = _track("Auto")
     state = StationState(playlist=[tagged, auto], heading=heading)
 
+    def _choose(candidates, **kwargs):
+        return [candidates[0]]
+
     with (
-        patch.object(state, "select_next_track", side_effect=[tagged, auto]) as select_next,
         patch(
             "mammamiradio.scheduling.producer.is_rejected_cache_key",
             side_effect=lambda key: key == tagged.cache_key,
         ),
+        patch("mammamiradio.core.models.random.choices", side_effect=_choose),
     ):
         selected = _select_accepted_music_track(state, _producer_config())
 
     assert selected is auto
     _arm_accepted_heading_announcement(state, selected)
-    assert select_next.call_count == 2
     assert state.heading_pending_announcement == ""
     assert state.heading_announced_id == ""
+
+
+def test_rejected_weighted_candidate_cannot_starve_valid_sibling():
+    rejected = _track("Rejected")
+    accepted = _track("Accepted")
+    state = StationState(playlist=[rejected, accepted])
+    captured: list[list[Track]] = []
+
+    def _choose(candidates, **kwargs):
+        captured.append(list(candidates))
+        return [candidates[0]]
+
+    with (
+        patch(
+            "mammamiradio.scheduling.producer.is_rejected_cache_key",
+            side_effect=lambda key: key == rejected.cache_key,
+        ),
+        patch("mammamiradio.core.models.random.choices", side_effect=_choose),
+    ):
+        selected = _select_accepted_music_track(state, _producer_config())
+
+    assert selected is accepted
+    assert captured == [[accepted]]
+
+
+def test_rejected_pinned_track_with_empty_playlist_raises_for_recovery():
+    rejected = _track("Rejected")
+    state = StationState(playlist=[], pinned_track=rejected)
+
+    with (
+        patch(
+            "mammamiradio.scheduling.producer.is_rejected_cache_key",
+            side_effect=lambda key: key == rejected.cache_key,
+        ),
+        pytest.raises(RuntimeError, match="Playlist is empty"),
+    ):
+        _select_accepted_music_track(state, _producer_config())
+
+    assert state.pinned_track is rejected
 
 
 def test_non_tagged_accepted_selection_does_not_arm_heading():
@@ -109,6 +150,7 @@ async def test_write_banter_prompt_frames_heading_as_request_mood(tmp_path):
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    config.party_mode = None
     heading = _heading()
     state = StationState(heading=heading, heading_pending_announcement=heading.label)
     captured: dict[str, str] = {}
@@ -120,20 +162,50 @@ async def test_write_banter_prompt_frames_heading_as_request_mood(tmp_path):
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_capture_prompt):
         _, commit = await write_banter(state, config)
 
-    course_block = captured["prompt"].split("COURSE CHANGE:", 1)[1].split("Return JSON:", 1)[0].lower()
-    assert "asked for" in course_block
-    assert "mood" in course_block
-    assert "request" in course_block
+    course_block = captured["prompt"].split("RECORD HUNT:", 1)[1].split("Return JSON:", 1)[0].lower()
+    assert "digging through lp/cd crates" in course_block
+    assert "steering" in course_block
+    assert "exact next song" in course_block
     assert "now playing" not in course_block
     assert "tornando ora" not in course_block
     assert "has just turned" not in course_block
     assert "going back" not in course_block
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == ""
     assert state.heading is not None
     assert state.heading.announced is False
     assert read_persisted_heading(tmp_path) is None
     assert commit is not None
+
+
+@pytest.mark.asyncio
+async def test_hunt_start_notice_does_not_mark_first_record_announced(tmp_path):
+    config = load_config()
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
+    config.cache_dir = tmp_path
+    config.party_mode = None
+    heading = _heading()
+    state = StationState(
+        heading=heading,
+        heading_pending_announcement=heading.label,
+        heading_pending_narration_kind="hunt_start",
+    )
+
+    async def _capture_prompt(**kwargs):
+        return {"lines": [{"host": config.hosts[0].name, "text": "Stiamo scavando nelle casse."}]}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_capture_prompt):
+        _, commit = await write_banter(state, config)
+
+    assert commit is not None
+    commit.apply(state, config)
+    assert state.heading is not None
+    assert state.heading.hunt_started_announced is True
+    assert state.heading.announced is False
+    assert state.heading_announced_id == ""
+    assert read_persisted_heading(tmp_path) == state.heading
 
 
 @pytest.mark.asyncio
@@ -168,6 +240,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    config.party_mode = None
     heading = _heading()
     tagged = _track("Vibe", heading_id=heading.id)
     state = StationState(playlist=[tagged], heading=heading, heading_pending_announcement=heading.label)
@@ -179,6 +252,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
         _, stale_commit = await write_banter(state, config)
 
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == ""
     assert stale_commit is not None
 
@@ -186,6 +260,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     _arm_accepted_heading_announcement(state, tagged)
 
     assert state.heading_pending_announcement == heading.label
+    assert state.heading_pending_narration_kind == "first_found"
     assert state.heading_announced_id == ""
     assert state.heading is not None
     assert state.heading.announced is False
@@ -198,6 +273,7 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     queued_commit.apply(state, config)
 
     assert state.heading_pending_announcement == ""
+    assert state.heading_pending_narration_kind == ""
     assert state.heading_announced_id == heading.id
     assert state.heading is not None
     assert state.heading.announced is True

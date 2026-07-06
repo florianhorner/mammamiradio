@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentLogEntry, SegmentType
+from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
 
@@ -45,6 +45,24 @@ async def test_public_status_returns_brand_block():
 
 
 @pytest.mark.asyncio
+async def test_public_status_returns_resolved_identity(monkeypatch):
+    """Chosen station identity must agree across legacy and additive fields."""
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    for body in (public, admin):
+        assert body["station"] == "Radio Test"
+        assert body["brand"]["station_name"] == "Radio Test"
+        assert body["identity"]["station_name"] == "Radio Test"
+        assert body["identity"]["source"] == "env"
+        assert body["identity"]["preview"]["heard_on_air"].startswith("Radio Test")
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_capabilities():
     """Listener page reads capabilities every poll for client-side feature gating."""
     app = _make_test_app()
@@ -58,6 +76,55 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+
+
+@pytest.mark.asyncio
+async def test_public_status_exposes_only_coarse_ritual_family_labels():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_ritual_public_families = ["Kitchen ritual"]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.kitchen_fridge_door"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert public["ha_moments"] == {
+        "connected": True,
+        "mood": None,
+        "weather": None,
+        "ritual_families": ["Kitchen ritual"],
+    }
+    assert "ha_details" not in public
+    assert "binary_sensor.kitchen_fridge_door" not in str(public["ha_moments"])
+    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.kitchen_fridge_door"
+
+
+@pytest.mark.asyncio
+async def test_public_status_current_source_is_loaded_playlist_source():
+    """`current_source` is the loaded playlist source, not the on-air segment."""
+    app = _make_test_app()
+    app.state.station_state.playlist_source = PlaylistSource(
+        kind="charts",
+        source_id="apple_music_it_top_100",
+        label="Italian charts",
+        track_count=75,
+        selected_at=1234.0,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["current_source"] == {
+        "kind": "charts",
+        "source_id": "apple_music_it_top_100",
+        "url": "",
+        "label": "Italian charts",
+        "track_count": 75,
+        "selected_at": 1234.0,
+    }
 
 
 @pytest.mark.asyncio
@@ -79,6 +146,35 @@ async def test_public_status_does_not_expose_admin_cost_breakdown():
     assert "consumption" not in public
     assert "cost_breakdown" not in str(public)
     assert admin["consumption"]["cost_breakdown"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_public_status_does_not_expose_operator_song_preferences():
+    app = _make_test_app()
+    app.state.station_state.song_preferences = {
+        ("modugno", "volare"): {
+            "score": 1,
+            "display": "Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+        preferences_resp = await client.get("/api/track/preferences")
+
+    public = public_resp.json()
+    admin = admin_resp.json()
+    preferences = preferences_resp.json()
+    assert "song_preferences" not in public
+    assert "current_track_preference" not in public
+    assert admin["song_preferences"]["count"] == 1
+    assert "preferences" not in admin["song_preferences"]
+    assert "current_track_preference" in admin
+    assert preferences["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -122,6 +218,7 @@ async def test_admin_listener_facts_agree():
     assert admin["session_stopped"] == public["session_stopped"]
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]
+    assert admin["identity"] == public["identity"]
     assert admin["capabilities"] == public["capabilities"]
     assert admin["upcoming"] == public["upcoming"]
     assert admin["upcoming_mode"] == public["upcoming_mode"]
@@ -178,6 +275,56 @@ async def test_stream_log_serializes_real_duration_when_available():
 
 
 @pytest.mark.asyncio
+async def test_status_payloads_redact_internal_memory_extraction_metadata():
+    app = _make_test_app()
+    state = app.state.station_state
+    private_memory = {
+        "script_lines": [{"host": "Marco", "text": "Aired text"}],
+        "persona_context": {"Marco": "private host note"},
+        "interaction_context": {"home_state": "private room context"},
+    }
+    metadata = {
+        "title": "Aired banter",
+        "artist": "Marco",
+        "album_art": "https://example.test/art.jpg",
+        "host": "Marco",
+        "source_kind": "generated_banter",
+        "duration_ms": 5000,
+        "memory_extraction": private_memory,
+    }
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=Path("/tmp/banter.mp3"),
+            duration_sec=5.0,
+            metadata=metadata,
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    for body in (public, admin):
+        now_metadata = body["now_streaming"]["metadata"]
+        assert "memory_extraction" not in now_metadata
+        assert now_metadata["title"] == "Aired banter"
+        assert now_metadata["artist"] == "Marco"
+        assert now_metadata["album_art"] == "https://example.test/art.jpg"
+        assert now_metadata["host"] == "Marco"
+        assert now_metadata["source_kind"] == "generated_banter"
+
+        log_metadata = body["stream_log"][-1]["metadata"]
+        assert "memory_extraction" not in log_metadata
+        assert log_metadata["title"] == "Aired banter"
+        assert log_metadata["duration_ms"] == 5000
+
+    assert state.now_streaming["metadata"]["memory_extraction"] is private_memory
+    assert state.stream_log[-1].metadata["memory_extraction"] is private_memory
+
+
+@pytest.mark.asyncio
 async def test_public_status_strict_subset_of_admin():
     """Every field in /public-status must also exist in /status.
 
@@ -212,6 +359,10 @@ async def test_public_status_no_admin_secrets_leak():
         "consumption",
         "produced_log",
         "ha_details",
+        "homeassistant_context_candidates",
+        "context_candidates",
+        "entity_policy",
+        "muted_entities",
         "scored_entities",
         "denylist_hits",
         "catalog_hit_rate",

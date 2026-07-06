@@ -2,21 +2,73 @@
 
 ## Unreleased
 
+## 2.17.0 - 2026-07-07
+
 ### Added
 
+- **A clearer setup guide shows exactly what's next.** The admin panel tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention. Add-ons that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
+- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds through a Home Assistant hiccup or an add-on restart.
+
+### Changed
+
+- **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
+- **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
+
+## 2.16.1 - 2026-07-06
+
+### Changed
+
+- **Super Italian Mode is easier to find live.** Its admin toggle now sits in Diretta with Chaos and Festival, so the station personality controls are together while Motore stays focused on runtime, costs, quality, and sound.
+- **Long-form YouTube results stay out of automatic rotation.** Direction searches, external adds, listener requests, and restart handoff now hold sets, full albums, podcasts, unknown-duration picks, and oversized candidates before they can become the next song; single-track music still passes when it fits the station's current pacing.
+
+### Fixed
+
+- **Recovery now uses real packaged audio instead of generated silence.** If the producer hits a broad failure or the queue drains after an operator clears the pool, the add-on now reaches for a committed recovery clip, then normalized cached music, then a branded recovery sweeper, then an emergency tone. The release checks fail if the recovery clip is missing or if producer recovery calls `generate_silence` again.
+- **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
+- **Resume now clears the stopped status right away.** After tapping Resume, the add-on's public and admin status panels no longer keep showing the old stopped-state copy while the station waits for the next segment.
+- **Listener dediche no longer disappear when you switch playlists.** If a request is waiting and the operator loads a different playlist, the request moves into the recently handled feed as "Playlist changed" instead of vanishing after the listener already saw the request accepted.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the emergency-tone fallback, so provider or download trouble feels intentional instead of like dead air.
+- **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
+- **Restart handoff follows the same music admission rules after an update.** Music restored from an older restart-handoff manifest is rechecked before startup playback, so a long YouTube set saved before this update cannot sneak into the cold-open queue. When a bad candidate is rejected for the session, the producer also chooses from the remaining eligible tracks directly instead of repeatedly sampling the rejected one.
+- **Normal Mode, handovers, and section stings now match the live controls.** Default-mode host copy that comes back all-Italian is retried once with a stronger English-led repair instruction, then falls back to stock English-led copy if the model still ignores the mode. Song-to-host talkovers start almost immediately instead of replaying a 1.5-second music tail, and synthetic section stings rotate among three distinct variants while prerecorded stinger assets still take priority.
+- **Norm-cache rescue tracks now carry a real duration estimate.** Fresh normalized cache entries save track duration, cache hits refresh stale duration sidecars without losing loudness markers, older entries fall back to a bitrate-size estimate, and rejected long-form cache artifacts are purged so rescue bridges cannot replay them.
+- **Listener song requests now say why they were refused.** The admin panel distinguishes no result, banned songs, long-form items, and download failures instead of flattening every terminal song request into "not found."
+
+## 2.16.0 - 2026-07-06
+
+### Added
+
+- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
+
+### Changed
+
+- **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
+
+## 2.15.0 - 2026-07-06
+
+### Added
+
+- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
+- **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded cold-open campaign after an update, counted only when a real listener receives streamed audio. The station can also bring back a recently rendered music segment after restart so the first listen reaches live programming faster.
 - **Listener dediche can now reject configured real-name matches before they reach the hosts.** Operators can keep `blocked_names` under `[moderation]` in `radio.toml`; it ships empty, but when filled it catches names case-insensitively and accent-insensitively without echoing the private list back to listeners.
-- **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
+- **The admin panel now shows where estimated AI spend is going.** Motore's cost card keeps the single session total, then splits it into host scripts, transitions, ad scripts, post-air memory extraction, and voice synthesis. Older sessions that only have the old aggregate counter show an honest "not available yet" note instead of pretending every category is zero, and unknown model prices are still flagged as estimates.
 - **New "Guest host" option.** On by default — the rotating guest host stays in the line-up. Turn it off to keep the show to your regular hosts only. Takes effect after the add-on restarts.
 
 ### Changed
 
-- **The Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. Jamendo and legacy provider-key fields move behind Home Assistant's optional configuration disclosure for new installs and installs where those saved keys are absent; existing installs that already saved blank legacy fields may still show them until those saved options are cleared.
+- **Durable listener memories now wait for a clean banter stream.** New listener theories and song reaction cues are extracted afterward from the final streamed script, so queued, skipped, fallback, or half-sent banter no longer writes durable listener or song-cue memory.
+- **The two language modes now do what they say.** With Super Italian Mode on, the hosts speak fully in Italian — no more English asides slipping through. In the default mode, the hosts now speak about 70% English with real Italian moments — including whole Italian sentences — and news flashes and ads follow the same mix rather than staying all-Italian inside an English-led show.
+- **Hosts push through a long thought instead of shrugging into filler.** When a host break runs longer than the writing budget allows, the station retries once with more room — first with its main writer, then with the backup — instead of quietly airing a generic filler line. The budget grew to match how much the hosts actually have to say, each attempt gets proportional breathing room under a hard time limit, and the music never waits on a chatty host.
+- **The Configuration tab is easier to scan.** The first screen now keeps the station, Home Assistant, AI quality, admin token, personality, and sound controls together. The Jamendo client ID moves behind Home Assistant's optional configuration disclosure for new installs and installs where the saved key is absent; existing installs that already saved a blank value may still show it until that saved option is cleared.
 - **Generated ad and imaging layers stop being remade every time.** The station now reuses its own generated music beds, ambient textures, motifs, and transition stings from the local cache when their inputs match. Repeated ad breaks and host transitions stay lighter on Raspberry Pi-class hardware, while the ambient layers keep a small rotation so the station does not sound like one identical loop.
 - **Banter is shorter by default.** Hosts keep most breaks to a quick beat between songs, saving longer breaks for moments that earn them — a home-event reaction, a listener request, an operator course change, or Festival Mode.
 
 ### Fixed
 
+- **The add-on logs stay calmer when providers or downloads fail safely.** Ad promo tags now use the configured ad voice engine instead of handing ElevenLabs IDs to Edge TTS, Azure and ElevenLabs auth/config failures fall back once and then stay on the Edge fallback for the session, direction-download failures no longer dump traceback noise for ordinary YouTube blocks, and Home Assistant state pushes are smoothed into ordered writes.
+- **Hans Günther now stays a cameo instead of taking over a host break.** The add-on recognises short or oddly punctuated Hans tags as guest-host attempts, drops them when the cameo gate is closed, and falls back to a full regular-host exchange if needed.
+- **Your pacing settings now stick.** The Diretta sliders in the admin panel — songs between host breaks, songs between ad breaks, and ads per break — used to reset to their defaults after a restart. They are now saved and restored, and the three values also appear on the add-on Configuration screen. If a save can't be written the panel says so and leaves the current setting untouched instead of half-applying it.
 - **Restart handoff scratch files no longer build up in `/data/cache`.** On startup the add-on now prunes stale restart-handoff `.tmp` files left behind by an interrupted update, while keeping the published manifest and finished music handoff files intact.
 - **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.
 - **"Clear pool" now actually empties the rotation.** The clear-pool button in the Rotazione tab used to fail with an error; it now clears the whole pool, and the song that's already playing finishes first so there is no dead air.
@@ -24,13 +76,8 @@
 
 ### Security
 
+- **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
-
-## 2.15.0
-
-### Security
-
-- **Provider keys can live outside Supervisor options.** The add-on now prefers `/config/secrets.env` for Anthropic, OpenAI, Azure Speech, and ElevenLabs credentials, keeps legacy option fields as per-key fallbacks for compatibility, and writes setup-saved provider keys back to that file in add-on mode so routine Supervisor option diagnostics no longer need to contain new provider secrets.
 
 ## 2.14.1 - 2026-06-21
 

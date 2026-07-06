@@ -235,6 +235,37 @@ def test_compact_deck_is_complete() -> None:
     assert 'class="mmr-tabbar"' in deck
 
 
+def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
+    """Record Hunt's two-line desk and chips must not create horizontal overflow."""
+    css = _admin_css()
+    phone_css = _phone_css()
+
+    direction_phone = _declarations_for_selector(phone_css, ".direction-row")
+    banner = _declarations_for_selector(css, ".course-banner")
+    truth = _declarations_for_selector(css, ".record-hunt-truth")
+    stage = _declarations_for_selector(css, ".record-hunt-stage")
+    chips = _declarations_for_selector(css, ".pl-chips")
+    phone_chips = _declarations_for_selector(phone_css, ".pl-chips")
+    phone_actions = _declarations_for_selector(phone_css, ".pl-a")
+    phone_ban = _declarations_for_selector(phone_css, ".pl-ban")
+
+    assert direction_phone.get("flex-direction") == "column"
+    assert direction_phone.get("align-items") == "stretch"
+    assert banner.get("display") == "grid"
+    assert banner.get("width") == "100%"
+    assert banner.get("min-width") == "0"
+    assert "break-word" in banner.get("overflow-wrap", "")
+    assert truth.get("min-width") == "0"
+    assert stage.get("min-width") == "0"
+    assert chips.get("min-width") == "0"
+    assert phone_chips.get("grid-column") == "4 / 6"
+    assert phone_chips.get("grid-row") == "2"
+    assert phone_chips.get("flex-wrap") == "wrap"
+    assert phone_actions.get("grid-row") == "3"
+    assert phone_ban.get("grid-row") == "3"
+    assert "white-space: nowrap" in css[css.index(".hunt-pick") : css.index(".pl-a {")]
+
+
 def test_on_air_idle_state_compacts_dead_space() -> None:
     """Idle console state should collapse only the non-useful now-playing space."""
     css = _admin_css()
@@ -311,6 +342,39 @@ def test_mobile_upper_deck_scrolls_away() -> None:
     assert mobile_deck.get("position") == "static"
     assert mobile_deck.get("top") == "auto"
     assert mobile_deck.get("z-index") == "auto"
+
+
+def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
+    """The sticky deck must hide focused panel borders scrolling behind it."""
+    css = _admin_css()
+
+    deck = _declarations_for_selector(css, ".mmr-deck")
+    assert deck.get("position") == "sticky"
+    assert deck.get("top") == "0"
+    assert deck.get("z-index") == "40"
+    assert deck.get("isolation") == "isolate"
+
+    mask = re.search(r"\.mmr-deck::before\s*\{([^}]*)\}", css, re.DOTALL)
+    assert mask, ".mmr-deck must own a pseudo-layer that masks scrolled panel chrome."
+    mask_declarations = {prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(mask.group(1))}
+    assert mask_declarations.get("position") == "absolute"
+    assert mask_declarations.get("inset") == "0 0 -16px 0"
+    assert mask_declarations.get("background") == "var(--bg)"
+    assert mask_declarations.get("z-index") == "0"
+    assert mask_declarations.get("pointer-events") == "none"
+
+    panel_focus = re.search(r"\.mmr-tabpanel:focus-visible\s*\{([^}]*)\}", css, re.DOTALL)
+    assert panel_focus, "Focusable tab panels need an internal focus ring."
+    focus_declarations = {prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(panel_focus.group(1))}
+    assert focus_declarations.get("outline") == "none"
+    assert focus_declarations.get("box-shadow", "").startswith("inset 0 0 0 2px")
+
+    mobile_mask = re.search(r"\.mmr-deck::before\s*\{([^}]*)\}", _phone_css(), re.DOTALL)
+    assert mobile_mask, "The mobile breakpoint must explicitly disable the desktop deck mask."
+    mobile_mask_declarations = {
+        prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(mobile_mask.group(1))
+    }
+    assert mobile_mask_declarations.get("display") == "none"
 
 
 def test_on_air_zone_renders_ai_cost_counter() -> None:
@@ -598,6 +662,14 @@ def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:
     _assert_touch_target(".host-preset")
     _assert_touch_target(".host-reset")
     _assert_touch_target(".setup-inline-action")
+
+
+def test_setup_guided_controls_have_44px_touch_targets() -> None:
+    _assert_touch_target(".setup-strip-action")
+    _assert_touch_target(".setup-advanced summary")
+    _assert_touch_target(".ha-preview-action")
+    _assert_touch_target(".setup-home-preview-action")
+    _assert_touch_target(".setup-recheck-action")
 
 
 def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:

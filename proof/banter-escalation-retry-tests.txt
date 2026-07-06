@@ -1,0 +1,5 @@
+..................................                                       [100%]
+178 passed in 0.81s
+3776 passed, 2 skipped, 19 deselected in 72.12s (0:01:12)
+ruff check: pass | ruff format --check: pass | mypy: Success (223 source files)
+coverage: make check passed — all per-module floors held

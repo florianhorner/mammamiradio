@@ -147,7 +147,7 @@ After starting the app:
 1. Open `http://127.0.0.1:8000/` and confirm the listener page loads.
 2. Open `http://127.0.0.1:8000/admin` (with admin auth if non-loopback) and confirm the control room loads.
 3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
-4. Hit `/public-status` and confirm the upcoming list reflects the real queued segments, or returns `upcoming_mode="building"` while the producer is warming up.
+4. Hit `/public-status` and confirm the upcoming list reflects only real queued segments, or returns `upcoming_mode="building"` while no render-ready segment exists yet.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
 6. Restart the app and verify the last selected source restores automatically.
 

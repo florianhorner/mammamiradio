@@ -18,11 +18,17 @@ from fastapi import FastAPI
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
+from mammamiradio.playlist.direction import (
+    find_existing_direction_tracks,
+    resolve_direction_tracks,
+    target_dicts_to_targets,
+)
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
@@ -33,7 +39,9 @@ from mammamiradio.playlist.playlist import (
     normalized_track_key,
     read_persisted_heading,
     read_persisted_source,
+    write_persisted_heading,
 )
+from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -41,6 +49,10 @@ from mammamiradio.web.listener_requests import router as listener_requests_route
 from mammamiradio.web.streamer import (
     CLIP_MAX_SEGMENT_SECONDS,
     LiveStreamHub,
+    _clear_active_heading,
+    _download_direction_track,
+    _heading_selection_budget,
+    _register_background_task,
     _session_stopped_flag,
     router,
     run_playback_loop,
@@ -95,6 +107,54 @@ def _clear_persisted_heading(config) -> None:
         logger.warning("Failed to clear persisted heading during startup", exc_info=True)
 
 
+async def _restore_direction_targets_background(app_state, heading_id: str, raw_targets, source_revision: int) -> None:
+    """Best-effort target rehydration for persisted directions after instant-audio startup."""
+    try:
+        targets = target_dicts_to_targets(raw_targets)
+        if not targets:
+            return
+        state = app_state.station_state
+        resolved_tracks = await resolve_direction_tracks(
+            targets,
+            playlist=list(state.playlist),
+            pacing=app_state.config.pacing,
+        )
+        resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
+        download_tracks = []
+        async with app_state.source_switch_lock:
+            if state.heading is None or state.heading.id != heading_id or state.source_revision != source_revision:
+                return
+            existing_keys = {normalized_track_key(track) for track in state.playlist}
+            seen_new: set[tuple[str, str]] = set()
+            for track in resolved_tracks:
+                key = normalized_track_key(track)
+                if key in existing_keys or key in seen_new:
+                    continue
+                seen_new.add(key)
+                track.heading_id = heading_id
+                download_tracks.append(track)
+
+        download_tasks = []
+        for track in download_tracks:
+            dl_task = asyncio.create_task(_download_direction_track(track, app_state, source_revision, heading_id))
+            _register_background_task(app_state, dl_task)
+            download_tasks.append(dl_task)
+        if download_tasks:
+            await asyncio.gather(*download_tasks, return_exceptions=True)
+
+        async with app_state.source_switch_lock:
+            state = app_state.station_state
+            if state.heading is None or state.heading.id != heading_id or state.source_revision != source_revision:
+                return
+            playable_count = sum(1 for track in state.playlist if track.heading_id == heading_id)
+            if playable_count == 0:
+                logger.warning("Persisted direction restored no playable tracks; returning to auto")
+                _clear_active_heading(state)
+                _clear_persisted_heading(app_state.config)
+    except Exception:
+        logger.warning("Persisted direction background restore failed", exc_info=True)
+
+
 def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) -> int:
     """Synchronously admit safe handoff music before background tasks start."""
     if state.session_stopped:
@@ -103,6 +163,8 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
     admission = admit_restart_handoff_entries(
         config.cache_dir,
         blocklist=state.blocklist,
+        playlist=state.playlist,
+        pacing=config.pacing,
     )
     accepted = 0
     for segment in admission.to_segments(config.cache_dir):
@@ -158,7 +220,7 @@ async def startup():
     global _producer_task, _playback_task, _prewarm_task
 
     config = load_config()
-    logger.info("Station: %s (%s)", config.station.name, config.station.language)
+    logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
 
     # One integrated-LUFS target across every segment type: configure the
     # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
@@ -240,12 +302,22 @@ async def startup():
     # resumes the same session and gags instead of resetting them. Missing or
     # corrupt files start fresh and never block boot. Candidacy policy comes from
     # config ([home.running_gags]); empty lists keep the built-in domain default.
+    # The mute policy's entity_denylist is static (config-only) and doesn't
+    # purge already-persisted buckets on its own, so a mute applied in a prior
+    # session (or a purge whose save_if_dirty() failed) would otherwise
+    # survive a restart and still be offerable as a running gag (codex
+    # adversarial review). Merge the current mute policy into the denylist
+    # AND purge any matching buckets already on disk.
+    _muted_at_boot = muted_entity_ids(config.cache_dir)
     evening_ledger = EveningLedger.load(
         config.cache_dir,
         domain_allowlist=config.running_gags.domain_allowlist or None,
         entity_allowlist=config.running_gags.entity_allowlist or None,
-        entity_denylist=config.running_gags.entity_denylist or None,
+        entity_denylist=(set(config.running_gags.entity_denylist) | _muted_at_boot) or None,
     )
+    for _muted_entity_id in _muted_at_boot:
+        evening_ledger.purge_entity(_muted_entity_id)
+    evening_ledger.save_if_dirty(config.cache_dir)
 
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not
@@ -293,45 +365,79 @@ async def startup():
             "Blocklist: filtered %d banned track(s) from the startup pool",
             pre_blocklist_count - len(tracks),
         )
+    song_preferences = load_preferences(config.cache_dir)
+    logger.info("Song preferences: loaded %d preference(s)", len(song_preferences))
 
     persisted_heading = read_persisted_heading(config.cache_dir)
+    pending_direction_targets: list[dict[str, str]] = []
     if persisted_heading is not None:
+        existing_heading_tracks = []
         try:
-            heading_tracks, _heading_source = load_explicit_source(
-                config,
-                PlaylistSource(kind="url", url=persisted_heading.seed),
-            )
+            if persisted_heading.targets:
+                heading_targets = target_dicts_to_targets(persisted_heading.targets)
+                if not heading_targets:
+                    raise ValueError("persisted direction has no valid targets")
+                pending_direction_targets = [target.to_dict() for target in heading_targets]
+                existing_heading_tracks = find_existing_direction_tracks(tracks, heading_targets)
+                heading_tracks = []
+            else:
+                heading_tracks, _heading_source = load_explicit_source(
+                    config,
+                    PlaylistSource(kind="url", url=persisted_heading.seed),
+                )
             heading_tracks = filter_blocklisted(heading_tracks, blocklist)
         except Exception as exc:
             logger.warning("Persisted heading restore failed; returning to auto: %s", exc)
             _clear_persisted_heading(config)
             persisted_heading = None
         else:
-            if not heading_tracks:
+            if not heading_tracks and not existing_heading_tracks and not pending_direction_targets:
                 logger.warning("Persisted heading restored no playable tracks; returning to auto")
                 _clear_persisted_heading(config)
                 persisted_heading = None
             else:
-                existing = {normalized_track_key(track) for track in tracks}
+                existing_by_key = {normalized_track_key(track): track for track in tracks}
                 blended_heading_tracks = []
+                retagged_existing = 0
+                for track in existing_heading_tracks:
+                    if track.heading_id != persisted_heading.id:
+                        track.heading_id = persisted_heading.id
+                        retagged_existing += 1
+                    existing_by_key[normalized_track_key(track)] = track
                 for track in heading_tracks:
                     key = normalized_track_key(track)
-                    if key in existing:
+                    existing_track = existing_by_key.get(key)
+                    if existing_track is not None:
+                        if existing_track.heading_id != persisted_heading.id:
+                            existing_track.heading_id = persisted_heading.id
+                            retagged_existing += 1
                         continue
                     track.heading_id = persisted_heading.id
-                    existing.add(key)
+                    existing_by_key[key] = track
                     blended_heading_tracks.append(track)
-                if not blended_heading_tracks:
-                    logger.warning("Persisted heading restored no new tracks; returning to auto")
+                restored_count = retagged_existing + len(blended_heading_tracks)
+                if not restored_count and not pending_direction_targets:
+                    logger.warning("Persisted heading restored no matching tracks; returning to auto")
                     _clear_persisted_heading(config)
                     persisted_heading = None
                 else:
-                    tracks = blended_heading_tracks[:5] + tracks + blended_heading_tracks[5:]
+                    if persisted_heading.selection_budget <= 0:
+                        persisted_heading.selection_budget = _heading_selection_budget(
+                            restored_count or len(pending_direction_targets)
+                        )
+                    if restored_count:
+                        persisted_heading.phase = "steering"
+                        if persisted_heading.first_found_at <= 0:
+                            persisted_heading.first_found_at = time.time()
+                    else:
+                        persisted_heading.phase = "hunting"
+                    tracks = tracks + blended_heading_tracks
                     logger.info(
-                        "Restored heading %s with %d fetched track(s), %d blended",
+                        "Restored heading %s with %d fetched track(s), %d blended, %d retagged",
                         persisted_heading.label,
                         len(heading_tracks),
                         len(blended_heading_tracks),
+                        retagged_existing,
                     )
     logger.info("Loaded %d tracks", len(tracks))
 
@@ -344,6 +450,7 @@ async def startup():
         if persisted_heading is not None and persisted_heading.announced
         else "",
         blocklist=blocklist,
+        song_preferences=song_preferences,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
         verbal_gag_ledger=verbal_gag_ledger,
@@ -380,6 +487,26 @@ async def startup():
     app.state.release_campaign = release_campaign
     app.state.config = config
     app.state.start_time = time.time()
+
+    def _persist_heading_update(heading) -> None:
+        async def _write_heading() -> None:
+            # Serialize against clear_heading/source switches and re-check identity
+            # under the lock: after_music fires this off the hot path, so without
+            # the lock a write could land AFTER a "Back to auto" deleted heading.json
+            # and resurrect the just-cleared course on the next restart.
+            try:
+                async with app.state.source_switch_lock:
+                    current = state.heading
+                    if current is None or current.id != heading.id:
+                        return
+                    await asyncio.to_thread(write_persisted_heading, config.cache_dir, current)
+            except Exception:
+                logger.warning("Failed to persist heading update", exc_info=True)
+
+        task = asyncio.create_task(_write_heading())
+        _register_background_task(app.state, task)
+
+    state.heading_persist_callback = _persist_heading_update
 
     # Provenance ledger (Show Memory). Start BEFORE producer/playback so the
     # earliest segments are captured, and stop AFTER them on shutdown so final
@@ -421,6 +548,13 @@ async def startup():
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
+    if state.heading is not None and pending_direction_targets:
+        restore_task = asyncio.create_task(
+            _restore_direction_targets_background(
+                app.state, state.heading.id, pending_direction_targets, state.source_revision
+            )
+        )
+        _register_background_task(app.state, restore_task)
     # Validate configured AI keys in the background so a bogus persisted key
     # surfaces in the admin BEFORE any banter fails. Fire-and-forget —
     # never awaited, so it can't delay first audio (Leadership Principle #2).

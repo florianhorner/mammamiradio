@@ -165,6 +165,7 @@ class GagBucket:
     first_ts: float = 0.0
     last_ts: float = 0.0
     last_spoken_ts: float = 0.0
+    cooldown_seconds: float = GAG_COOLDOWN_SECONDS
 
     def salience(self, *, now: float) -> float:
         """tier_weight x log(count+1) x recency_decay(now - last_ts)."""
@@ -182,6 +183,7 @@ class GagBucket:
             "first_ts": self.first_ts,
             "last_ts": self.last_ts,
             "last_spoken_ts": self.last_spoken_ts,
+            "cooldown_seconds": self.cooldown_seconds,
         }
 
     @classmethod
@@ -195,6 +197,7 @@ class GagBucket:
             first_ts=float(data.get("first_ts", 0.0) or 0.0),
             last_ts=float(data.get("last_ts", 0.0) or 0.0),
             last_spoken_ts=float(data.get("last_spoken_ts", 0.0) or 0.0),
+            cooldown_seconds=float(data.get("cooldown_seconds", GAG_COOLDOWN_SECONDS) or GAG_COOLDOWN_SECONDS),
         )
 
 
@@ -246,11 +249,14 @@ class EveningLedger:
             return False
         if event.entity_id in self.entity_denylist:
             return False
+        # Availability flaps remain infrastructure noise even for explicit
+        # radio-event rules.
+        if _is_sentinel_transition(event):
+            return False
+        if getattr(event, "force_gag_candidate", False):
+            return True
         # Defense in depth: a candidate must never emit numeric drift...
         if _is_numeric(event.raw_new_state) or _is_numeric(event.raw_old_state):
-            return False
-        # ...nor a device-availability flap (HA/addon restart artefact).
-        if _is_sentinel_transition(event):
             return False
         if self.entity_allowlist:
             return event.entity_id in self.entity_allowlist
@@ -309,8 +315,15 @@ class EveningLedger:
                     old_state=event.old_state,
                     new_state=event.new_state,
                     first_ts=event.timestamp,
+                    cooldown_seconds=(
+                        event.gag_cooldown_seconds
+                        if getattr(event, "gag_cooldown_seconds", 0.0) > 0
+                        else GAG_COOLDOWN_SECONDS
+                    ),
                 )
                 self.buckets[key] = bucket
+            elif getattr(event, "gag_cooldown_seconds", 0.0) > 0:
+                bucket.cooldown_seconds = event.gag_cooldown_seconds
             bucket.count += 1
             bucket.last_ts = event.timestamp
             changed = True
@@ -339,7 +352,9 @@ class EveningLedger:
         eligible = [
             (key, bucket)
             for key, bucket in self.buckets.items()
-            if bucket.count >= MIN_COUNT_FOR_GAG and (now - bucket.last_spoken_ts) >= GAG_COOLDOWN_SECONDS
+            if bucket.count >= MIN_COUNT_FOR_GAG
+            and (now - bucket.last_spoken_ts) >= bucket.cooldown_seconds
+            and bucket.entity_id not in self.entity_denylist
         ]
         # Weighted-random pick (not strict top, so a hot gag can't starve the rest)
         # + silence chance ("discovered, not announced"). Shared with the verbal
@@ -363,6 +378,33 @@ class EveningLedger:
             return
         bucket.last_spoken_ts = now
         self._dirty = True
+
+    def purge_entity(self, entity_id: str) -> bool:
+        """Drop any bucket already tallied for ``entity_id``.
+
+        `entity_denylist` only stops NEW events from becoming buckets — it does
+        nothing about a bucket built before an operator mutes the entity, and
+        `offer_gag()` does not re-check the denylist at read time. Called when
+        an operator mutes an entity so an already-observed moment about it
+        cannot still be offered as a running gag after the mute.
+        """
+        to_drop = [key for key, bucket in self.buckets.items() if bucket.entity_id == entity_id]
+        for key in to_drop:
+            del self.buckets[key]
+        if to_drop:
+            self._dirty = True
+        return bool(to_drop)
+
+    def purge_denied_entities(self) -> bool:
+        """Drop persisted buckets that current config/policy now denies."""
+        if not self.entity_denylist:
+            return False
+        to_drop = [key for key, bucket in self.buckets.items() if bucket.entity_id in self.entity_denylist]
+        for key in to_drop:
+            del self.buckets[key]
+        if to_drop:
+            self._dirty = True
+        return bool(to_drop)
 
     def select_and_render(self, *, now: float, rng: random.Random | None = None) -> str:
         """Pick one eligible gag and immediately spend its cooldown."""
@@ -445,6 +487,7 @@ class EveningLedger:
             led.entity_allowlist = frozenset(entity_allowlist)
         if entity_denylist is not None:
             led.entity_denylist = frozenset(entity_denylist)
+            led.purge_denied_entities()
         return led
 
     def save_if_dirty(self, cache_dir: Path) -> None:

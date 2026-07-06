@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -168,12 +168,19 @@ body[data-stopped="true"] .btn-util {
 /* ── QUICK ACTIONS ── */
 .quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .course-banner {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  display: grid; gap: 3px;
   width: 100%; margin-top: 8px; padding: 9px 11px;
   border: 1px solid rgba(244,208,72,0.18); border-radius: 8px;
   background: rgba(20,17,15,0.34); color: rgba(245,237,216,0.78);
-  font-size: 12px;
+  font-size: 12px; min-width: 0; overflow-wrap: break-word;
 }
+.course-banner[data-active="true"] { border-color: rgba(244,208,72,0.32); background: rgba(244,208,72,0.07); }
+.record-hunt-truth { min-width: 0; line-height: 1.35; }
+.record-hunt-stage {
+  min-width: 0; color: rgba(245,237,216,0.48); font-family: var(--font-mono);
+  font-size: 10px; line-height: 1.3;
+}
+.course-banner[data-active="false"] .record-hunt-stage { display: none; }
 .course-banner b { color: var(--sun2); font-weight: 700; }
 .course-banner[data-active="false"] b { color: rgba(245,237,216,0.58); }
 
@@ -328,6 +335,28 @@ body[data-stopped="true"] .btn-util {
 }
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
+.setup-strip{display:none;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+.setup-strip.show{display:flex}
+.setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
+.setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
+.setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
+.setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
+.setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
+.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"],.setup-strip-chip[data-s="stopped"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
+.setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.setup-strip-action{min-width:44px;min-height:44px;white-space:nowrap}
+.setup-note{font-size:11px;line-height:1.45;color:rgba(245,237,216,0.66);margin-top:6px}
+.setup-advanced{margin-top:10px;border:1px solid rgba(245,237,216,0.1);border-radius:8px;padding:8px 10px;background:rgba(20,17,15,0.2)}
+.setup-advanced summary{cursor:pointer;min-width:44px;min-height:44px;display:flex;align-items:center;font-size:12px;font-weight:700;color:var(--cream)}
+.setup-home-preview-section{display:none}
+.setup-home-preview-section.show{display:block}
+.ha-preview{display:grid;gap:8px}
+.ha-preview-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;min-height:48px;padding:9px 10px;border:1px solid rgba(245,237,216,0.1);border-radius:8px;background:rgba(20,17,15,0.22)}
+.ha-preview-title{font-size:12px;font-weight:800;color:var(--cream)}
+.ha-preview-meta{font-size:11px;color:rgba(245,237,216,0.65);line-height:1.45}
+.ha-preview-id{font-family:var(--font-mono);font-size:10px;color:rgba(245,237,216,0.45)}
+.ha-preview-action,.setup-home-preview-action,.setup-recheck-action{min-width:44px;min-height:44px}
+@media(max-width:720px){.setup-strip{align-items:flex-start;flex-direction:column}.setup-strip-actions{width:100%;flex-direction:column;align-items:stretch}.setup-strip-action{width:100%}.ha-preview-row{grid-template-columns:1fr}.ha-preview-action{width:100%}}
 /* Motore Setup group — collapsible <details>; auto-collapses when all-ready. */
 .setup-group > summary.setup-summary {
   display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none;
@@ -345,6 +374,13 @@ body[data-stopped="true"] .btn-util {
 
 /* ── PLAYLIST / SEARCH ── */
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
+.direction-row .quick-add-label { flex-shrink: 0; }
+.direction-row .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
+.direction-row .btn-direction { min-height: 44px; padding: 10px 16px; }
+.direction-row .btn-direction.loading,
+.direction-row .btn-direction:disabled,
+.direction-row .search-input:disabled { opacity: 0.65; pointer-events: none; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -369,7 +405,13 @@ body[data-stopped="true"] .btn-util {
 
 .pl-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 0; border-bottom: 1px solid rgba(245,237,216,0.06); font-size: 12px; transition: background 0.15s; }
 .pl-row:hover { background: rgba(245,237,216,0.03); border-radius: 4px; }
+.pl-row.record-hunt-match { background: rgba(244,208,72,0.08); border-left: 2px solid rgba(244,208,72,0.56); padding-left: 6px; border-radius: 4px; }
+.pl-row.record-hunt-match:hover { background: rgba(244,208,72,0.12); }
 .pl-row.focus { background: rgba(37,99,235,0.22); border-radius: 4px; }
+.pl-row.record-hunt-match { background: rgba(244,208,72,0.08); border-radius: 4px; box-shadow: inset 3px 0 0 var(--sun2); }
+.pl-row.record-hunt-match:hover { background: rgba(244,208,72,0.12); }
+.hunt-pick { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; white-space: nowrap; color: #14110F; background: var(--sun2); border: 1px solid rgba(244,208,72,0.72); }
+.pl-row.record-hunt-match .pl-a { opacity: 1; }
 .pl-row.drag-over { border-top: 2px solid var(--sun); padding-top: 4px; }
 .pl-row.dragging { opacity: 0.4; }
 .pl-grip { cursor: grab; color: var(--muted); min-width: 44px; min-height: 44px; width: 44px; display: inline-flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
@@ -394,6 +436,11 @@ body[data-stopped="true"] .btn-util {
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn { font-size: 10px; font-weight: 600; min-height: 44px; padding: 10px 12px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+.pl-pref-group { display: inline-flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.pl-pref { width: 44px; height: 44px; padding: 0; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+.pl-pref svg { width: 15px; height: 15px; }
+.pref-btn[aria-pressed="true"] { color: var(--sun); border-color: rgba(236,204,48,0.72); background: rgba(236,204,48,0.14); }
+.pref-btn.down[aria-pressed="true"] { color: var(--ok); border-color: rgba(37,99,235,0.58); background: rgba(37,99,235,0.12); }
 #plBody {
   max-height: 400px;
   min-width: 0;
@@ -1103,8 +1150,8 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-content { padding: 16px 16px; }
   .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
   .lg-row .ts { font-size: 9px; }
-  .search-row { flex-direction: column; }
-  .search-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row, .direction-row { flex-direction: column; align-items: stretch; }
+  .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
   /* 481-768px = two-pane desktop column. Keep action buttons on the track
@@ -1140,9 +1187,9 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .pl-n { display: none; }
   .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; }
   .pl-t { grid-column: 4; grid-row: 1; }
-  .pl-chips { grid-column: 5; grid-row: 1; margin-left: 0; }
-  .pl-a { grid-column: 2 / 4; grid-row: 2; width: auto; padding-left: 0; opacity: 1; }
-  .pl-ban { grid-column: 4 / 6; grid-row: 2; justify-self: end; margin-left: 0; }
+  .pl-chips { grid-column: 4 / 6; grid-row: 2; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
+  .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
+  .pl-ban { grid-column: 4 / 6; grid-row: 3; justify-self: end; margin-left: 0; }
   .pl-btn, .sr-add { min-height: 44px; }
 }
 
@@ -1470,14 +1517,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 /* ══════════ Producer Desk — Concept B: pinned console + tabbed work area ══════════ */
 .producer-desk .producer-main{max-width:1100px}
 /* Sticky deck — console + tab bar pin together (one sticky unit, never overlap) */
-.mmr-deck{position:sticky;top:0;z-index:40;background:var(--bg);padding-top:8px;margin-bottom:16px}
+.mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:var(--bg);padding-top:8px;margin-bottom:16px}
+.mmr-deck::before{content:"";position:absolute;inset:0 0 -16px 0;background:var(--bg);z-index:0;pointer-events:none}
 @media (max-width:768px){
   .mmr-deck{position:static;top:auto;z-index:auto}
+  .mmr-deck::before{display:none}
 }
 /* Pinned live console */
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:12px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 8px 24px -16px rgba(0,0,0,.7);
-  overflow:hidden;margin-bottom:10px}
+  overflow:hidden;margin-bottom:10px;z-index:1}
 /* Inner top accent: keep the real 1px rounded border visible. Placing this at
    top:0 made the accent replace the border, so the corner read as broken. */
 .mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:11px 11px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
@@ -1511,7 +1560,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-.mmr-tabbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
+.mmr-tabbar{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
 .mmr-tabbar::-webkit-scrollbar{display:none}
 .mmr-tab{position:relative;display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:44px;min-height:44px;padding:9px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
@@ -1521,6 +1570,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 /* Tab panels — one visible at a time */
 .mmr-tabpanel{display:none}
 .mmr-tabpanel.is-active{display:block}
+.mmr-tabpanel:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(244,208,72,0.38),inset 0 1px 0 rgba(245,237,216,0.06),0 8px 24px -12px rgba(0,0,0,0.55)}
 /* One header per panel */
 .mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .a-panel header.mmr-panel-head-stacked{display:grid;grid-template-columns:1fr;gap:10px}
@@ -1569,6 +1619,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     <symbol id="ic-megaphone" viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 13"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
     <symbol id="ic-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
     <symbol id="ic-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></symbol>
+    <symbol id="ic-thumbs-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></symbol>
+    <symbol id="ic-thumbs-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></symbol>
     <symbol id="ic-rotate-cw" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
     <symbol id="ic-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
@@ -1624,6 +1676,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
+            <button type="button" id="prefUpNowBtn" class="btn-icon pref-btn" title="Play this song more often" aria-label="Like this song" aria-pressed="false" data-preference-target="now" data-preference-vote="up" style="display:none">
+              <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-up"/></svg>
+            </button>
+            <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
+              <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
+            </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
             </button>
@@ -1663,6 +1721,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="setup-strip" id="setupStrip" aria-label="Station setup">
+      <div class="setup-strip-title">Station setup</div>
+      <div class="setup-strip-chips" id="setupStripChips"></div>
+      <div class="setup-strip-actions" id="setupStripActions"></div>
     </section>
 
     <!-- Legacy sticky strip — superseded by the pinned console; kept hidden so its JS writer targets stay valid -->
@@ -1718,8 +1782,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <div class="card-label">Pending requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody"><div class="empty">No requests</div></div>
       </div>
-      <div id="programmeList">
-        <div class="prog-empty">Building queue...</div>
+      <div id="programmeList" aria-live="polite" aria-atomic="true">
+        <div class="prog-empty" role="status">Building queue...</div>
       </div>
     </section>
 
@@ -1744,15 +1808,21 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
           <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
         </div>
-        <div class="quick-actions" id="headingControls" aria-label="Steer the next stretch">
-          <span class="quick-add-label">Steer:</span>
+        <div class="quick-actions" id="headingControls" aria-label="Record Hunt presets">
+          <span class="quick-add-label">Record Hunt:</span>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_70s" onclick="setHeading('classic_70s',this)">Anni '70</button>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
           <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
           <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
         </div>
+        <div class="direction-row" id="directionControls">
+          <label class="quick-add-label" for="directionInput">Find records:</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt</button>
+        </div>
         <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
-          <span>Course: <b>Auto rotation</b></span>
+          <span class="record-hunt-truth">Record Hunt: <b>Auto rotation</b></span>
+          <span class="record-hunt-stage" aria-hidden="true"></span>
         </div>
       </div>
       <div class="rotation-select" id="plSelectBar" style="display:none">
@@ -1805,6 +1875,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <input type="checkbox" id="festivalToggle" aria-label="Toggle Festival Mode" onchange="toggleFestivalMode(this)">
             <span class="festival-slider"></span>
           </label>
+        </div>
+        <div class="card-label" style="margin-top:12px">Super Italian Mode</div>
+        <div style="margin-bottom:14px">
+          <label class="super-italian-toggle">
+            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" aria-label="Toggle Super Italian Mode" onchange="toggleSuperItalian(this)">
+            <span><strong>Super Italian Mode</strong></span>
+          </label>
+          <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+            On: hosts speak 100% Italian and the listener page stays in Italian. Off: hosts speak about 70% English with real Italian moments, and the listener page is in English.
+          </div>
         </div>
       </div>
 
@@ -1938,17 +2018,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-config-h">
           <div class="ttl-eyebrow" id="eg-config-h">Configurazione</div>
 
-          <div class="card-label">Super Italian Mode</div>
-          <div style="margin-bottom:14px">
-            <label class="super-italian-toggle">
-              <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
-              <span><strong>Super Italian Mode</strong></span>
-            </label>
-            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-              Full Italian mode: hosts speak as an Italian station and the listener page stays in Italian.
-            </div>
-          </div>
-
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
             <select id="qualityProfile" onchange="setQuality(this.value)"
@@ -1991,6 +2060,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="setup-headline" id="setupHeadline">Checking configuration...</div>
             <div class="setup-meta" id="setupMeta"></div>
             <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+            <div class="setup-subhead">Identity</div>
+            <div class="setup-list" id="setupIdentity"></div>
             <div class="setup-subhead">Steps</div>
             <ul class="setup-steps" id="setupSteps"></ul>
             <div class="setup-subhead">Essentials</div>
@@ -2003,20 +2074,35 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <button type="button" class="btn btn-util setup-inline-action" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
             <div id="setupKeysForm">
-              <div class="setup-subhead">Save Keys</div>
+              <div class="setup-subhead">AI hosts</div>
+              <div class="setup-note">One key is enough. Add Anthropic or OpenAI to unlock generated host breaks and ads; audio keeps playing while the key is checked.</div>
               <div class="setup-keys">
-                <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off" aria-label="Anthropic API key">
-                <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
-                <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
-                <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
-                <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
+                <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY" autocomplete="off" aria-label="Anthropic API key">
+                <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY" autocomplete="off" aria-label="OpenAI API key">
+                <details class="setup-advanced" id="setupPremiumVoices">
+                  <summary>Premium voices</summary>
+                  <div class="setup-note">Optional voice providers. These change voice rendering, not the first AI-host unlock.</div>
+                  <div class="setup-keys">
+                    <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
+                    <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
+                    <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
+                  </div>
+                </details>
               </div>
               <div class="setup-actions" style="margin-top:10px">
-                <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+                <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save AI key</button>
+              </div>
+            </div>
+            <div class="setup-home-preview-section" id="homeContextPreviewSection">
+              <div class="setup-subhead">Home context preview</div>
+              <div class="setup-note">After an AI host key is ready, filtered Home Assistant context can be sent to that provider. Review what future host prompts may use and mute any entity locally.</div>
+              <div class="ha-preview" id="haContextPreview"><div class="empty">Home context preview will appear after the station has safe Home Assistant context.</div></div>
+              <div class="setup-actions">
+                <button type="button" class="btn btn-util setup-home-preview-action" onclick="loadHomeContextPreview()">Refresh home preview</button>
               </div>
             </div>
             <div class="setup-actions">
-              <button type="button" class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+              <button type="button" class="btn btn-util setup-recheck-action" onclick="setupRecheck(this)">Re-check</button>
             </div>
             <div class="setup-snippet" id="setupSnippetWrap">
               <div class="setup-subhead" style="margin-top:0">Home Assistant secrets.env Snippet</div>
@@ -2113,6 +2199,10 @@ function notifyExternalAddNotices(notices){
     }
     const msg=n.reason==='banned'
       ? '“'+name+'” is banned — unban it from the Banned list first, then add it.'
+      : n.reason==='non_music_audio'
+      ? '“'+name+'” looks like talk or non-music audio — choose a single-track song instead.'
+      : n.reason==='longform_audio'
+      ? '“'+name+'” looks like a set or long-form item — choose a single-track result instead.'
       : n.reason==='source_changed'
       ? 'Couldn’t queue “'+name+'” — the playlist source changed.'
       : 'Couldn’t download “'+name+'” — try another result.';
@@ -2178,7 +2268,79 @@ function nowTypeStatus(type){
   return{cls:`segment-inline segment-${sKey}`,ariaLabel:`segment: ${sText}`,title:`segment: ${sText}`,text:segmentBadge(typeKey)};
 }
 
-async function api(m,p,b){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);return(await fetch(_base+p,o)).json()}
+async function api(m,p,b,timeoutMs){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);let _t=null;if(timeoutMs){const c=new AbortController();o.signal=c.signal;_t=setTimeout(()=>c.abort(),timeoutMs);}try{return(await fetch(_base+p,o)).json()}finally{if(_t)clearTimeout(_t);}}
+
+function preferenceToast(score,persisted){
+  let msg=score>0?'Marked to play more often':score<0?'Marked to play less often':'Preference cleared';
+  if(persisted===false)msg+=' — saved for this session only';
+  return msg;
+}
+function syncNowPreferenceButtons(score){
+  score=Number(score||0);
+  const up=document.getElementById('prefUpNowBtn');
+  const down=document.getElementById('prefDownNowBtn');
+  if(up)up.setAttribute('aria-pressed',score>0?'true':'false');
+  if(down)down.setAttribute('aria-pressed',score<0?'true':'false');
+}
+function renderPreferenceButton(vote,score,attrs=''){
+  const isDown=vote==='down';
+  const pressed=isDown?Number(score||0)<0:Number(score||0)>0;
+  const label=isDown?'Dislike this song':'Like this song';
+  const title=isDown?'Play this song less often':'Play this song more often';
+  const icon=isDown?'ic-thumbs-down':'ic-thumbs-up';
+  const cls=`pl-btn pl-pref pref-btn${isDown?' down':''}`;
+  return `<button type="button" class="${cls}" data-preference-vote="${vote}" ${attrs} aria-label="${label}" title="${title}" aria-pressed="${pressed?'true':'false'}"><svg aria-hidden="true"><use href="#${icon}"/></svg></button>`;
+}
+function renderPreferenceControls(index,score){
+  const attrs=`data-preference-target="index" data-preference-index="${Number(index)}"`;
+  return `<div class="pl-pref-group">${renderPreferenceButton('up',score,attrs)}${renderPreferenceButton('down',score,attrs)}</div>`;
+}
+function preferencePayloadFromButton(el){
+  const target=el?.dataset?.preferenceTarget;
+  if(target==='now')return{now_playing:true};
+  if(target==='index')return{index:Number(el.dataset.preferenceIndex)};
+  return null;
+}
+function applyPreferenceToCachedRows(key,score){
+  if(!Array.isArray(key)||key.length!==2)return;
+  const prefKey=_plKey(key[0],key[1]);
+  const nextScore=Number(score||0);
+  let touched=false;
+  const apply=t=>{
+    if(_plKey(t?.artist,t?.title)!==prefKey)return t;
+    touched=true;
+    return {...t,preference:nextScore};
+  };
+  if(Array.isArray(_plRows))_plRows=_plRows.map(apply);
+  if(_st&&Array.isArray(_st.playlist))_st.playlist=_st.playlist.map(apply);
+  if(touched&&_activeTab==='rotazione')updatePl(_plRows,_plPage,true);
+}
+async function setTrackPreference(payload,vote,el){
+  const active=el&&el.getAttribute('aria-pressed')==='true';
+  const finalVote=active&&vote!=='clear'?'clear':vote;
+  flash(el);
+  try{
+    const r=await api('POST','/api/track/preference',{...payload,vote:finalVote});
+    if(!(r&&r.ok)){toast(wayOut('mark that song'));return;}
+    toast(preferenceToast(Number(r.score||0),r.persisted));
+    if(_st){
+      const pref=_st.song_preferences||{};
+      _st.song_preferences={...pref,revision:Number(r.preference_revision??pref.revision??0)};
+    }
+    applyPreferenceToCachedRows(r.key,r.score);
+    if(_st&&payload&&payload.now_playing===true){_st.current_track_preference=Number(r.score||0);syncNowPreferenceButtons(_st.current_track_preference);}
+    await refreshFast();
+  }catch(_){toast(offlineMsg());}
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-preference-vote]');
+  if(!btn)return;
+  const payload=preferencePayloadFromButton(btn);
+  const vote=btn.dataset.preferenceVote;
+  if(!payload||!vote)return;
+  event.preventDefault();
+  setTrackPreference(payload,vote,btn);
+});
 
 // ── Clock ──
 function updateClock(){
@@ -2541,8 +2703,12 @@ function updateNow(ns){
   // Ban-now is only meaningful while a song is on air — derive it straight from the
   // segment type the admin already polls (no extra server field needed).
   const banBtn=document.getElementById('banNowBtn');
+  const prefBtns=[...document.querySelectorAll('[data-preference-target="now"]')];
   const onAir=document.getElementById('on-air');
-  if(banBtn)banBtn.style.display=(ns&&segmentTypeKey(ns.type)==='music')?'':'none';
+  const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
+  if(banBtn)banBtn.style.display=isMusic?'':'none';
+  prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
+  syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){
     if(onAir)onAir.classList.add('is-idle');
     const ty=document.getElementById('nowType');
@@ -2694,7 +2860,7 @@ function renderProgramme(st){
   // different copy when stopped vs building, so a stop/resume with an unchanged
   // upcoming list must still re-render.
   const faderDown=shouldFaderDown(st);
-  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),st?.current_source?.kind,st?.current_source?.label,st?.playlist_source?.kind,st?.playlist_source?.label,st?.golden_path?.stage,_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -2702,8 +2868,9 @@ function renderProgramme(st){
   // Suppress optimistically-removed rows until their deferred backend call
   // commits (delayed-commit undo). A pending purge blanks the whole queue.
   const upcoming=_pendingPurge?[]:(st.upcoming||[]).filter(it=>!_pendingRemovals.has(it.id));
+  const needsMusicSource=st?.golden_path?.stage==='needs_music_source';
+  const hasMusicSource=!needsMusicSource&&!!(st.current_source||st.playlist_source);
   const rows=[];
-  let totalCount=0;
 
   function matchFilter(type){
     if(_programmeFilter==='all')return true;
@@ -2719,10 +2886,10 @@ function renderProgramme(st){
     return m+':'+(r<10?'0':'')+r;
   };
   const relLabel=idx=>idx===0?'next':idx===1?'after':'later';
+  const emptyState=copy=>`<div class="prog-empty" role="status">${esc(copy)}</div>`;
 
   const upFiltered=upcoming.map((it,idx)=>({...it,_queueIndex:idx})).filter(it=>matchFilter(it.type));
   upFiltered.slice(0,8).forEach(it=>{
-    totalCount++;
     const typeKey=segmentTypeKey(it.type);
     const linked=Number.isInteger(it.playlist_index)||!!it.spotify_id;
     const clickAttrs=linked?`data-playlist-link="true" data-playlist-index="${Number.isInteger(it.playlist_index)?it.playlist_index:-1}" data-spotify-id="${esc(it.spotify_id||'')}" style="cursor:pointer"`:'';
@@ -2730,7 +2897,7 @@ function renderProgramme(st){
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
     const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
-    const source=it.source||'predicted_from_playlist';
+    const source=it.source||'rendered_queue';
     const actionable=source==='rendered_queue';
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
     const sourceText=actionable?(parts.artist||it.source_kind||'rendered'):(parts.artist||'planned');
@@ -2749,16 +2916,24 @@ function renderProgramme(st){
   }
 
   const countEl=document.getElementById('programmeCount');
-  if(countEl)countEl.textContent=totalCount+' upcoming';
+  if(countEl){
+    countEl.textContent=_programmeFilter==='all'
+      ? upcoming.length+' ready'
+      : upFiltered.length+' of '+upcoming.length+' ready';
+  }
 
   if(rows.length){
     el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Quando</th><th>Tipo</th><th>Titolo</th><th>Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }else if(upcoming.length>0&&_programmeFilter!=='all'){
+    el.innerHTML=emptyState('No '+segmentText(_programmeFilter)+' ready in this rundown.');
   }else if(document.body.getAttribute('data-stopped')==='true'){
-    el.innerHTML='<div class="prog-empty">Station paused — press Start to resume.</div>';
+    el.innerHTML=emptyState('Station paused — press Start to resume.');
+  }else if(needsMusicSource||!hasMusicSource){
+    el.innerHTML=emptyState('No music source selected. Add a source to build the rundown.');
   }else if(faderDown){
-    el.innerHTML='<div class="prog-empty">Fader Down — the record is cued for the next listener.</div>';
+    el.innerHTML=emptyState('Fader Down — the record is cued for the next listener.');
   }else{
-    el.innerHTML='<div class="prog-empty">Preparing the next segment...</div>';
+    el.innerHTML=emptyState('The next item is being cued for air.');
   }
 }
 
@@ -2963,17 +3138,130 @@ function setupRow(label, detail, status){
   const pill=setupPill(status);
   return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
+function openListener(){
+  window.open((_base||'')+'/listen','_blank','noopener');
+}
+function openSetupPanel(){
+  const motore=document.getElementById('tab-motore');
+  if(motore)motore.click();
+  const details=document.getElementById('setupGroup');
+  if(details){details.open=true;details.dataset.userPinned='true';}
+  setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
+}
+function renderGuidedSetupStrip(setup){
+  const strip=document.getElementById('setupStrip');
+  const chips=document.getElementById('setupStripChips');
+  const actions=document.getElementById('setupStripActions');
+  if(!strip||!chips||!actions)return;
+  const stripData=setup?.guided_setup?.strip||{};
+  const entries=Array.isArray(stripData.items)?stripData.items:[];
+  const show=Boolean(stripData.attention_required&&entries.length);
+  strip.classList.toggle('show',show);
+  if(!entries.length){chips.innerHTML='';actions.innerHTML='';return;}
+  chips.innerHTML=entries.map(item=>{
+    const shapeSym=item.shape&&SHAPE[item.shape]?SHAPE[item.shape]:SHAPE.info;
+    return `<span class="setup-strip-chip" data-s="${esc(item.status||'checking')}"><span aria-hidden="true">${shapeSym}</span>${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
+  }).join('');
+  const primary=stripData.primary_action||{};
+  const primaryKind=primary.kind||'review_setup';
+  const primaryLabel=primary.label||'Review setup';
+  const primaryTarget=primary.target||(primaryKind==='open_listener'?'listen':'setup');
+  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')?'openListener()':'openSetupPanel()';
+  actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
+}
+function shouldShowHomeContextPreview(setup){
+  const home=setup?.guided_setup?.home_context||{};
+  return home.action==='review_home_context'||home.status==='ready'||home.status==='empty';
+}
+function renderHomeContextPreview(data){
+  const box=document.getElementById('haContextPreview');
+  if(!box)return;
+  if(!data||data.ok===false){box.innerHTML='<div class="empty">Home context preview unavailable</div>';return;}
+  const rows=(Array.isArray(data.entities)&&data.entities.length?data.entities:[...(data.sent_now||[]),...(data.muted||[])]).slice(0,16);
+  if(!rows.length){
+    const copy=data.status==='checking'?'Home Assistant context is still being collected.':data.status==='empty'?'Home Assistant is connected, but nothing prompt-safe is available yet.':'Home context preview will appear after AI hosts and Home Assistant context are ready.';
+    box.innerHTML='<div class="empty">'+esc(copy)+'</div>';
+    return;
+  }
+  box.innerHTML=rows.map(row=>{
+    const muted=Boolean(row.muted);
+    const action=muted?'Unmute':'Mute for future host use';
+    const aria=(muted?'Unmute ':'Mute ')+(row.label||row.entity_id)+(muted?'':' for future host use');
+    const meta=[row.area,row.domain,row.state_summary,row.reason].filter(Boolean).join(' · ');
+    return `<div class="ha-preview-row" data-entity="${esc(row.entity_id)}">
+      <div>
+        <div class="ha-preview-title">${esc(row.label||row.entity_id)}</div>
+        <div class="ha-preview-meta">${esc(meta)}</div>
+        <div class="ha-preview-id">${esc(row.entity_id)}</div>
+      </div>
+      <button type="button" class="btn btn-util ha-preview-action" aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>
+    </div>`;
+  }).join('');
+}
+async function loadHomeContextPreview(){
+  try{
+    const resp=await api('GET','/api/homeassistant/context-candidates');
+    renderHomeContextPreview(resp);
+  }catch(e){
+    console.error('home_context_preview',e);
+    renderHomeContextPreview(null);
+  }
+}
+function renderHomeContextPreviewGate(setup){
+  const section=document.getElementById('homeContextPreviewSection');
+  const box=document.getElementById('haContextPreview');
+  const show=shouldShowHomeContextPreview(setup);
+  if(section)section.classList.toggle('show',show);
+  if(show){
+    loadHomeContextPreview();
+  }else if(box){
+    box.innerHTML='<div class="empty">Home context preview will appear after AI hosts and Home Assistant context are ready.</div>';
+  }
+}
+async function setHaEntityMuted(entityId, muted, el){
+  flash(el);
+  const resp=await api('PATCH','/api/homeassistant/entity-policy',{entity_id:entityId,muted:Boolean(muted)});
+  if(!resp.ok){toast(wayOut('update home context'));return}
+  toast(Boolean(muted)?'Home entity muted':'Home entity unmuted');
+  await loadHomeContextPreview();
+  await refreshFast();
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-ha-entity-id][data-ha-muted-next]');
+  if(!btn)return;
+  event.preventDefault();
+  setHaEntityMuted(btn.getAttribute('data-ha-entity-id')||'',btn.getAttribute('data-ha-muted-next')==='true',btn);
+});
 function renderSetup(setup){
   if(!setup) return;
   const _json=JSON.stringify(setup);
   if(_json===_lastSetupJson) return;
   _lastSetupJson=_json;
+  renderGuidedSetupStrip(setup);
   const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
   const modeLabel=mode?.label||setup.detected_mode||'unknown';
   const stationLabel=setup.station_mode?.label||'Unknown';
   document.getElementById('setupHeadline').textContent=setup.launch?.headline||'Configuration status available';
   document.getElementById('setupMeta').textContent=`Mode: ${modeLabel} • Station: ${stationLabel}`;
   document.getElementById('setupNext').textContent=setup.recommended_next_action||'Configuration complete.';
+
+  const identity=setup.identity||{};
+  const preview=identity.preview||{};
+  const identityRows=[
+    setupRow('Station name', identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Heard on air', preview.heard_on_air||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Seen by listeners', preview.seen_by_listeners||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow('Seen in Home Assistant', preview.seen_in_home_assistant||identity.station_name||'Mamma Mi Radio', 'done'),
+    setupRow(
+      'Automation IDs',
+      'Entity IDs, media-source paths, add-on slug, and integration domain stay mammamiradio.',
+      identity.custom_copy_preserved?'warn':'done'
+    ),
+  ];
+  if(identity.custom_copy_preserved){
+    identityRows.push(setupRow('Custom copy preserved','Some custom brand or sonic copy still uses operator-provided wording. Regenerate it deliberately if it should match the station name.','warn'));
+  }
+  document.getElementById('setupIdentity').innerHTML=identityRows.join('');
 
   const steps=(setup.onboarding_steps||[]).map(step=>{
     const detail = step.detail ? ` - ${step.detail}` : '';
@@ -3023,6 +3311,7 @@ function renderSetup(setup){
 
   // Auto-collapse the Setup group when everything is ready (eng review T5/E5).
   if(typeof window.motoreSetupAutoCollapse==='function')window.motoreSetupAutoCollapse(!needsAction);
+  renderHomeContextPreviewGate(setup);
 }
 async function setupRecheck(el){
   flash(el);
@@ -3044,8 +3333,16 @@ async function setupSaveKeys(el){
   if(azureRegion) payload.AZURE_SPEECH_REGION=azureRegion;
   if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
-  const resp=await api('POST','/api/setup/save-keys',payload);
+  let resp;
+  try{
+    resp=await api('POST','/api/setup/save-keys',payload);
+  }catch(e){
+    console.error('setup_save_keys',e);
+    toast(wayOut('save your keys'));
+    return;
+  }
   if(!resp.ok){toast(wayOut('save your keys'));return}
+  toast('Keys saved. Checking provider...');
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
   document.getElementById('setupAzureSpeechKey').value='';
@@ -3054,7 +3351,6 @@ async function setupSaveKeys(el){
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
-  toast('Keys saved');
 }
 async function copySetupSnippet(){
   const txt=document.getElementById('setupSnippet')?.textContent||'';
@@ -3090,14 +3386,18 @@ function updateSystems(caps,st){
   }
 
   const sourceLabel=st?.current_source?.label||st?.playlist_source?.label||'No playlist source';
+  const needsMusicSource=gp.stage==='needs_music_source';
+  const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source);
   const upcomingMusic=(st?.upcoming||[]).filter(it=>it.type==='music').map(it=>it.label).slice(0,2);
   let musicState='ready',musicLabel='Ready',musicDetail=`Source: ${sourceLabel}.`;
-  if(upcomingMusic.length){
+  if(needsMusicSource||!hasMusicSource){
+    musicState='blocked';musicLabel='Needs source';musicDetail='Add a source from Rotazione to build the rundown.';
+  }else if(st?.session_stopped===true){
+    musicState='idle';musicLabel='Paused';musicDetail=`Source: ${sourceLabel}. Station paused — press Start to resume.`;
+  }else if(upcomingMusic.length){
     musicDetail=`Source: ${sourceLabel}. Up next: ${upcomingMusic.join(' • ')}.`;
   }else if(st?.upcoming_mode==='building'){
     musicState='working';musicLabel='Checking';musicDetail=`Source: ${sourceLabel}. The producer is preparing the next track.`;
-  }else if(sourceLabel==='No playlist source'){
-    musicState='blocked';musicLabel='Error';musicDetail='No music source configured.';
   }
 
   el.innerHTML=[
@@ -3128,6 +3428,14 @@ const PLAYLIST_PAGE_SIZE=80;
 let _plRows=[];
 let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
 let _plLoadingMore=false;
+let _plRenderSig='';
+function playlistPreferenceRevision(){
+  return Number(_st?.song_preferences?.revision||0);
+}
+function playlistRenderSignature(page){
+  const p=page||{};
+  return [p.revision??'',playlistPreferenceRevision(),p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
+}
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
@@ -3172,30 +3480,166 @@ async function enrichPlaylistSource(kind,el){
 async function setHeading(kind,el){
   flash(el);
   const dispatch=_HEADING_DISPATCH[kind]||_HEADING_DISPATCH.classic_80s;
+  clearRecordHuntOptimistic();
+  renderRecordHuntPending(dispatch.label);
   const r=await api('POST','/api/heading',{seed:dispatch.seed});
   if(!r.ok){
+    clearRecordHuntOptimistic();
     toast(r.message||wayOut('pull that vibe'));
+    await refreshFast();
     return;
   }
-  toast(r.idempotent?`${dispatch.label} is already steering.`:`${dispatch.label} is steering the next stretch.`);
+  toast(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`);
   await refreshFast();
+}
+let _directionPending=false;
+function handleDirectionKey(event){
+  if(event.key!=='Enter' || event.repeat || event.isComposing)return;
+  event.preventDefault();
+  setDirectionText(document.getElementById('directionBtn'));
+}
+const RECORD_HUNT_BUSYWORK=[
+  'shopping for records...',
+  'undusting the LPs...',
+  'buying a new CD-RW writer...',
+  'checking the bargain bin...',
+  'reading suspicious liner notes...',
+  'arguing with the jukebox...',
+  'rewinding a mixtape nobody asked for...',
+  'pricing imports with a tiny sticker gun...',
+  'borrowing a crate from the night host...',
+  'testing whether the B-side still has magic...'
+];
+let _recordHuntOptimistic={active:false,label:'',startedAt:0};
+let _recordHuntBusyIndex=0;
+let _recordHuntBusyTimer=null;
+function recordHuntReducedMotion(){
+  return !!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+function recordHuntStageEl(){
+  return document.querySelector('#courseBanner .record-hunt-stage');
+}
+function updateRecordHuntBusyLine(){
+  const el=recordHuntStageEl();
+  if(!el)return;
+  el.textContent=RECORD_HUNT_BUSYWORK[_recordHuntBusyIndex%RECORD_HUNT_BUSYWORK.length];
+}
+function startRecordHuntBusywork(reset){
+  if(reset)_recordHuntBusyIndex=0;
+  updateRecordHuntBusyLine();
+  if(recordHuntReducedMotion())return;
+  if(_recordHuntBusyTimer)return;
+  _recordHuntBusyTimer=setInterval(()=>{
+    _recordHuntBusyIndex=(_recordHuntBusyIndex+1)%RECORD_HUNT_BUSYWORK.length;
+    updateRecordHuntBusyLine();
+  },1800);
+}
+function stopRecordHuntBusywork(){
+  if(_recordHuntBusyTimer)clearInterval(_recordHuntBusyTimer);
+  _recordHuntBusyTimer=null;
+}
+function clearRecordHuntOptimistic(){
+  _recordHuntOptimistic={active:false,label:'',startedAt:0};
+  stopRecordHuntBusywork();
+}
+function renderRecordHuntDesk(active,truthHtml,{busy=false,resetBusy=false,stageText=''}={}){
+  const banner=document.getElementById('courseBanner');
+  if(!banner)return;
+  banner.dataset.active=active?'true':'false';
+  banner.innerHTML=`<span class="record-hunt-truth">${truthHtml}</span><span class="record-hunt-stage" aria-hidden="true">${busy?'':esc(stageText)}</span>`;
+  if(busy)startRecordHuntBusywork(resetBusy);
+  else stopRecordHuntBusywork();
+}
+async function setDirectionText(el){
+  if(_directionPending)return;
+  const input=document.getElementById('directionInput');
+  const text=(input?.value||'').trim();
+  if(!text){toast('Type a direction and try again.');return;}
+  flash(el);
+  _directionPending=true;
+  if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');el.classList.add('loading');el.textContent='Hunting...';}
+  renderRecordHuntPending(text);
+  try{
+    // 60s client-side ceiling so a hung request can't leave the control stuck
+    // on "Hunting..." forever with no way out — it rejects into catch below.
+    const r=await api('POST','/api/direction',{text},60000);
+    if(!r.ok){
+      clearRecordHuntOptimistic();
+      toast(r.message||wayOut('shape that set'));
+      await refreshFast();
+      return;
+    }
+    const label=r.heading?.label||text;
+    if(r.idempotent){
+      toast(`${label} is already in the crate.`);
+    }else{
+      // Only count songs actually confirmed in rotation; anything still
+      // downloading is shown as hunting rather than counted as aired.
+      const confirmed=Number(r.added||0);
+      const pending=Number(r.pending_downloads||0);
+      let detail='';
+      if(confirmed&&pending)detail=` (${confirmed} record${confirmed===1?'':'s'}, hunting ${pending} more...)`;
+      else if(confirmed)detail=` (${confirmed} record${confirmed===1?'':'s'})`;
+      else if(pending)detail=' (hunting records...)';
+      toast(`Record Hunt started for ${label}${detail}.`);
+    }
+    if(input)input.value='';
+    await refreshFast();
+  }catch(e){
+    // The 60s client ceiling can fire while the station is still finding songs —
+    // that's not an outage. Refresh so the Course banner shows the real state
+    // instead of claiming we couldn't reach the studio.
+    if(e&&e.name==='AbortError'){
+      clearRecordHuntOptimistic();
+      toast('Still hunting records - check the banner in a moment.');
+      try{await refreshFast();}catch(_){}
+    }else{
+      clearRecordHuntOptimistic();
+      toast(offlineMsg());
+    }
+  }finally{
+    _directionPending=false;
+    if(input){input.disabled=false;input.removeAttribute('aria-busy');}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt';}
+  }
 }
 async function clearHeading(el){
   flash(el);
+  clearRecordHuntOptimistic();
   const r=await api('POST','/api/heading/clear',{});
-  if(!r.ok){toast(wayOut('return to auto'));return;}
+  if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
   toast('Back to auto.');
   await refreshFast();
+}
+function renderRecordHuntPending(label){
+  const safeLabel=esc(label||'that vibe');
+  _recordHuntOptimistic={active:true,label:label||'that vibe',startedAt:Date.now()};
+  renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${safeLabel}</b>`,{busy:true,resetBusy:true});
 }
 function updateHeadingBanner(st){
   const heading=st?.heading||{};
   const banner=document.getElementById('courseBanner');
   if(banner){
     const active=!!heading.active;
-    banner.dataset.active=active?'true':'false';
-    banner.innerHTML=active
-      ? `<span>Course: <b>${esc(heading.label||'On course')}</b></span>`
-      : '<span>Course: <b>Auto rotation</b></span>';
+    if(active){
+      _recordHuntOptimistic={active:false,label:'',startedAt:0};
+      const phase=heading.phase||'steering';
+      const label=esc(heading.label||'that vibe');
+      const count=Number(heading.tagged_count||0);
+      if(phase==='hunting'||heading.resolving){
+        renderRecordHuntDesk(true,`Record Hunt is searching for <b>${label}</b>`,{busy:true});
+      }else if(phase==='complete'){
+        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> played through. Back on auto.`);
+      }else{
+        const found=count>0?` - ${count} Hunt pick${count===1?'':'s'} highlighted`:'';
+        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> is shaping the next stretch${found}`);
+      }
+    }else if(_recordHuntOptimistic.active){
+      renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>`,{busy:true});
+    }else{
+      renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>');
+    }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
     const d=_HEADING_DISPATCH[btn.dataset.headingKind];
@@ -3222,7 +3666,7 @@ function sourceChip(source){
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
 function _plKey(artist,title){return JSON.stringify([(artist||'').trim().toLowerCase(),(title||'').trim().toLowerCase()]);}
-function updatePl(tracks,page){
+function updatePl(tracks,page,force){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
   const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
@@ -3239,15 +3683,25 @@ function updatePl(tracks,page){
   const pageOffset=Number(inPage.offset||0);
   const loadedEnd=Math.min(pageOffset+_plRows.length,total);
   _plPage={...inPage,limit:_plRows.length,has_more:loadedEnd<total};
+  const renderSig=playlistRenderSignature(_plPage);
+  if(!force&&renderSig===_plRenderSig)return;
+  _plRenderSig=renderSig;
   if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
+  const activeHeadingId=_st?.heading?.active?_st.heading.id:'';
   const filter=_plFilter.toLowerCase();
   const rows=_plRows.map((t,i)=>({t,idx:(_plPage.offset||0)+i}));
   const filtered=filter?rows.filter(row=>`${row.t.title} ${row.t.artist}`.toLowerCase().includes(filter)):rows;
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    const prefControls=renderPreferenceControls(idx,Number(t.preference||0));
+    const huntMatch=!!(activeHeadingId&&t.heading_id===activeHeadingId);
+    const huntTitle='Favored for the current Record Hunt';
+    const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
+    const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
+    const rowTitle=huntMatch?` title="${huntTitle}"`:'';
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -3493,7 +3947,8 @@ async function addExternal(i){
       document.getElementById('searchResults').innerHTML='';
       si.value='';_plFilter='';
     }else{
-      toast(wayOut('add that to the queue'));
+      const msg=r.message||wayOut('add that to the queue');
+      if(typeof window.errorToast==='function')window.errorToast(msg);else toast(msg);
     }
   }catch(_){
     toast(offlineMsg());
@@ -3602,22 +4057,22 @@ function updatePaceCounters(pacing){
 
 // ── Hosts ──
 const AX=['energy','chaos','warmth','verbosity','nostalgia'];
-const AX_LABEL={'energy':'Energia','chaos':'Caos','warmth':'Calore','verbosity':'Verbosità','nostalgia':'Nostalgia'};
-const AX_LOW ={'energy':'Calma','chaos':'Ordinato','warmth':'Distante','verbosity':'Conciso','nostalgia':'Presente'};
-const AX_HIGH={'energy':'Accesa','chaos':'Anarchico','warmth':'Intimo','verbosity':'Inarrestabile','nostalgia':'Viaggio nel tempo'};
+const AX_LABEL={'energy':'Energy','chaos':'Chaos','warmth':'Warmth','verbosity':'Verbosity','nostalgia':'Nostalgia'};
+const AX_LOW ={'energy':'Calm','chaos':'Ordered','warmth':'Distant','verbosity':'Concise','nostalgia':'Present'};
+const AX_HIGH={'energy':'Lit','chaos':'Anarchic','warmth':'Intimate','verbosity':'Nonstop','nostalgia':'Time travel'};
 const AX_WORDS={
-  energy:   ['Calma','Vivace','Energica','Accesa'],
-  chaos:    ['Ordinato','Spontaneo','Imprevedibile','Anarchico'],
-  warmth:   ['Distante','Cordiale','Caldo','Intimo'],
-  verbosity:['Conciso','Equilibrato','Loquace','Inarrestabile'],
-  nostalgia:['Presente','Retro','Nostalgico','Viaggio nel tempo'],
+  energy:   ['Calm','Lively','Energetic','Lit'],
+  chaos:    ['Ordered','Spontaneous','Unpredictable','Anarchic'],
+  warmth:   ['Distant','Friendly','Warm','Intimate'],
+  verbosity:['Concise','Balanced','Talkative','Nonstop'],
+  nostalgia:['Present','Retro','Nostalgic','Time travel'],
 };
 const HOST_PRESETS={
   Balanced:{energy:50,chaos:50,warmth:50,verbosity:50,nostalgia:50},
   Calm:{energy:25,chaos:25,warmth:65,verbosity:40,nostalgia:60},
   Hype:{energy:85,chaos:70,warmth:55,verbosity:65,nostalgia:45},
 };
-const PRESET_LABEL={Balanced:'EQUILIBRATO',Calm:'CALMO',Hype:'HYPE'};
+const PRESET_LABEL={Balanced:'Balanced',Calm:'Calm',Hype:'Hype'};
 const PRESET_BARS=Object.fromEntries(Object.entries(HOST_PRESETS).map(([p,v])=>[p,AX.map(a=>v[a])]));
 
 function axWord(ax,val){return AX_WORDS[ax][Math.min(3,Math.floor(val/26))];}
@@ -3634,10 +4089,10 @@ function buildHostPreview(block){
   block.querySelectorAll('input[type="range"]').forEach(sl=>{vals[sl.dataset.a]=+sl.value;});
   const v=vals;
   const energyLine=v.energy>70?"Cuts in before the song fades — no dead air, ever.":v.energy>40?"Picks moments carefully. Won't rush the music.":"Slow, deliberate. Long pauses after songs.";
-  const chaosLine=v.chaos>70?"Virate a metà frase e tangenti che atterrano comunque.":v.chaos>40?"Quasi in scaletta, con qualche deviazione.":"Stretto e strutturato. Ogni parola serve.";
-  const warmthLine=v.warmth>65?"Gli ascoltatori si sentono chiamati in causa.":v.warmth>35?"Cordiale senza diventare troppo familiare.":"Distanza professionale, da radio notturna.";
+  const chaosLine=v.chaos>70?"Swerves mid-sentence and still lands the tangent.":v.chaos>40?"Mostly on the rundown, with a few detours.":"Tight and structured. Every word has a job.";
+  const warmthLine=v.warmth>65?"Listeners feel personally pulled into the room.":v.warmth>35?"Friendly without getting too familiar.":"Professional distance, like a late-night station.";
   const verbosityLine=v.verbosity>70?"Three minutes of talk between tracks, minimum.":v.verbosity>40?"One or two lines between songs — enough to feel live.":"Barely speaks. Lets the music do it.";
-  const nostalgiaLine=v.nostalgia>65?"Aspettati riferimenti a Sanremo tra un brano e l’altro.":v.nostalgia>35?"Mescola riferimenti recenti e vecchi.":"Suona attuale, senza callback.";
+  const nostalgiaLine=v.nostalgia>65?"Expect Sanremo callbacks between songs.":v.nostalgia>35?"Mixes new references with old ones.":"Sounds current, without callbacks.";
   const entries=[
     {val:v.energy,line:energyLine},
     {val:v.chaos,line:chaosLine},
@@ -3735,6 +4190,15 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
+const LISTENER_SONG_ERROR_TEXT={
+  longform_audio:['not a single-track song','Not a single-track song'],
+  non_music_audio:['not a song','Not a song'],
+  banned:['banned song','Banned song'],
+  download_failed:['download failed','Download failed'],
+  download_cancelled:['cancelled','Cancelled'],
+};
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -3759,7 +4223,7 @@ function updateListenerRequests(reqs,consumed){
         status=statusInline('ready',r.song_track||'ready');
         actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
-        status=statusInline('blocked','not found');
+        status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
         status=statusInline('working','searching…');
       }
@@ -3777,8 +4241,10 @@ function updateListenerRequests(reqs,consumed){
     html+=`<div class="lr-consumed-label">Recently handled</div>`;
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
-      const badge=r.status==='song_not_found'
-        ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+      const badge=r.status==='source_changed'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
+        :r.status==='song_not_found'
+        ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">
@@ -3896,7 +4362,7 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Super Italian ON — hosts go Italian-first, listener page in Italian':'Super Italian OFF — hosts speak English-first (with Italian flavour), listener page in English');
+    if(r&&r.ok)toast(value?'Super Italian ON — hosts go full Italian, listener page in Italian':'Super Italian OFF — hosts speak mostly English with real Italian moments (about 70/30), listener page in English');
     else{
       el.checked=!value;
       toast(wayOut());
@@ -4010,7 +4476,9 @@ function renderCostSplit(con){
   const labels={
     script_banter:'Host scripts',
     script_transition:'Transitions',
+    script_home_mood:'Home mood',
     script_ads:'Ad scripts',
+    script_memory:'Memory',
     tts:'Voice synthesis'
   };
   const cats=breakdown.categories||{};

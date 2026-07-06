@@ -8,13 +8,16 @@ import random
 import re
 import time
 from collections import deque
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
@@ -24,8 +27,14 @@ if TYPE_CHECKING:
 
 
 PartyMode = Literal["festival"]
-CostCategory = Literal["script_banter", "script_transition", "script_ads", "tts"]
-LLM_COST_CATEGORIES: tuple[CostCategory, ...] = ("script_banter", "script_transition", "script_ads")
+CostCategory = Literal["script_banter", "script_transition", "script_ads", "script_home_mood", "script_memory", "tts"]
+LLM_COST_CATEGORIES: tuple[CostCategory, ...] = (
+    "script_banter",
+    "script_transition",
+    "script_ads",
+    "script_home_mood",
+    "script_memory",
+)
 TTS_COST_CATEGORY: CostCategory = "tts"
 
 
@@ -158,6 +167,16 @@ class Track:
         """Human-readable label used in logs and APIs."""
         return f"{self.artist} – {self.title}"
 
+    @cached_property
+    def normalized_key(self) -> tuple[str, str]:
+        """Canonical station song identity used by bans, preferences, and dedupe."""
+        return (self.artist.strip().lower(), self.title.strip().lower())
+
+
+def normalized_track_key(track: Track) -> tuple[str, str]:
+    """Canonical station song identity used by bans, preferences, and dedupe."""
+    return track.normalized_key
+
 
 @dataclass
 class PlayedEntry:
@@ -205,6 +224,14 @@ class Heading:
     set_at: float
     set_by: str
     announced: bool = False
+    selection_budget: int = 0
+    selection_spent: int = 0
+    targets: list[dict[str, str]] = field(default_factory=list)
+    phase: str = "hunting"
+    hunt_started_announced: bool = False
+    first_found_at: float = 0.0
+    last_narrated_at: float = 0.0
+    narration_count: int = 0
 
 
 @dataclass
@@ -442,7 +469,8 @@ class ConsumedListenerRequest(TypedDict):
     message: str | None
     song_track: str | None
     type: str | None
-    status: str  # "sent_to_hosts" | "song_not_found"
+    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed"
+    song_error_reason: str
     consumed_at: float
 
 
@@ -464,6 +492,7 @@ class StationState:
     songs_since_news: int = 0
     segments_since_station_id: int = 0
     segments_since_time_check: int = 0
+    guest_host_banter_cooldown_remaining: int = 0
     running_jokes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
     recent_transition_texts: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     current_track: Track | None = None
@@ -488,7 +517,10 @@ class StationState:
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
     heading: Heading | None = None
+    heading_revision: int = 0
+    heading_persist_callback: Callable[[Heading], None] | None = None
     heading_pending_announcement: str = ""
+    heading_pending_narration_kind: str = ""
     heading_announced_id: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
@@ -533,6 +565,12 @@ class StationState:
     ha_context_entity_count: int = 0
     ha_context_char_count: int = 0
     ha_first_home_context_moment_fired: bool = False
+    # Community-inspired Impossible Moments recipe telemetry. Public surfaces
+    # may expose only the coarse family labels; recipe internals stay admin-only.
+    ha_ritual_context: str = ""
+    ha_ritual_public_families: list[str] = field(default_factory=list)
+    ha_ritual_matches: list[dict[str, object]] = field(default_factory=list)
+    ha_ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the
@@ -564,6 +602,13 @@ class StationState:
     # read-modify-write and the disk save), so handlers cannot interleave and lose an
     # update — the same single-loop discipline switch_playlist / queue_remove_item use.
     blocklist: dict[tuple[str, str], dict] = field(default_factory=dict)
+    # Persistent operator taste: normalized (artist, title) -> {score, display,
+    # updated_at, updated_by}. Scores are soft scheduler weights only; bans remain
+    # the sole hard exclusion.
+    song_preferences: dict[tuple[str, str], dict] = field(default_factory=dict)
+    # In-session version for cheap admin polling. Startup-loaded preferences start
+    # at 0; every real operator mutation bumps this once.
+    song_preferences_revision: int = 0
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
     # Recently consumed requests kept for 5 min so the admin can see what happened
@@ -878,28 +923,60 @@ class StationState:
         self.played_track_log.clear()
         # Clear listener requests and pinned track so in-flight background
         # download tasks from the old source can't zombie-pin a track into
-        # the new playlist context.
-        self.pending_requests.clear()
+        # the new playlist context. Keep an admin-visible trail so accepted
+        # listener requests never disappear without an outcome.
+        self._mark_pending_requests_source_changed()
         self.pending_actions.clear()
         self._listener_request_rl.clear()
         self.pinned_track = None
         self.force_next = None
         self.operator_force_pending = None
         self.heading = None
+        self.heading_revision += 1
         self.heading_pending_announcement = ""
+        self.heading_pending_narration_kind = ""
         self.heading_announced_id = ""
+
+    def _mark_pending_requests_source_changed(self) -> None:
+        if not self.pending_requests:
+            return
+        now = time.time()
+        for request in self.pending_requests:
+            self.recently_consumed_requests.append(
+                {
+                    "id": request.get("request_id") or str(request.get("ts", "")),
+                    "name": request.get("name"),
+                    "message": request.get("message") or request.get("text"),
+                    "song_track": request.get("song_track"),
+                    "type": request.get("type"),
+                    "status": "source_changed",
+                    "song_error_reason": "",
+                    "consumed_at": now,
+                }
+            )
+        cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+        self.recently_consumed_requests = [
+            request for request in self.recently_consumed_requests if request.get("consumed_at", 0) >= cutoff
+        ]
+        self.pending_requests.clear()
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading
-        if (
-            heading is None
-            or not heading.id
-            or self.heading_announced_id == heading.id
-            or self.heading_pending_announcement
-        ):
+        if heading is None or not heading.id or self.heading_pending_announcement:
             return
         if track.heading_id == heading.id:
+            if heading.phase == "hunting":
+                heading.phase = "steering"
+            if heading.first_found_at <= 0:
+                heading.first_found_at = time.time()
+            if heading.announced or self.heading_announced_id == heading.id:
+                now = time.time()
+                if heading.narration_count > 0 and now - heading.last_narrated_at >= 1800:
+                    self.heading_pending_announcement = heading.label
+                    self.heading_pending_narration_kind = "crate_beat"
+                return
             self.heading_pending_announcement = heading.label
+            self.heading_pending_narration_kind = "first_found"
 
     def _log(self, seg_type: str, label: str, metadata: dict | None = None) -> None:
         """Append a bounded producer-side log entry."""
@@ -931,8 +1008,8 @@ class StationState:
         if segment.metadata.get("canned"):
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
-        if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
-            fallback_active = is_fallback_active(segment.metadata)
+        fallback_active = is_fallback_active(segment.metadata)
+        if raw_audio_source or segment.metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
             audio_source = raw_audio_source
             if not audio_source and fallback_active:
                 audio_source = "canned"
@@ -971,7 +1048,7 @@ class StationState:
             has_real_title = title_key not in placeholder_titles and not (
                 title_key == label_key and label_key in placeholder_titles
             )
-            if not segment.metadata.get("error") and duration_ms > 0 and has_real_title:
+            if not segment.metadata.get("error") and not fallback_active and duration_ms > 0 and has_real_title:
                 self.played_track_log.append(
                     PlayedEntry(
                         track=Track(
@@ -1020,6 +1097,7 @@ class StationState:
         repeat_cooldown: int = 8,
         artist_cooldown: int = 3,
         max_artist_per_hour: int = 3,
+        excluded_cache_keys: Collection[str] | None = None,
     ) -> Track:
         """Pick the next track using weighted random selection with diversity rules.
 
@@ -1031,12 +1109,19 @@ class StationState:
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
 
+        excluded = set(excluded_cache_keys or ())
+
         if self.pinned_track is not None:
             track = self.pinned_track
             self.pinned_track = None
-            return track
+            if track.cache_key not in excluded:
+                return track
+            if not any(candidate.cache_key not in excluded for candidate in self.playlist):
+                raise RuntimeError("Playlist has no eligible tracks")
 
-        pool = list(self.playlist)
+        pool = [track for track in self.playlist if track.cache_key not in excluded]
+        if not pool:
+            raise RuntimeError("Playlist has no eligible tracks")
 
         # Build all filter/weight data in a single pass over played_tracks.
         # Each track is visited once; sets and counters are accumulated per-index.
@@ -1102,6 +1187,8 @@ class StationState:
 
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         weights: list[float] = []
+        heading = self.heading
+        preference_scores = preference_score_map(self.song_preferences)
         for track in candidates:
             w = 1.0
 
@@ -1123,6 +1210,17 @@ class StationState:
             if track.popularity:
                 w *= 0.8 + 0.2 * (track.popularity / 100.0)
 
+            heading_match = heading is not None and heading.id and track.heading_id == heading.id
+            if heading_match:
+                # Record Hunt is steering, not queue control: matching records get a
+                # durable lift, but cooldowns, bans, pinned tracks, and diversity still win.
+                w *= 4.0
+
+            score = preference_scores.get(normalized_track_key(track), 0)
+            if score < 0 and heading_match:
+                score = 0
+            w *= preference_weight(score)
+
             weights.append(max(w, 0.01))  # Floor to avoid zero weights
 
         selected = random.choices(candidates, weights=weights, k=1)[0]
@@ -1132,6 +1230,17 @@ class StationState:
         """Advance state after successfully queuing a music segment."""
         self.played_tracks.append(track)
         self.current_track = track
+        heading = self.heading
+        spent_heading: Heading | None = None
+        if heading is not None and heading.id and track.heading_id == heading.id:
+            heading.selection_spent += 1
+            spent_heading = heading
+        if spent_heading is not None and self.heading_persist_callback is not None:
+            try:
+                self.heading_persist_callback(spent_heading)
+            except Exception:
+                # Persistence is best-effort; audio admission already succeeded.
+                pass
         self.songs_since_banter += 1
         self.songs_since_ad += 1
         self.songs_since_news += 1
@@ -1221,6 +1330,12 @@ class Capabilities:
     ha: bool = False
     """Home Assistant token present and integration enabled."""
 
+    home_context_ready: bool = False
+    """A prompt-safe Home Assistant context slice is available."""
+
+    home_context_enabled: bool = False
+    """Home Assistant context polling/review is enabled when HA access exists."""
+
     jamendo: bool = False
     """Jamendo source is configured with a client ID."""
 
@@ -1233,7 +1348,7 @@ class Capabilities:
     @property
     def tier(self) -> str:
         """Derive a human-friendly tier label from capability flags."""
-        if self.llm and self.ha:
+        if self.llm and self.home_context_ready:
             return "connected_home"
         if self.llm:
             return "full_ai"

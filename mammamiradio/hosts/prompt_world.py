@@ -155,12 +155,63 @@ _STYLE_INSTRUCTIONS: dict[str, str] = {
     "react": _REACT_STYLE_INSTRUCTION,
 }
 
+# Station language policy — ONE source of truth per mode, injected at every
+# LLM speech surface (banter system prompt via language_mode_directive; the
+# news/ad/transition RULES lists and the course-change notice via
+# language_mode_rule). The blocks are Italian-specific by design, like the
+# idiom examples they replaced; other station.language codes keep affecting
+# only stock-copy/data selection.
+_LANGUAGE_NAMES: dict[str, str] = {"it": "Italian", "en": "English"}
+
+LANGUAGE_MODE_FULL_ITALIAN = (
+    "LANGUAGE — SUPER ITALIAN MODE: This station broadcasts 100% in Italian. "
+    "Every line is Italian — narrative, jokes, asides, sign-offs, everything. "
+    "Never write English sentences, English asides, or English translations of "
+    "your own Italian. The only exceptions: song titles, artist names, and "
+    "brand names spoken as-is, plus any guest-host language exception granted "
+    "below. Lean fully into Italian idioms — address listeners as 'amici miei', "
+    "'cari ascoltatori'. Italian phrases land without translation."
+)
+
+LANGUAGE_MODE_INTERNATIONAL = (
+    "LANGUAGE — INTERNATIONAL MODE: You broadcast to a mixed international "
+    "audience. Target roughly 70% English, 30% Italian in every segment. "
+    "English carries the information — stories, song facts, news, anything the "
+    "listener must follow. Italian carries the heart — greetings, exclamations, "
+    "teasing, punchlines, sign-offs — and about one line in three may be a "
+    "complete Italian sentence, kept simple enough that the moment explains "
+    "itself. The Italian expression banks below are your palette for those "
+    "moments. Never translate your own Italian back into English. Think "
+    "'Italian DJ on tour speaking to the world,' not 'RAI domestic broadcast.'"
+)
+
+
+def language_mode_directive(super_italian: bool) -> str:
+    """The full language-policy block for the banter system prompt."""
+    return LANGUAGE_MODE_FULL_ITALIAN if super_italian else LANGUAGE_MODE_INTERNATIONAL
+
+
+def language_mode_rule(super_italian: bool, language_code: str) -> str:
+    """Compact one-liner for per-prompt RULES lists (news/ad/transition/course-change).
+
+    Unmapped language codes degrade to the raw code (today's behavior) — never
+    a KeyError inside a prompt build.
+    """
+    if super_italian:
+        return f"ALL text in {_LANGUAGE_NAMES.get(language_code, language_code)}."
+    return (
+        "Roughly 70% English / 30% Italian: English carries the information, "
+        "Italian the flavor — Italian moments land without translation."
+    )
+
+
 COURSE_CHANGE_MOOD_NOTICE_TEMPLATE = """
-COURSE CHANGE:
-Someone asked for, or is clearly in the mood for, {heading_label}. Notice that request as a mood in the room.
-Do not claim current playlist state, a live turn in direction, a return to that era, or a promise to stay there.
-Do not say "heading", "seed", "button", "operator", or describe the control surface.
-Frame it as a remembered request or desire that remains true even if the playlist has already moved on.
+RECORD HUNT:
+The station is digging through LP/CD crates for {heading_label}.
+{narration_line}
+Do not promise an exact next song, a queue purge, an interruption, or a permanent format change.
+Do not say "heading", "seed", "button", "operator", "phase", or describe the control surface.
+Frame it as crate-digging momentum: the hosts are steering the show toward what they find.
 {language_line}
 """
 

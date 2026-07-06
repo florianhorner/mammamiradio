@@ -9,14 +9,42 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
 Add: `https://github.com/florianhorner/mammamiradio`
 
-### 2. Configure provider secrets
+### 2. Start the add-on
+
+Click Start. Watch the log for:
+- `[mammamiradio] Starting add-on...`
+- `[mammamiradio] Home Assistant API access configured via Supervisor`
+- `Producer started`
+- `Station ready`
+
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. Once the station is ready, the listener stream should produce audio quickly. No AI key is required for this first proof: Demo Radio plays with stock host copy and fallback voices.
+
+### 3. Open the Web UI and listen
+
+Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys.
+
+### 4. Add one AI host key, then review home context
+
+Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
+
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; already-rendered audio is not purged.
+
+Premium voice keys are optional and separate from the first AI-host unlock.
 
 Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
-`ANTHROPIC_API_KEY` (recommended for AI banter and ads), `OPENAI_API_KEY` (script fallback and OpenAI
+`ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
-`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). The legacy
-Configuration-tab provider fields still work as per-key fallbacks, but new provider secrets should go
-in `/config/secrets.env`.
+`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
+longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
+the add-on's stored settings and moved into `/config/secrets.env` automatically the first time the
+updated add-on starts.
+
+Because provider keys are no longer add-on options, a fresh install never puts them where
+`ha addons info <slug>` can print them. An install upgraded from an older version may still carry
+previously saved key values in Home Assistant's stored add-on settings; opening the add-on's
+Configuration tab and pressing Save once replaces the stored settings with only the current fields,
+clearing the old key values. When sharing diagnostics, redact the options block:
+`ha addons info <slug> --raw-json | jq 'del(.data.options)'`.
 
 `secrets.env` accepts `KEY=VALUE` lines, optional `export KEY=VALUE`, whitespace around keys or
 values, single or double quoted values, values containing `=`, UTF-8 BOM, and CRLF endings. Full-line
@@ -33,20 +61,6 @@ Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
 Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
-
-### 3. Start the add-on
-
-Click Start. Watch the log for:
-- `[mammamiradio] Starting add-on...`
-- `[mammamiradio] Home Assistant API access configured via Supervisor`
-- `Producer started`
-- `Station ready`
-
-First boot is slow (30–90 seconds) — yt-dlp downloads Italian chart tracks before playback begins.
-
-### 4. Open the listener page
-
-Click Open Web UI or navigate to the ingress URL in the sidebar. Italian radio should start within 10 seconds.
 
 ## Architecture
 
@@ -69,7 +83,7 @@ HA Supervisor
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
-2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`.
+2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`, and maps the Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
 3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
 5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
@@ -168,11 +182,20 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
   |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
   |
-  +-- /data/options.json (HA UI; legacy provider fallback + non-provider options)
-  |     Legacy provider fields are used only when the same /config/secrets.env key is blank or missing.
+  +-- /data/options.json (HA UI options; provider fields are not in the schema anymore)
+  |     Supervisor drops schema-removed keys from this file on start; provider keys
+  |     saved by older versions are recovered once via the Supervisor API
+  |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
-  |     HA_ENABLED (from enable_home_assistant)
+  |     HA_ENABLED (from enable_home_assistant),
+  |     MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
+  |     MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
+  |     MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS,
+  |     MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK,
+  |     JAMENDO_CLIENT_ID
   |
   +-- run.sh maps Supervisor token
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
@@ -224,22 +247,40 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 
 ## Renaming the station
 
-The station name is what the hosts say on air. If you call it "Radio Florian", the hosts will say "Radio Florian" — naturally, mid-conversation, the way a real DJ does.
+The station name is the operator-facing identity people see and hear. If you
+call it "Radio Florian", the listener page, stream metadata, admin setup preview,
+Home Assistant friendly labels, and the default generated station IDs and
+sweepers use "Radio Florian" naturally, the way a real station would.
 
 **To rename:**
 
 1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
 2. Click Save, then restart the add-on.
-3. Within a few minutes of playback, the hosts will start using the new name.
+3. Reopen the add-on. The admin setup panel shows an **Identity** preview for
+   what listeners hear, what listeners see, and what Home Assistant shows.
+4. Within a few minutes of playback, new generated IDs, sweepers, and host copy
+   will start using the new name.
 
-The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
+The stable add-on slug, integration domain, entity IDs, and media-source path do
+not change: `mammamiradio`, `media_player.mammamiradio`,
+`sensor.mammamiradio_*`, `binary_sensor.mammamiradio_on_air`, and
+`media-source://mammamiradio/live` remain the automation contract.
+
+Custom sonic-brand copy in `radio.toml` is preserved deliberately. If you wrote
+your own `full_ident` or sweeper lines, the setup Identity preview keeps them and
+flags that custom copy may still mention the old name. Blank or default copy is
+regenerated from the new station name.
+
+You can also set the name via environment variable:
+`STATION_NAME=Radio Florian`.
 
 ## Home Assistant entities
 
 The add-on automatically pushes a basic `media_player.mammamiradio` plus sensor
-state after each segment transition and every 30 seconds — no
-`configuration.yaml` changes required, so an add-on-only setup gets a media-player
-tile out of the box.
+state after each segment transition. The media-player heartbeat continues every
+30 seconds for add-on-only setups; unchanged auxiliary sensor payloads are
+deduped between bounded recovery heartbeats — no `configuration.yaml` changes
+required, so an add-on-only setup gets a media-player tile out of the box.
 
 For a registered, controllable `media_player.mammamiradio` and the native
 `media-source://mammamiradio/live` stream source, install the HACS integration in
@@ -250,12 +291,12 @@ flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
-| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
-| `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
-| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `icon: mdi:radio`; pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `news_flash` / `station_id` / `sweeper` / `time_check` / `off` | dynamic `icon` matching the current segment type |
+| `sensor.mammamiradio_listeners` | sensor | integer | `icon: mdi:account-group`; `unit_of_measurement: listeners` |
+| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | `icon: mdi:broadcast` |
 
-**30-second cold-start note:** after a HA or add-on restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
+**Cold-start note:** after a HA or add-on restart, the media player reappears within 30 seconds via the heartbeat. Unchanged auxiliary sensors are republished by the bounded recovery heartbeat, or sooner when their state changes. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 
 **Lovelace media card** with the HACS integration:
 
@@ -287,4 +328,4 @@ The dashboard shows one of three tiers based on your configuration:
 |------|--------------|---------------|
 | Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
 | Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env` (legacy add-on option fallback still works) |
-| Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |
+| Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |

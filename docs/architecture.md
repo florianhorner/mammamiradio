@@ -72,6 +72,13 @@ base playlist:
   live pool, tags newly blended tracks with the active `Heading.id`, and bumps
   `playlist_revision` once. A zero-result import returns warm operator copy and
   does not arm narration.
+- `POST /api/direction {"text": "2000s female vocals"}` (also accepted as
+  `/api/heading` with `text`) expands operator text into concrete `{artist,title}`
+  targets, searches yt-dlp metadata, and starts audio downloads in background via
+  the same `_commit_external_download` boundary used by listener/admin external
+  songs. It never pins, purges, or blocks the live queue. Existing matching tracks
+  are retagged immediately; resolved new targets join rotation only if the source
+  revision and active heading still match when the download finishes.
 - `POST /api/heading/clear` is manual Back to auto. It clears `StationState.heading`
   and deletes `cache/heading.json`; already blended tracks remain in rotation and
   age out naturally. There is no purge and no audio interruption.
@@ -80,22 +87,39 @@ base playlist:
   loaded base.
 
 `cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
-corrupt/missing tolerant and return no heading rather than failing boot. After the
-startup base playlist is fetched and blocklisted, startup re-fetches the persisted
-heading seed, re-tags matching tracks, and blends any new heading tracks into the
-pool. If that boot fetch fails, returns no playable tracks, or adds no new tracks
-after dedupe, startup deletes `heading.json` and continues in auto mode.
+corrupt/missing tolerant and return no heading rather than failing boot. Seed
+headings persist the seed; text directions persist concrete targets, phase, safe
+counts, and Record Hunt narration throttle fields. Restore splits by kind to honor
+INSTANT AUDIO: a **seed** heading still restores synchronously during startup
+(re-fetch the source, re-tag matching tracks, blend new ones at the back of the
+rotation; on empty/failure it deletes `heading.json` and continues in auto). A
+**text direction** does NOT re-search yt-dlp on the boot path — startup re-tags any
+target already present in the freshly-fetched pool and marks the course active
+immediately, then defers the network target re-search + downloads to a background
+task (`_restore_direction_targets_background`) dispatched *after* the
+producer/playback tasks start, so a slow search can never delay first audio. Until
+that background resolve lands its first track, the course reports `phase:
+"hunting"` / `resolving: true` (the admin banner shows the station hunting
+records); if the background resolve yields no playable track, it clears the heading
+back to auto and deletes `heading.json`. Persisted-heading writes (phase changes,
+safe count updates, and narration throttle changes) are serialized under
+`source_switch_lock` with a fresh identity re-check, so a write racing a "Back to
+auto" can't resurrect a just-cleared course on the next restart.
 
-Narration is selection-driven, not button-driven. `StationState.select_next_track()`
-arms `heading_pending_announcement` only when the producer accepts a track tagged
-with the active heading id for airing. The next host break consumes that dedicated
-slot at prompt-build into a mood-noticing block; it does not reuse or overwrite
-`ha_pending_directive`. The host observes that someone asked for, or is in the mood
-for, the selected era rather than claiming the station is currently playing it or
-returning there. Because the line asserts a request, not present playlist state, it
-is intentionally allowed to air even if Back to auto or another heading lands while
-the banter is rendering. Consuming the notice marks `heading.announced` and persists
-that flag best-effort so restarts do not redundantly re-notice. The music turn
+Narration and stickiness are selection-driven, not queue-control-driven.
+`StationState.select_next_track()` first applies the normal diversity filters and
+then gives eligible tracks tagged with the active heading id a durable soft weight.
+Cooldowns, bans, artist diversity, pinned tracks, and rescue paths can still win;
+the heading never purges the queue, forces play-next, or interrupts audio.
+`heading_pending_announcement` is armed for hunt start, first found record, and
+occasional crate-digging beats. The next ordinary host break consumes that
+dedicated slot at prompt-build into a Record Hunt block; it does not reuse or
+overwrite `ha_pending_directive`, and it waits behind listener requests, HA
+directives, chaos interrupts, release beats, festival beats, and new-listener
+moments. Because the line asserts crate-digging momentum, not exact playlist state,
+it is intentionally allowed to air even if Back to auto or another heading lands
+while the banter is rendering. Consuming the notice persists the relevant narration
+flag/counter best-effort so restarts do not redundantly re-notice. The music turn
 always remains best-effort and never blocks or delays audio.
 
 ## Segment production
@@ -117,6 +141,7 @@ always remains best-effort and never blocks or delays audio.
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
   - preserves running jokes in `StationState`
+  - snapshots the generated evidence needed for listener/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
@@ -255,6 +280,11 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- BANTER memory extraction is deliberately **not** a queue-time commit. The
+  scriptwriter snapshots context, the producer rewrites that snapshot with the
+  final aired lines including the transition, and the streamer schedules
+  `memory_extractor` only after the send loop reaches EOF with bytes sent. Purged,
+  skipped, stale, failed, or partial banter never writes persona or song-cue memory.
 
 ### Dynamic LLM routing (which model voices each task)
 
@@ -265,6 +295,7 @@ Script generation never names a model in code. Each call site asks for a model b
 task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
   "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
   "transition"              "fast"                                          "haiku"     "claude-haiku-..."
+  "memory_extract"          "fast"                                          "haiku"     "claude-haiku-..."
 ```
 
 - The `[models]` block in `radio.toml` is the only place model IDs live: a
@@ -277,7 +308,7 @@ task (caller)  ──routing──▶  role  ──active profile──▶  cata
   `DEFAULT_MODELS` cold-start safety net.
 - A missing or malformed `[models]` block **degrades** to `DEFAULT_MODELS` so the
   station always boots and airs; it never fails boot.
-- `fast` (transitions) is pinned to the lowest-latency model in every profile.
+- `fast` (transitions and post-air memory extraction) is pinned to the lowest-latency model in every profile.
 - The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
   falls back to the fast OpenAI model and banter to the creative one.
 - The quality profile hot-swaps live via `POST /api/quality` (admin) with no restart
@@ -288,7 +319,7 @@ Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings a
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
-**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
+**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
 
 **Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on real activity (excluding numeric drift, `person.*`, device-availability flaps, and passive `weather`/`sun` changes), so neither radio-cadence polling nor passive environmental events can keep a quiet evening alive forever — or at the 4am day rollover.
 
@@ -344,14 +375,15 @@ diverge from `stream.audio_format.bitrate_kbps` in the same response.
 
 ## Capability flags
 
-The system uses two independent boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
+The system uses boolean flags in a frozen `Capabilities` dataclass (`mammamiradio/core/models.py`, with detection and serialization in `mammamiradio/core/capabilities.py`):
 
 | Flag | Source | What it enables |
 | --- | --- | --- |
 | `anthropic` | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` present | Live AI-generated banter and ads |
-| `ha` | `HA_TOKEN` + integration enabled | Ambient home context in banter |
+| `ha` | `HA_TOKEN` + integration enabled | Home Assistant API access is available |
+| `home_context_ready` | `ha` is true AND a prompt-safe HA context slice has actually been fetched | Ambient home context in banter |
 
-The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, Connected Home. `GET /api/capabilities` returns flags, tier, and a guided `next_step` hint (what the user should do next).
+The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, Connected Home — reaching Connected Home requires an AI host key and `home_context_ready` (not just `ha`), so having a valid HA token isn't enough on its own until a real context slice populates. `GET /api/capabilities` returns flags, tier, and a guided `next_step` hint (what the user should do next).
 
 ## Music sources
 
@@ -367,13 +399,21 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
-Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
+Once playback is running, the producer's recovery layers (packaged recovery clip, last-known-good music recycle, emergency tone, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
 ### Operator song blocklist
 
 Because every source above is re-fetched fresh on startup, an in-memory "remove" would reappear after a restart. The operator blocklist makes a ban durable. It persists to `cache_dir/blocklist.json` as `{serialized_key: {display, banned_by, banned_at}}`, keyed by the single canonical identity `normalized_track_key(track) = (artist.strip().lower(), title.strip().lower())` (the same key used for playlist dedup, so a ban holds across sources even when the per-source track id differs). The store is best-effort and corrupt-tolerant: a missing or malformed file loads as empty and never raises into the audio path; writes are atomic (`tmp` + `os.replace`).
 
 Enforcement is a single primitive, `playlist.filter_blocklisted(tracks, blocklist)`, applied at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and the external/listener download commit (`_commit_external_download`). The norm-cache **rescue** path is a separate doorway — it serves cached audio directly without passing through `state.playlist`, so `select_norm_cache_rescue` (in `audio/norm_cache.py`) drops blocklisted cache files itself, matching each file's `{title, artist}` sidecar against `state.blocklist`; a banned song never re-airs even when the queue starves and recovery kicks in (if every cache file is banned the rescue degrades to the next layer — canned clip / forced banter — never to a banned song). The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, empty-queue bridge to forced music, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge reads the post-purge queue depth and still force-bridges to music if the ban emptied the queue — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
+
+### Operator song preferences
+
+Operator song preferences are soft taste hints, not bans. They persist to `cache_dir/song_preferences.json` as `{serialized_key: {score, display, updated_at, updated_by}}`, keyed by the same `normalized_track_key(track)` identity as the blocklist. Scores are `1` for thumbs-up and `-1` for thumbs-down; clearing a preference removes the row. Loading is missing/corrupt tolerant and writes are best-effort atomic (`tmp` + `os.replace`) so a bad preference file cannot stop audio.
+
+`StationState.song_preferences` is loaded at startup and exposed only on admin JSON. `POST /api/track/preference` accepts `vote: "up"|"down"|"clear"` plus exactly one target: `now_playing: true`, `index`, or `key: [artist, title]`. The route only mutates `song_preferences`: it does not call skip, purge queue entries, remove tracks, or change `state.blocklist`. `GET /api/track/preferences` lists the full rows and counts for the admin panel. `/status` includes only the current track's preference and playlist row scores; the full row list stays behind `/api/track/preferences`. `/public-status` and the Home Assistant now-playing APIs intentionally omit preferences.
+
+Selection applies preference multipliers after hard eligibility filters inside `StationState.select_next_track()`: thumbs-up `x2.5`, thumbs-down `x0.15`, neutral `x1.0`. Pinned tracks, Move Next, listener requests, cooldowns, heading steering, Record Hunt, and bans keep their existing authority; preferences only bias among tracks already eligible for weighted selection, and the active Record Hunt heading lift is not suppressed by an older thumbs-down. The norm-cache rescue path stays preference-free on purpose: after dropping blocklisted files and avoiding recent/current identities when possible, it picks the simplest safe cache bridge so recovery remains fast.
 
 ## TTS architecture
 
@@ -402,7 +442,7 @@ A singleton OpenAI client is reused across OpenAI TTS calls for connection pool 
 - **Running jokes**: cross-session callbacks that build familiarity
 - **Callbacks used**: structured format `{"song": "...", "context": "..."}` recording which songs were referenced and why
 
-During banter generation, the persona is loaded into the prompt via `<listener_memory>`. Claude's response includes `persona_updates` (new theories, jokes, callbacks) which are persisted back to SQLite. First-time listeners get curiosity and intrigue. Returning listeners get inside jokes, personal references, and phase-aware banter depth.
+During banter generation, the persona is loaded into the prompt via `<listener_memory>`, but the hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has listener memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials. First-time listeners get curiosity and intrigue; returning listeners get inside jokes, personal references, and phase-aware banter depth only from content that actually aired.
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
@@ -412,9 +452,9 @@ Instruction-like patterns in persona entries are filtered before storage (matchi
 
 - **Anthem detection**: a track played 3+ times and never skipped becomes an anthem. The cue is stored with confidence "anthem".
 - **Skip-bit detection**: a track skipped 2+ times gets a skip-bit cue. When the listener skips a known skip-bit track, the hosts can react ("caught you again").
-- **LLM reaction cues**: during banter generation Claude can generate a free-text reaction cue for the current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
+- **LLM reaction cues**: after a generated banter segment airs cleanly, `hosts/memory_extractor.py` can extract one free-text reaction cue for the pinned current track (e.g., "sempre questa canzone sul tramonto"). These are stored and reinjected into future banter prompts for that track.
 
-Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from live playback state is used to key cues rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
+Cues appear in banter prompts as a `TRACK MEMORY` block alongside operator-flagged rules from `track_rules.py`. The `youtube_id` from the producer-side queued music history is pinned in segment metadata and used to key cues after extraction rather than trusting LLM echoes, preventing orphan rows from hallucinated IDs.
 
 Cue text is sanitized via `_sanitize_prompt_data` on the read path before injection, closing a cross-session prompt injection vector.
 
@@ -422,13 +462,14 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
+- `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
 - `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
 - allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
 - the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
 - hand-tuned entity labels (curated tier) remain authoritative; unknown entities resolve through a generated catalog backed by Anthropic (`home/catalog.py`, cached locally), then a sanitized HA display name plus area metadata, and are dropped entirely rather than letting a raw entity ID reach a host prompt
 - event diffing, mood classification, and weather narrative arcs continue to feed the existing scriptwriter fields
+- home mood uses the heuristic ladder by default; an experimental LLM scene-namer can be enabled with `MAMMAMIRADIO_HA_MOOD_LLM=true`, caches names for `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`, and falls back to the ladder whenever disabled, unavailable, slow, or invalid
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
@@ -465,7 +506,7 @@ When a HA timer fires, the station immediately interrupts playback with a pissed
 ```text
 HA timer fires (timer.xyz → idle, with recent finished_at)
     ↓
-ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+ha_context.py: lightweight 5s poll detects idle transition (separate from the default 300s full-state prompt-context fetch).
     Cancel/reset filter: only fire when finished_at is set and within the last 30s.
     ↓
 check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
@@ -511,15 +552,19 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, the real queued segments (`upcoming_mode` is `queued` or `building`), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
-| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
+| `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; includes additive `entities` rows while preserving legacy arrays, and is never exposed on `/public-status` |
+| `/api/homeassistant/entity-policy` | PATCH | Admin | Idempotently mute/unmute one Home Assistant entity for host context use |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
+| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; never skips, purges, or mutates the blocklist |
+| `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |
 | `/api/purge` | POST | Admin | Remove queued segments |
 | `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
@@ -551,11 +596,14 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
-| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` |
+| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying its current `preference` score |
 | `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
+| `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
+| `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
+| `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
-| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py` then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. |
+| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
 ### Auth rules
 
@@ -580,7 +628,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions insert a short silence segment instead of crashing the app
+- producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks
@@ -589,6 +637,8 @@ This repo is biased toward "keep the station on air."
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
+
+**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. `mammamiradio/playlist/downloader.py`'s `_generate_silence()` (writing `_silence_*.mp3` placeholders when a track download fails) is a similar out-of-scope path. Both are deliberately out of scope for the producer-exception rescue ladder above; closing them is separate follow-up work.
 
 ## File map
 
@@ -602,7 +652,8 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
 | `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
-| `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, LLM reaction cues |
+| `mammamiradio/hosts/memory_extractor.py` | Post-air banter memory extraction for persona updates and LLM reaction cues |
+| `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, stored reaction cues |
 | `mammamiradio/playlist/track_rationale.py` | "Why this track?" rationale generation for listener UI |
 | `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
@@ -624,10 +675,11 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/audio/tts.py` | TTS synthesis (Edge, OpenAI, Azure Speech, ElevenLabs) |
 | `mammamiradio/audio/voice_catalog.py` | Edge, OpenAI, and curated Azure voice ID catalogs |
 | `scripts/audition_tts_voices.py` | Local audition clips and manifest generation for configured/catalog TTS voices |
-| `mammamiradio/home/ha_context.py` | Home Assistant polling, mood classification, reactive triggers |
+| `mammamiradio/home/ha_context.py` | Home Assistant polling, heuristic mood classification, optional LLM scene-namer, reactive triggers |
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/status_payload.py` | Shared admin/listener status payload serializers re-exported by `streamer.py` |
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |
 | `mammamiradio/web/og_card.py` | Open Graph share-card PNG renderer |
