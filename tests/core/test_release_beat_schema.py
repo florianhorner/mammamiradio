@@ -7,6 +7,8 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from mammamiradio.core.release_beat_schema import (
     ALLOWED_KEYS,
     ID_RE,
@@ -73,6 +75,18 @@ def _write_pyproject(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _validate_payload(payload: dict[str, Any], tmp_path: Path) -> list[str]:
+    validator = _load_validator()
+    return validator._validate_enabled_manifest(
+        payload,
+        Path("mammamiradio/assets/release/release_beat.toml"),
+        _write_pyproject(tmp_path),
+        target_channel=None,
+        target_sha=None,
+        target_semver=None,
+    )
 
 
 def test_schema_key_sets_are_intentionally_partitioned() -> None:
@@ -165,6 +179,104 @@ def test_scalar_text_field_can_opt_into_machine_terms(tmp_path: Path) -> None:
     )
 
     assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        ("title", 123, "release_beat.title must be a non-empty string"),
+        ("copy_guidance", "  ", "release_beat.copy_guidance must be a non-empty string"),
+        ("title", "Studio crate\nsecond line", "release_beat.title must be one line"),
+        ("copy_guidance", "TODO: fill this later", "release_beat.copy_guidance contains placeholder copy"),
+        ("title", "x" * 121, "release_beat.title must be <= 120 characters"),
+        ("copy_guidance", "x" * 221, "release_beat.copy_guidance must be <= 220 characters"),
+    ],
+)
+def test_scalar_text_fields_reject_malformed_prompt_copy(
+    tmp_path: Path,
+    field: str,
+    value: Any,
+    expected_error: str,
+) -> None:
+    payload = _valid_manifest_payload()
+    payload[field] = value
+
+    assert expected_error in _validate_payload(payload, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_error"),
+    [
+        (123, "release_beat.forbidden_terms must be a list of strings"),
+        ([""], "release_beat.forbidden_terms[1] must not be blank"),
+        (["software update"] * 13, "release_beat.forbidden_terms must contain 0-12 item(s)"),
+        (["software\nupdate"], "release_beat.forbidden_terms[1] must be one line"),
+        (["TODO"], "release_beat.forbidden_terms[1] contains placeholder copy"),
+        (["x" * 161], "release_beat.forbidden_terms[1] must be <= 160 characters"),
+    ],
+)
+def test_forbidden_terms_get_avoid_style_validation(tmp_path: Path, value: Any, expected_error: str) -> None:
+    payload = _valid_manifest_payload()
+    payload["forbidden_terms"] = value
+
+    assert expected_error in _validate_payload(payload, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        ("max_airings", "forever", "release_beat.max_airings must be an integer"),
+        ("max_airings", True, "release_beat.max_airings must be an integer"),
+        ("max_airings", 0, "release_beat.max_airings must be between 1 and 20"),
+        ("max_airings", 21, "release_beat.max_airings must be between 1 and 20"),
+        ("campaign_window_seconds", "later", "release_beat.campaign_window_seconds must be an integer"),
+        (
+            "campaign_window_seconds",
+            59,
+            "release_beat.campaign_window_seconds must be between 60 and 604800",
+        ),
+        (
+            "campaign_window_seconds",
+            604801,
+            "release_beat.campaign_window_seconds must be between 60 and 604800",
+        ),
+        (
+            "min_seconds_between_airings",
+            -1,
+            "release_beat.min_seconds_between_airings must be between 0 and 86400",
+        ),
+        (
+            "min_seconds_between_airings",
+            86401,
+            "release_beat.min_seconds_between_airings must be between 0 and 86400",
+        ),
+        (
+            "min_segments_between_airings",
+            {},
+            "release_beat.min_segments_between_airings must be an integer",
+        ),
+        (
+            "min_segments_between_airings",
+            -1,
+            "release_beat.min_segments_between_airings must be between 0 and 100",
+        ),
+        (
+            "min_segments_between_airings",
+            101,
+            "release_beat.min_segments_between_airings must be between 0 and 100",
+        ),
+    ],
+)
+def test_runtime_integer_fields_reject_malformed_values(
+    tmp_path: Path,
+    field: str,
+    value: Any,
+    expected_error: str,
+) -> None:
+    payload = _valid_manifest_payload()
+    payload[field] = value
+
+    assert expected_error in _validate_payload(payload, tmp_path)
 
 
 def test_release_manifest_loader_reads_only_declared_runtime_keys() -> None:

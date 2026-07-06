@@ -1,9 +1,19 @@
-$ pytest tests/ (fleet lane: single-source-of-truth-for-the-release-b, run florianhorner-fleet-single-source-of-truth-for-the-release-b-1782980953)
+$ pytest tests/core/test_release_beat_schema.py tests/scripts/test_validate_release_beat.py tests/test_release_campaign.py tests/hosts/test_release_beat_scriptwriter.py tests/scheduling/test_release_campaign_producer.py tests/web/test_stream_result.py tests/web/test_shadow_queue_sync.py::test_purge_restores_queued_release_beat_attempt
 
-................................................................ [100%]
-
-3635 passed, 2 skipped, 19 deselected, 1 warning in 69.92s (0:01:09)
+90 passed in 0.97s
 EXITCODE=0
 
-ruff check . : clean
-mypy mammamiradio/ tests/ : clean
+$ pytest tests/web/test_ui_control_contracts.py -k remove_release_beat_segment_restores_campaign_attempt
+
+1 passed, 85 deselected in 0.24s
+EXITCODE=0
+
+$ ruff check scripts/validate-release-beat.py tests/core/test_release_beat_schema.py
+
+All checks passed!
+EXITCODE=0
+
+$ ruff format --check scripts/validate-release-beat.py tests/core/test_release_beat_schema.py
+
+2 files already formatted
+EXITCODE=0

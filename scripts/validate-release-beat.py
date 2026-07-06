@@ -127,6 +127,27 @@ def _unsafe_terms(text: str, safe_terms: set[str]) -> list[str]:
     return [term for term, pattern in UNSAFE_TERMS.items() if term not in safe_terms and pattern.search(text)]
 
 
+def _validate_text(
+    text: str,
+    field_label: str,
+    errors: list[str],
+    *,
+    max_chars: int,
+    scan_listener_safe: bool,
+    safe_terms: set[str],
+) -> None:
+    if "\n" in text or "\r" in text:
+        errors.append(f"release_beat.{field_label} must be one line")
+    if len(text) > max_chars:
+        errors.append(f"release_beat.{field_label} must be <= {max_chars} characters")
+    if re.search(r"\b(TODO|TBD|FIXME|placeholder|lorem ipsum)\b", text, re.IGNORECASE):
+        errors.append(f"release_beat.{field_label} contains placeholder copy")
+    if scan_listener_safe:
+        terms = _unsafe_terms(text, safe_terms)
+        if terms:
+            errors.append(f"release_beat.{field_label} contains listener-unsafe term(s): " + ", ".join(terms))
+
+
 def _validate_text_list(
     release_beat: dict[str, Any],
     field: str,
@@ -160,20 +181,18 @@ def _validate_text_list(
         if not text:
             errors.append(f"release_beat.{field}[{index}] must not be blank")
             continue
-        if "\n" in text or "\r" in text:
-            errors.append(f"release_beat.{field}[{index}] must be one line")
-        if len(text) > max_chars:
-            errors.append(f"release_beat.{field}[{index}] must be <= {max_chars} characters")
-        if re.search(r"\b(TODO|TBD|FIXME|placeholder|lorem ipsum)\b", text, re.IGNORECASE):
-            errors.append(f"release_beat.{field}[{index}] contains placeholder copy")
+        _validate_text(
+            text,
+            f"{field}[{index}]",
+            errors,
+            max_chars=max_chars,
+            scan_listener_safe=scan_listener_safe,
+            safe_terms=safe_terms,
+        )
         normalized = re.sub(r"\s+", " ", text).casefold()
         if normalized in seen:
             errors.append(f"release_beat.{field}[{index}] duplicates another {field} item")
         seen.add(normalized)
-        if scan_listener_safe:
-            terms = _unsafe_terms(text, safe_terms)
-            if terms:
-                errors.append(f"release_beat.{field}[{index}] contains listener-unsafe term(s): " + ", ".join(terms))
 
 
 def _validate_scalar_text(
@@ -181,18 +200,42 @@ def _validate_scalar_text(
     field: str,
     errors: list[str],
     *,
+    max_chars: int,
     safe_terms: set[str],
 ) -> None:
-    """Listener-safety-scan a free-text scalar field that reaches the on-air prompt."""
+    """Validate a free-text scalar field that reaches the on-air prompt."""
     value = release_beat.get(field)
     if value is None:
         return
     if not isinstance(value, str) or not value.strip():
         errors.append(f"release_beat.{field} must be a non-empty string")
         return
-    terms = _unsafe_terms(value, safe_terms)
-    if terms:
-        errors.append(f"release_beat.{field} contains listener-unsafe term(s): " + ", ".join(terms))
+    _validate_text(
+        value.strip(),
+        field,
+        errors,
+        max_chars=max_chars,
+        scan_listener_safe=True,
+        safe_terms=safe_terms,
+    )
+
+
+def _validate_integer_field(
+    release_beat: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    minimum: int,
+    maximum: int,
+) -> None:
+    value = release_beat.get(field)
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        errors.append(f"release_beat.{field} must be an integer")
+        return
+    if not minimum <= value <= maximum:
+        errors.append(f"release_beat.{field} must be between {minimum} and {maximum}")
 
 
 def _sha_matches(manifest_sha: str, target_sha: str) -> bool:
@@ -290,10 +333,25 @@ def _validate_enabled_manifest(
         scan_listener_safe=False,
         safe_terms=safe_terms,
     )
+    _validate_text_list(
+        release_beat,
+        "forbidden_terms",
+        errors,
+        required=False,
+        min_items=0,
+        max_items=12,
+        max_chars=160,
+        scan_listener_safe=False,
+        safe_terms=safe_terms,
+    )
     # title and copy_guidance are free-text runtime fields forwarded into the
-    # on-air host prompt, so they get the same listener-safety scan as copy.
-    for scalar_field in ("title", "copy_guidance"):
-        _validate_scalar_text(release_beat, scalar_field, errors, safe_terms=safe_terms)
+    # on-air host prompt, so they get the same copy hygiene as list text fields.
+    _validate_scalar_text(release_beat, "title", errors, max_chars=120, safe_terms=safe_terms)
+    _validate_scalar_text(release_beat, "copy_guidance", errors, max_chars=220, safe_terms=safe_terms)
+    _validate_integer_field(release_beat, "max_airings", errors, minimum=1, maximum=20)
+    _validate_integer_field(release_beat, "campaign_window_seconds", errors, minimum=60, maximum=604800)
+    _validate_integer_field(release_beat, "min_seconds_between_airings", errors, minimum=0, maximum=86400)
+    _validate_integer_field(release_beat, "min_segments_between_airings", errors, minimum=0, maximum=100)
 
     if target_channel is not None and channel != target_channel:
         errors.append(f"release_beat.channel must be {target_channel!r} for this release gate (got {channel!r})")

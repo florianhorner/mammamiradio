@@ -1,9 +1,11 @@
-# codex review — issue #728 (release_beat_schema single source of truth)
+# codex review follow-up — issue #728
 
-Run: florianhorner-fleet-single-source-of-truth-for-the-release-b-1782980953
+Run: local follow-up on PR #736 after pre-landing review findings.
 
-First pass found one **P2**: the unified `ALLOWED_KEYS` widened the validator to admit `title` and `copy_guidance` — both free-text fields that reach the on-air prompt — without routing them through the existing listener-safety term scan that every other free-text release-beat field gets.
+Fix applied in scope:
+- `title` and `copy_guidance` now get the same one-line, max-length, placeholder-copy, and listener-safety checks as release-beat list copy.
+- `forbidden_terms` now gets the same list shape and copy-hygiene checks as the legacy `avoid` alias.
+- `max_airings`, `campaign_window_seconds`, `min_seconds_between_airings`, and `min_segments_between_airings` now require integer values inside explicit validator ranges instead of passing through to runtime coercion.
 
-Fix applied in-scope: added `_validate_scalar_text()` (mirrors the existing `_validate_text_list` listener-safety scan) and wired it to `title`/`copy_guidance`, respecting the manifest's existing `listener_safe_terms` opt-in. Added 2 regression tests.
-
-Re-verify after fix: **0 P0/P1/P2 findings**. Full suite green (3637 passed, 2 skipped — 2 more than the pre-fix run, from the new regression tests).
+Re-verify after fix: 0 known P0/P1/P2 findings in the patched validator/test scope.
+Proof: `proof/release-beat-schema-tests.txt`.
