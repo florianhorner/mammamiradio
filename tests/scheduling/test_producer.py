@@ -213,9 +213,14 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
     async def fake_render(track: Track, *_args, **_kwargs) -> RenderedMusicTrack:
         return RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
 
+    def fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=fake_tone),
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
@@ -228,6 +233,13 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
             state.session_stopped = False
             state.resume_event.set()
             deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue resume bridge")
+                await asyncio.sleep(0.05)
+            bridge = queue.get_nowait()
+            assert bridge.metadata.get("resume_bridge") is True
+            assert bridge.metadata.get("audio_source") == "emergency_tone"
             while not state.queued_segments:
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not queue after resume")

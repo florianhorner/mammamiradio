@@ -97,14 +97,13 @@ Two modules carry a `# TODO: split` marker referencing the cathedral plan
 (`docs/archive/2026-04-28-cathedral-restructure.md`, PRs 5 & 6, deferred after "the
 cathedral has walls"):
 
-- `mammamiradio/web/streamer.py` (~4,000 LOC)
-- `mammamiradio/hosts/scriptwriter.py` (~2,200 LOC)
+- `mammamiradio/web/streamer.py` (~5,100 LOC after the status-payload leaf extraction)
+- `mammamiradio/hosts/scriptwriter.py` (~2,800 LOC)
 
-**Status — probe-first, NOT a committed program (decided 2026-06-20).** This is real
-but *unbitten* debt, so it is gated on two cheap probes before any multi-cut program is
-committed. No cadence or floor; remaining cuts defer behind a named tripwire (a feature
-demonstrably harder because of a god module, a token-burn event, or a positive
-degradation probe).
+**Status — first cost-probe cut extracted, remaining train still tripwire-gated.** This
+is real debt, but no full multi-cut program is committed. No cadence or floor; remaining
+cuts defer behind a named tripwire (a feature demonstrably harder because of a god module,
+a token-burn event, or a positive degradation probe).
 
 1. **Degradation probe** — does an agent edit a **core-touching** `scriptwriter` task
    (the Anthropic→OpenAI fallback chain, `_cached_system_prompt`, or the `max_tokens`/
@@ -116,13 +115,15 @@ degradation probe).
 **The cut menu (parked; the probes size it):**
 
 `streamer.py` → 4 cuts, in order:
-1. `status_payload.py` — the **pure serialize/payload leaf only**: `_serialize_*`,
-   `_paginated_tracks`, `_status_now_playback`, `_page_bounds`, `_golden_path_status`
-   (+TTL), `_cached_cache_size_mb`, `_ha_details_payload`. **Must NOT move** in this cut:
-   `_public_status_payload`, the `_*_snapshot` family, or the live-clock cluster
-   (`_runtime_monotonic`/`_queue_empty_elapsed`/`_silence_with_listeners`) — the playback
-   loop and `/healthz`+`/readyz` call them, so moving them risks an unplanned addon
-   restart. They wait for a later `runtime_health.py` leaf.
+1. `status_payload.py` — **extracted** pure serialize/payload leaf:
+   `mammamiradio/web/status_payload.py` owns `_serialize_*`, `_paginated_tracks`,
+   `_status_now_playback`, `_page_bounds`, `_golden_path_status` (+TTL),
+   `_cached_cache_size_mb`, and `_ha_details_payload` behind a `streamer.py` facade.
+   **Still not moved:** `_public_status_payload`, the `_*_snapshot` family, or the
+   live-clock cluster (`_runtime_monotonic`/`_queue_empty_elapsed`/
+   `_silence_with_listeners`) — the playback loop and `/healthz`+`/readyz` call them, so
+   moving them risks an unplanned addon restart. They wait for a later
+   `runtime_health.py` leaf.
 2. `playback_loop.py` — `LiveStreamHub`, `run_playback_loop`, `_purge_queue_and_shadow`,
    the live-clock cluster, norm-cache rescue (also fix the hardcoded paths in
    `scripts/check-release-invariants.sh` in the same cut).
@@ -139,5 +140,5 @@ test, whole-repo patch-string grep, per-module coverage floor, edge-soak on the 
 (`/public-status`, `/status`, `/healthz`, `/readyz`, first `/stream` byte). Full per-cut
 discipline: `docs/runbooks/refactor-cuts.md`.
 
-Until the probes run and a cut lands, these modules are postal addresses, not
+Until a remaining cut is explicitly scoped, these modules are postal addresses, not
 destinations. Ride the structure that exists today; do not pre-split.

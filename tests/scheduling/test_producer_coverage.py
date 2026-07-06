@@ -891,9 +891,9 @@ async def test_error_recovery_uses_canned_banter(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("error_recovery") is True
-    # failed_segments is reset to 0 after the recovery segment is queued successfully;
-    # confirming it is 0 here verifies the full success-reset path ran.
-    assert state.failed_segments == 0
+    # Canned recovery is continuity cover, not successful production; keep the
+    # failure counter armed so repeated provider/download failures can back off.
+    assert state.failed_segments == 1
 
 
 @pytest.mark.asyncio

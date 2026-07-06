@@ -529,6 +529,32 @@ def test_seed_adjacency_type_applies_continuity_break_on_both_paths(tmp_path):
     assert _seed_adjacency_type(q, state, SegmentType.MUSIC) is None
 
 
+def test_initial_previous_segment_type_treats_continuity_breaks_as_none(tmp_path):
+    """Producer startup must not seed stinger context from rescue tone/error tails."""
+    from mammamiradio.scheduling.producer import _initial_previous_segment_type
+
+    state = StationState()
+    q: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    q.put_nowait(_seg(tmp_path, metadata={"audio_source": "emergency_tone", "rescue": True}, name="tone.mp3"))
+    assert _initial_previous_segment_type(q, state) is None
+
+    q = asyncio.Queue(maxsize=4)
+    q.put_nowait(_seg(tmp_path, metadata={"error": "boom", "rescue": True}, name="silence.mp3"))
+    assert _initial_previous_segment_type(q, state) is None
+
+    q = asyncio.Queue(maxsize=4)
+    q.put_nowait(_seg(tmp_path, metadata={"title": "Real Song"}, name="song.mp3"))
+    assert _initial_previous_segment_type(q, state) == SegmentType.MUSIC
+
+    empty: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state.now_streaming = {"type": "music", "metadata": {"audio_source": "emergency_tone"}}
+    assert _initial_previous_segment_type(empty, state) is None
+    state.now_streaming = {"type": "music", "metadata": {"error": "boom"}}
+    assert _initial_previous_segment_type(empty, state) is None
+    state.now_streaming = {"type": "music", "metadata": {"title": "Real Song"}}
+    assert _initial_previous_segment_type(empty, state) == SegmentType.MUSIC
+
+
 def test_adjacency_type_for_treats_continuity_breaks_as_non_song():
     """The single shared rule: errored silence and the emergency tone are NOT adjacent songs."""
     from mammamiradio.scheduling.producer import _adjacency_type_for
