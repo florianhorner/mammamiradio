@@ -27,6 +27,8 @@ map:
 options:
   station_name: "Mamma Mi Radio"
   enable_home_assistant: true
+  ha_context_enabled: true
+  ha_context_poll_interval: 300
   ha_media_player_push: true
   quality_profile: "balanced"
   admin_token: ""
@@ -41,6 +43,8 @@ options:
 schema:
   station_name: str?
   enable_home_assistant: bool?
+  ha_context_enabled: bool?
+  ha_context_poll_interval: int(1,3600)?
   ha_media_player_push: bool?
   quality_profile: list(premium|balanced|economy)?
   admin_token: password?

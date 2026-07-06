@@ -461,7 +461,7 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
+- `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
 - `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
 - allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
@@ -505,7 +505,7 @@ When a HA timer fires, the station immediately interrupts playback with a pissed
 ```text
 HA timer fires (timer.xyz → idle, with recent finished_at)
     ↓
-ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+ha_context.py: lightweight 5s poll detects idle transition (separate from the default 300s full-state prompt-context fetch).
     Cancel/reset filter: only fire when finished_at is set and within the last 30s.
     ↓
 check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)

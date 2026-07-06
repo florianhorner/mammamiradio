@@ -12,6 +12,12 @@ The current version source of truth is `pyproject.toml`.
 - **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the station now plays a short branded recovery sweeper before using the last-resort silence placeholder, so provider or download trouble feels intentional instead of like dead air.
 - **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
 
+## [2.16.0] - 2026-07-06
+
+### Changed
+
+- **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
+
 ## [2.15.0] - 2026-07-06
 
 ### Added

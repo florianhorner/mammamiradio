@@ -234,6 +234,7 @@ def _serialize_track(track: Track, *, preferences: object | None = None) -> dict
         "year": track.year,
         "youtube_id": track.youtube_id,
         "duration_ms": track.duration_ms,
+        "heading_id": track.heading_id,
     }
     if preferences is not None:
         payload["preference"] = _track_preference_score(track, preferences)
