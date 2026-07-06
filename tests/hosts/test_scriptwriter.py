@@ -888,6 +888,20 @@ async def test_write_banter_normal_mode_retries_all_italian_response(config, sta
     assert state.pending_verbal_gag is None
 
 
+def test_normal_mode_language_guard_ignores_ambiguous_short_markers(config):
+    config.super_italian_mode = False
+
+    assert (
+        scriptwriter_module._normal_mode_language_ok(
+            [
+                "Siamo a casa con la musica in onda e ora questa canzone va avanti senza fretta per tutti.",
+            ],
+            config,
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_write_banter_normal_mode_falls_back_after_all_italian_repair(config, state):
     config.super_italian_mode = False
@@ -920,6 +934,44 @@ async def test_write_banter_normal_mode_falls_back_after_all_italian_repair(conf
     assert [text for _, text in result] == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
     assert commit is None
     assert mock_generate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_rechecks_after_guest_gate_drops_english_line(config, state):
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    raw_response = {
+        "lines": [
+            {
+                "host": _LOCAL_BALLOON_GUEST_HOST,
+                "text": "This English line would make the raw language check pass, but the gate drops it.",
+            },
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=raw_response,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
+    assert commit is None
+    assert mock_generate.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -3316,6 +3368,7 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
     # Request moves to recently_consumed with song_not_found status
     assert len(state.recently_consumed_requests) == 1
     assert state.recently_consumed_requests[0]["status"] == "song_not_found"
+    assert state.recently_consumed_requests[0]["song_error_reason"] == "not_found"
     assert state.recently_consumed_requests[0]["name"] == "Luca"
 
 
@@ -3329,6 +3382,7 @@ def test_plan_listener_request_block_background_failure_consumes_song_not_found(
         "type": "song_request",
         "song_found": False,
         "song_error": True,
+        "song_error_reason": "longform_audio",
         "song_track": None,
         "banter_cycles_missed": 0,
     }
@@ -3343,6 +3397,7 @@ def test_plan_listener_request_block_background_failure_consumes_song_not_found(
     assert req not in state.pending_requests
     assert len(state.recently_consumed_requests) == 1
     assert state.recently_consumed_requests[0]["status"] == "song_not_found"
+    assert state.recently_consumed_requests[0]["song_error_reason"] == "longform_audio"
     assert state.recently_consumed_requests[0]["name"] == "Giulia"
 
 

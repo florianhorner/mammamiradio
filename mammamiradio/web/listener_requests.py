@@ -136,6 +136,7 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
                 "type": r.get("type"),
                 "song_found": r.get("song_found"),
                 "song_error": r.get("song_error"),
+                "song_error_reason": r.get("song_error_reason") or "",
                 "song_track": r.get("song_track"),
                 "age_s": int(now - r.get("ts", now)),
                 # Track B v2.11.0 (admin-only fields):
@@ -153,6 +154,7 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
                 "song_track": r.get("song_track"),
                 "type": r.get("type"),
                 "status": r.get("status"),
+                "song_error_reason": r.get("song_error_reason") or "",
                 "age_s": int(now - r.get("consumed_at", now)),
             }
             for r in state.recently_consumed_requests
@@ -295,6 +297,7 @@ async def listener_request(request: Request):
         "song_query": message if is_song_request else None,
         "song_found": False,
         "song_error": False,
+        "song_error_reason": "",
         "song_track": None,
         "banter_cycles_missed": 0,  # initialized here; incremented by ListenerRequestCommit in scriptwriter.py
         "ts": now,
@@ -347,6 +350,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
         )
         if not results:
             req["song_error"] = True
+            req["song_error_reason"] = "not_found"
             logger.info("Listener song request returned no results: request_id=%s", req.get("request_id"))
             return
         track: Track | None = None
@@ -370,6 +374,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             )
         if track is None:
             req["song_error"] = True
+            req["song_error_reason"] = "longform_audio"
             logger.info("Listener song request returned no single-track result: request_id=%s", req.get("request_id"))
             return
         status = await _commit_external_download(
@@ -395,6 +400,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
         # consumption discarded it (a silent no-op, the request is gone anyway).
         if status in {"banned", "held"}:
             req["song_error"] = True
+            req["song_error_reason"] = "banned" if status == "banned" else "longform_audio"
             logger.info("Listener song request refused (%s): %s", status, track.display)
         elif status != "dropped":
             req["song_found"] = True
@@ -411,10 +417,12 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             logger.info("Listener song downloaded but playlist changed or request consumed: %s", track.display)
     except asyncio.CancelledError:
         req["song_error"] = True
+        req["song_error_reason"] = "download_cancelled"
         if req in state.pending_requests:
             state.pending_requests.remove(req)
         logger.info("Listener song download cancelled: request_id=%s", req.get("request_id"))
         raise
     except Exception:
         req["song_error"] = True
+        req["song_error_reason"] = "download_failed"
         logger.warning("Listener song download failed: request_id=%s", req.get("request_id"), exc_info=True)

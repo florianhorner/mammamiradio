@@ -181,6 +181,7 @@ class ListenerRequestCommit:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
         if self.mark_song_error:
             self.request["song_error"] = True
+            self.request.setdefault("song_error_reason", "not_found")
         if self.consume:
             now = time.time()
             state.recently_consumed_requests.append(
@@ -191,6 +192,7 @@ class ListenerRequestCommit:
                     "song_track": self.request.get("song_track"),
                     "type": self.request.get("type"),
                     "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
+                    "song_error_reason": self.request.get("song_error_reason") or "",
                     "consumed_at": now,
                 }
             )
@@ -1403,6 +1405,8 @@ _NORMAL_MODE_ITALIAN_MARKERS = frozenset(
     }
 )
 
+_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS = frozenset({"a", "in", "no"})
+
 
 def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
     """Extract model-authored speech fields from script JSON for language checks."""
@@ -1447,7 +1451,10 @@ def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
     if len(tokens) < 12:
         return True
 
-    english_hits = sum(token in _NORMAL_MODE_ENGLISH_MARKERS for token in tokens)
+    english_hits = sum(
+        token in _NORMAL_MODE_ENGLISH_MARKERS and token not in _NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS
+        for token in tokens
+    )
     italian_hits = sum(
         token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù") for token in tokens
     )
@@ -2346,6 +2353,9 @@ Return JSON:
             if not (has_regular_before and has_regular_after):
                 raise ValueError("banter response did not frame guest-host line as a cameo")
             guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
+
+        if not _normal_mode_language_ok([text for _, text in result], config):
+            raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.station.name)) for host, text in result]

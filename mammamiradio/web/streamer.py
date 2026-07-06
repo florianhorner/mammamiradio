@@ -1292,13 +1292,17 @@ async def run_playback_loop(app) -> None:
                                 rescue.name,
                             )
                             state.queue_empty_since = None
+                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
+                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
                                 type=SegmentType.MUSIC,
                                 path=rescue,
+                                duration_sec=duration_sec,
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
                                     "artist": rescue_artist,
+                                    **duration_fields,
                                     "audio_source": "fallback_demo_asset",
                                     "fallback": True,
                                 },

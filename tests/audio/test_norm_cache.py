@@ -5,6 +5,7 @@ from unittest.mock import patch
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import SegmentLogEntry, SegmentType, StationState, Track
+from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
 
 
 def _write_norm(tmp_path, name: str, *, title: str | None = None, artist: str | None = None):
@@ -114,6 +115,22 @@ def test_select_norm_cache_rescue_returns_none_when_only_file_is_banned(tmp_path
     _write_norm(tmp_path, "norm_aaa_ordinary.mp3", title="Ordinary", artist="Alex Warren")
 
     assert select_norm_cache_rescue(tmp_path, state) is None
+
+
+def test_select_norm_cache_rescue_skips_rejected_cache_key_even_when_file_remains(tmp_path):
+    cache_key = "youtube_rejected001"
+    try:
+        reject_cached_download(tmp_path, cache_key, "simulated failed purge")
+        _write_norm(tmp_path, f"norm_{cache_key}_192k.mp3", title="Rejected Set", artist="Selector")
+        allowed = _write_norm(tmp_path, "norm_youtube_allowed001_192k.mp3", title="Single", artist="Artist")
+
+        with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]) as choice:
+            rescue = select_norm_cache_rescue(tmp_path, StationState())
+
+        assert rescue == allowed
+        choice.assert_called_once_with([allowed])
+    finally:
+        clear_rejected_cache_keys()
 
 
 def test_select_norm_cache_rescue_ignores_malformed_sidecar(tmp_path):

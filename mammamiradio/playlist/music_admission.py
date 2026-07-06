@@ -18,6 +18,7 @@ AdmissionStatus = Literal["accept", "hold", "reject"]
 # the envelope when the current station is intentionally running longer songs.
 REFERENCE_SINGLE_TRACK_SEC = 210.0
 DEFAULT_SONGS_BETWEEN_BANTER = 2
+HIGH_TRACK_MEDIAN_MULTIPLE = 2.0
 
 YOUTUBE_ADMISSION_SEARCH_DEPTH = 5
 
@@ -93,7 +94,14 @@ def build_music_admission_envelope(
     sample_size = len(durations)
     if durations:
         median_sec = max(float(statistics.median(durations)), REFERENCE_SINGLE_TRACK_SEC)
-        high_sec = max(_nearest_rank_percentile(durations, 0.90), REFERENCE_SINGLE_TRACK_SEC)
+        # A stale/manual long-form track already in rotation must not redefine the
+        # single-track window for every future YouTube candidate. Keep the p90
+        # signal, but cap its contribution relative to the median; the pacing
+        # window below still expands naturally for intentionally longer rotations.
+        high_sec = max(
+            min(_nearest_rank_percentile(durations, 0.90), median_sec * HIGH_TRACK_MEDIAN_MULTIPLE),
+            REFERENCE_SINGLE_TRACK_SEC,
+        )
     else:
         median_sec = REFERENCE_SINGLE_TRACK_SEC
         high_sec = REFERENCE_SINGLE_TRACK_SEC

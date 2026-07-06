@@ -141,6 +141,37 @@ async def test_resolve_direction_tracks_searches_deeper_and_skips_longform(monke
 
 
 @pytest.mark.asyncio
+async def test_resolve_direction_tracks_skips_unknown_duration_when_admission_enabled(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert query == "FKJ Tadow"
+        assert max_results == 5
+        return [
+            {
+                "youtube_id": "unknown0001",
+                "title": "FKJ - Tadow",
+                "artist": "FKJ",
+                "duration_ms": None,
+            },
+            {
+                "youtube_id": "song0000001",
+                "title": "FKJ - Tadow official audio",
+                "artist": "FKJ",
+                "duration_ms": 240_000,
+            },
+        ]
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+
+    tracks = await resolve_direction_tracks(
+        [DirectionTarget("FKJ", "Tadow")],
+        playlist=[Track(title="Base", artist="Base", duration_ms=200_000, youtube_id="base0000001")],
+        pacing=PacingSection(songs_between_banter=2),
+    )
+
+    assert [track.youtube_id for track in tracks] == ["song0000001"]
+
+
+@pytest.mark.asyncio
 async def test_resolve_direction_tracks_returns_empty_on_search_error(monkeypatch):
     def boom(query: str, max_results: int):
         raise RuntimeError("yt-dlp exploded")

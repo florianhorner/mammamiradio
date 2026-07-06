@@ -23,6 +23,7 @@ from mammamiradio.audio.normalizer import (
     mix_with_bed,
     norm_cache_duration_sec,
     normalize,
+    refresh_track_metadata,
     save_track_metadata,
 )
 
@@ -756,12 +757,36 @@ def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
     assert data["stray"] == "keep"  # unrelated keys preserved
 
 
+def test_refresh_track_metadata_preserves_reconciled_marker(tmp_path):
+    norm = tmp_path / "norm_merge_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    sidecar = tmp_path / "norm_merge_192k.mp3.json"
+    sidecar.write_text(json.dumps({"title": "Old", "artist": "Old", "duration_sec": 123.0, "reconciled_lufs": -16.0}))
+
+    refresh_track_metadata(norm, title="New", artist="Artist", duration_ms=180_000)
+
+    data = json.loads(sidecar.read_text())
+    assert data["title"] == "New"
+    assert data["artist"] == "Artist"
+    assert data["duration_ms"] == 180_000
+    assert "duration_sec" not in data
+    assert data["reconciled_lufs"] == -16.0
+
+
 def test_norm_cache_duration_estimates_older_sidecar_from_size_and_bitrate(tmp_path):
     norm = tmp_path / "norm_old_sidecar_192k.mp3"
     norm.write_bytes(b"x" * 24_000)
     save_track_metadata(norm, title="Old", artist="Cache")
     assert load_track_metadata(norm) == {"title": "Old", "artist": "Cache"}
     assert norm_cache_duration_sec(norm, bitrate_kbps=192) == pytest.approx(1.0)
+
+
+def test_norm_cache_duration_uses_filename_bitrate_before_current_config(tmp_path):
+    norm = tmp_path / "norm_legacy_track_320k.mp3"
+    norm.write_bytes(b"x" * 40_000)
+    save_track_metadata(norm, title="Old", artist="Cache")
+
+    assert norm_cache_duration_sec(norm, bitrate_kbps=128) == pytest.approx(1.0)
 
 
 def test_load_track_metadata_non_utf8_returns_none(tmp_path):

@@ -1098,6 +1098,18 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     assert now_meta.get("artist") == "Pino Daniele", (
         f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
     )
+    assert app.state.station_state.now_streaming["duration_sec"] > 0
+    assert now_meta["duration_ms"] == round(app.state.station_state.now_streaming["duration_sec"] * 1000)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_status = (await client.get("/public-status")).json()
+        admin_status = (await client.get("/status")).json()
+
+    for body in (public_status, admin_status):
+        assert body["now_streaming"]["metadata"]["audio_source"] == "fallback_demo_asset"
+        assert body["now_streaming"]["duration_sec"] > 0
+        assert body["current_duration_sec"] > 0
 
 
 @pytest.mark.asyncio

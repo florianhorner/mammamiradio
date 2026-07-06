@@ -257,18 +257,26 @@ def find_existing_direction_tracks(playlist: list[Track], targets: list[Directio
     return existing
 
 
-def track_from_direction_search(target: DirectionTarget, metadata: dict[str, Any]) -> Track | None:
+def track_from_direction_search(
+    target: DirectionTarget,
+    metadata: dict[str, Any],
+    *,
+    default_duration_ms: int | None = 180_000,
+) -> Track | None:
     youtube_id = str(metadata.get("youtube_id") or "").strip()
     if not youtube_id:
         return None
     try:
-        duration_ms = int(metadata.get("duration_ms") or 180_000)
+        raw_duration_ms = metadata.get("duration_ms")
+        if raw_duration_ms is None:
+            raise ValueError("missing duration")
+        duration_ms = int(raw_duration_ms)
     except (TypeError, ValueError):
-        duration_ms = 180_000
+        duration_ms = default_duration_ms or 0
     return Track(
         title=target.title,
         artist=target.artist,
-        duration_ms=max(1, duration_ms),
+        duration_ms=max(0, duration_ms),
         youtube_id=youtube_id,
         album_art=str(metadata.get("album_art") or "").strip(),
         source="youtube",
@@ -286,11 +294,18 @@ def resolve_direction_search_results(
     first_rejected_track: Track | None = None
     first_rejected_reason = ""
     for metadata in metadata_results:
-        track = track_from_direction_search(target, metadata)
+        admission_playlist = playlist
+        admission_pacing = pacing
+        admission_enabled = admission_playlist is not None and admission_pacing is not None
+        track = track_from_direction_search(
+            target,
+            metadata,
+            default_duration_ms=0 if admission_enabled else 180_000,
+        )
         if track is None:
             continue
-        if playlist is not None and pacing is not None:
-            verdict = classify_youtube_candidate(track, playlist, pacing, metadata=metadata)
+        if admission_playlist is not None and admission_pacing is not None:
+            verdict = classify_youtube_candidate(track, admission_playlist, admission_pacing, metadata=metadata)
             if not verdict.accepted:
                 logger.info(
                     "Direction candidate held out of rotation before download: %s (query=%r reason=%s)",

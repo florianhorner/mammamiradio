@@ -1252,6 +1252,7 @@ async def test_get_listener_requests_returns_age():
             "type": "shoutout",
             "song_found": False,
             "song_error": False,
+            "song_error_reason": "",
             "song_track": None,
             "ts": now - 8,
         }
@@ -1263,6 +1264,7 @@ async def test_get_listener_requests_returns_age():
     body = resp.json()
     assert len(body["requests"]) == 1
     assert body["requests"][0]["age_s"] >= 8
+    assert body["requests"][0]["song_error_reason"] == ""
 
 
 @pytest.mark.asyncio
@@ -1284,6 +1286,7 @@ async def test_get_listener_requests_prunes_expired_recently_consumed():
             "message": "Metti Volare",
             "type": "song_request",
             "status": "song_not_found",
+            "song_error_reason": "longform_audio",
             "consumed_at": now - 10,
         },
     ]
@@ -1300,6 +1303,7 @@ async def test_get_listener_requests_prunes_expired_recently_consumed():
     assert recent["song_track"] is None
     assert recent["type"] == "song_request"
     assert recent["status"] == "song_not_found"
+    assert recent["song_error_reason"] == "longform_audio"
     assert 10 <= recent["age_s"] < 300
     assert [r["id"] for r in app.state.station_state.recently_consumed_requests] == ["fresh"]
 
@@ -1766,6 +1770,7 @@ async def test_admin_listener_requests_surfaces_phase2_fields():
             "type": "shoutout",
             "song_found": False,
             "song_error": False,
+            "song_error_reason": "",
             "song_track": None,
             "ts": now,
             "request_id": "11111111-1111-4111-8111-111111111111",
@@ -1782,6 +1787,7 @@ async def test_admin_listener_requests_surfaces_phase2_fields():
     assert rec["request_id"] == "11111111-1111-4111-8111-111111111111"
     assert rec["status"] == "queued"
     assert rec["evict_after"] is None
+    assert rec["song_error_reason"] == ""
     assert "submitter_ip_hash" not in rec
 
 
@@ -2446,6 +2452,7 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "banned"
     assert req["song_found"] is False
     # The banned song never joined rotation.
     assert len(state.playlist) == original_len
@@ -2540,6 +2547,7 @@ async def test_download_listener_song_no_results_marks_error(tmp_path):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "not_found"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -2571,6 +2579,7 @@ async def test_download_listener_song_longform_result_marks_error_without_downlo
 
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "longform_audio"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
     download_mock.assert_not_called()
@@ -2629,6 +2638,7 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "download_failed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -2647,6 +2657,7 @@ async def test_download_listener_song_search_exception_marks_error(tmp_path):
 
     assert req["song_found"] is False
     assert req["song_error"] is True
+    assert req["song_error_reason"] == "download_failed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 

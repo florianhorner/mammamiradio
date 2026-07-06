@@ -86,6 +86,22 @@ def test_music_admission_accepts_longer_song_when_rotation_envelope_fits():
     assert verdict.reason == "single_track_music"
 
 
+def test_music_admission_longform_outlier_does_not_widen_envelope():
+    playlist = [
+        _track("Single A", duration_ms=180_000, youtube_id="single00001"),
+        _track("Single B", duration_ms=200_000, youtube_id="single00002"),
+        _track("Stale Long Set", duration_ms=7_200_000, youtube_id="staleset001"),
+    ]
+    candidate = _track("Another Long Set", duration_ms=7_200_000, youtube_id="newset00001")
+
+    verdict = classify_youtube_candidate(candidate, playlist, PacingSection(songs_between_banter=2))
+
+    assert verdict.status == "hold"
+    assert verdict.reason == "longform_duration"
+    assert verdict.envelope is not None
+    assert verdict.envelope.longform_threshold_sec < 7_200.0
+
+
 def test_music_admission_envelope_uses_station_pacing():
     playlist = [_track("Single A", duration_ms=180_000, youtube_id="single00001")]
 

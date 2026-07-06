@@ -44,6 +44,7 @@ from mammamiradio.audio.normalizer import (
     normalize,
     probe_duration_sec,
     reconcile_cached_music,
+    refresh_track_metadata,
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
@@ -274,8 +275,11 @@ async def _render_music_track(
         should_probe_actual = audio_path.exists()
     except OSError:
         should_probe_actual = False
+    actual_duration_ms: int | None = None
     if should_probe_actual and is_youtube_music_candidate(track):
         actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+        if actual_duration_sec > 0:
+            actual_duration_ms = round(actual_duration_sec * 1000)
         envelope_playlist = (
             [candidate for candidate in playlist if candidate.cache_key != track.cache_key]
             if playlist is not None
@@ -296,6 +300,8 @@ async def _render_music_track(
                 track.display,
             )
             return None
+        if actual_duration_ms is not None:
+            track.duration_ms = actual_duration_ms
 
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
@@ -306,6 +312,10 @@ async def _render_music_track(
         # the sidecar marks it done, so steady-state cache hits stay instant.
         reconcile_fn = partial(reconcile_cached_music, norm_cached, background=background)
         await loop.run_in_executor(None, reconcile_fn)
+        await loop.run_in_executor(
+            None,
+            partial(refresh_track_metadata, norm_cached, track.title, track.artist, duration_ms=track.duration_ms),
+        )
         return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
     norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"

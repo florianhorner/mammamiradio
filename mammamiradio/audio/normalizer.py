@@ -17,6 +17,7 @@ from pathlib import Path
 from mammamiradio.audio.admission import ffmpeg_slot
 
 logger = logging.getLogger(__name__)
+_NORM_CACHE_BITRATE_RE = re.compile(r"_(?P<bitrate>[1-9]\d*)k\.mp3$")
 
 
 class ConcatDurationError(RuntimeError):
@@ -81,6 +82,22 @@ def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
+def refresh_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+    """Refresh mutable norm-cache metadata without clearing content markers."""
+    sidecar = _norm_sidecar_path(norm_path)
+    data = _load_sidecar(sidecar)
+    data.update({"title": title, "artist": artist})
+    duration = _positive_finite_number(duration_ms)
+    if duration is not None:
+        data.pop("duration_sec", None)
+        data.pop("duration_s", None)
+        data["duration_ms"] = round(duration)
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not refresh norm metadata sidecar %s: %s", sidecar.name, exc)
+
+
 def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
     """Return public norm-cache metadata from a valid title/artist sidecar."""
     # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
@@ -97,12 +114,20 @@ def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
     return None
 
 
+def _norm_cache_filename_bitrate_kbps(norm_path: Path) -> float | None:
+    match = _NORM_CACHE_BITRATE_RE.search(norm_path.name)
+    if not match:
+        return None
+    return _positive_finite_number(int(match.group("bitrate")))
+
+
 def norm_cache_duration_sec(norm_path: Path, *, bitrate_kbps: int | float | None = None) -> float:
     """Return a non-blocking duration estimate for a normalized cache file.
 
     Rescue paths cannot afford an ffprobe call before audio starts. Prefer the
     sidecar duration for freshly normalized cache files; older sidecars degrade to
-    a constant-bitrate estimate from file size and the station bitrate.
+    a constant-bitrate estimate from file size and the encoded bitrate in the
+    cache filename, falling back to the station bitrate when absent.
     """
     data = _load_sidecar(_norm_sidecar_path(norm_path))
     duration_ms = _positive_finite_number(data.get("duration_ms"))
@@ -112,7 +137,7 @@ def norm_cache_duration_sec(norm_path: Path, *, bitrate_kbps: int | float | None
         duration_sec = _positive_finite_number(data.get(key))
         if duration_sec is not None:
             return duration_sec
-    bitrate = _positive_finite_number(bitrate_kbps)
+    bitrate = _norm_cache_filename_bitrate_kbps(norm_path) or _positive_finite_number(bitrate_kbps)
     if bitrate is None:
         return 0.0
     try:

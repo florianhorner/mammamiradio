@@ -290,11 +290,14 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
 
     for expected in (
         "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
-        "statusInline('blocked','not found')",
+        "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
+    assert "not a single-track song" in _read_admin_html()
+    assert "Banned song" in _read_admin_html()
     # ensure double-glyph pattern is gone
     assert "'▶ '" not in block
 

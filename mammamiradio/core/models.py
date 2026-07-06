@@ -458,6 +458,7 @@ class ConsumedListenerRequest(TypedDict):
     song_track: str | None
     type: str | None
     status: str  # "sent_to_hosts" | "song_not_found"
+    song_error_reason: str
     consumed_at: float
 
 

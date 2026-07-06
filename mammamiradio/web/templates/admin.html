@@ -3836,6 +3836,20 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
+function listenerSongErrorLabel(reason){
+  if(reason==='longform_audio')return 'not a single-track song';
+  if(reason==='banned')return 'banned song';
+  if(reason==='download_failed')return 'download failed';
+  if(reason==='download_cancelled')return 'cancelled';
+  return 'not found';
+}
+function listenerSongErrorBadge(reason){
+  if(reason==='longform_audio')return 'Not a single-track song';
+  if(reason==='banned')return 'Banned song';
+  if(reason==='download_failed')return 'Download failed';
+  if(reason==='download_cancelled')return 'Cancelled';
+  return 'Song not found';
+}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -3860,7 +3874,7 @@ function updateListenerRequests(reqs,consumed){
         status=statusInline('ready',r.song_track||'ready');
         actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
-        status=statusInline('blocked','not found');
+        status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
         status=statusInline('working','searching…');
       }
@@ -3879,7 +3893,7 @@ function updateListenerRequests(reqs,consumed){
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='song_not_found'
-        ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+        ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">
