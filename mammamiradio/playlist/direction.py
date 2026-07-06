@@ -315,7 +315,7 @@ def resolve_direction_search_results(
                 )
                 if first_rejected_track is None:
                     first_rejected_track = track
-                    first_rejected_reason = verdict.reason
+                    first_rejected_reason = verdict.notice_reason
                 continue
         return DirectionResolution(track=track)
     return DirectionResolution(track=None, rejected_track=first_rejected_track, rejected_reason=first_rejected_reason)
@@ -337,12 +337,12 @@ def resolve_direction_tracks_sync(
     for target in targets[: max(1, max_targets)]:
         try:
             metadata = search_ytdlp_metadata(target.query, depth)
+            if not metadata:
+                continue
+            track = resolve_direction_search_results(target, metadata, playlist=playlist, pacing=pacing).track
         except Exception:
             logger.debug("Direction target search failed for %s", target.query, exc_info=True)
-            metadata = []
-        if not metadata:
             continue
-        track = resolve_direction_search_results(target, metadata, playlist=playlist, pacing=pacing).track
         if track is None:
             continue
         key = normalized_track_key(track)

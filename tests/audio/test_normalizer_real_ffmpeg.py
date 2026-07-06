@@ -249,7 +249,7 @@ def test_crossfade_voice_over_music_renders_with_short_voice_delay_real_ffmpeg(t
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert probe_duration_sec(out) >= 1.0
+    assert probe_duration_sec(out) >= 1.1
 
 
 def _measure_lufs_real(path) -> float | None:

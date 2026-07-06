@@ -144,7 +144,9 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
             artist_cooldown=config.playlist.artist_cooldown,
             excluded_cache_keys=rejected_keys,
         )
-    except RuntimeError:
+    except RuntimeError as exc:
+        if not state.playlist or str(exc) == "Playlist is empty":
+            raise
         if rejected_keys:
             logger.debug("No eligible music tracks remain after excluding session-rejected cache keys")
             return None

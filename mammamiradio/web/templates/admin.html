@@ -1851,7 +1851,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <div class="card-label" style="margin-top:12px">Super Italian Mode</div>
         <div style="margin-bottom:14px">
           <label class="super-italian-toggle">
-            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" onchange="toggleSuperItalian(this)">
+            <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" aria-label="Toggle Super Italian Mode" onchange="toggleSuperItalian(this)">
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
@@ -2154,6 +2154,8 @@ function notifyExternalAddNotices(notices){
     }
     const msg=n.reason==='banned'
       ? '“'+name+'” is banned — unban it from the Banned list first, then add it.'
+      : n.reason==='non_music_audio'
+      ? '“'+name+'” looks like talk or non-music audio — choose a single-track song instead.'
       : n.reason==='longform_audio'
       ? '“'+name+'” looks like a set or long-form item — choose a single-track result instead.'
       : n.reason==='source_changed'
@@ -4022,20 +4024,15 @@ async function applyHostPreset(n,presetName){
 }
 
 // ── Listener Requests ──
-function listenerSongErrorLabel(reason){
-  if(reason==='longform_audio')return 'not a single-track song';
-  if(reason==='banned')return 'banned song';
-  if(reason==='download_failed')return 'download failed';
-  if(reason==='download_cancelled')return 'cancelled';
-  return 'not found';
-}
-function listenerSongErrorBadge(reason){
-  if(reason==='longform_audio')return 'Not a single-track song';
-  if(reason==='banned')return 'Banned song';
-  if(reason==='download_failed')return 'Download failed';
-  if(reason==='download_cancelled')return 'Cancelled';
-  return 'Song not found';
-}
+const LISTENER_SONG_ERROR_TEXT={
+  longform_audio:['not a single-track song','Not a single-track song'],
+  non_music_audio:['not a song','Not a song'],
+  banned:['banned song','Banned song'],
+  download_failed:['download failed','Download failed'],
+  download_cancelled:['cancelled','Cancelled'],
+};
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');

@@ -354,6 +354,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             logger.info("Listener song request returned no results: request_id=%s", req.get("request_id"))
             return
         track: Track | None = None
+        held_notice_reason = "longform_audio"
         for meta in results:
             candidate = Track(
                 title=meta["title"],
@@ -366,6 +367,8 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             if verdict.accepted:
                 track = candidate
                 break
+            if held_notice_reason == "longform_audio" and verdict.notice_reason:
+                held_notice_reason = verdict.notice_reason
             logger.info(
                 "Listener song candidate held out of rotation before download: request_id=%s display=%s reason=%s",
                 req.get("request_id"),
@@ -374,7 +377,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             )
         if track is None:
             req["song_error"] = True
-            req["song_error_reason"] = "longform_audio"
+            req["song_error_reason"] = held_notice_reason
             logger.info("Listener song request returned no single-track result: request_id=%s", req.get("request_id"))
             return
         status = await _commit_external_download(

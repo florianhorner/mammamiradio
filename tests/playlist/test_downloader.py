@@ -1608,6 +1608,29 @@ def test_search_ytdlp_metadata_skips_malformed_duration_without_dropping_sibling
                         "duration": "not-a-number",
                     },
                     {
+                        "id": "infinite001",
+                        "title": "Infinite Duration",
+                        "uploader": "Uploader",
+                        "duration": "inf",
+                    },
+                    {
+                        "id": "unknown0001",
+                        "title": "Unknown Duration",
+                        "uploader": "Uploader",
+                        "duration": None,
+                    },
+                    {
+                        "id": "missing0001",
+                        "title": "Missing Duration",
+                        "uploader": "Uploader",
+                    },
+                    {
+                        "id": "emptytime01",
+                        "title": "Empty Duration",
+                        "uploader": "Uploader",
+                        "duration": "",
+                    },
+                    {
                         "id": "validtime01",
                         "title": "Good Duration",
                         "uploader": "Uploader",
@@ -1625,8 +1648,13 @@ def test_search_ytdlp_metadata_skips_malformed_duration_without_dropping_sibling
     ):
         out = search_ytdlp_metadata("duration edge", 5)
 
-    assert [result["youtube_id"] for result in out] == ["validtime01"]
-    assert out[0]["duration_ms"] == 185_500
+    assert [result["youtube_id"] for result in out] == [
+        "unknown0001",
+        "missing0001",
+        "emptytime01",
+        "validtime01",
+    ]
+    assert [result["duration_ms"] for result in out] == [0, 0, 0, 185_500]
 
 
 # --- prune_stale_tmp_files ---

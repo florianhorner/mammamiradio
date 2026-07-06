@@ -351,8 +351,15 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
-    assert "not a single-track song" in _read_admin_html()
-    assert "Banned song" in _read_admin_html()
+    html = _read_admin_html()
+    assert "not a single-track song" in html
+    assert "not a song" in html
+    assert "Not a song" in html
+    assert "Banned song" in html
+    assert "download failed" in html
+    assert "Download failed" in html
+    assert "cancelled" in html
+    assert "Cancelled" in html
     # ensure double-glyph pattern is gone
     assert "'▶ '" not in block
 

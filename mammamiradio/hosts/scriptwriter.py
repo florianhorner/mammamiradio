@@ -181,7 +181,8 @@ class ListenerRequestCommit:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
         if self.mark_song_error:
             self.request["song_error"] = True
-            self.request.setdefault("song_error_reason", "not_found")
+            if not self.request.get("song_error_reason"):
+                self.request["song_error_reason"] = "not_found"
         if self.consume:
             now = time.time()
             state.recently_consumed_requests.append(

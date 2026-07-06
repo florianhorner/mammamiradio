@@ -78,7 +78,11 @@ class MusicAdmissionVerdict:
 
     @property
     def notice_reason(self) -> str:
-        return "longform_audio" if not self.accepted else ""
+        if self.accepted:
+            return ""
+        if self.status == "reject":
+            return "non_music_audio"
+        return "longform_audio"
 
 
 def build_music_admission_envelope(
@@ -93,7 +97,7 @@ def build_music_admission_envelope(
     )
     sample_size = len(durations)
     if durations:
-        median_sec = max(float(statistics.median(durations)), REFERENCE_SINGLE_TRACK_SEC)
+        median_sec = max(float(statistics.median_low(durations)), REFERENCE_SINGLE_TRACK_SEC)
         # A stale/manual long-form track already in rotation must not redefine the
         # single-track window for every future YouTube candidate. Keep the p90
         # signal, but cap its contribution relative to the median; the pacing

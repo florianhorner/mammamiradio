@@ -106,6 +106,22 @@ def test_rejected_weighted_candidate_cannot_starve_valid_sibling():
     assert captured == [[accepted]]
 
 
+def test_rejected_pinned_track_with_empty_playlist_raises_for_recovery():
+    rejected = _track("Rejected")
+    state = StationState(playlist=[], pinned_track=rejected)
+
+    with (
+        patch(
+            "mammamiradio.scheduling.producer.is_rejected_cache_key",
+            side_effect=lambda key: key == rejected.cache_key,
+        ),
+        pytest.raises(RuntimeError, match="Playlist is empty"),
+    ):
+        _select_accepted_music_track(state, _producer_config())
+
+    assert state.pinned_track is rejected
+
+
 def test_non_tagged_accepted_selection_does_not_arm_heading():
     state = StationState(playlist=[_track("Auto")], heading=_heading())
 

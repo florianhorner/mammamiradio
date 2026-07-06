@@ -575,7 +575,7 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
             else:
                 try:
                     duration_ms = max(0, int(float(raw_duration_s) * 1000))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     logger.debug("Skipping yt-dlp result with invalid duration: %r", raw_duration_s)
                     continue
             thumbnail = e.get("thumbnail") or ""

@@ -39,6 +39,18 @@ def test_music_admission_holds_longform_marker():
 
     assert verdict.status == "hold"
     assert verdict.reason.startswith("longform_marker:")
+    assert verdict.notice_reason == "longform_audio"
+
+
+def test_music_admission_reject_notice_reason_is_non_music():
+    playlist = [_track("Single A", duration_ms=180_000, youtube_id="single00001")]
+    candidate = _track("Morning Podcast Episode", duration_ms=180_000, youtube_id="talk0000001")
+
+    verdict = classify_youtube_candidate(candidate, playlist, PacingSection(songs_between_banter=2))
+
+    assert verdict.status == "reject"
+    assert verdict.reason.startswith("non_music_marker:")
+    assert verdict.notice_reason == "non_music_audio"
 
 
 def test_music_admission_holds_duration_outside_station_envelope():
@@ -100,6 +112,18 @@ def test_music_admission_longform_outlier_does_not_widen_envelope():
     assert verdict.reason == "longform_duration"
     assert verdict.envelope is not None
     assert verdict.envelope.longform_threshold_sec < 7_200.0
+
+
+def test_music_admission_even_playlist_outlier_does_not_average_median():
+    playlist = [
+        _track("Single A", duration_ms=180_000, youtube_id="single00001"),
+        _track("Stale Long Set", duration_ms=7_200_000, youtube_id="staleset001"),
+    ]
+
+    envelope = build_music_admission_envelope(playlist, PacingSection(songs_between_banter=2))
+
+    assert envelope.median_track_sec == 210.0
+    assert envelope.longform_threshold_sec == 420.0
 
 
 def test_music_admission_envelope_uses_station_pacing():

@@ -3351,6 +3351,7 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
         "type": "song_request",
         "song_found": False,
         "song_error": False,
+        "song_error_reason": "",
         "song_track": None,
         "banter_cycles_missed": 4,
     }

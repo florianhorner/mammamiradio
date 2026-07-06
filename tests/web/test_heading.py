@@ -579,6 +579,28 @@ async def test_direction_resolver_notices_only_when_all_candidates_are_longform(
 
 
 @pytest.mark.asyncio
+async def test_direction_resolver_notices_non_music_rejection(tmp_path):
+    from mammamiradio.web.streamer import _resolve_direction_tracks_for_route
+
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    target = DirectionTarget("Talk", "Episode")
+    non_music = {
+        "title": "Talk - Podcast Episode",
+        "artist": "Talk",
+        "duration_ms": 180_000,
+        "youtube_id": "episode0001",
+        "album_art": "",
+    }
+
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[non_music]):
+        tracks = await _resolve_direction_tracks_for_route([target], app.state.station_state, app.state.config)
+
+    assert tracks == []
+    assert [n.get("reason") for n in app.state.station_state.external_add_notices] == ["non_music_audio"]
+
+
+@pytest.mark.asyncio
 async def test_direction_submit_idempotent_even_before_tracks_land(tmp_path):
     """A duplicate submit while the first course's downloads are still in flight
     (zero tracks tagged yet) is a no-op, never a second competing course."""

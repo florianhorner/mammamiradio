@@ -3766,7 +3766,7 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         return JSONResponse(
             {
                 "ok": False,
-                "error": _LONGFORM_NOTICE_REASON,
+                "error": verdict.notice_reason,
                 "reason": verdict.reason,
                 "message": verdict.message,
             },
@@ -3846,6 +3846,7 @@ async def _commit_external_download(
     # Acquiring the lock makes us wait out any in-flight switch, then re-check the
     # (now bumped) revision. The block below is synchronous — it never awaits while
     # holding the lock, so it can't deadlock the switch routes.
+    rejected_download_reason = ""
     async with app_state.source_switch_lock:
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
@@ -3861,30 +3862,33 @@ async def _commit_external_download(
                 actual_duration_sec=actual_duration_sec if actual_duration_sec and actual_duration_sec > 0 else None,
             )
             if not verdict.accepted:
-                reject_cached_download(config.cache_dir, track.cache_key, verdict.reason)
-                logger.info(
-                    "External track held out of rotation after download: %s (yt:%s reason=%s)",
-                    track.display,
-                    getattr(track, "youtube_id", ""),
-                    verdict.reason,
-                )
-                return "held"
-        if normalized_track_key(track) in state.blocklist:
-            return "banned"
-        state.playlist.append(track)
-        state.playlist_revision += 1
-        # Don't clobber a pin that's still pending — claim the play-next slot only
-        # when the caller's guard says it's free. Otherwise the track is in
-        # rotation and the caller surfaces that it's queued-behind, not next.
-        if not should_pin():
-            return "queued"
-        state.pinned_track = track
-        # Only force MUSIC when nothing else is already forced. An operator trigger
-        # (banter/ad/news) or a mode change may have set force_next; that directive
-        # plays first, then the pinned track lands on the next music slot.
-        if state.force_next is None:
-            state.force_next = SegmentType.MUSIC
-        return "pinned"
+                rejected_download_reason = verdict.reason
+        if not rejected_download_reason:
+            if normalized_track_key(track) in state.blocklist:
+                return "banned"
+            state.playlist.append(track)
+            state.playlist_revision += 1
+            # Don't clobber a pin that's still pending — claim the play-next slot only
+            # when the caller's guard says it's free. Otherwise the track is in
+            # rotation and the caller surfaces that it's queued-behind, not next.
+            if not should_pin():
+                return "queued"
+            state.pinned_track = track
+            # Only force MUSIC when nothing else is already forced. An operator trigger
+            # (banter/ad/news) or a mode change may have set force_next; that directive
+            # plays first, then the pinned track lands on the next music slot.
+            if state.force_next is None:
+                state.force_next = SegmentType.MUSIC
+            return "pinned"
+
+    await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
+    logger.info(
+        "External track held out of rotation after download: %s (yt:%s reason=%s)",
+        track.display,
+        getattr(track, "youtube_id", ""),
+        rejected_download_reason,
+    )
+    return "held"
 
 
 async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
@@ -3970,7 +3974,12 @@ async def _resolve_direction_tracks_for_route(
         if resolution.track is not None:
             return resolution.track
         if state is not None and resolution.rejected_track is not None:
-            _record_direction_notice(state, resolution.rejected_track, ok=False, reason=_LONGFORM_NOTICE_REASON)
+            _record_direction_notice(
+                state,
+                resolution.rejected_track,
+                ok=False,
+                reason=resolution.rejected_reason or _LONGFORM_NOTICE_REASON,
+            )
         return None
 
     try:

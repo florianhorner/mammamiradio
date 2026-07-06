@@ -4,6 +4,7 @@ import pytest
 
 from mammamiradio.core.config import PacingSection, load_config
 from mammamiradio.core.models import StationState, Track
+from mammamiradio.playlist import direction as direction_module
 from mammamiradio.playlist.direction import (
     DirectionTarget,
     expand_direction,
@@ -87,6 +88,29 @@ def test_resolve_direction_tracks_sync_uses_canonical_target_artist_title(monkey
     assert tracks[0].artist == "Lucio Battisti"
     assert tracks[0].title == "Il mio canto libero"
     assert tracks[0].youtube_id == "abc12345678"
+
+
+def test_resolve_direction_tracks_sync_skips_bad_resolution(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert max_results == 1
+        return [
+            {"youtube_id": f"{query[:3].lower()}12345678", "title": query, "artist": "Uploader", "duration_ms": 180_000}
+        ]
+
+    def fake_resolve(target: DirectionTarget, metadata: list[dict], **_kwargs):
+        assert metadata
+        if target.artist == "Bad":
+            raise RuntimeError("malformed metadata")
+        return direction_module.DirectionResolution(
+            track=Track(title=target.title, artist=target.artist, youtube_id="good1234567", duration_ms=180_000)
+        )
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+    monkeypatch.setattr(direction_module, "resolve_direction_search_results", fake_resolve)
+
+    tracks = resolve_direction_tracks_sync([DirectionTarget("Bad", "Song"), DirectionTarget("Good", "Song")])
+
+    assert [(track.artist, track.title) for track in tracks] == [("Good", "Song")]
 
 
 @pytest.mark.asyncio
