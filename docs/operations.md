@@ -356,10 +356,10 @@ sensors keep flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
-| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
-| `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
-| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `icon: mdi:radio`; pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `news_flash` / `station_id` / `sweeper` / `time_check` / `off` | dynamic `icon` matching the current segment type |
+| `sensor.mammamiradio_listeners` | sensor | integer | `icon: mdi:account-group`; `unit_of_measurement: listeners` |
+| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | `icon: mdi:broadcast` |
 
 All four entities are labelled with the configured station name (`Mamma Mi Radio` by default): the media player's `friendly_name` is the station name itself (and it doubles as `media_artist` for non-music segments), while the sensors read `<station> Segment Type`, `<station> Listeners`, and `<station> On Air`. Entity IDs and the `mammamiradio_*` attribute keys stay fixed regardless of the display name, so existing automations and dashboards keep working.
 
