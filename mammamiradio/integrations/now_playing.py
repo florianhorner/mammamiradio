@@ -56,7 +56,9 @@ def _station_block(config) -> StationBlock:
             )
     frequency = getattr(brand, "frequency", "") if brand is not None else ""
     tagline = getattr(brand, "tagline", "") if brand is not None else ""
-    station_name = getattr(brand, "station_name", "") or config.station.name
+    station_name = (
+        getattr(config, "display_station_name", "") or getattr(brand, "station_name", "") or config.station.name
+    )
     return StationBlock(
         name=station_name,
         frequency=frequency,

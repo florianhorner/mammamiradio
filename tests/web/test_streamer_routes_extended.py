@@ -3219,6 +3219,26 @@ async def test_stream_returns_audio_headers():
 
 
 @pytest.mark.asyncio
+async def test_stream_icy_name_uses_resolved_identity_and_strips_crlf():
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Test\r\nX-Evil: 1"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio TestX-Evil: 1"
+            assert "\r" not in resp.headers["icy-name"]
+            assert "\n" not in resp.headers["icy-name"]
+
+
+@pytest.mark.asyncio
 async def test_stream_headers_match_audio_format_helper():
     """The /stream response headers and the /public-status audio_format object
     must derive from the same helper, so a config change cannot make them

@@ -241,15 +241,32 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 
 ## Renaming the station
 
-The station name is what the hosts say on air. If you call it "Radio Florian", the hosts will say "Radio Florian" — naturally, mid-conversation, the way a real DJ does.
+The station name is the operator-facing identity people see and hear. If you
+call it "Radio Florian", the listener page, stream metadata, admin setup preview,
+Home Assistant friendly labels, and the default generated station IDs and
+sweepers use "Radio Florian" naturally, the way a real station would.
 
 **To rename:**
 
 1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
 2. Click Save, then restart the add-on.
-3. Within a few minutes of playback, the hosts will start using the new name.
+3. Reopen the add-on. The admin setup panel shows an **Identity** preview for
+   what listeners hear, what listeners see, and what Home Assistant shows.
+4. Within a few minutes of playback, new generated IDs, sweepers, and host copy
+   will start using the new name.
 
-The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
+The stable add-on slug, integration domain, entity IDs, and media-source path do
+not change: `mammamiradio`, `media_player.mammamiradio`,
+`sensor.mammamiradio_*`, `binary_sensor.mammamiradio_on_air`, and
+`media-source://mammamiradio/live` remain the automation contract.
+
+Custom sonic-brand copy in `radio.toml` is preserved deliberately. If you wrote
+your own `full_ident` or sweeper lines, the setup Identity preview keeps them and
+flags that custom copy may still mention the old name. Blank or default copy is
+regenerated from the new station name.
+
+You can also set the name via environment variable:
+`STATION_NAME=Radio Florian`.
 
 ## Home Assistant entities
 

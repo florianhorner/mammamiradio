@@ -49,8 +49,9 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
 3. The dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
-4. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` to `/config/secrets.env` to unlock live AI hosts
-5. Install the HACS integration for the controllable `media_player.mammamiradio`
+4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
+5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` to `/config/secrets.env` to unlock live AI hosts
+6. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.

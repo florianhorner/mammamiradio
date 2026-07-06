@@ -36,6 +36,12 @@ now-playing contract; this integration is the HA-native face of it.
   Mamma Mi Radio → ⋮ → **Reconfigure**) — no need to delete and re-add the
   entity. A failed change keeps what you typed instead of reverting.
 
+The add-on's `station_name` option changes the entity's friendly name, media
+titles, listener UI, stream metadata, and default generated imaging copy. The
+integration domain, entity ID, and media-source ID stay stable:
+`mammamiradio`, `media_player.mammamiradio`, and
+`media-source://mammamiradio/live`.
+
 ## Install (HACS custom repository)
 
 1. HACS → three-dot menu → **Custom repositories**.
