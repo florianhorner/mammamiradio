@@ -2339,6 +2339,52 @@ async def test_idle_bridge_queues_canned_clip_when_available(tmp_path):
     assert (last["bridge_type"], last["source"]) == ("idle", "canned")
 
 
+@pytest.mark.asyncio
+async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invariants(tmp_path):
+    """Extra canned metadata may add display markers but cannot weaken bridge flags."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio")
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment) -> bool:
+        queued.append(segment)
+        return True
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
+        ok = await producer._queue_continuity_bridge(
+            _capture,
+            state,
+            config,
+            bridge_type="idle",
+            bridge_flag="idle_bridge",
+            canned_title="Station warm-up",
+            canned_metadata={
+                "warmup": True,
+                "type": "music",
+                "canned": False,
+                "idle_bridge": False,
+                "rescue": False,
+                "title": "Override attempt",
+            },
+        )
+
+    assert ok is True
+    seg = queued[0]
+    assert seg.metadata["type"] == "banter"
+    assert seg.metadata["canned"] is True
+    assert seg.metadata["idle_bridge"] is True
+    assert seg.metadata["rescue"] is True
+    assert seg.metadata["title"] == "Station warm-up"
+    assert seg.metadata["warmup"] is True
+    assert state.bridge_events[-1]["bridge_type"] == "idle"
+
+
 # ---------------------------------------------------------------------------
 # P0: hot-reload import refactor invariants
 # ---------------------------------------------------------------------------
@@ -2512,9 +2558,9 @@ async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_path):
+async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
     """When neither canned clips nor pre-normalized files exist, the bridge is a
-    no-op — the producer should not crash and should eventually queue real content."""
+    generated rescue tone so the resumed session does not wait on real content."""
     state = _make_state()
     state.session_stopped = True
     config = _make_config()
@@ -2522,22 +2568,23 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            # Wait long enough for the producer's 1s sleep to complete and run
-            # one more iteration (the bridge no-op path with no norm files).
-            await asyncio.sleep(1.5)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Resume emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
         finally:
             task.cancel()
             try:
@@ -2545,15 +2592,25 @@ async def test_resume_bridge_noop_when_no_canned_clips_and_empty_norm_cache(tmp_
             except asyncio.CancelledError:
                 pass
 
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("resume_bridge") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("resume", "emergency_tone")
+
 
 @pytest.mark.asyncio
 async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
     """Audio-delivery Scenario 3 (post-restart): a banned song must not re-air even
     through the norm-cache resume bridge. The only cached file on disk is banned, so
-    the rescue selector returns None and the bridge fires nothing — it must never
-    queue the banned song. (The selector itself is unit-tested both ways in
-    tests/audio/test_norm_cache.py; this proves the blocklist filter composes with
-    the producer's resume-bridge guard end to end.)"""
+    the rescue selector returns None and the bridge falls through to emergency tone
+    instead. (The selector itself is unit-tested both ways in tests/audio/test_norm_cache.py;
+    this proves the blocklist filter composes with the producer's bridge guard end to end.)"""
     state = _make_state()
     state.session_stopped = True
     state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
@@ -2566,20 +2623,23 @@ async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(t
     banned_file.write_bytes(b"pre-normalized banned audio")
     save_track_metadata(banned_file, title="Ordinary", artist="Alex Warren")
 
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
-        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
             state.session_stopped = False
-            await asyncio.sleep(1.5)
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Resume emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
         finally:
             task.cancel()
             try:
@@ -2593,9 +2653,11 @@ async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(t
     while not queue.empty():
         queued.append(queue.get_nowait())
     assert all(seg.path != banned_file for seg in queued)
+    assert any(seg.metadata.get("audio_source") == "emergency_tone" for seg in queued)
     assert all(
         not (ev.get("bridge_type") == "resume" and ev.get("source") == "norm_cache") for ev in state.bridge_events
     )
+    assert any(ev.get("bridge_type") == "resume" and ev.get("source") == "emergency_tone" for ev in state.bridge_events)
 
 
 @pytest.mark.asyncio
@@ -2690,6 +2752,53 @@ async def test_idle_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("title") == "Musica Leggera"
     assert seg.metadata.get("artist") == "Colapesce Dimartino"
+
+
+@pytest.mark.asyncio
+async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
+    """When a listener reconnects after idle and no instant audio source exists,
+    the idle bridge queues an emergency tone instead of waiting on production."""
+    state = _make_state()
+    state.listeners_active = 0
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.15)
+            state.listeners_active = 1
+            deadline = asyncio.get_event_loop().time() + 3.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Idle emergency bridge did not queue a segment")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    mock_tone.assert_called_once()
+    assert mock_tone.call_args.kwargs["rescue"] is True
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("idle_bridge") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert state.bridge_fires_total >= 1
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("idle", "emergency_tone")
 
 
 @pytest.mark.asyncio

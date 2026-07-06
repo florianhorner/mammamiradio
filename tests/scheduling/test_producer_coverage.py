@@ -891,9 +891,9 @@ async def test_error_recovery_uses_canned_banter(tmp_path):
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("error_recovery") is True
-    # Recovery audio keeps the station on air, but it does not count as a true
-    # producer success: persistent primary failures still need backoff pressure.
-    assert state.failed_segments >= 1
+    # Canned recovery is continuity cover, not successful production; keep the
+    # failure counter armed so repeated provider/download failures can back off.
+    assert state.failed_segments == 1
 
 
 @pytest.mark.asyncio
