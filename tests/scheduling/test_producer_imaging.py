@@ -192,6 +192,48 @@ async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_emergency_tone_tail_at_startup_does_not_seed_transition_stinger(tmp_path):
+    tone = tmp_path / "tone.mp3"
+    tone.write_bytes(b"tone")
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tone,
+            metadata={"audio_source": "emergency_tone", "rescue": True},
+            ephemeral=True,
+        )
+    )
+    host = config.hosts[0]
+    banter_lines = [(host, "Ripartiamo puliti.")]
+    banter_path = tmp_path / "dialogue.mp3"
+    banter_path.write_bytes(b"voice")
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Siamo tornati.")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "transition.mp3"),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        await _run_until_queued(queue, state, config, target_qsize=2)
+
+    queue.get_nowait()  # startup emergency tone
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    mock_imaging_cls.return_value.pick_stinger.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_banter_talk_bed_severed_after_ad_no_stale_bleed(tmp_path):
     """Bleed regression (Scenario 1): a song that aired before an ad block must NOT
     bleed under a later banter. The previous queued segment is an AD, so the song
@@ -237,6 +279,40 @@ async def test_banter_talk_bed_severed_after_ad_no_stale_bleed(tmp_path):
     mock_xfade.assert_not_called()
     # AD -> BANTER is speech-to-speech: no stinger.
     imaging.pick_stinger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_error_recovery_silence_after_banter_does_not_get_transition_stinger(tmp_path):
+    previous_banter = tmp_path / "previous_banter.mp3"
+    previous_banter.write_bytes(b"voice")
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    queue.put_nowait(Segment(type=SegmentType.BANTER, path=previous_banter, metadata={"title": "Banter"}))
+
+    def _fake_silence(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"silence")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
+        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_silence),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        await _run_until_queued(queue, state, config, target_qsize=2)
+
+    queue.get_nowait()  # previous banter
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("error") == "network down"
+    assert seg.path.name.startswith("silence_")
+    mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 
 @pytest.mark.asyncio
