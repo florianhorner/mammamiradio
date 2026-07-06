@@ -28,7 +28,7 @@ jobs:
     name: Hassfest (manifest validation)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The app ships a PWA web manifest.json (mammamiradio/web/static/) that a
       # whole-workspace hassfest scan discovers and misreads as an integration
       # (KeyError: codeowners). Run hassfest against an isolated workspace that
@@ -46,7 +46,7 @@ jobs:
     name: HACS validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hacs/action@main
         with:
           category: integration
@@ -55,7 +55,7 @@ jobs:
     name: Integration tests (HA harness)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
