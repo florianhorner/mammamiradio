@@ -457,7 +457,7 @@ class ConsumedListenerRequest(TypedDict):
     message: str | None
     song_track: str | None
     type: str | None
-    status: str  # "sent_to_hosts" | "song_not_found"
+    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed"
     consumed_at: float
 
 
@@ -897,8 +897,9 @@ class StationState:
         self.played_track_log.clear()
         # Clear listener requests and pinned track so in-flight background
         # download tasks from the old source can't zombie-pin a track into
-        # the new playlist context.
-        self.pending_requests.clear()
+        # the new playlist context. Keep an admin-visible trail so accepted
+        # listener requests never disappear without an outcome.
+        self._mark_pending_requests_source_changed()
         self.pending_actions.clear()
         self._listener_request_rl.clear()
         self.pinned_track = None
@@ -909,6 +910,28 @@ class StationState:
         self.heading_pending_announcement = ""
         self.heading_pending_narration_kind = ""
         self.heading_announced_id = ""
+
+    def _mark_pending_requests_source_changed(self) -> None:
+        if not self.pending_requests:
+            return
+        now = time.time()
+        for request in self.pending_requests:
+            self.recently_consumed_requests.append(
+                {
+                    "id": request.get("request_id") or str(request.get("ts", "")),
+                    "name": request.get("name"),
+                    "message": request.get("message") or request.get("text"),
+                    "song_track": request.get("song_track"),
+                    "type": request.get("type"),
+                    "status": "source_changed",
+                    "consumed_at": now,
+                }
+            )
+        cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+        self.recently_consumed_requests = [
+            request for request in self.recently_consumed_requests if request.get("consumed_at", 0) >= cutoff
+        ]
+        self.pending_requests.clear()
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading

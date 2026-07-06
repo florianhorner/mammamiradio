@@ -207,7 +207,7 @@ def test_track_display():
 
 def test_switch_playlist_clears_listener_request_state():
     state = StationState(playlist=[_track(1)])
-    state.pending_requests.append({"name": "Luca", "message": "ciao", "type": "shoutout"})
+    state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
     state.pending_actions.append({"type": "skip_bridge"})
     state._listener_request_rl = {"127.0.0.1": 123.0}
     state.pinned_track = _track(99)
@@ -216,6 +216,13 @@ def test_switch_playlist_clears_listener_request_state():
     state.switch_playlist([_track(2)])
 
     assert state.pending_requests == []
+    assert len(state.recently_consumed_requests) == 1
+    consumed = state.recently_consumed_requests[0]
+    assert consumed["id"] == "req-1"
+    assert consumed["name"] == "Luca"
+    assert consumed["message"] == "ciao"
+    assert consumed["type"] == "shoutout"
+    assert consumed["status"] == "source_changed"
     assert list(state.pending_actions) == []
     assert state._listener_request_rl == {}
     assert state.pinned_track is None

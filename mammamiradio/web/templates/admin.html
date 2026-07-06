@@ -3868,6 +3868,8 @@ function updateListenerRequests(reqs,consumed){
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='song_not_found'
         ?'<span class="lr-badge lr-badge-warn">&#9888; Song not found</span>'
+        :r.status==='source_changed'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">

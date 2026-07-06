@@ -280,6 +280,8 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "statusInline('blocked','not found')",
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "r.status==='source_changed'",
+        "Playlist changed",
     ):
         assert expected in block
     # ensure double-glyph pattern is gone

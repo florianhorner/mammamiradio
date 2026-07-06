@@ -2137,6 +2137,7 @@ async def test_stop_and_resume_toggle_session_state():
         resume = await client.post("/api/resume")
         assert resume.status_code == 200
         assert app.state.station_state.session_stopped is False
+        assert app.state.station_state.now_streaming == {}
 
 
 @pytest.mark.asyncio

@@ -2618,6 +2618,57 @@ async def test_load_playlist_success():
 
 
 @pytest.mark.asyncio
+async def test_load_playlist_surfaces_source_changed_listener_request_in_admin_queue():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.pending_requests.append(
+        {
+            "request_id": "listener-req-1",
+            "name": "Luca",
+            "message": "Metti Volare",
+            "type": "song_request",
+            "song_found": False,
+            "song_error": False,
+            "song_track": None,
+            "ts": time.time(),
+        }
+    )
+    new_tracks = [Track(title="New A", artist="NA", duration_ms=200_000, spotify_id="na1")]
+    resolved_source = PlaylistSource(
+        kind="url",
+        source_id="xyz",
+        url="https://open.spotify.com/playlist/xyz",
+        label="New A",
+        track_count=1,
+        selected_at=1.0,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(new_tracks, resolved_source),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            load_resp = await client.post("/api/playlist/load", json={"url": resolved_source.url})
+            queue_resp = await client.get("/api/listener-requests")
+
+    assert load_resp.status_code == 200
+    assert load_resp.json()["ok"] is True
+    assert queue_resp.status_code == 200
+    body = queue_resp.json()
+    assert body["requests"] == []
+    assert len(body["recently_consumed"]) == 1
+    consumed = body["recently_consumed"][0]
+    assert consumed["id"] == "listener-req-1"
+    assert consumed["name"] == "Luca"
+    assert consumed["message"] == "Metti Volare"
+    assert consumed["type"] == "song_request"
+    assert consumed["status"] == "source_changed"
+
+
+@pytest.mark.asyncio
 async def test_load_playlist_no_url():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
