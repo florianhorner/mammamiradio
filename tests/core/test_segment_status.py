@@ -16,6 +16,8 @@ from mammamiradio.core import segment_status as ss
     "metadata",
     [
         {"fallback": True},
+        {"rescue": True},
+        {"error_recovery": True},
         {"queue_drain_recovery": True},
         {"resume_bridge": True},
         {"silence_fallback": True},

@@ -61,6 +61,29 @@ async def test_public_status_returns_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_public_status_exposes_only_coarse_ritual_family_labels():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_ritual_public_families = ["Kitchen ritual"]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.kitchen_fridge_door"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert public["ha_moments"] == {
+        "connected": True,
+        "mood": None,
+        "weather": None,
+        "ritual_families": ["Kitchen ritual"],
+    }
+    assert "ha_details" not in public
+    assert "binary_sensor.kitchen_fridge_door" not in str(public["ha_moments"])
+    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.kitchen_fridge_door"
+
+
+@pytest.mark.asyncio
 async def test_public_status_current_source_is_loaded_playlist_source():
     """`current_source` is the loaded playlist source, not the on-air segment."""
     app = _make_test_app()
@@ -105,6 +128,35 @@ async def test_public_status_does_not_expose_admin_cost_breakdown():
     assert "consumption" not in public
     assert "cost_breakdown" not in str(public)
     assert admin["consumption"]["cost_breakdown"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_public_status_does_not_expose_operator_song_preferences():
+    app = _make_test_app()
+    app.state.station_state.song_preferences = {
+        ("modugno", "volare"): {
+            "score": 1,
+            "display": "Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+        preferences_resp = await client.get("/api/track/preferences")
+
+    public = public_resp.json()
+    admin = admin_resp.json()
+    preferences = preferences_resp.json()
+    assert "song_preferences" not in public
+    assert "current_track_preference" not in public
+    assert admin["song_preferences"]["count"] == 1
+    assert "preferences" not in admin["song_preferences"]
+    assert "current_track_preference" in admin
+    assert preferences["count"] == 1
 
 
 @pytest.mark.asyncio

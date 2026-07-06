@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.playlist.playlist import normalized_track_key
+from mammamiradio.playlist.preferences import preference_score
 from mammamiradio.web.assets import _ASSETS_DIR
 
 
@@ -114,10 +116,17 @@ def _golden_path_status(config, state) -> dict:
 
 
 def _ha_details_payload(state: StationState) -> dict | None:
-    has_ha_observability = bool(state.ha_context or state.ha_scored_entities or state.ha_denylist_hits)
+    has_ha_observability = bool(
+        state.ha_context
+        or state.ha_scored_entities
+        or state.ha_denylist_hits
+        or state.ha_ritual_public_families
+        or state.ha_ritual_matches
+        or state.ha_ritual_recipe_audit
+    )
     if not has_ha_observability:
         return None
-    return {
+    payload: dict[str, object] = {
         "mood": state.ha_home_mood or None,
         "weather_arc": state.ha_weather_arc or None,
         "events_summary": state.ha_events_summary or None,
@@ -138,6 +147,13 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "context_last_updated": state.ha_context_last_updated or None,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
+    if state.ha_ritual_public_families or state.ha_ritual_matches or state.ha_ritual_recipe_audit:
+        payload["rituals"] = {
+            "public_families": list(state.ha_ritual_public_families),
+            "matches": copy.deepcopy(state.ha_ritual_matches[:8]),
+            "audit": copy.deepcopy(state.ha_ritual_recipe_audit[:16]),
+        }
+    return payload
 
 
 def _serialize_source(source: PlaylistSource | None) -> dict | None:
@@ -217,8 +233,12 @@ def _serialize_brand(brand) -> dict:
     }
 
 
-def _serialize_track(track: Track) -> dict:
-    return {
+def _track_preference_score(track: Track, preferences: object) -> int:
+    return preference_score(preferences, normalized_track_key(track))
+
+
+def _serialize_track(track: Track, *, preferences: object | None = None) -> dict:
+    payload = {
         "title": track.title,
         "artist": track.artist,
         "display": track.display,
@@ -230,13 +250,23 @@ def _serialize_track(track: Track) -> dict:
         "duration_ms": track.duration_ms,
         "heading_id": track.heading_id,
     }
+    if preferences is not None:
+        payload["preference"] = _track_preference_score(track, preferences)
+    return payload
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
+def _paginated_tracks(
+    tracks: list[Track],
+    offset: int,
+    limit: int,
+    *,
+    revision: int | None = None,
+    preferences: object | None = None,
+) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
     payload: dict[str, Any] = {
-        "tracks": [_serialize_track(track) for track in page],
+        "tracks": [_serialize_track(track, preferences=preferences) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -265,7 +295,15 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     return None
 
 
-_INTERNAL_SEGMENT_METADATA_KEYS = frozenset({"memory_extraction"})
+_INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
+    {
+        "memory_extraction",
+        "ritual_recipe_match",
+        "ritual_recipe_matches",
+        "ritual_recipe_audit",
+        "ritual_directive",
+    }
+)
 
 
 def _public_segment_metadata(metadata: object) -> dict:

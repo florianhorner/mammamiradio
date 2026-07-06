@@ -1161,13 +1161,13 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Error recovery — silence generation also fails
+# Error recovery — emergency tone generation also fails
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_also_fails(tmp_path):
-    """When download, recovery sweeper, and silence generation fail, producer continues."""
+async def test_error_recovery_emergency_tone_failure_is_contained(tmp_path):
+    """When download, recovery sweeper, and emergency tone fail, producer continues."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -1191,17 +1191,27 @@ async def test_error_recovery_silence_also_fails(tmp_path):
                 _fake_path(),
             ],
         ),
-        patch(f"{MODULE}.generate_silence", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
         patch(
-            f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, side_effect=RuntimeError("tts down")
+            f"{MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts down"),
         ),
+        patch(f"{MODULE}.generate_tone", side_effect=[RuntimeError("ffmpeg broken"), _fake_path]),
+        patch(
+            f"{MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config, timeout=10.0)
 
-    # Should eventually get a segment (either silence from 2nd attempt or music)
+    mock_silence.assert_not_called()
+    # Should eventually get a segment (either tone from 2nd attempt or music)
     assert queue.qsize() >= 1
 
 
@@ -1226,12 +1236,21 @@ async def test_consecutive_failures_increment_counter(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
-        patch(f"{MODULE}.generate_silence", side_effect=_fake_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
         patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+        patch(
+            f"{MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
+    mock_silence.assert_not_called()
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.SWEEPER
     assert state.failed_segments >= 1
 
 
@@ -1403,6 +1422,7 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_reject),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
     ):
         await _run_until_queued(queue, state, config)
 
@@ -1415,9 +1435,9 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
-    """When all-silence rejections hit the circuit breaker AND a canned banter clip
-    is available, the breaker must queue BANTER instead of the silent track."""
+async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
+    """When all-silence rejections hit the circuit breaker, the breaker must use
+    the full recovery clip ladder instead of the older banter/welcome-only path."""
     state = _make_state()
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
@@ -1425,12 +1445,17 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    fake_banter = tmp_path / "fallback_banter.mp3"
-    fake_banter.write_bytes(b"fake")
+    recovery_clip = tmp_path / "continuity_1.mp3"
+    recovery_clip.write_bytes(b"fake")
+    picked_subdirs: list[str] = []
 
     def _always_silence(path, seg_type):
         if seg_type == SegmentType.MUSIC:
             raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _pick_recovery_only(subdir: str, *, state=None):
+        picked_subdirs.append(subdir)
+        return recovery_clip if subdir == "recovery" else None
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -1439,14 +1464,18 @@ async def test_circuit_breaker_silence_inserts_banter_when_available(tmp_path):
         patch(f"{MODULE}.shutil.copy2"),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
-        patch(f"{MODULE}._pick_canned_clip", return_value=fake_banter),
+        patch(f"{MODULE}._pick_canned_clip", side_effect=_pick_recovery_only),
     ):
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
-    # Banter was available → circuit breaker must queue BANTER not the silent track
+    # Packaged recovery was available -> circuit breaker must queue BANTER not the silent track.
     assert seg.type == SegmentType.BANTER
+    assert seg.path == recovery_clip
     assert seg.metadata.get("silence_fallback") is True
+    assert seg.metadata.get("rescue") is True
+    assert seg.metadata.get("title") == "Station continuity"
+    assert picked_subdirs == ["recovery"]
 
 
 # ---------------------------------------------------------------------------
@@ -1751,6 +1780,8 @@ async def test_news_flash_produced_after_session_resume(tmp_path):
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=flash_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=flash_path),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
         patch(f"{MODULE}.generate_tone", side_effect=_fake_tone),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
