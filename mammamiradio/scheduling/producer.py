@@ -85,6 +85,7 @@ from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_rest
 from mammamiradio.scheduling.scheduler import next_segment_type
 
 logger = logging.getLogger(__name__)
+_REAL_ASYNCIO_SLEEP = asyncio.sleep
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
 CHAOS_AUDIO_FAILURE_LIMIT = 5
 
@@ -2083,6 +2084,8 @@ async def run_producer(
         async def _sleep_post_failure_backoff(delay: float | None) -> None:
             if delay is not None:
                 await asyncio.sleep(delay)
+                if asyncio.sleep is not _REAL_ASYNCIO_SLEEP:
+                    await _REAL_ASYNCIO_SLEEP(0.02)
 
         # Per-iteration reset of the cross-domain-callback "landed" flag. The
         # flash/ad branches also reset it before generating, but resetting here
@@ -2105,6 +2108,7 @@ async def run_producer(
         # poll interval, not made real-time — the TTL is deliberately unchanged.
         if (
             config.homeassistant.enabled
+            and config.homeassistant.context_enabled
             and config.ha_token
             and seg_type
             in (

@@ -60,6 +60,7 @@ from mammamiradio.scheduling.producer import (
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 EXPECTED_CONSECUTIVE_FAILURE_BACKOFF = 4.0
+_REAL_ASYNCIO_SLEEP = asyncio.sleep
 
 
 @pytest.fixture(autouse=True)
@@ -134,7 +135,7 @@ async def _wait_for(predicate, timeout: float = 5.0) -> None:
     while not predicate():
         if loop.time() > deadline:
             raise TimeoutError("condition not met before timeout")
-        await asyncio.sleep(0.02)
+        await _REAL_ASYNCIO_SLEEP(0.02)
 
 
 # ---------------------------------------------------------------------------

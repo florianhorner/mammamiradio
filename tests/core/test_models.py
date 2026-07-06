@@ -7,7 +7,17 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.models import ChaosSubtype, Heading, ListenerProfile, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    ChaosSubtype,
+    Heading,
+    ListenerProfile,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+    normalized_track_key,
+)
+from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
 
 def _track(n: int = 1) -> Track:
@@ -276,6 +286,7 @@ def test_select_next_track_consumes_pinned_track():
     state = StationState(playlist=[_track(1), _track(2)])
     pinned = _track(99)
     state.pinned_track = pinned
+    state.song_preferences[normalized_track_key(pinned)] = {"score": -1}
 
     picked = state.select_next_track()
 
@@ -293,6 +304,56 @@ def test_select_next_track_most_stale_fallback():
     picked = state.select_next_track()
 
     assert picked == stale
+
+
+def test_select_next_track_applies_operator_preference_weights():
+    liked = _track(1)
+    neutral = _track(2)
+    disliked = _track(3)
+    state = StationState(
+        playlist=[liked, neutral, disliked],
+        song_preferences={
+            normalized_track_key(liked): {"score": 1},
+            normalized_track_key(disliked): {"score": -1},
+        },
+    )
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [neutral]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is neutral
+    liked_idx = captured["candidates"].index(liked)
+    neutral_idx = captured["candidates"].index(neutral)
+    disliked_idx = captured["candidates"].index(disliked)
+    assert captured["weights"][liked_idx] > captured["weights"][neutral_idx]
+    assert 0 < captured["weights"][disliked_idx] < captured["weights"][neutral_idx]
+
+
+def test_select_next_track_cooldowns_still_override_liked_songs():
+    liked_recent = _track(1)
+    other = _track(2)
+    state = StationState(
+        playlist=[liked_recent, other],
+        song_preferences={normalized_track_key(liked_recent): {"score": 1}},
+    )
+    state.played_tracks.append(liked_recent)
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        return [other]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(repeat_cooldown=8, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is other
+    assert liked_recent not in captured["candidates"]
 
 
 def test_select_next_track_prefers_active_heading_candidates():
@@ -323,6 +384,106 @@ def test_select_next_track_prefers_active_heading_candidates():
     normal_idx = captured["candidates"].index(normal)
     tagged_idx = captured["candidates"].index(tagged)
     assert captured["weights"][tagged_idx] > captured["weights"][normal_idx]
+
+
+def test_select_next_track_heading_bias_still_beats_liked_non_heading_track():
+    liked_normal = _track(1)
+    tagged = _track(2)
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    tagged.heading_id = heading.id
+    state = StationState(
+        playlist=[liked_normal, tagged],
+        heading=heading,
+        song_preferences={normalized_track_key(liked_normal): {"score": 1}},
+    )
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [tagged]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is tagged
+    normal_idx = captured["candidates"].index(liked_normal)
+    tagged_idx = captured["candidates"].index(tagged)
+    assert captured["weights"][tagged_idx] > captured["weights"][normal_idx]
+
+
+def test_select_next_track_stacks_like_with_heading_bias():
+    liked_tagged = _track(1)
+    neutral_tagged = _track(2)
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    liked_tagged.heading_id = heading.id
+    neutral_tagged.heading_id = heading.id
+    state = StationState(
+        playlist=[liked_tagged, neutral_tagged],
+        heading=heading,
+        song_preferences={normalized_track_key(liked_tagged): {"score": 1}},
+    )
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [liked_tagged]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is liked_tagged
+    liked_idx = captured["candidates"].index(liked_tagged)
+    neutral_idx = captured["candidates"].index(neutral_tagged)
+    assert captured["weights"][liked_idx] == pytest.approx(captured["weights"][neutral_idx] * PREFERENCE_UP_WEIGHT)
+
+
+def test_select_next_track_heading_bias_still_beats_disliked_heading_track():
+    neutral = _track(1)
+    disliked_tagged = _track(2)
+    heading = Heading(
+        id="heading-1",
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+        selection_budget=2,
+    )
+    disliked_tagged.heading_id = heading.id
+    state = StationState(
+        playlist=[neutral, disliked_tagged],
+        heading=heading,
+        song_preferences={normalized_track_key(disliked_tagged): {"score": -1}},
+    )
+    captured = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = kwargs["weights"]
+        return [disliked_tagged]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert picked is disliked_tagged
+    neutral_idx = captured["candidates"].index(neutral)
+    tagged_idx = captured["candidates"].index(disliked_tagged)
+    assert captured["weights"][tagged_idx] > captured["weights"][neutral_idx]
 
 
 def test_select_next_track_heading_bias_persists_after_budget_spent():
