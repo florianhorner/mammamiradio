@@ -268,6 +268,10 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "musicState='ready'" in update_systems
     assert "musicState='working'" in update_systems
     assert "musicState='blocked'" in update_systems
+    assert "if(!hasMusicSource)" in update_systems
+    assert "else if(st?.session_stopped===true)" in update_systems
+    assert "else if(st?.upcoming_mode==='building')" in update_systems
+    assert update_systems.index("st?.session_stopped===true") < update_systems.index("st?.upcoming_mode==='building'")
     assert "statusRow('Scrittura AI',aiState,aiLabel,aiDetail)" in update_systems
     assert "statusRow('Fonti musica',musicState,musicLabel,musicDetail)" in update_systems
 

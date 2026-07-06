@@ -55,8 +55,13 @@ voice/interstitial segments without faking music metadata.
 
 If you are an existing consumer polling `/public-status` for now-playing,
 read [migration-from-public-status.md](./migration-from-public-status.md)
-for the field-by-field mapping. `/public-status` will keep its current
-shape for the foreseeable future, so the migration is not time-critical.
+for the field-by-field mapping. `/public-status` will keep its legacy
+top-level fields for the foreseeable future, but `upcoming` now lists only
+render-ready queued audio. When it is empty with `upcoming_mode: "building"`,
+inspect `session_stopped` and `golden_path.stage` to distinguish stopped,
+no-source, and still-building states. `current_source`, when present, is the
+loaded playlist source; the migration guide includes the copy-paste decision
+table.
 
 ## Future endpoints
 

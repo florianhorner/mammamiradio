@@ -29,6 +29,7 @@
 - **Bad request bodies now fail gently instead of looking like an add-on fault.** Admin and listener write endpoints that expect request details now share one parser: empty, malformed, or wrong-shaped bodies return a calm `422` response with `ok: false` and a human message, instead of leaking raw server errors or inconsistent 400/200 responses.
 - **"Clear pool" now actually empties the rotation.** The clear-pool button in the Rotazione tab used to fail with an error; it now clears the whole pool, and the song that's already playing finishes first so there is no dead air.
 - **Admin panel visual cleanups.** The "Shuffle" button shows its proper icon, the host personality sliders fill as a clean thin track instead of a tall colour block, the doubled hairline under section headers is now a single rule, and the gold accent on the live console runs cleanly into its rounded corners.
+- **The "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, the listener page and any connected integration used to see a guessed lineup pulled from the rotation pool, shown as if it were real. The schedule now only ever lists songs that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows.
 
 ### Security
 

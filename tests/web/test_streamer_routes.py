@@ -1625,17 +1625,63 @@ async def test_public_status_reflects_session_stopped_flag():
 
 
 @pytest.mark.asyncio
-async def test_public_status_upcoming_mode_shows_predictions_when_queue_empty():
+async def test_public_status_upcoming_mode_building_when_queue_empty():
     app = _make_test_app()
-    # Queue is empty -- predictions from playlist are shown instead
+    # Queue is empty -- only render-ready segments belong in the public schedule.
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body["upcoming"]) > 0
-    assert all(item["source"] == "predicted_from_playlist" for item in body["upcoming"])
-    assert body["upcoming_mode"] == "queued"
+    assert body["upcoming"] == []
+    assert body["upcoming_mode"] == "building"
+
+
+@pytest.mark.asyncio
+async def test_public_status_needs_music_source_and_building_queue_together(monkeypatch):
+    """No configured music source AND an empty render queue must both show up in
+    the same response -- the two "getting started" surfaces (listener no-source
+    banner, admin no-source empty state) both key off this combination, so a
+    change that decouples them again must fail here, not silently in the UI."""
+    import mammamiradio.web.streamer as streamer_mod
+
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer._has_any_mp3", return_value=False):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["golden_path"]["stage"] == "needs_music_source"
+    assert body["upcoming"] == []
+    assert body["upcoming_mode"] == "building"
+
+
+@pytest.mark.asyncio
+async def test_public_status_session_stopped_alongside_needs_music_source(monkeypatch):
+    """A stopped station with no music source still reports both flags plainly --
+    the listener/admin UIs are responsible for prioritizing "stopped" copy over
+    "no source" copy; the backend never collapses one signal into the other."""
+    import mammamiradio.web.streamer as streamer_mod
+
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app)
+    with patch("mammamiradio.web.streamer._has_any_mp3", return_value=False):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/public-status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_stopped"] is True
+    assert body["golden_path"]["stage"] == "needs_music_source"
 
 
 @pytest.mark.asyncio
