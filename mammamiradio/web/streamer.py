@@ -64,6 +64,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_heading,
     write_persisted_source,
 )
+from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
 from mammamiradio.scheduling.scheduler import preview_upcoming
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
@@ -413,6 +414,194 @@ def _apply_unban(state: StationState, config, keys: list[tuple[str, str]]) -> di
             unbanned += 1
     persisted = save_blocklist(config.cache_dir, state.blocklist) if unbanned else True
     return {"ok": True, "unbanned": unbanned, "persisted": persisted}
+
+
+def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | None:
+    if not isinstance(raw_key, list | tuple) or len(raw_key) != 2:
+        return None
+    artist_raw = str(raw_key[0] or "").strip()
+    title_raw = str(raw_key[1] or "").strip()
+    artist = artist_raw.lower()
+    title = title_raw.lower()
+    if not (artist and title):
+        return None
+    display = f"{artist_raw} - {title_raw}"
+    return (artist, title), display
+
+
+def _split_artist_title_label(value: object) -> tuple[str, str] | None:
+    label = str(value or "").strip()
+    parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
+    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+def _fold_identity_part(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def _now_playing_music_track(now_seg: object) -> Track | None:
+    if not isinstance(now_seg, dict) or now_seg.get("type") != "music":
+        return None
+    meta = now_seg.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    artist = str(meta.get("artist") or "").strip()
+    title = str(meta.get("title_only") or "").strip()
+    raw_title = str(meta.get("title") or "").strip()
+    if artist and not title and raw_title:
+        parsed_title = _split_artist_title_label(raw_title)
+        if parsed_title is None:
+            title = raw_title
+        else:
+            left, right = parsed_title
+            folded_artist = _fold_identity_part(artist)
+            if _fold_identity_part(left) == folded_artist:
+                title = right
+            elif _fold_identity_part(right) == folded_artist:
+                title = left
+            else:
+                title = raw_title
+    if not (artist and title):
+        parsed_label = _split_artist_title_label(now_seg.get("label"))
+        if parsed_label is not None:
+            artist, title = parsed_label
+    if not (artist and title):
+        return None
+    return Track(title=title, artist=artist, duration_ms=0)
+
+
+def _now_playing_preference_target(state: StationState) -> tuple[tuple[str, str], str] | None:
+    track = _now_playing_music_track(state.now_streaming or {})
+    if track is None:
+        return None
+    return normalized_track_key(track), track.display
+
+
+def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[str, str], str, str] | JSONResponse:
+    raw_target = str(body.get("target") or "").strip().lower()
+    legacy_now_playing = raw_target in {"current-song", "current_song", "now-playing", "now_playing"}
+    target_count = (
+        int(body.get("now_playing") is True or legacy_now_playing) + int("index" in body) + int("key" in body)
+    )
+    if target_count != 1:
+        return JSONResponse(
+            content={"ok": False, "error": "Choose exactly one preference target."},
+            status_code=422,
+        )
+
+    if body.get("now_playing") is True or legacy_now_playing:
+        target = _now_playing_preference_target(state)
+        if target is None:
+            return JSONResponse(
+                content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
+            )
+        key, display = target
+        return key, display, "now_playing"
+
+    if "index" in body:
+        idx = _as_int_index(body.get("index"))
+        if idx < 0 or idx >= len(state.playlist):
+            return JSONResponse(content={"ok": False, "error": "Invalid song index."}, status_code=422)
+        track = state.playlist[idx]
+        return normalized_track_key(track), track.display, "index"
+
+    target = _normalize_preference_key(body.get("key"))
+    if target is None:
+        return JSONResponse(content={"ok": False, "error": "Invalid song key."}, status_code=422)
+    key, display = target
+    return key, display, "key"
+
+
+def _apply_preference(
+    state: StationState,
+    config,
+    key: tuple[str, str],
+    display: str,
+    vote: str,
+    target: str,
+) -> dict:
+    score_by_vote = {"up": 1, "down": -1, "clear": 0}
+    score = score_by_vote[vote]
+    updated_at = time.time()
+    updated_by = "operator"
+    existing = state.song_preferences.get(key)
+    existing_score = preference_score(state.song_preferences, key)
+    existing_display = str(existing.get("display") or "") if isinstance(existing, dict) else ""
+    changed = False
+    if score == 0:
+        changed = clear_preference(state.song_preferences, key)
+    else:
+        changed = existing_score != score or existing_display != display
+        if isinstance(existing, dict) and not changed:
+            meta = existing
+        else:
+            meta = set_preference(state.song_preferences, key, score, display, updated_by=updated_by)
+        raw_updated_at = meta.get("updated_at")
+        if isinstance(raw_updated_at, str | int | float):
+            updated_at = float(raw_updated_at)
+        updated_by = str(meta.get("updated_by", updated_by) or updated_by)
+    if changed:
+        state.song_preferences_revision += 1
+    persisted = save_preferences(config.cache_dir, state.song_preferences) if changed else True
+    return {
+        "ok": True,
+        "target": target,
+        "key": list(key),
+        "display": display,
+        "vote": vote,
+        "score": score,
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+        "persisted": persisted,
+        "preference_revision": state.song_preferences_revision,
+    }
+
+
+def _serialize_preference_summary(state: StationState) -> dict:
+    rows = []
+    up = 0
+    down = 0
+    for key, meta in state.song_preferences.items():
+        score = preference_score(state.song_preferences, key)
+        if score > 0:
+            up += 1
+        elif score < 0:
+            down += 1
+        rows.append(
+            {
+                "artist": key[0],
+                "title": key[1],
+                "key": list(key),
+                "score": score,
+                "display": meta.get("display") or f"{key[0]} - {key[1]}",
+                "updated_at": meta.get("updated_at", 0.0),
+                "updated_by": meta.get("updated_by", "operator"),
+            }
+        )
+    rows.sort(key=lambda row: row["updated_at"], reverse=True)
+    return {
+        "count": len(rows),
+        "counts": {"up": up, "down": down},
+        "revision": state.song_preferences_revision,
+        "preferences": rows,
+    }
+
+
+def _serialize_preference_status(state: StationState) -> dict:
+    return {
+        "count": len(state.song_preferences),
+        "revision": state.song_preferences_revision,
+    }
+
+
+def _current_track_preference_score(state: StationState) -> int:
+    target = _now_playing_preference_target(state)
+    if target is None:
+        return 0
+    key, _display = target
+    return preference_score(state.song_preferences, key)
 
 
 def _session_stopped_flag(config) -> Path:
@@ -1202,8 +1391,12 @@ def _preview_tracks(tracks: list, limit: int = 3) -> dict:
     }
 
 
-def _serialize_track(track: Track) -> dict:
-    return {
+def _track_preference_score(track: Track, preferences: object) -> int:
+    return preference_score(preferences, normalized_track_key(track))
+
+
+def _serialize_track(track: Track, *, preferences: object | None = None) -> dict:
+    payload = {
         "title": track.title,
         "artist": track.artist,
         "display": track.display,
@@ -1214,13 +1407,23 @@ def _serialize_track(track: Track) -> dict:
         "youtube_id": track.youtube_id,
         "duration_ms": track.duration_ms,
     }
+    if preferences is not None:
+        payload["preference"] = _track_preference_score(track, preferences)
+    return payload
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
+def _paginated_tracks(
+    tracks: list[Track],
+    offset: int,
+    limit: int,
+    *,
+    revision: int | None = None,
+    preferences: object | None = None,
+) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
     payload: dict[str, Any] = {
-        "tracks": [_serialize_track(track) for track in page],
+        "tracks": [_serialize_track(track, preferences=preferences) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -3558,28 +3761,16 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     if now_seg.get("type") != "music":
         return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
 
-    meta = now_seg.get("metadata") or {}
-    artist = str(meta.get("artist") or "").strip()
     # Prefer ``title_only`` so the blocklist key matches both the queue-purge key and
-    # the clean ``Track.title`` used at every ingest doorway; fall back to parsing the
-    # "Artist — Title" label (never the raw ``title``, which can carry the combined
-    # label and would forge a key that matches nothing).
-    title = str(meta.get("title_only") or "").strip()
-    if not (artist or title):
-        # A label is "Artist — Title"; only accept it when BOTH sides are present.
-        # A one-sided label ("Mina —") is malformed and would forge a half-key — fall
-        # through to the way-out message instead of banning on a guessed fragment.
-        label = str(now_seg.get("label") or "").strip()
-        parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
-        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-            artist, title = parts[0].strip(), parts[1].strip()
-    if not (artist or title):
+    # the clean ``Track.title`` used at every ingest doorway. Fall back through the
+    # shared now-playing identity resolver so Ban and Like/Dislike never persist
+    # different keys for the same on-air song.
+    track = _now_playing_music_track(now_seg)
+    if track is None:
         return {
             "ok": False,
             "error": "I can’t tell which song this is to ban it. Ban it from the rotation list instead.",
         }
-
-    track = Track(title=title, artist=artist, duration_ms=0)
     # Ban FIRST (this purges any queued copies of the same song), THEN skip — so the
     # bridge decision inside _request_skip sees the post-purge queue depth.
     result = _apply_ban(state, config, [track], queue=request.app.state.queue)
@@ -3597,6 +3788,44 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
         # segment can advance in that window).
         "key": list(normalized_track_key(track)),
     }
+
+
+@router.post("/api/track/preference")
+async def prefer_track(request: Request, _: None = Depends(require_admin_access)):
+    """Set or clear an operator-only soft preference for one song.
+
+    Body: ``{"vote": "up"|"down"|"clear", "now_playing": true}``,
+    ``{"vote": ..., "index": N}``, or ``{"vote": ..., "key": [artist, title]}``.
+    This deliberately does not skip, purge the queue, or touch the blocklist.
+    """
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    vote = str(body.get("vote") or "").strip().lower()
+    if not vote and "score" in body:
+        raw_score = body.get("score")
+        try:
+            score = int(raw_score) if raw_score is not None else 0
+        except (TypeError, ValueError):
+            score = 0
+        vote = "up" if score > 0 else "down" if score < 0 else "clear"
+    if vote not in {"up", "down", "clear"}:
+        return JSONResponse(
+            content={"ok": False, "error": "Preference vote must be up, down, or clear."},
+            status_code=422,
+        )
+    state = request.app.state.station_state
+    target = _resolve_preference_target(state, body)
+    if isinstance(target, JSONResponse):
+        return target
+    key, display, target_label = target
+    return _apply_preference(state, request.app.state.config, key, display, vote, target_label)
+
+
+@router.get("/api/track/preferences")
+async def track_preferences(request: Request, _: None = Depends(require_admin_access)):
+    """List operator song preferences for the admin control room."""
+    return {"ok": True, **_serialize_preference_summary(request.app.state.station_state)}
 
 
 @router.post("/api/track/unban")
@@ -3662,7 +3891,13 @@ async def playlist_tracks(
     """Return a bounded playlist page for admin lazy loading."""
     offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
     state = request.app.state.station_state
-    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
+    return _paginated_tracks(
+        state.playlist,
+        offset,
+        limit,
+        revision=state.playlist_revision,
+        preferences=state.song_preferences,
+    )
 
 
 @router.get("/api/search")
@@ -5242,6 +5477,7 @@ async def status(
         playlist_offset,
         playlist_limit,
         revision=state.playlist_revision,
+        preferences=state.song_preferences,
     )
     payload.update(
         {
@@ -5327,6 +5563,8 @@ async def status(
             # false-light the "Triggered" row.
             "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
+            "song_preferences": _serialize_preference_status(state),
+            "current_track_preference": _current_track_preference_score(state),
             "playlist": playlist_page["tracks"],
             "playlist_page": {
                 "total": playlist_page["total"],

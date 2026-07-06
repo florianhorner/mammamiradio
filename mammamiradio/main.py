@@ -40,6 +40,7 @@ from mammamiradio.playlist.playlist import (
     read_persisted_source,
     write_persisted_heading,
 )
+from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -347,6 +348,7 @@ async def startup():
             "Blocklist: filtered %d banned track(s) from the startup pool",
             pre_blocklist_count - len(tracks),
         )
+    song_preferences = load_preferences(config.cache_dir)
 
     persisted_heading = read_persisted_heading(config.cache_dir)
     pending_direction_targets: list[dict[str, str]] = []
@@ -430,6 +432,7 @@ async def startup():
         if persisted_heading is not None and persisted_heading.announced
         else "",
         blocklist=blocklist,
+        song_preferences=song_preferences,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
         verbal_gag_ledger=verbal_gag_ledger,

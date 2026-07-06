@@ -401,6 +401,11 @@ body[data-stopped="true"] .btn-util {
 .pl-row:hover .pl-a { opacity: 1; }
 .pl-btn { font-size: 10px; font-weight: 600; min-height: 44px; padding: 10px 12px; border-radius: 4px; background: rgba(20,17,15,0.5); color: rgba(245,237,216,0.6); border: 1px solid rgba(245,237,216,0.12); cursor: pointer; }
 .pl-btn:hover { color: var(--cream); border-color: rgba(245,237,216,0.3); }
+.pl-pref-group { display: inline-flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.pl-pref { width: 44px; height: 44px; padding: 0; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+.pl-pref svg { width: 15px; height: 15px; }
+.pref-btn[aria-pressed="true"] { color: var(--sun); border-color: rgba(236,204,48,0.72); background: rgba(236,204,48,0.14); }
+.pref-btn.down[aria-pressed="true"] { color: var(--ok); border-color: rgba(37,99,235,0.58); background: rgba(37,99,235,0.12); }
 #plBody {
   max-height: 400px;
   min-width: 0;
@@ -1576,6 +1581,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
     <symbol id="ic-megaphone" viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 13"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
     <symbol id="ic-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
     <symbol id="ic-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></symbol>
+    <symbol id="ic-thumbs-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></symbol>
+    <symbol id="ic-thumbs-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></symbol>
     <symbol id="ic-rotate-cw" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
     <symbol id="ic-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
@@ -1630,6 +1637,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
           <div class="mmr-air-controls">
             <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
+            </button>
+            <button type="button" id="prefUpNowBtn" class="btn-icon pref-btn" title="Play this song more often" aria-label="Like this song" aria-pressed="false" data-preference-target="now" data-preference-vote="up" style="display:none">
+              <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-up"/></svg>
+            </button>
+            <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
+              <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
             </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
@@ -2192,6 +2205,78 @@ function nowTypeStatus(type){
 
 async function api(m,p,b,timeoutMs){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);let _t=null;if(timeoutMs){const c=new AbortController();o.signal=c.signal;_t=setTimeout(()=>c.abort(),timeoutMs);}try{return(await fetch(_base+p,o)).json()}finally{if(_t)clearTimeout(_t);}}
 
+function preferenceToast(score,persisted){
+  let msg=score>0?'Marked to play more often':score<0?'Marked to play less often':'Preference cleared';
+  if(persisted===false)msg+=' — saved for this session only';
+  return msg;
+}
+function syncNowPreferenceButtons(score){
+  score=Number(score||0);
+  const up=document.getElementById('prefUpNowBtn');
+  const down=document.getElementById('prefDownNowBtn');
+  if(up)up.setAttribute('aria-pressed',score>0?'true':'false');
+  if(down)down.setAttribute('aria-pressed',score<0?'true':'false');
+}
+function renderPreferenceButton(vote,score,attrs=''){
+  const isDown=vote==='down';
+  const pressed=isDown?Number(score||0)<0:Number(score||0)>0;
+  const label=isDown?'Dislike this song':'Like this song';
+  const title=isDown?'Play this song less often':'Play this song more often';
+  const icon=isDown?'ic-thumbs-down':'ic-thumbs-up';
+  const cls=`pl-btn pl-pref pref-btn${isDown?' down':''}`;
+  return `<button type="button" class="${cls}" data-preference-vote="${vote}" ${attrs} aria-label="${label}" title="${title}" aria-pressed="${pressed?'true':'false'}"><svg aria-hidden="true"><use href="#${icon}"/></svg></button>`;
+}
+function renderPreferenceControls(index,score){
+  const attrs=`data-preference-target="index" data-preference-index="${Number(index)}"`;
+  return `<div class="pl-pref-group">${renderPreferenceButton('up',score,attrs)}${renderPreferenceButton('down',score,attrs)}</div>`;
+}
+function preferencePayloadFromButton(el){
+  const target=el?.dataset?.preferenceTarget;
+  if(target==='now')return{now_playing:true};
+  if(target==='index')return{index:Number(el.dataset.preferenceIndex)};
+  return null;
+}
+function applyPreferenceToCachedRows(key,score){
+  if(!Array.isArray(key)||key.length!==2)return;
+  const prefKey=_plKey(key[0],key[1]);
+  const nextScore=Number(score||0);
+  let touched=false;
+  const apply=t=>{
+    if(_plKey(t?.artist,t?.title)!==prefKey)return t;
+    touched=true;
+    return {...t,preference:nextScore};
+  };
+  if(Array.isArray(_plRows))_plRows=_plRows.map(apply);
+  if(_st&&Array.isArray(_st.playlist))_st.playlist=_st.playlist.map(apply);
+  if(touched&&_activeTab==='rotazione')updatePl(_plRows,_plPage,true);
+}
+async function setTrackPreference(payload,vote,el){
+  const active=el&&el.getAttribute('aria-pressed')==='true';
+  const finalVote=active&&vote!=='clear'?'clear':vote;
+  flash(el);
+  try{
+    const r=await api('POST','/api/track/preference',{...payload,vote:finalVote});
+    if(!(r&&r.ok)){toast(wayOut('mark that song'));return;}
+    toast(preferenceToast(Number(r.score||0),r.persisted));
+    if(_st){
+      const pref=_st.song_preferences||{};
+      _st.song_preferences={...pref,revision:Number(r.preference_revision??pref.revision??0)};
+    }
+    applyPreferenceToCachedRows(r.key,r.score);
+    if(_st&&payload&&payload.now_playing===true){_st.current_track_preference=Number(r.score||0);syncNowPreferenceButtons(_st.current_track_preference);}
+    await refreshFast();
+  }catch(_){toast(offlineMsg());}
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-preference-vote]');
+  if(!btn)return;
+  const payload=preferencePayloadFromButton(btn);
+  const vote=btn.dataset.preferenceVote;
+  if(!payload||!vote)return;
+  event.preventDefault();
+  setTrackPreference(payload,vote,btn);
+});
+
 // ── Clock ──
 function updateClock(){
   const now=new Date();
@@ -2553,8 +2638,12 @@ function updateNow(ns){
   // Ban-now is only meaningful while a song is on air — derive it straight from the
   // segment type the admin already polls (no extra server field needed).
   const banBtn=document.getElementById('banNowBtn');
+  const prefBtns=[...document.querySelectorAll('[data-preference-target="now"]')];
   const onAir=document.getElementById('on-air');
-  if(banBtn)banBtn.style.display=(ns&&segmentTypeKey(ns.type)==='music')?'':'none';
+  const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
+  if(banBtn)banBtn.style.display=isMusic?'':'none';
+  prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
+  syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){
     if(onAir)onAir.classList.add('is-idle');
     const ty=document.getElementById('nowType');
@@ -3140,6 +3229,14 @@ const PLAYLIST_PAGE_SIZE=80;
 let _plRows=[];
 let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
 let _plLoadingMore=false;
+let _plRenderSig='';
+function playlistPreferenceRevision(){
+  return Number(_st?.song_preferences?.revision||0);
+}
+function playlistRenderSignature(page){
+  const p=page||{};
+  return [p.revision??'',playlistPreferenceRevision(),p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
+}
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
@@ -3311,7 +3408,7 @@ function sourceChip(source){
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
 function _plKey(artist,title){return JSON.stringify([(artist||'').trim().toLowerCase(),(title||'').trim().toLowerCase()]);}
-function updatePl(tracks,page){
+function updatePl(tracks,page,force){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
   const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
@@ -3328,6 +3425,9 @@ function updatePl(tracks,page){
   const pageOffset=Number(inPage.offset||0);
   const loadedEnd=Math.min(pageOffset+_plRows.length,total);
   _plPage={...inPage,limit:_plRows.length,has_more:loadedEnd<total};
+  const renderSig=playlistRenderSignature(_plPage);
+  if(!force&&renderSig===_plRenderSig)return;
+  _plRenderSig=renderSig;
   if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const filter=_plFilter.toLowerCase();
@@ -3336,7 +3436,8 @@ function updatePl(tracks,page){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    const prefControls=renderPreferenceControls(idx,Number(t.preference||0));
+    return `<div class="pl-row" draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
