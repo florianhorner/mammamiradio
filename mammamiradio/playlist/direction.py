@@ -11,6 +11,10 @@ from typing import Any
 from mammamiradio.core.config import StationConfig, resolve_model
 from mammamiradio.core.models import StationState, Track
 from mammamiradio.hosts.scriptwriter import _generate_json_response, _sanitize_prompt_data, has_script_llm
+from mammamiradio.playlist.music_admission import (
+    YOUTUBE_ADMISSION_SEARCH_DEPTH,
+    classify_youtube_candidate,
+)
 from mammamiradio.playlist.playlist import normalized_track_key
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,13 @@ class DirectionExpansion:
     @property
     def target_dicts(self) -> list[dict[str, str]]:
         return [target.to_dict() for target in self.targets]
+
+
+@dataclass(frozen=True)
+class DirectionResolution:
+    track: Track | None
+    rejected_track: Track | None = None
+    rejected_reason: str = ""
 
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f<>]+")
@@ -264,23 +275,59 @@ def track_from_direction_search(target: DirectionTarget, metadata: dict[str, Any
     )
 
 
+def resolve_direction_search_results(
+    target: DirectionTarget,
+    metadata_results: list[dict[str, Any]],
+    *,
+    playlist: list[Track] | None = None,
+    pacing: Any | None = None,
+) -> DirectionResolution:
+    """Pick the first admissible search result for a direction target."""
+    first_rejected_track: Track | None = None
+    first_rejected_reason = ""
+    for metadata in metadata_results:
+        track = track_from_direction_search(target, metadata)
+        if track is None:
+            continue
+        if playlist is not None and pacing is not None:
+            verdict = classify_youtube_candidate(track, playlist, pacing, metadata=metadata)
+            if not verdict.accepted:
+                logger.info(
+                    "Direction candidate held out of rotation before download: %s (query=%r reason=%s)",
+                    track.display,
+                    target.query,
+                    verdict.reason,
+                )
+                if first_rejected_track is None:
+                    first_rejected_track = track
+                    first_rejected_reason = verdict.reason
+                continue
+        return DirectionResolution(track=track)
+    return DirectionResolution(track=None, rejected_track=first_rejected_track, rejected_reason=first_rejected_reason)
+
+
 def resolve_direction_tracks_sync(
-    targets: list[DirectionTarget], *, max_targets: int = DEFAULT_DIRECTION_TARGETS
+    targets: list[DirectionTarget],
+    *,
+    max_targets: int = DEFAULT_DIRECTION_TARGETS,
+    playlist: list[Track] | None = None,
+    pacing: Any | None = None,
 ) -> list[Track]:
     """Search yt-dlp metadata for direction targets; blocking, bounded, and best-effort."""
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
     tracks: list[Track] = []
     seen: set[tuple[str, str]] = set()
+    depth = YOUTUBE_ADMISSION_SEARCH_DEPTH if playlist is not None and pacing is not None else 1
     for target in targets[: max(1, max_targets)]:
         try:
-            metadata = search_ytdlp_metadata(target.query, 1)
+            metadata = search_ytdlp_metadata(target.query, depth)
         except Exception:
             logger.debug("Direction target search failed for %s", target.query, exc_info=True)
             metadata = []
         if not metadata:
             continue
-        track = track_from_direction_search(target, metadata[0])
+        track = resolve_direction_search_results(target, metadata, playlist=playlist, pacing=pacing).track
         if track is None:
             continue
         key = normalized_track_key(track)
@@ -292,7 +339,11 @@ def resolve_direction_tracks_sync(
 
 
 async def resolve_direction_tracks(
-    targets: list[DirectionTarget], *, max_targets: int = DEFAULT_DIRECTION_TARGETS
+    targets: list[DirectionTarget],
+    *,
+    max_targets: int = DEFAULT_DIRECTION_TARGETS,
+    playlist: list[Track] | None = None,
+    pacing: Any | None = None,
 ) -> list[Track]:
     """Resolve targets to tracks concurrently and best-effort, bounded by an overall
     timeout. Each per-target yt-dlp search runs off the event loop via
@@ -301,16 +352,17 @@ async def resolve_direction_tracks(
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
     bounded = targets[: max(1, max_targets)]
+    depth = YOUTUBE_ADMISSION_SEARCH_DEPTH if playlist is not None and pacing is not None else 1
 
     async def _resolve_one(target: DirectionTarget) -> Track | None:
         try:
-            metadata = await asyncio.to_thread(search_ytdlp_metadata, target.query, 1)
+            metadata = await asyncio.to_thread(search_ytdlp_metadata, target.query, depth)
         except Exception:
             logger.debug("Direction target search failed for %s", target.query, exc_info=True)
             return None
         if not metadata:
             return None
-        return track_from_direction_search(target, metadata[0])
+        return resolve_direction_search_results(target, metadata, playlist=playlist, pacing=pacing).track
 
     try:
         resolved = await asyncio.wait_for(

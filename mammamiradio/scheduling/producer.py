@@ -40,6 +40,7 @@ from mammamiradio.audio.normalizer import (
     mix_quiet_bleed,
     mix_voice_with_bed,
     mix_voice_with_sting,
+    norm_cache_duration_sec,
     normalize,
     probe_duration_sec,
     reconcile_cached_music,
@@ -80,6 +81,7 @@ from mammamiradio.playlist.downloader import (
     reject_cached_download,
     validate_download,
 )
+from mammamiradio.playlist.music_admission import classify_youtube_candidate, is_youtube_music_candidate
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
@@ -187,9 +189,15 @@ def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
     return config.cache_dir / f"norm_{track.cache_key}_{config.audio.bitrate}k.mp3"
 
 
-def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: str) -> tuple[dict, str]:
+def _norm_cache_bridge_payload(
+    norm_path: Path,
+    bridge_flag: str,
+    station_name: str,
+    *,
+    bitrate_kbps: int | float | None = None,
+) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
-    raw_title = _meta.get("title") or humanize_norm_filename(norm_path.name)
+    raw_title = str(_meta.get("title") or humanize_norm_filename(norm_path.name))
     # Illusion guard: a poisoned sidecar (a foreign "Radio X" station name) must
     # never surface as the now-playing artist/title on the listener UI / Music
     # Assistant provider. Strip the artist (drop to title-only) and prefix-strip
@@ -198,18 +206,30 @@ def _norm_cache_bridge_payload(norm_path: Path, bridge_flag: str, station_name: 
     # path, so every sidecar->metadata source scrubs at its origin instead of one
     # surface getting protected while a sibling bridge leaks.
     title = strip_foreign_station_name(raw_title, station_name, prefix_only=True) or raw_title
-    artist = strip_foreign_station_name(_meta.get("artist", ""), station_name)
+    artist = strip_foreign_station_name(str(_meta.get("artist") or ""), station_name)
+    duration_sec = norm_cache_duration_sec(norm_path, bitrate_kbps=bitrate_kbps)
+    duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
     detail = f"{artist} - {title}" if artist else title
     return (
         {
             "title": title,
             "artist": artist,
+            **duration_fields,
             bridge_flag: True,
             "rescue": True,
             "audio_source": "norm_cache",
         },
         f"{norm_path.name} ({detail})",
     )
+
+
+def _duration_sec_from_metadata(metadata: dict) -> float:
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, bool):
+        return 0.0
+    if isinstance(duration_ms, int | float) and duration_ms > 0:
+        return float(duration_ms) / 1000.0
+    return 0.0
 
 
 def _record_bridge_fire(state: StationState, bridge_type: str, source: str) -> None:
@@ -238,6 +258,7 @@ async def _render_music_track(
     context: str,
     cache_write_required: bool = False,
     background: bool = False,
+    playlist: list[Track] | None = None,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"), background=background)
@@ -248,6 +269,33 @@ async def _render_music_track(
         reject_cached_download(config.cache_dir, track.cache_key, reason)
         logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
         return None
+
+    try:
+        should_probe_actual = audio_path.exists()
+    except OSError:
+        should_probe_actual = False
+    if should_probe_actual and is_youtube_music_candidate(track):
+        actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+        envelope_playlist = (
+            [candidate for candidate in playlist if candidate.cache_key != track.cache_key]
+            if playlist is not None
+            else []
+        )
+        verdict = classify_youtube_candidate(
+            track,
+            envelope_playlist,
+            config.pacing,
+            actual_duration_sec=actual_duration_sec if actual_duration_sec > 0 else None,
+        )
+        if not verdict.accepted:
+            reject_cached_download(config.cache_dir, track.cache_key, verdict.reason)
+            logger.warning(
+                "Skipping %s track held out of rotation (%s): %s",
+                context,
+                verdict.reason,
+                track.display,
+            )
+            return None
 
     norm_cached = _normalized_cache_path(track, config)
     if norm_cached.exists():
@@ -278,7 +326,7 @@ async def _render_music_track(
             norm_path.unlink(missing_ok=True)
             raise
     else:
-        save_track_metadata(norm_cached, track.title, track.artist)
+        save_track_metadata(norm_cached, track.title, track.artist, duration_ms=track.duration_ms)
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
@@ -310,7 +358,12 @@ async def _queue_drain_recovery_bridge(
 
     norm_path = select_norm_cache_rescue(config.cache_dir, state)
     if norm_path:
-        metadata, log_label = _norm_cache_bridge_payload(norm_path, "queue_drain_recovery", config.display_station_name)
+        metadata, log_label = _norm_cache_bridge_payload(
+            norm_path,
+            "queue_drain_recovery",
+            config.display_station_name,
+            bitrate_kbps=config.audio.bitrate,
+        )
         logger.warning(
             "Queue empty during active playback — inserting norm-cache bridge: %s",
             log_label,
@@ -319,6 +372,7 @@ async def _queue_drain_recovery_bridge(
             Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
+                duration_sec=_duration_sec_from_metadata(metadata),
                 metadata=metadata,
                 ephemeral=False,
             )
@@ -626,6 +680,34 @@ def _release_campaign_abandon_in_flight(state: StationState) -> None:
 def _schedule_restart_handoff_spool(state: StationState, config: StationConfig, segment: Segment) -> None:
     if segment.type is not SegmentType.MUSIC:
         return
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("youtube_id"):
+        duration_sec = (
+            segment.duration_sec
+            if segment.duration_sec and segment.duration_sec > 0
+            else _duration_sec_from_metadata(metadata)
+        )
+        track = Track(
+            title=str(metadata.get("title_only") or metadata.get("title") or "Music"),
+            artist=str(metadata.get("artist") or ""),
+            duration_ms=round(duration_sec * 1000) if duration_sec > 0 else 0,
+            youtube_id=str(metadata.get("youtube_id") or ""),
+            album_art=str(metadata.get("album_art") or ""),
+            source="youtube",
+        )
+        verdict = classify_youtube_candidate(
+            track,
+            [candidate for candidate in state.playlist if candidate.cache_key != track.cache_key],
+            config.pacing,
+            actual_duration_sec=duration_sec if duration_sec > 0 else None,
+        )
+        if not verdict.accepted:
+            logger.info(
+                "Skipping restart handoff spool for held music segment: %s (%s)",
+                track.display,
+                verdict.reason,
+            )
+            return
     try:
         candidate = RestartHandoffCandidate.from_segment(segment)
     except Exception:
@@ -1204,6 +1286,7 @@ async def _prefetch_next(
             context="prefetch",
             cache_write_required=True,
             background=True,
+            playlist=state.playlist,
         )
         if rendered is None:
             logger.debug("Prefetch: skipping invalid download for %s", candidate.display)
@@ -1248,7 +1331,13 @@ async def prewarm_first_segment(
             artist_cooldown=config.playlist.artist_cooldown,
         )
         logger.info("Pre-warming first track: %s", track.display)
-        rendered = await _render_music_track(track, config, temp_prefix="music", context="prewarm")
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="prewarm",
+            playlist=state.playlist,
+        )
         if rendered is None:
             return False
         loop = asyncio.get_running_loop()
@@ -1781,13 +1870,17 @@ async def run_producer(
                     norm_path = select_norm_cache_rescue(config.cache_dir, state)
                     if norm_path:
                         metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path, "resume_bridge", config.display_station_name
+                            norm_path,
+                            "resume_bridge",
+                            config.display_station_name,
+                            bitrate_kbps=config.audio.bitrate,
                         )
                         logger.info("Resume bridge: seeding pre-normalized track %s", log_label)
                         if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
+                                duration_sec=_duration_sec_from_metadata(metadata),
                                 metadata=metadata,
                                 ephemeral=False,
                             )
@@ -1832,13 +1925,17 @@ async def run_producer(
                     norm_path = select_norm_cache_rescue(config.cache_dir, state)
                     if norm_path:
                         metadata, log_label = _norm_cache_bridge_payload(
-                            norm_path, "idle_bridge", config.display_station_name
+                            norm_path,
+                            "idle_bridge",
+                            config.display_station_name,
+                            bitrate_kbps=config.audio.bitrate,
                         )
                         logger.info("Idle bridge: seeding pre-normalized track %s", log_label)
                         if await _queue_segment(
                             Segment(
                                 type=SegmentType.MUSIC,
                                 path=norm_path,
+                                duration_sec=_duration_sec_from_metadata(metadata),
                                 metadata=metadata,
                                 ephemeral=False,
                             )
@@ -2117,7 +2214,13 @@ async def run_producer(
                 state.set_gen("finding", "music", f"Finding {track.display}")
                 _gen_ok = False
                 try:
-                    rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+                    rendered = await _render_music_track(
+                        track,
+                        config,
+                        temp_prefix="music",
+                        context="music",
+                        playlist=state.playlist,
+                    )
                     _gen_ok = rendered is not None
                 finally:
                     state.end_gen(ok=_gen_ok)

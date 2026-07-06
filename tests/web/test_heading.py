@@ -285,8 +285,11 @@ async def test_direction_sets_existing_track_heading_and_persists(tmp_path):
     assert state.heading.selection_budget == 1
     assert state.heading.targets == [{"artist": "Britney Spears", "title": "Toxic"}]
     assert read_persisted_heading(tmp_path) == state.heading
-    assert status.json()["heading"]["label"] == "2000s female vocals"
-    assert status.json()["heading"]["selection_remaining"] == 1
+    status_body = status.json()
+    assert status_body["heading"]["label"] == "2000s female vocals"
+    assert status_body["heading"]["tagged_count"] == 1
+    assert status_body["heading"]["selection_remaining"] == 1
+    assert status_body["playlist"][0]["heading_id"] == state.heading.id
 
 
 @pytest.mark.asyncio
@@ -521,6 +524,58 @@ async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path,
     assert "Direction download failed for Fergie – Glamorous" in caplog.text
     assert "RuntimeError: yt-dlp failed" in caplog.text
     assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_direction_resolver_skips_longform_first_hit(tmp_path):
+    from mammamiradio.web.streamer import _resolve_direction_tracks_for_route
+
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    target = DirectionTarget("FKJ", "Tadow")
+    longform = {
+        "title": "FKJ - Tadow DJ Set Full Album",
+        "artist": "FKJ",
+        "duration_ms": 7_200_000,
+        "youtube_id": "set00000001",
+        "album_art": "",
+    }
+    single = {
+        "title": "FKJ - Tadow official audio",
+        "artist": "FKJ",
+        "duration_ms": 240_000,
+        "youtube_id": "song0000001",
+        "album_art": "",
+    }
+
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[longform, single]):
+        tracks = await _resolve_direction_tracks_for_route([target], app.state.station_state, app.state.config)
+
+    assert len(tracks) == 1
+    assert tracks[0].youtube_id == "song0000001"
+    assert list(app.state.station_state.external_add_notices) == []
+
+
+@pytest.mark.asyncio
+async def test_direction_resolver_notices_only_when_all_candidates_are_longform(tmp_path):
+    from mammamiradio.web.streamer import _resolve_direction_tracks_for_route
+
+    app = _make_app(tmp_path)
+    app.state.config.allow_ytdlp = True
+    target = DirectionTarget("FKJ", "Tadow")
+    longform = {
+        "title": "FKJ - Tadow DJ Set Full Album",
+        "artist": "FKJ",
+        "duration_ms": 7_200_000,
+        "youtube_id": "set00000001",
+        "album_art": "",
+    }
+
+    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[longform]):
+        tracks = await _resolve_direction_tracks_for_route([target], app.state.station_state, app.state.config)
+
+    assert tracks == []
+    assert [n.get("reason") for n in app.state.station_state.external_add_notices] == ["longform_audio"]
 
 
 @pytest.mark.asyncio

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mammamiradio.core.config import load_config
-from mammamiradio.core.models import StationState
+from mammamiradio.core.config import PacingSection, load_config
+from mammamiradio.core.models import StationState, Track
 from mammamiradio.playlist.direction import (
     DirectionTarget,
     expand_direction,
@@ -107,6 +107,37 @@ async def test_resolve_direction_tracks_concurrent_dedupes(monkeypatch):
     tracks = await resolve_direction_tracks(targets)
 
     assert {(t.artist, t.title) for t in tracks} == {("Artist One", "Song One"), ("Artist Two", "Song Two")}
+
+
+@pytest.mark.asyncio
+async def test_resolve_direction_tracks_searches_deeper_and_skips_longform(monkeypatch):
+    def fake_search(query: str, max_results: int):
+        assert query == "FKJ Tadow"
+        assert max_results == 5
+        return [
+            {
+                "youtube_id": "set00000001",
+                "title": "FKJ - Tadow DJ Set Full Album",
+                "artist": "FKJ",
+                "duration_ms": 7_200_000,
+            },
+            {
+                "youtube_id": "song0000001",
+                "title": "FKJ - Tadow official audio",
+                "artist": "FKJ",
+                "duration_ms": 240_000,
+            },
+        ]
+
+    monkeypatch.setattr("mammamiradio.playlist.downloader.search_ytdlp_metadata", fake_search)
+
+    tracks = await resolve_direction_tracks(
+        [DirectionTarget("FKJ", "Tadow")],
+        playlist=[Track(title="Base", artist="Base", duration_ms=200_000, youtube_id="base0000001")],
+        pacing=PacingSection(songs_between_banter=2),
+    )
+
+    assert [track.youtube_id for track in tracks] == ["song0000001"]
 
 
 @pytest.mark.asyncio

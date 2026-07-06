@@ -47,35 +47,81 @@ def _load_sidecar(sidecar: Path) -> dict:
     return {}
 
 
-def save_track_metadata(norm_path: Path, title: str, artist: str) -> None:
-    """Persist title+artist alongside a normalized cache file so rescue paths can
-    surface human-readable metadata instead of the raw filename.
+def _positive_finite_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        numeric = float(value)
+        if math.isfinite(numeric) and numeric > 0:
+            return numeric
+    return None
+
+
+def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+    """Persist norm-cache metadata so rescue paths can surface current-track facts.
 
     Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
-    marker found here is tied to the OLD content of an orphaned sidecar (eviction
-    unlinks the .mp3 but leaves the .json), so it is DROPPED — the fresh file must
-    re-earn its marker on the first cache-hit reconcile. Other keys are preserved.
+    marker, or prior duration, found here is tied to the OLD content of an orphaned
+    sidecar (eviction unlinks the .mp3 but leaves the .json), so it is DROPPED.
+    The fresh file must re-earn content-specific markers. Other keys are preserved.
     """
     sidecar = _norm_sidecar_path(norm_path)
     data = _load_sidecar(sidecar)
     data.pop("reconciled_lufs", None)  # content-specific; a fresh file re-earns it
+    data.pop("duration_ms", None)
+    data.pop("duration_sec", None)
+    data.pop("duration_s", None)
     data.update({"title": title, "artist": artist})
+    duration = _positive_finite_number(duration_ms)
+    if duration is not None:
+        data["duration_ms"] = round(duration)
     try:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
-def load_track_metadata(norm_path: Path) -> dict[str, str] | None:
-    """Return {'title', 'artist'} from a norm cache sidecar if present and valid."""
+def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
+    """Return public norm-cache metadata from a valid title/artist sidecar."""
     # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
     # cleanly instead of raising (same failure mode guarded in the reconcile path).
     data = _load_sidecar(_norm_sidecar_path(norm_path))
     title = data.get("title")
     artist = data.get("artist")
     if isinstance(title, str) and isinstance(artist, str) and title and artist:
-        return {"title": title, "artist": artist}
+        metadata: dict[str, str | int] = {"title": title, "artist": artist}
+        duration_ms = _positive_finite_number(data.get("duration_ms"))
+        if duration_ms is not None:
+            metadata["duration_ms"] = round(duration_ms)
+        return metadata
     return None
+
+
+def norm_cache_duration_sec(norm_path: Path, *, bitrate_kbps: int | float | None = None) -> float:
+    """Return a non-blocking duration estimate for a normalized cache file.
+
+    Rescue paths cannot afford an ffprobe call before audio starts. Prefer the
+    sidecar duration for freshly normalized cache files; older sidecars degrade to
+    a constant-bitrate estimate from file size and the station bitrate.
+    """
+    data = _load_sidecar(_norm_sidecar_path(norm_path))
+    duration_ms = _positive_finite_number(data.get("duration_ms"))
+    if duration_ms is not None:
+        return duration_ms / 1000.0
+    for key in ("duration_sec", "duration_s"):
+        duration_sec = _positive_finite_number(data.get(key))
+        if duration_sec is not None:
+            return duration_sec
+    bitrate = _positive_finite_number(bitrate_kbps)
+    if bitrate is None:
+        return 0.0
+    try:
+        size_bytes = norm_path.stat().st_size
+    except OSError:
+        return 0.0
+    if size_bytes <= 0:
+        return 0.0
+    return max((size_bytes * 8) / (bitrate * 1000), 0.1)
 
 
 def humanize_norm_filename(name: str) -> str:
@@ -1403,35 +1449,65 @@ def generate_transition_sting(
     to_type_name: str,
     output_path: Path,
     motif_notes: list[int] | None = None,
+    *,
+    variant: int = 0,
 ) -> Path:
     """Generate a station-branded transition sting for music/speech boundaries."""
     from_name = from_type_name.strip().lower()
     to_name = to_type_name.strip().lower()
     speech_types = {"banter", "news_flash", "ad", "station_id"}
     notes = motif_notes or [523, 659, 784, 1047]
+    variant_index = max(0, int(variant)) % 3
+    rotated_notes = notes[1:] + notes[:1] if len(notes) > 1 else notes
 
     tmp = Path(tempfile.mkdtemp())
     parts: list[Path] = []
     try:
         if from_name == "music" and to_name in speech_types:
-            sweep_path = tmp / "transition_sweep.mp3"
-            motif_path = tmp / "transition_motif.mp3"
-            generate_sweep(sweep_path, duration_sec=0.8)
-            generate_station_id_bed(motif_path, 1.2, notes)
-            parts = [sweep_path, motif_path]
+            if variant_index == 0:
+                sweep_path = tmp / "transition_sweep.mp3"
+                motif_path = tmp / "transition_motif.mp3"
+                generate_sweep(sweep_path, duration_sec=0.8)
+                generate_station_id_bed(motif_path, 1.2, notes)
+                parts = [sweep_path, motif_path]
+            elif variant_index == 1:
+                sweep_path = tmp / "transition_sweep_short.mp3"
+                motif_path = tmp / "transition_motif_reverse.mp3"
+                generate_sweep(sweep_path, duration_sec=0.55)
+                generate_station_id_bed(motif_path, 1.0, list(reversed(notes)))
+                parts = [sweep_path, motif_path]
+            else:
+                motif_path = tmp / "transition_motif_rotated.mp3"
+                bumper_path = tmp / "transition_bumper_short.mp3"
+                generate_station_id_bed(motif_path, 0.65, rotated_notes)
+                generate_bumper_jingle(bumper_path, 0.45)
+                parts = [motif_path, bumper_path]
         elif from_name in speech_types and to_name == "music":
-            motif_path = tmp / "transition_motif.mp3"
-            bumper_path = tmp / "transition_bumper.mp3"
-            generate_station_id_bed(motif_path, 0.5, list(reversed(notes)))
-            generate_bumper_jingle(bumper_path, 0.5)
-            parts = [motif_path, bumper_path]
+            if variant_index == 0:
+                motif_path = tmp / "transition_motif.mp3"
+                bumper_path = tmp / "transition_bumper.mp3"
+                generate_station_id_bed(motif_path, 0.5, list(reversed(notes)))
+                generate_bumper_jingle(bumper_path, 0.5)
+                parts = [motif_path, bumper_path]
+            elif variant_index == 1:
+                bumper_path = tmp / "transition_bumper_open.mp3"
+                motif_path = tmp / "transition_motif_answer.mp3"
+                generate_bumper_jingle(bumper_path, 0.7)
+                generate_station_id_bed(motif_path, 0.45, notes)
+                parts = [bumper_path, motif_path]
+            else:
+                sweep_path = tmp / "transition_sweep_out.mp3"
+                bumper_path = tmp / "transition_bumper_tight.mp3"
+                generate_sweep(sweep_path, duration_sec=0.45)
+                generate_bumper_jingle(bumper_path, 0.55)
+                parts = [sweep_path, bumper_path]
         else:
             logger.warning(
                 "generate_transition_sting: unsupported pair %s->%s, using sweep fallback",
                 from_type_name,
                 to_type_name,
             )
-            generate_sweep(output_path, duration_sec=1.0)
+            generate_sweep(output_path, duration_sec=[1.0, 0.65, 0.45][variant_index])
             return output_path
 
         concat_files(parts, output_path, silence_ms=0, loudnorm=False)
@@ -1588,12 +1664,14 @@ def crossfade_voice_over_music(
     tail_seconds: float = 8.0,
     voice_volume: float = 1.0,
     music_fade_volume: float = 0.5,
+    voice_delay_ms: int = 150,
 ) -> Path:
     """Overlay voice on the tail of a music track, fading music down underneath.
 
     Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
     and mixes the voice on top. The result is a "DJ talking over the outro" effect.
     """
+    delay_ms = max(0, int(voice_delay_ms))
     cmd = [
         "ffmpeg",
         "-y",
@@ -1605,7 +1683,7 @@ def crossfade_voice_over_music(
         str(voice_path),
         "-filter_complex",
         f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
-        f"[1:a]volume={voice_volume},adelay=1500|1500[voice];"
+        f"[1:a]volume={voice_volume},adelay={delay_ms}|{delay_ms}[voice];"
         f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
         f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",

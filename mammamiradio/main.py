@@ -111,8 +111,12 @@ async def _restore_direction_targets_background(app_state, heading_id: str, raw_
         targets = target_dicts_to_targets(raw_targets)
         if not targets:
             return
-        resolved_tracks = await resolve_direction_tracks(targets)
         state = app_state.station_state
+        resolved_tracks = await resolve_direction_tracks(
+            targets,
+            playlist=list(state.playlist),
+            pacing=app_state.config.pacing,
+        )
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
         download_tracks = []
         async with app_state.source_switch_lock:

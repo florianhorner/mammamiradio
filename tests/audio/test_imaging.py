@@ -46,11 +46,14 @@ def test_pick_stinger_music_to_speech_falls_back_to_synthetic(tmp_path):
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing")
 
-    with patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate:
+    with (
+        patch("mammamiradio.audio.imaging.next_synth_variant", return_value=2),
+        patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate,
+    ):
         result = lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out)
 
     assert result == out
-    mock_generate.assert_called_once_with("music", "news_flash", out, motif)
+    mock_generate.assert_called_once_with("music", "news_flash", out, motif, variant=2)
 
 
 def test_pick_stinger_speech_to_music_falls_back_to_synthetic(tmp_path):
@@ -58,32 +61,45 @@ def test_pick_stinger_speech_to_music_falls_back_to_synthetic(tmp_path):
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing")
 
-    with patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate:
+    with (
+        patch("mammamiradio.audio.imaging.next_synth_variant", return_value=1),
+        patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate,
+    ):
         result = lib.pick_stinger(SegmentType.BANTER, SegmentType.MUSIC, out)
 
     assert result == out
-    mock_generate.assert_called_once_with("banter", "music", out, motif)
+    mock_generate.assert_called_once_with("banter", "music", out, motif, variant=1)
 
 
-def test_pick_stinger_cache_reuses_synthetic_render(tmp_path):
+def test_pick_stinger_cache_rotates_bounded_synthetic_variant_pool(tmp_path):
     cache_dir = tmp_path / "cache"
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing", cache_dir=cache_dir)
     out_a = tmp_path / "transition_a.mp3"
     out_b = tmp_path / "transition_b.mp3"
+    out_c = tmp_path / "transition_c.mp3"
+    out_d = tmp_path / "transition_d.mp3"
 
-    def _generate(_from_name, _to_name, output_path, _notes):
-        output_path.write_bytes(b"sting")
+    def _generate(_from_name, _to_name, output_path, _notes, *, variant=0):
+        output_path.write_bytes(f"sting-{variant}".encode())
         return output_path
 
-    with patch("mammamiradio.audio.imaging.generate_transition_sting", side_effect=_generate) as mock_generate:
+    with (
+        patch("mammamiradio.audio.imaging.next_synth_variant", side_effect=[0, 1, 2, 0]),
+        patch("mammamiradio.audio.imaging.generate_transition_sting", side_effect=_generate) as mock_generate,
+    ):
         assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_a) == out_a
         assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_b) == out_b
+        assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_c) == out_c
+        assert lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out_d) == out_d
 
-    assert mock_generate.call_count == 1
-    assert out_a.read_bytes() == b"sting"
-    assert out_b.read_bytes() == b"sting"
-    assert len(list(cache_dir.glob("synth_transition_sting_*.mp3"))) == 1
+    assert mock_generate.call_count == 3
+    assert out_a.read_bytes() == b"sting-0"
+    assert out_b.read_bytes() == b"sting-1"
+    assert out_c.read_bytes() == b"sting-2"
+    assert out_d.read_bytes() == b"sting-0"
+    assert len(list(cache_dir.glob("synth_transition_sting_*.mp3"))) == 3
+    assert [call.kwargs["variant"] for call in mock_generate.call_args_list] == [0, 1, 2]
 
 
 def test_pick_talk_bed_uses_prerecorded_bed_before_source_track(tmp_path):

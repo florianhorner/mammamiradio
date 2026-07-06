@@ -332,25 +332,46 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
     """
     from mammamiradio.core.models import Track
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
+    from mammamiradio.playlist.music_admission import YOUTUBE_ADMISSION_SEARCH_DEPTH, classify_youtube_candidate
     from mammamiradio.web.streamer import _commit_external_download, _safe_external_album_art
 
     state = app_state.station_state
     query = req.get("song_query") or req.get("message") or ""
     try:
         loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(_listener_dl_executor, search_ytdlp_metadata, query, 1)
+        results = await loop.run_in_executor(
+            _listener_dl_executor,
+            search_ytdlp_metadata,
+            query,
+            YOUTUBE_ADMISSION_SEARCH_DEPTH,
+        )
         if not results:
             req["song_error"] = True
             logger.info("Listener song request returned no results: request_id=%s", req.get("request_id"))
             return
-        meta = results[0]
-        track = Track(
-            title=meta["title"],
-            artist=meta["artist"],
-            duration_ms=meta["duration_ms"],
-            youtube_id=meta["youtube_id"],
-            album_art=_safe_external_album_art(meta.get("album_art")),
-        )
+        track: Track | None = None
+        for meta in results:
+            candidate = Track(
+                title=meta["title"],
+                artist=meta["artist"],
+                duration_ms=meta["duration_ms"],
+                youtube_id=meta["youtube_id"],
+                album_art=_safe_external_album_art(meta.get("album_art")),
+            )
+            verdict = classify_youtube_candidate(candidate, state.playlist, app_state.config.pacing, metadata=meta)
+            if verdict.accepted:
+                track = candidate
+                break
+            logger.info(
+                "Listener song candidate held out of rotation before download: request_id=%s display=%s reason=%s",
+                req.get("request_id"),
+                candidate.display,
+                verdict.reason,
+            )
+        if track is None:
+            req["song_error"] = True
+            logger.info("Listener song request returned no single-track result: request_id=%s", req.get("request_id"))
+            return
         status = await _commit_external_download(
             track,
             app_state,
@@ -368,12 +389,13 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
         )
         # "pinned" or "queued" both mean the track landed in the playlist for this
         # request. "banned" means the operator blocklisted the song — a terminal
-        # answer, so mark song_error rather than leaving the listener spinning on
-        # "searching…" forever. "dropped" means a source switch / consumption
-        # discarded it (a silent no-op, the request is gone anyway).
-        if status == "banned":
+        # answer. "held" means the downloaded file proved to be long-form or
+        # non-rotation audio. Both mark song_error rather than leaving the listener
+        # spinning on "searching…" forever. "dropped" means a source switch /
+        # consumption discarded it (a silent no-op, the request is gone anyway).
+        if status in {"banned", "held"}:
             req["song_error"] = True
-            logger.info("Listener song request refused — song is banned: %s", track.display)
+            logger.info("Listener song request refused (%s): %s", status, track.display)
         elif status != "dropped":
             req["song_found"] = True
             req["song_track"] = track.display

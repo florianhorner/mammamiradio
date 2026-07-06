@@ -21,6 +21,7 @@ from mammamiradio.audio.normalizer import (
     mix_oneshot_sfx,
     mix_quiet_bleed,
     mix_with_bed,
+    norm_cache_duration_sec,
     normalize,
     save_track_metadata,
 )
@@ -695,6 +696,15 @@ def test_save_and_load_track_metadata_roundtrip(tmp_path):
     assert meta == {"title": "SOGNO AMERICANO", "artist": "Artie 5ive"}
 
 
+def test_save_and_load_track_metadata_roundtrip_with_duration(tmp_path):
+    norm = tmp_path / "norm_artie_5ive_sogno_americano_192k.mp3"
+    norm.write_bytes(b"pretend mp3")
+    save_track_metadata(norm, title="SOGNO AMERICANO", artist="Artie 5ive", duration_ms=204_192)
+    meta = load_track_metadata(norm)
+    assert meta == {"title": "SOGNO AMERICANO", "artist": "Artie 5ive", "duration_ms": 204_192}
+    assert norm_cache_duration_sec(norm, bitrate_kbps=192) == pytest.approx(204.192)
+
+
 def test_load_track_metadata_missing_sidecar_returns_none(tmp_path):
     norm = tmp_path / "norm_missing_192k.mp3"
     norm.write_bytes(b"pretend mp3")
@@ -725,12 +735,33 @@ def test_save_track_metadata_drops_stale_reconciled_marker(tmp_path):
     norm = tmp_path / "norm_merge_192k.mp3"
     norm.write_bytes(b"pretend mp3")
     sidecar = tmp_path / "norm_merge_192k.mp3.json"
-    sidecar.write_text(json.dumps({"reconciled_lufs": -16.0, "stray": "keep"}))
+    sidecar.write_text(
+        json.dumps(
+            {
+                "duration_ms": 123000,
+                "duration_sec": 123.0,
+                "duration_s": 123.0,
+                "reconciled_lufs": -16.0,
+                "stray": "keep",
+            }
+        )
+    )
     save_track_metadata(norm, title="T", artist="A")
     data = json.loads(sidecar.read_text())
     assert "reconciled_lufs" not in data  # stale marker dropped
+    assert "duration_ms" not in data  # old-content duration dropped unless restamped
+    assert "duration_sec" not in data
+    assert "duration_s" not in data
     assert data["title"] == "T" and data["artist"] == "A"
     assert data["stray"] == "keep"  # unrelated keys preserved
+
+
+def test_norm_cache_duration_estimates_older_sidecar_from_size_and_bitrate(tmp_path):
+    norm = tmp_path / "norm_old_sidecar_192k.mp3"
+    norm.write_bytes(b"x" * 24_000)
+    save_track_metadata(norm, title="Old", artist="Cache")
+    assert load_track_metadata(norm) == {"title": "Old", "artist": "Cache"}
+    assert norm_cache_duration_sec(norm, bitrate_kbps=192) == pytest.approx(1.0)
 
 
 def test_load_track_metadata_non_utf8_returns_none(tmp_path):

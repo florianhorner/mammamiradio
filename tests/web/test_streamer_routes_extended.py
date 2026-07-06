@@ -617,6 +617,34 @@ async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_external_track_holds_longform_before_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(
+                "/api/playlist/add-external",
+                json={
+                    "youtube_id": "dQw4w9WgXcQ",
+                    "title": "Two Hour DJ Set",
+                    "artist": "The Selector",
+                    "duration_ms": 7_200_000,
+                    "album_art": "",
+                },
+            )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "longform_audio"
+    assert "single-track" in body["message"]
+    download_mock.assert_not_called()
+    assert not getattr(app.state, "background_tasks", set())
+
+
+@pytest.mark.asyncio
 async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path):
     """On an iTunes miss the track keeps its thumbnail rather than going blank —
     protects the now-playing tile from regressing to no image."""
@@ -679,6 +707,71 @@ async def test_listener_request_upgrades_thumbnail_to_cover(tmp_path):
         await _download_listener_song(req, app.state, state.source_revision)
     assert state.pinned_track is not None
     assert state.pinned_track.album_art == "https://is1.mzstatic.com/600x600bb.jpg"
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_holds_lied_actual_duration_and_purges(tmp_path):
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"long audio placeholder")
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=7_200.0),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "held"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    assert raw_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp_path):
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "pinned"
+    assert state.pinned_track is track
+    assert track in state.playlist
+    assert raw_path.exists() is True
 
 
 @pytest.mark.asyncio
@@ -2449,6 +2542,38 @@ async def test_download_listener_song_no_results_marks_error(tmp_path):
     assert req["song_error"] is True
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_longform_result_marks_error_without_download(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"song_query": "two hour set", "message": "two hour set", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+            return_value=[
+                {
+                    "title": "Two Hour DJ Set",
+                    "artist": "The Selector",
+                    "duration_ms": 7_200_000,
+                    "youtube_id": "set00000001",
+                    "album_art": "",
+                }
+            ],
+        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    download_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

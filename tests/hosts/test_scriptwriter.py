@@ -837,14 +837,286 @@ async def test_write_banter_guest_gate_fallback_uses_normal_mode_language(config
 
 
 @pytest.mark.asyncio
+async def test_write_banter_normal_mode_retries_all_italian_response(config, state):
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    italian_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": {"text": "rejected all-Italian room bit", "punch": 5},
+    }
+    english_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "That outro had teeth, mamma mia, and now we keep the room moving.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Exactly. A little Italian sparkle, but the facts stay in English.",
+            },
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, english_response],
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [text for _, text in result] == [
+        "That outro had teeth, mamma mia, and now we keep the room moving.",
+        "Exactly. A little Italian sparkle, but the facts stay in English.",
+    ]
+    assert commit is None
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+    assert list(state.running_jokes) == []
+    assert state.pending_verbal_gag is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_falls_back_after_all_italian_repair(config, state):
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    italian_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, italian_response],
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [text for _, text in result] == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
+    assert commit is None
+    assert mock_generate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_write_banter_super_italian_accepts_all_italian_response(config, state):
+    config.super_italian_mode = True
+    regulars = _regular_hosts(config)
+    italian_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=italian_response,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [text for _, text in result] == [
+        "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+        "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+    ]
+    assert commit is None
+    assert mock_generate.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_normal_mode_retries_all_italian_response(config, state):
+    config.super_italian_mode = False
+    italian_response = {
+        "text": "Questa notizia arriva adesso e la casa respira piano mentre la musica continua senza fretta.",
+        "intro_jingle": "notizie flash",
+    }
+    english_response = {
+        "text": "This bulletin lands cleanly, mamma mia, and then the music keeps moving.",
+        "intro_jingle": "notizie flash",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[italian_response, english_response],
+    ) as mock_generate:
+        _host, text, category = await write_news_flash(state, config, category="breaking")
+
+    assert text == "This bulletin lands cleanly, mamma mia, and then the music keeps moving."
+    assert category == "breaking"
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_normal_mode_fallback_after_all_italian_repair_is_english(config, state):
+    config.super_italian_mode = False
+    italian_response = {
+        "text": "Questa notizia arriva adesso e la casa respira piano mentre la musica continua senza fretta.",
+        "intro_jingle": "notizie flash",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[italian_response, italian_response],
+    ):
+        _host, text, category = await write_news_flash(state, config, category="breaking")
+
+    assert "breaking news" in text.lower()
+    assert "notizia" not in text.lower()
+    assert category == "breaking"
+
+
+@pytest.mark.asyncio
+async def test_write_transition_normal_mode_retries_all_italian_response(config, state):
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="Volare", artist="Domenico Modugno", duration_ms=180000, spotify_id="v1")]
+    italian_response = {"text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma."}
+    english_response = {"text": "That landing was clean, mamma mia, and now we keep moving."}
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, english_response],
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        _host, text = await write_transition(state, config, song_cues=[])
+
+    assert text == "That landing was clean, mamma mia, and now we keep moving."
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is_english(config, state):
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="Volare", artist="Domenico Modugno", duration_ms=180000, spotify_id="v1")]
+    italian_response = {"text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma."}
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, italian_response],
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        _host, text = await write_transition(state, config, song_cues=[])
+
+    assert text == "All right..."
+
+
+@pytest.mark.asyncio
+async def test_write_ad_normal_mode_retries_all_italian_voice_parts(config, state):
+    config.super_italian_mode = False
+    brand = AdBrand(name="TestBrand", tagline="Il meglio del meglio", category="food")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+    italian_response = {
+        "parts": [
+            {
+                "type": "voice",
+                "text": "Questa offerta arriva adesso e la casa respira piano mentre tutti restano qui.",
+            }
+        ],
+        "summary": "Rejected all-Italian ad",
+    }
+    english_response = {
+        "parts": [
+            {
+                "type": "voice",
+                "text": "This offer lands fast, mamma mia, and then the room keeps smiling.",
+            }
+        ],
+        "summary": "English-led ad",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[italian_response, english_response],
+    ) as mock_generate:
+        result = await write_ad(brand, voices, state, config)
+
+    voice_lines = [part.text for part in result.parts if part.type == "voice"]
+    assert "This offer lands fast, mamma mia, and then the room keeps smiling." in voice_lines
+    assert result.summary == "English-led ad"
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english(config, state):
+    config.super_italian_mode = False
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+    italian_response = {
+        "parts": [
+            {
+                "type": "voice",
+                "text": "Questa offerta arriva adesso e la casa respira piano mentre tutti restano qui.",
+            }
+        ],
+        "summary": "Rejected all-Italian ad",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[italian_response, italian_response],
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+    assert result.summary == "Fallback ad for FallbackBrand"
+
+
+@pytest.mark.asyncio
 async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(config, state):
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
             "lines": [
-                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Nuovo ascoltatore, entro io."},
-                {"host": regulars[0].name, "text": "No, lo salutiamo noi."},
-                {"host": regulars[1].name, "text": "Con calma, senza ospiti."},
+                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "New listener, I enter now."},
+                {"host": regulars[0].name, "text": "No, we welcome them ourselves, piano piano."},
+                {"host": regulars[1].name, "text": "Exactly. Guest mic closed, warm room open."},
             ],
             "new_joke": None,
         }
@@ -862,8 +1134,8 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
     assert "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!" in prompt
     assert "GUEST HOST GATE" in prompt
     assert [(host.name, text) for host, text in result] == [
-        (regulars[0].name, "No, lo salutiamo noi."),
-        (regulars[1].name, "Con calma, senza ospiti."),
+        (regulars[0].name, "No, we welcome them ourselves, piano piano."),
+        (regulars[1].name, "Exactly. Guest mic closed, warm room open."),
     ]
     assert commit is None
 
@@ -3420,10 +3692,26 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     assert "Fallback" in result.summary
     assert len(result.parts) >= 1
     assert result.parts[0].type == "voice"
+    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
 
 
 @pytest.mark.asyncio
 async def test_write_ad_no_llm_returns_minimal_script(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    result = await write_ad(brand, voices, state, config)
+
+    assert result.brand == "FallbackBrand"
+    assert result.summary == "Sempre il top"
+    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+
+
+@pytest.mark.asyncio
+async def test_write_ad_no_llm_super_italian_uses_italian_tagline(config, state):
+    config.super_italian_mode = True
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
@@ -3851,15 +4139,13 @@ async def test_write_news_flash_english_station_without_english_arc_falls_back(c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("language", "expected", "forbidden"),
-    [("it", "ultima ora", "breaking news"), ("en", "breaking news", "ultima ora")],
+    ("super_italian", "expected", "forbidden"),
+    [(True, "notizia", "breaking news"), (False, "breaking news", "notizia")],
 )
-async def test_write_news_flash_no_llm_fallback_is_localized(config, state, language, expected, forbidden):
-    """The no-LLM stock line follows the station language: Italian gets the Italian
-    line, every other station gets the English one (#627 — an English station must
-    never air an Italian fallback)."""
+async def test_write_news_flash_no_llm_fallback_follows_spoken_mode(config, state, super_italian, expected, forbidden):
+    """The no-LLM stock line follows the live spoken mode, not just station language."""
     config.anthropic_api_key = ""  # force the no-LLM fallback path
-    config.station.language = language
+    config.super_italian_mode = super_italian
 
     _host, text, _category = await write_news_flash(state, config)
 
@@ -3869,13 +4155,14 @@ async def test_write_news_flash_no_llm_fallback_is_localized(config, state, lang
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("language", "expected"),
-    [("it", "ultima ora"), ("en", "breaking news"), ("de", "breaking news")],
+    ("super_italian", "expected", "forbidden"),
+    [(True, "notizia", "breaking news"), (False, "breaking news", "notizia")],
 )
-async def test_write_news_flash_exception_fallback_is_localized(config, state, language, expected):
-    """The EXCEPTION fallback path is localized too (not just the no-LLM path), and a
-    third language (de) falls back to the English line, never Italian."""
-    config.station.language = language
+async def test_write_news_flash_exception_fallback_follows_spoken_mode(
+    config, state, super_italian, expected, forbidden
+):
+    """The EXCEPTION fallback path is mode-driven too, matching no-LLM fallback."""
+    config.super_italian_mode = super_italian
 
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
@@ -3885,6 +4172,7 @@ async def test_write_news_flash_exception_fallback_is_localized(config, state, l
         _host, text, category = await write_news_flash(state, config, category="sports")
 
     assert expected in text.lower()
+    assert forbidden not in text.lower()
     assert category == "sports"
 
 
@@ -3938,6 +4226,16 @@ async def test_write_transition_returns_host_and_text(config, state):
 @pytest.mark.asyncio
 async def test_write_transition_no_key_returns_fallback(config, state):
     config.anthropic_api_key = ""
+    for next_seg, expected in [("banter", "All right..."), ("ad", "And now..."), ("news_flash", "Attention...")]:
+        host, text = await write_transition(state, config, next_segment=next_seg)
+        assert isinstance(host, HostPersonality)
+        assert text == expected
+
+
+@pytest.mark.asyncio
+async def test_write_transition_no_key_super_italian_returns_italian_fallback(config, state):
+    config.super_italian_mode = True
+    config.anthropic_api_key = ""
     for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
         host, text = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
@@ -3958,7 +4256,7 @@ async def test_write_transition_api_exception_returns_fallback(config, state):
         host, text = await write_transition(state, config, next_segment="banter")
 
     assert isinstance(host, HostPersonality)
-    assert text == "Allora..."
+    assert text == "All right..."
 
 
 @pytest.mark.asyncio

@@ -787,6 +787,63 @@ async def test_run_playback_loop_timeout_uses_norm_cache_at_first_byte_grace(tmp
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_norm_cache_rescue_status_exposes_progress_duration(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+
+    rescue_path = tmp_path / "norm_jamendo_jamendo_1131121_192k.mp3"
+    rescue_path.write_bytes(b"x" * 1_048_576)
+    (tmp_path / "norm_jamendo_jamendo_1131121_192k.mp3.json").write_text(
+        '{"title": "Miss Understanding", "artist": "Sam Brown"}'
+    )
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5],
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not rescue from norm cache")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_streaming = app.state.station_state.now_streaming
+    assert now_streaming["duration_sec"] > 0
+    assert now_streaming["metadata"]["duration_ms"] == round(now_streaming["duration_sec"] * 1000)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_status = (await client.get("/public-status")).json()
+        admin_status = (await client.get("/status")).json()
+
+    for body in (public_status, admin_status):
+        assert body["now_streaming"]["metadata"]["audio_source"] == "fallback_norm_cache"
+        assert body["now_streaming"]["duration_sec"] > 0
+        assert body["current_duration_sec"] > 0
+        assert isinstance(body["current_progress_sec"], int | float)
+
+    assert public_status["current_duration_sec"] == admin_status["current_duration_sec"]
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog):
     """When a norm-cache file has a `.json` sidecar, the rescue path should use
     its title+artist instead of the humanized filename fallback (Item 20)."""
