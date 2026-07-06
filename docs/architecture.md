@@ -398,13 +398,21 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
-Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
+Once playback is running, the producer's recovery layers (packaged recovery clip, last-known-good music recycle, emergency tone, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
 ### Operator song blocklist
 
 Because every source above is re-fetched fresh on startup, an in-memory "remove" would reappear after a restart. The operator blocklist makes a ban durable. It persists to `cache_dir/blocklist.json` as `{serialized_key: {display, banned_by, banned_at}}`, keyed by the single canonical identity `normalized_track_key(track) = (artist.strip().lower(), title.strip().lower())` (the same key used for playlist dedup, so a ban holds across sources even when the per-source track id differs). The store is best-effort and corrupt-tolerant: a missing or malformed file loads as empty and never raises into the audio path; writes are atomic (`tmp` + `os.replace`).
 
 Enforcement is a single primitive, `playlist.filter_blocklisted(tracks, blocklist)`, applied at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and the external/listener download commit (`_commit_external_download`). The norm-cache **rescue** path is a separate doorway — it serves cached audio directly without passing through `state.playlist`, so `select_norm_cache_rescue` (in `audio/norm_cache.py`) drops blocklisted cache files itself, matching each file's `{title, artist}` sidecar against `state.blocklist`; a banned song never re-airs even when the queue starves and recovery kicks in (if every cache file is banned the rescue degrades to the next layer — canned clip / forced banter — never to a banned song). The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, empty-queue bridge to forced music, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge reads the post-purge queue depth and still force-bridges to music if the ban emptied the queue — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
+
+### Operator song preferences
+
+Operator song preferences are soft taste hints, not bans. They persist to `cache_dir/song_preferences.json` as `{serialized_key: {score, display, updated_at, updated_by}}`, keyed by the same `normalized_track_key(track)` identity as the blocklist. Scores are `1` for thumbs-up and `-1` for thumbs-down; clearing a preference removes the row. Loading is missing/corrupt tolerant and writes are best-effort atomic (`tmp` + `os.replace`) so a bad preference file cannot stop audio.
+
+`StationState.song_preferences` is loaded at startup and exposed only on admin JSON. `POST /api/track/preference` accepts `vote: "up"|"down"|"clear"` plus exactly one target: `now_playing: true`, `index`, or `key: [artist, title]`. The route only mutates `song_preferences`: it does not call skip, purge queue entries, remove tracks, or change `state.blocklist`. `GET /api/track/preferences` lists the full rows and counts for the admin panel. `/status` includes only the current track's preference and playlist row scores; the full row list stays behind `/api/track/preferences`. `/public-status` and the Home Assistant now-playing APIs intentionally omit preferences.
+
+Selection applies preference multipliers after hard eligibility filters inside `StationState.select_next_track()`: thumbs-up `x2.5`, thumbs-down `x0.15`, neutral `x1.0`. Pinned tracks, Move Next, listener requests, cooldowns, heading steering, Record Hunt, and bans keep their existing authority; preferences only bias among tracks already eligible for weighted selection, and the active Record Hunt heading lift is not suppressed by an older thumbs-down. The norm-cache rescue path stays preference-free on purpose: after dropping blocklisted files and avoiding recent/current identities when possible, it picks the simplest safe cache bridge so recovery remains fast.
 
 ## TTS architecture
 
@@ -453,7 +461,7 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
-- `ha_context.py` polls the Home Assistant REST API state snapshot and filters it through a default-deny privacy layer
+- `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
 - `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
 - allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
@@ -497,7 +505,7 @@ When a HA timer fires, the station immediately interrupts playback with a pissed
 ```text
 HA timer fires (timer.xyz → idle, with recent finished_at)
     ↓
-ha_context.py: lightweight 5s poll detects idle transition (separate from 60s full fetch).
+ha_context.py: lightweight 5s poll detects idle transition (separate from the default 300s full-state prompt-context fetch).
     Cancel/reset filter: only fire when finished_at is set and within the last 30s.
     ↓
 check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
@@ -544,7 +552,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, and station mode |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -552,6 +560,8 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
+| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; never skips, purges, or mutates the blocklist |
+| `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |
 | `/api/purge` | POST | Admin | Remove queued segments |
 | `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
 | `/api/playlist/remove` | POST | Admin | Remove track by index |
@@ -583,7 +593,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
-| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` |
+| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying its current `preference` score |
 | `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
 | `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
 | `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
@@ -615,7 +625,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions first try canned recovery audio, then a bounded branded recovery sweeper, then a short silence segment only if recovery audio cannot be rendered in time
+- producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks
@@ -624,6 +634,8 @@ This repo is biased toward "keep the station on air."
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
+
+**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. `mammamiradio/playlist/downloader.py`'s `_generate_silence()` (writing `_silence_*.mp3` placeholders when a track download fails) is a similar out-of-scope path. Both are deliberately out of scope for the producer-exception rescue ladder above; closing them is separate follow-up work.
 
 ## File map
 

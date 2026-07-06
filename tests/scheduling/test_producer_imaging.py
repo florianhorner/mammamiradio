@@ -282,8 +282,8 @@ async def test_banter_talk_bed_severed_after_ad_no_stale_bleed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_silence_after_banter_does_not_get_transition_stinger(tmp_path):
-    """Final silence after recovery-sweeper failure stays a rescue, not a transition."""
+async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(tmp_path):
+    """Emergency tone after recovery-sweeper failure stays a rescue, not a transition."""
     previous_banter = tmp_path / "previous_banter.mp3"
     previous_banter.write_bytes(b"voice")
     state = _make_state()
@@ -292,14 +292,20 @@ async def test_error_recovery_silence_after_banter_does_not_get_transition_sting
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     queue.put_nowait(Segment(type=SegmentType.BANTER, path=previous_banter, metadata={"title": "Banter"}))
 
-    def _fake_silence(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"silence")
+    def _fake_tone(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"tone")
         return path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=_fake_silence),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(
             f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
@@ -316,8 +322,9 @@ async def test_error_recovery_silence_after_banter_does_not_get_transition_sting
     queue.get_nowait()  # previous banter
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
-    assert seg.metadata.get("error") == "network down"
-    assert seg.path.name.startswith("silence_")
+    assert seg.metadata.get("error_recovery") is True
+    assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name.startswith("recovery_tone_")
     mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 
@@ -343,8 +350,13 @@ async def test_error_recovery_sweeper_does_not_get_transition_stinger(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")),
+        patch(
+            f"{PRODUCER_MODULE}.generate_silence",
+            side_effect=AssertionError("silence should never be a producer recovery fallback"),
+            create=True,
+        ) as mock_silence,
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
         patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
@@ -358,6 +370,7 @@ async def test_error_recovery_sweeper_does_not_get_transition_stinger(tmp_path):
     assert seg.type == SegmentType.SWEEPER
     assert seg.path == recovery_path
     assert seg.metadata.get("title") == "Recovery sweeper"
+    mock_silence.assert_not_called()
     mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 

@@ -6,13 +6,24 @@
 
 - **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
 
+## 2.16.1 - 2026-07-06
+
 ### Fixed
 
+- **Recovery now uses real packaged audio instead of generated silence.** If the producer hits a broad failure or the queue drains after an operator clears the pool, the add-on now reaches for a committed recovery clip, then normalized cached music, then a branded recovery sweeper, then an emergency tone. The release checks fail if the recovery clip is missing or if producer recovery calls `generate_silence` again.
 - **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
-- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the last-resort silence placeholder, so provider or download trouble feels intentional instead of like dead air.
+- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the emergency-tone fallback, so provider or download trouble feels intentional instead of like dead air.
 - **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
 
-## 2.16.0
+## 2.16.0 - 2026-07-06
+
+### Added
+
+- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
+
+### Changed
+
+- **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
 
 ## 2.15.0 - 2026-07-06
 

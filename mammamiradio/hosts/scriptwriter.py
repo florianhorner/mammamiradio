@@ -1709,6 +1709,8 @@ async def write_banter(
         home_state_sections.append(state.ha_context)
     if state.ha_events_summary:
         home_state_sections.append("EVENTI RECENTI:\n" + state.ha_events_summary)
+    if state.ha_ritual_context:
+        home_state_sections.append("RITUALI DI CASA:\n" + _sanitize_prompt_data(state.ha_ritual_context, max_len=160))
     if state.ha_weather_arc:
         home_state_sections.append("WEATHER ARC: " + state.ha_weather_arc)
 

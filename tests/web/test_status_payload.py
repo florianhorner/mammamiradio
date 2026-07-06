@@ -67,6 +67,7 @@ def test_paginated_tracks_serializes_page_and_revision():
                 "year": 2001,
                 "youtube_id": "",
                 "duration_ms": 180_000,
+                "heading_id": "",
             }
         ],
         "total": 3,
@@ -75,6 +76,14 @@ def test_paginated_tracks_serializes_page_and_revision():
         "has_more": True,
         "revision": 7,
     }
+
+
+def test_serialize_track_includes_heading_id_for_admin_hunt_rows():
+    track = Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="id-1", heading_id="hunt-1")
+
+    payload = status_payload._serialize_track(track)
+
+    assert payload["heading_id"] == "hunt-1"
 
 
 def test_status_now_playback_redacts_internal_metadata_and_reports_progress():
@@ -119,6 +128,22 @@ def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
     }
 
 
+def test_public_segment_metadata_redacts_private_ritual_internals():
+    metadata = {
+        "source": "banter",
+        "ritual_families": ["Kitchen ritual"],
+        "ritual_recipe_matches": [{"entity_id": "binary_sensor.kitchen_fridge_door"}],
+        "ritual_directive": "Mention the exact fridge door.",
+    }
+
+    payload = status_payload._public_segment_metadata(metadata)
+
+    assert payload == {
+        "source": "banter",
+        "ritual_families": ["Kitchen ritual"],
+    }
+
+
 def test_ha_details_payload_absent_without_ha_observability():
     assert status_payload._ha_details_payload(StationState()) is None
 
@@ -134,6 +159,9 @@ def test_ha_details_payload_serializes_present_observability():
     state.ha_last_event_label = "Kitchen"
     state.ha_scored_entities = [{"entity_id": f"sensor.{i}"} for i in range(20)]
     state.ha_denylist_hits = {"sensor.hidden": 2}
+    state.ha_ritual_public_families = ["Kitchen ritual"]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.fridge"}]
+    state.ha_ritual_recipe_audit = [{"recipe_id": "chores_reminders", "status": "opportunity"}]
 
     payload = status_payload._ha_details_payload(state)
 
@@ -146,6 +174,9 @@ def test_ha_details_payload_serializes_present_observability():
     assert payload["last_event_label"] == "Kitchen"
     assert len(payload["scored_entities"]) == 12
     assert payload["denylist_hits"] == {"sensor.hidden": 2}
+    assert payload["rituals"]["public_families"] == ["Kitchen ritual"]
+    assert payload["rituals"]["matches"][0]["recipe_id"] == "fridge_freezer_raid"
+    assert payload["rituals"]["audit"][0]["status"] == "opportunity"
 
 
 def test_serialize_heading_reports_resolving_until_track_tagged():

@@ -745,11 +745,15 @@ async def test_fetch_cached_context_does_not_repeat_radio_events():
         summary="cached",
         timestamp=time.time(),
         radio_events=[object()],
+        ritual_recipe_matches=[object()],
+        ritual_public_families=["Kitchen ritual"],
     )
     with patch("mammamiradio.home.ha_context._ha_cache", None):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
     assert result is cache
     assert result.radio_events == []
+    assert result.ritual_recipe_matches == []
+    assert result.ritual_public_families == []
 
 
 @pytest.mark.asyncio
@@ -837,6 +841,50 @@ async def test_fetch_matches_radio_events_without_ambient_script_visibility():
     assert "script.kitchen_tts" not in result.raw_states
     assert len(result.radio_events) == 1
     assert result.radio_events[0].directive == "One of the house voices just spoke."
+
+
+@pytest.mark.asyncio
+async def test_fetch_matches_ritual_recipes_and_public_family_label():
+    states = [
+        {
+            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._ritual_recipe_state_cache",
+            {
+                "binary_sensor.kitchen_fridge_door": {
+                    "state": "off",
+                    "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+                }
+            },
+        ),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    assert len(result.ritual_recipe_matches) == 1
+    assert result.ritual_recipe_matches[0].recipe.id == "fridge_freezer_raid"
+    assert result.ritual_public_families == ["Kitchen ritual"]
+    fridge_audit = next(item for item in result.ritual_recipe_audit if item["recipe_id"] == "fridge_freezer_raid")
+    assert fridge_audit["status"] == "instrumented"
 
 
 @pytest.mark.asyncio
@@ -2188,13 +2236,21 @@ def reset_ha_push_debounce():
     original = _hc._last_ha_push
     original_stop = _hc._last_ha_stop_push
     original_lock = _hc._ha_push_lock
+    original_fingerprints = dict(_hc._ha_entity_payload_fingerprints)
+    original_push_times = dict(_hc._ha_entity_last_push_at)
     _hc._last_ha_push = 0.0
     _hc._last_ha_stop_push = 0.0
     _hc._ha_push_lock = None
+    _hc._ha_entity_payload_fingerprints.clear()
+    _hc._ha_entity_last_push_at.clear()
     yield
     _hc._last_ha_push = original
     _hc._last_ha_stop_push = original_stop
     _hc._ha_push_lock = original_lock
+    _hc._ha_entity_payload_fingerprints.clear()
+    _hc._ha_entity_payload_fingerprints.update(original_fingerprints)
+    _hc._ha_entity_last_push_at.clear()
+    _hc._ha_entity_last_push_at.update(original_push_times)
 
 
 @pytest.mark.asyncio
@@ -2597,6 +2653,65 @@ async def test_push_state_to_ha_posts_entities_sequentially(reset_ha_push_deboun
 
     assert max_in_flight == 1
     assert [url.rsplit("/", 1)[-1] for url in urls] == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_dedupes_unchanged_auxiliary_entities(reset_ha_push_debounce):
+    """The 30s heartbeat keeps the media_player fresh without rewriting unchanged sensors forever."""
+    import mammamiradio.home.ha_context as _hc
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    payload = {
+        "type": "music",
+        "label": "Volare",
+        "started": time.time() - 10,
+        "metadata": {"title": "Volare"},
+    }
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+        _hc._last_ha_push = 0.0
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+
+    urls = [call.args[0].rsplit("/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert urls == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
+        "media_player.mammamiradio",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_republishes_auxiliary_entities_after_recovery_window(reset_ha_push_debounce):
+    """Unchanged sensors still get a forced heartbeat so HA restart recovery is bounded."""
+    import mammamiradio.home.ha_context as _hc
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+
+    payload = {"type": "music", "label": "Volare", "started": time.time() - 10, "metadata": {"title": "Volare"}}
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+        stale_time = time.time() - _hc._HA_ENTITY_RECOVERY_REPUBLISH_SECONDS - 1.0
+        for eid in _hc._HA_DEDUPED_ENTITY_IDS:
+            _hc._ha_entity_last_push_at[eid] = stale_time
+        _hc._last_ha_push = 0.0
+        await push_state_to_ha("http://ha.local:8123", "test-token", payload, None, 1, False)
+
+    urls = [call.args[0].rsplit("/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert urls == [
+        "media_player.mammamiradio",
+        "sensor.mammamiradio_segment_type",
+        "sensor.mammamiradio_listeners",
+        "binary_sensor.mammamiradio_on_air",
         "media_player.mammamiradio",
         "sensor.mammamiradio_segment_type",
         "sensor.mammamiradio_listeners",
