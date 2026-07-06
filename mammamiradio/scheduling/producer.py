@@ -69,6 +69,7 @@ from mammamiradio.home.ha_context import (
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
+from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_recipe_match
 from mammamiradio.home.scene_namer import resolve_home_mood
 from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
@@ -1579,6 +1580,45 @@ def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatc
     return gag_events
 
 
+def _apply_ritual_recipe_matches(
+    state: StationState,
+    matches: list[RitualRecipeMatch],
+) -> tuple[list[HomeEvent], InterruptSpec | None]:
+    """Apply bundled ritual recipe matches to existing delivery lanes."""
+    gag_events: list[HomeEvent] = []
+    interrupt: InterruptSpec | None = None
+    for match in matches:
+        lane = match.recipe.delivery_lane
+        if lane == "running_gag":
+            gag_events.append(match.to_home_event())
+            continue
+        if lane == "ambient_context":
+            continue
+        if lane == "interrupt":
+            if (
+                interrupt is not None
+                or state.ha_pending_directive
+                or state.chaos_pending is not None
+                or state.operator_force_pending is not None
+                or state.force_next is not None
+            ):
+                continue
+            interrupt = InterruptSpec(
+                directive=match.recipe.directive,
+                urgency=match.recipe.interrupt_urgency,
+                cooldown=match.recipe.cooldown_seconds,
+            )
+            commit_ritual_recipe_match(match)
+            continue
+        if lane != "directive" or not match.recipe.directive:
+            continue
+        if state.ha_pending_directive:
+            continue
+        state.ha_pending_directive = match.recipe.directive
+        commit_ritual_recipe_match(match)
+    return gag_events, interrupt
+
+
 def _maybe_arm_first_home_context_moment(
     state: StationState,
     ha_cache: HomeContext,
@@ -1988,6 +2028,13 @@ async def run_producer(
             state.ha_registry_source = str(getattr(ha_cache, "registry_source", "") or "")
             state.ha_context_entity_count = len(ha_cache.scored)
             state.ha_context_char_count = len(ha_cache.summary or "")
+            ritual_matches = list(getattr(ha_cache, "ritual_recipe_matches", []) or [])
+            state.ha_ritual_public_families = list(getattr(ha_cache, "ritual_public_families", []) or [])[:4]
+            state.ha_ritual_context = ", ".join(state.ha_ritual_public_families)
+            state.ha_ritual_matches = [
+                match.to_status_dict() for match in ritual_matches if hasattr(match, "to_status_dict")
+            ][:8]
+            state.ha_ritual_recipe_audit = list(getattr(ha_cache, "ritual_recipe_audit", []) or [])[:16]
             raw_states = getattr(ha_cache, "raw_states", {})
             if isinstance(raw_states, dict):
                 # Fail-soft: scheduling does synchronous preflight work before
@@ -2051,6 +2098,16 @@ async def run_producer(
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
             radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
+            ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
+            if ritual_interrupt is not None:
+                await _fire_interrupt(
+                    state,
+                    ritual_interrupt,
+                    queue,
+                    skip_event,
+                    enforce_global_cooldown=True,
+                    bridge_tmp_dir=config.tmp_dir,
+                )
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,
@@ -2064,7 +2121,7 @@ async def run_producer(
             # the addon's frequent restarts.
             if state.evening_ledger is not None:
                 _now = time.time()
-                state.evening_ledger.observe([*ha_cache.events, *radio_gag_events], now=_now)
+                state.evening_ledger.observe([*ha_cache.events, *radio_gag_events, *ritual_gag_events], now=_now)
                 if seg_type == SegmentType.BANTER:
                     # Offer (don't spend) — the cooldown is marked in the banter
                     # success callback only if generated banter actually airs, so

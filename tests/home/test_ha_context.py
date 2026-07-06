@@ -743,11 +743,15 @@ async def test_fetch_cached_context_does_not_repeat_radio_events():
         summary="cached",
         timestamp=time.time(),
         radio_events=[object()],
+        ritual_recipe_matches=[object()],
+        ritual_public_families=["Kitchen ritual"],
     )
     with patch("mammamiradio.home.ha_context._ha_cache", None):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
     assert result is cache
     assert result.radio_events == []
+    assert result.ritual_recipe_matches == []
+    assert result.ritual_public_families == []
 
 
 @pytest.mark.asyncio
@@ -835,6 +839,50 @@ async def test_fetch_matches_radio_events_without_ambient_script_visibility():
     assert "script.kitchen_tts" not in result.raw_states
     assert len(result.radio_events) == 1
     assert result.radio_events[0].directive == "One of the house voices just spoke."
+
+
+@pytest.mark.asyncio
+async def test_fetch_matches_ritual_recipes_and_public_family_label():
+    states = [
+        {
+            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._ritual_recipe_state_cache",
+            {
+                "binary_sensor.kitchen_fridge_door": {
+                    "state": "off",
+                    "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+                }
+            },
+        ),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    assert len(result.ritual_recipe_matches) == 1
+    assert result.ritual_recipe_matches[0].recipe.id == "fridge_freezer_raid"
+    assert result.ritual_public_families == ["Kitchen ritual"]
+    fridge_audit = next(item for item in result.ritual_recipe_audit if item["recipe_id"] == "fridge_freezer_raid")
+    assert fridge_audit["status"] == "instrumented"
 
 
 @pytest.mark.asyncio

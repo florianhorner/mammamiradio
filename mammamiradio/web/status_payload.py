@@ -114,10 +114,17 @@ def _golden_path_status(config, state) -> dict:
 
 
 def _ha_details_payload(state: StationState) -> dict | None:
-    has_ha_observability = bool(state.ha_context or state.ha_scored_entities or state.ha_denylist_hits)
+    has_ha_observability = bool(
+        state.ha_context
+        or state.ha_scored_entities
+        or state.ha_denylist_hits
+        or state.ha_ritual_public_families
+        or state.ha_ritual_matches
+        or state.ha_ritual_recipe_audit
+    )
     if not has_ha_observability:
         return None
-    return {
+    payload: dict[str, object] = {
         "mood": state.ha_home_mood or None,
         "weather_arc": state.ha_weather_arc or None,
         "events_summary": state.ha_events_summary or None,
@@ -138,6 +145,13 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "context_last_updated": state.ha_context_last_updated or None,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
+    if state.ha_ritual_public_families or state.ha_ritual_matches or state.ha_ritual_recipe_audit:
+        payload["rituals"] = {
+            "public_families": list(state.ha_ritual_public_families),
+            "matches": copy.deepcopy(state.ha_ritual_matches[:8]),
+            "audit": copy.deepcopy(state.ha_ritual_recipe_audit[:16]),
+        }
+    return payload
 
 
 def _serialize_source(source: PlaylistSource | None) -> dict | None:
@@ -264,7 +278,15 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     return None
 
 
-_INTERNAL_SEGMENT_METADATA_KEYS = frozenset({"memory_extraction"})
+_INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
+    {
+        "memory_extraction",
+        "ritual_recipe_match",
+        "ritual_recipe_matches",
+        "ritual_recipe_audit",
+        "ritual_directive",
+    }
+)
 
 
 def _public_segment_metadata(metadata: object) -> dict:

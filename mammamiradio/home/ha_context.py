@@ -36,6 +36,13 @@ from mammamiradio.home.ha_enrichment import (
     prune_events,
 )
 from mammamiradio.home.radio_events import RadioEventMatch, build_radio_event_baseline, match_radio_events
+from mammamiradio.home.ritual_recipes import (
+    RitualRecipeMatch,
+    audit_ritual_recipes,
+    build_ritual_recipe_baseline,
+    match_ritual_recipes,
+    public_family_labels,
+)
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
@@ -368,6 +375,9 @@ class HomeContext:
     summary: str = ""
     events: deque[HomeEvent] = field(default_factory=lambda: deque(maxlen=EVENT_BUFFER_SIZE))
     radio_events: list[RadioEventMatch] = field(default_factory=list)
+    ritual_recipe_matches: list[RitualRecipeMatch] = field(default_factory=list)
+    ritual_public_families: list[str] = field(default_factory=list)
+    ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     events_summary: str = ""
     timestamp: float = 0.0
     # Phase 2: mood classification
@@ -1141,6 +1151,7 @@ def check_reactive_triggers(
 _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
 _radio_event_state_cache: dict[str, dict] = {}
+_ritual_recipe_state_cache: dict[str, dict] = {}
 _ha_registry_snapshot_cache: HomeRegistrySnapshot | None = None
 _ha_registry_fetched_at: float = 0.0
 _HA_REGISTRY_TTL = 6 * 60 * 60
@@ -1430,7 +1441,7 @@ async def fetch_home_context(
     Uses module-level cache for persistence across calls, with the
     _cache parameter as a fallback for backward compatibility.
     """
-    global _ha_cache, _radio_event_state_cache
+    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
     # Prefer explicitly passed cache, then module-level cache
     effective_cache = _cache or _ha_cache
     if effective_cache and effective_cache.age_seconds < poll_interval:
@@ -1443,6 +1454,8 @@ async def fetch_home_context(
             effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=now
         )
         effective_cache.radio_events = []
+        effective_cache.ritual_recipe_matches = []
+        effective_cache.ritual_public_families = []
         return effective_cache
 
     try:
@@ -1461,32 +1474,52 @@ async def fetch_home_context(
         denylist_hits: dict[str, int] = {}
         registry_snapshot = await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
         entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        enriched_entity_map = {
+            entity_id: _apply_registry_snapshot(entity_id, state_data, registry_snapshot)
+            for entity_id, state_data in entity_map.items()
+        }
         radio_events: list[RadioEventMatch] = []
         if radio_event_rules:
             try:
                 radio_events = match_radio_events(
                     radio_event_rules,
                     _radio_event_state_cache,
-                    entity_map,
+                    enriched_entity_map,
                     now=timestamp,
                 )
             except Exception as exc:  # pragma: no cover - defensive continuity guard
                 logger.warning("Failed to match configured HA radio events: %s", exc)
                 radio_events = []
             try:
-                _radio_event_state_cache = build_radio_event_baseline(entity_map, radio_event_rules)
+                _radio_event_state_cache = build_radio_event_baseline(enriched_entity_map, radio_event_rules)
             except Exception as exc:  # pragma: no cover - defensive continuity guard
                 logger.warning("Failed to update configured HA radio-event baseline: %s", exc)
                 _radio_event_state_cache = {}
         else:
             _radio_event_state_cache = {}
+        ritual_recipe_matches: list[RitualRecipeMatch] = []
+        try:
+            ritual_recipe_matches = match_ritual_recipes(
+                None,
+                _ritual_recipe_state_cache,
+                enriched_entity_map,
+                now=timestamp,
+            )
+        except Exception as exc:  # pragma: no cover - defensive continuity guard
+            logger.warning("Failed to match HA ritual recipes: %s", exc)
+            ritual_recipe_matches = []
+        try:
+            _ritual_recipe_state_cache = build_ritual_recipe_baseline(enriched_entity_map)
+        except Exception as exc:  # pragma: no cover - defensive continuity guard
+            logger.warning("Failed to update HA ritual recipe baseline: %s", exc)
+            _ritual_recipe_state_cache = {}
         relevant = {
             entity_id: filtered
-            for entity_id, state_data in entity_map.items()
+            for entity_id, state_data in enriched_entity_map.items()
             if (
                 filtered := _filter_state(
                     entity_id,
-                    _apply_registry_snapshot(entity_id, state_data, registry_snapshot),
+                    state_data,
                     denylist_hits,
                 )
             )
@@ -1516,6 +1549,8 @@ async def fetch_home_context(
         summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
         events_summary_en = build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+        ritual_public_families = public_family_labels(ritual_recipe_matches)
+        ritual_recipe_audit = audit_ritual_recipes(states=enriched_entity_map)
         # Determine English label of the most recent event for admin display
         last_event_label_en = ""
         if events:
@@ -1526,6 +1561,9 @@ async def fetch_home_context(
             summary=summary,
             events=events,
             radio_events=radio_events,
+            ritual_recipe_matches=ritual_recipe_matches,
+            ritual_public_families=ritual_public_families,
+            ritual_recipe_audit=ritual_recipe_audit,
             events_summary=events_summary,
             mood=mood,
             weather_arc=weather_arc,
@@ -1542,11 +1580,12 @@ async def fetch_home_context(
         )
         _ha_cache = context
         logger.info(
-            "Fetched HA context: %d/%d entities, %d scored, %d events, mood=%r",
+            "Fetched HA context: %d/%d entities, %d scored, %d events, %d ritual matches, mood=%r",
             len(relevant),
             len(entity_map),
             len(scored),
             len(events),
+            len(ritual_recipe_matches),
             mood or "none",
         )
         return context
@@ -1562,6 +1601,8 @@ async def fetch_home_context(
                 effective_cache.events, ENTITY_LABELS_EN, STATE_TRANSLATIONS_EN, now=timestamp
             )
             effective_cache.radio_events = []
+            effective_cache.ritual_recipe_matches = []
+            effective_cache.ritual_public_families = []
             return effective_cache
         return HomeContext()
 

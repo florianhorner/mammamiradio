@@ -552,6 +552,12 @@ class StationState:
     ha_context_entity_count: int = 0
     ha_context_char_count: int = 0
     ha_first_home_context_moment_fired: bool = False
+    # Community-inspired Impossible Moments recipe telemetry. Public surfaces
+    # may expose only the coarse family labels; recipe internals stay admin-only.
+    ha_ritual_context: str = ""
+    ha_ritual_public_families: list[str] = field(default_factory=list)
+    ha_ritual_matches: list[dict[str, object]] = field(default_factory=list)
+    ha_ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
     # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the

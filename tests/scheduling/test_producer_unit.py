@@ -14,6 +14,7 @@ from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.models import (
     HostPersonality,
+    InterruptSpec,
     PlaylistSource,
     Segment,
     SegmentLogEntry,
@@ -24,12 +25,14 @@ from mammamiradio.core.models import (
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
+from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
+    _apply_ritual_recipe_matches,
     _pick_canned_clip,
     run_producer,
 )
@@ -1153,6 +1156,91 @@ def test_radio_event_gag_feeds_ledger_event_path():
 
     assert _apply_radio_event_matches(state, [match]) == [event]
     assert state.ha_pending_directive == ""
+
+
+def _ha_state(value: object, **attrs: object) -> dict:
+    return {"state": value, "attributes": attrs}
+
+
+def test_ritual_recipe_directive_uses_next_break_path():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        now=100.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is None
+    assert "Morning launch" in state.ha_pending_directive
+    commit.assert_called_once_with(matches[0])
+
+
+def test_ritual_recipe_directive_does_not_override_existing_directive():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.ha_pending_directive = "legacy directive"
+    matches = match_ritual_recipes(
+        None,
+        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        now=100.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert interrupt is None
+    assert state.ha_pending_directive == "legacy directive"
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_cooldown():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.fridge_door": _ha_state("off", device_class="door", friendly_name="Kitchen fridge door")},
+        {"binary_sensor.fridge_door": _ha_state("on", device_class="door", friendly_name="Kitchen fridge door")},
+        now=200.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert interrupt is None
+    assert state.ha_pending_directive == ""
+    assert len(gag_events) == 1
+    assert gag_events[0].label == "Kitchen ritual"
+    assert gag_events[0].force_gag_candidate is True
+    commit.assert_not_called()
+
+
+def test_ritual_recipe_safety_interrupt_preserves_interrupt_lane():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=300.0,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert gag_events == []
+    assert isinstance(interrupt, InterruptSpec)
+    assert interrupt.urgency == "urgent"
+    assert "Safety moment" in interrupt.directive
+    assert state.ha_pending_directive == ""
+    commit.assert_called_once_with(matches[0])
 
 
 @pytest.mark.asyncio
