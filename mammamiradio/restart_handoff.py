@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.audio.normalizer import probe_duration_sec
-from mammamiradio.core.models import Segment, SegmentType
+from mammamiradio.core.models import Segment, SegmentType, Track
+from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +286,8 @@ def admit_restart_handoff_entries(
     cache_dir: Path | str,
     *,
     blocklist: Mapping[BlockKey, object] | None = None,
+    playlist: Iterable[Track] | None = None,
+    pacing: Any | None = None,
     now: float | None = None,
     max_entries: int = DEFAULT_MAX_ENTRIES,
     max_age_sec: float = DEFAULT_MAX_ENTRY_AGE_SEC,
@@ -297,6 +300,8 @@ def admit_restart_handoff_entries(
         cache_dir,
         manifest,
         blocklist=blocklist,
+        playlist=playlist,
+        pacing=pacing,
         now=now,
         max_entries=max_entries,
         max_age_sec=max_age_sec,
@@ -309,6 +314,8 @@ def admit_restart_handoff_manifest(
     manifest: RestartHandoffManifest,
     *,
     blocklist: Mapping[BlockKey, object] | None = None,
+    playlist: Iterable[Track] | None = None,
+    pacing: Any | None = None,
     now: float | None = None,
     max_entries: int = DEFAULT_MAX_ENTRIES,
     max_age_sec: float = DEFAULT_MAX_ENTRY_AGE_SEC,
@@ -334,6 +341,8 @@ def admit_restart_handoff_manifest(
             cache_dir,
             entry,
             blocklist=blocklist,
+            playlist=playlist,
+            pacing=pacing,
             now=now,
             max_age_sec=max_age_sec,
             duration_probe=duration_probe,
@@ -525,6 +534,8 @@ def _entry_rejection_reason(
     entry: RestartHandoffEntry,
     *,
     blocklist: Mapping[BlockKey, object] | None,
+    playlist: Iterable[Track] | None,
+    pacing: Any | None,
     now: float,
     max_age_sec: float,
     duration_probe: DurationProbe,
@@ -568,7 +579,42 @@ def _entry_rejection_reason(
         return "missing_file"
     if _validated_duration(path, entry.duration_sec, duration_probe) is None:
         return "invalid_duration"
+    admission_reason = _music_admission_rejection_reason(entry, playlist=playlist, pacing=pacing)
+    if admission_reason is not None:
+        return admission_reason
     return None
+
+
+def _music_admission_rejection_reason(
+    entry: RestartHandoffEntry,
+    *,
+    playlist: Iterable[Track] | None,
+    pacing: Any | None,
+) -> str | None:
+    metadata = dict(entry.metadata) if isinstance(entry.metadata, Mapping) else {}
+    youtube_id = _coerce_str(metadata.get("youtube_id"))
+    source = _coerce_str(metadata.get("source") or metadata.get("source_kind") or metadata.get("audio_source"))
+    if not youtube_id and source.casefold() not in {"youtube", "yt-dlp", "ytdlp"}:
+        return None
+
+    track = Track(
+        title=entry.title,
+        artist=entry.artist,
+        duration_ms=round(entry.duration_sec * 1000),
+        youtube_id=youtube_id,
+        album_art=_coerce_str(metadata.get("album_art")),
+        source="youtube",
+    )
+    verdict = classify_youtube_candidate(
+        track,
+        playlist or (),
+        pacing,
+        metadata=metadata,
+        actual_duration_sec=entry.duration_sec,
+    )
+    if verdict.accepted:
+        return None
+    return f"music_admission:{verdict.reason}"
 
 
 def _publish_manifest(cache_dir: Path | str, manifest: RestartHandoffManifest) -> None:

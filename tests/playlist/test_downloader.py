@@ -926,6 +926,12 @@ def test_reject_cached_download_purges_and_denylists(tmp_path):
         cache_key = "poisoned_key_abc"
         cached = cache / f"{cache_key}.mp3"
         cached.write_bytes(b"x" * 2048)
+        norm_cached = cache / f"norm_{cache_key}_192k.mp3"
+        norm_cached.write_bytes(b"normalized poison")
+        norm_sidecar = cache / f"{norm_cached.name}.json"
+        norm_sidecar.write_text('{"title":"Poison","artist":"Cache"}')
+        fm_bake = cache / f"fm_norm_{cache_key}_192k_v1_123_456.mp3"
+        fm_bake.write_bytes(b"baked poison")
 
         assert not is_rejected_cache_key(cache_key)
 
@@ -933,6 +939,9 @@ def test_reject_cached_download_purges_and_denylists(tmp_path):
 
         assert removed is True
         assert not cached.exists(), "rejected cache file must be purged"
+        assert not norm_cached.exists(), "rejected norm-cache rescue file must be purged"
+        assert not norm_sidecar.exists(), "rejected norm-cache sidecar must be purged"
+        assert not fm_bake.exists(), "rejected broadcast-chain bake must be purged"
         assert is_rejected_cache_key(cache_key), "rejected key must be denylisted"
     finally:
         clear_rejected_cache_keys()
@@ -1572,6 +1581,80 @@ def test_search_ytdlp_metadata_filters_non_video_ids():
     # The non-string id is dropped without crashing; only the real video survives.
     assert ids == ["qVSALcVpwkc"]
     assert all(isinstance(i, str) and len(i) == 11 for i in ids)
+
+
+def test_search_ytdlp_metadata_skips_malformed_duration_without_dropping_siblings():
+    import os
+
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, query, download=False):
+            return {
+                "entries": [
+                    {
+                        "id": "badtime0001",
+                        "title": "Bad Duration",
+                        "uploader": "Uploader",
+                        "duration": "not-a-number",
+                    },
+                    {
+                        "id": "infinite001",
+                        "title": "Infinite Duration",
+                        "uploader": "Uploader",
+                        "duration": "inf",
+                    },
+                    {
+                        "id": "unknown0001",
+                        "title": "Unknown Duration",
+                        "uploader": "Uploader",
+                        "duration": None,
+                    },
+                    {
+                        "id": "missing0001",
+                        "title": "Missing Duration",
+                        "uploader": "Uploader",
+                    },
+                    {
+                        "id": "emptytime01",
+                        "title": "Empty Duration",
+                        "uploader": "Uploader",
+                        "duration": "",
+                    },
+                    {
+                        "id": "validtime01",
+                        "title": "Good Duration",
+                        "uploader": "Uploader",
+                        "duration": "185.5",
+                    },
+                ]
+            }
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with (
+        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        out = search_ytdlp_metadata("duration edge", 5)
+
+    assert [result["youtube_id"] for result in out] == [
+        "unknown0001",
+        "missing0001",
+        "emptytime01",
+        "validtime01",
+    ]
+    assert [result["duration_ms"] for result in out] == [0, 0, 0, 185_500]
 
 
 # --- prune_stale_tmp_files ---

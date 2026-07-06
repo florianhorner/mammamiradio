@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.audio.normalizer import (
+    crossfade_voice_over_music,
     generate_sfx,
     generate_transition_sting,
     mix_ad_with_bed,
@@ -58,6 +59,24 @@ def test_transition_sting_music_to_banter(tmp_path, mock_run):
     assert duration == pytest.approx(0.8, abs=0.01)
 
 
+def test_transition_sting_music_to_speech_variant_changes_shape(tmp_path, mock_run):
+    out = tmp_path / "sting.mp3"
+    with (
+        patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep,
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_sweep.side_effect = lambda p, **_: p.write_bytes(b"sweep") or p
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("music", "banter", out, variant=1)
+
+    assert result == out
+    assert mock_sweep.call_args.kwargs["duration_sec"] == pytest.approx(0.55, abs=0.01)
+    assert mock_bed.call_args.args[1] == pytest.approx(1.0, abs=0.01)
+    assert mock_bed.call_args.args[2] == [1047, 784, 659, 523]
+
+
 def test_transition_sting_speech_to_music(tmp_path, mock_run):
     out = tmp_path / "sting.mp3"
     with (
@@ -73,6 +92,26 @@ def test_transition_sting_speech_to_music(tmp_path, mock_run):
     assert result == out
     mock_bed.assert_called_once()
     mock_bumper.assert_called_once()
+
+
+def test_transition_sting_speech_to_music_variant_changes_shape(tmp_path, mock_run):
+    out = tmp_path / "sting.mp3"
+    with (
+        patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep,
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.generate_bumper_jingle") as mock_bumper,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_sweep.side_effect = lambda p, **_: p.write_bytes(b"sweep") or p
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_bumper.side_effect = lambda p, *_, **__: p.write_bytes(b"bump") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("banter", "music", out, variant=2)
+
+    assert result == out
+    mock_bed.assert_not_called()
+    assert mock_sweep.call_args.kwargs["duration_sec"] == pytest.approx(0.45, abs=0.01)
+    assert mock_bumper.call_args.args[1] == pytest.approx(0.55, abs=0.01)
 
 
 def test_transition_sting_news_flash_to_music(tmp_path, mock_run):
@@ -155,6 +194,25 @@ def test_transition_sting_uses_custom_motif_notes(tmp_path, mock_run):
 
     notes_passed = mock_bed.call_args.args[2] if len(mock_bed.call_args.args) > 2 else mock_bed.call_args.args[1]
     assert notes_passed == custom_notes
+
+
+# ---------------------------------------------------------------------------
+# crossfade_voice_over_music
+# ---------------------------------------------------------------------------
+
+
+def test_crossfade_voice_over_music_starts_voice_without_music_only_replay(tmp_path, mock_run):
+    music = tmp_path / "music.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "mixed.mp3"
+
+    result = crossfade_voice_over_music(music, voice, out)
+
+    assert result == out
+    cmd = mock_run.call_args[0][0]
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "adelay=1500|1500" not in filter_complex
+    assert "adelay=150|150" in filter_complex
 
 
 # ---------------------------------------------------------------------------

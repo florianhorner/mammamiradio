@@ -8,6 +8,9 @@ from pathlib import Path
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.core.models import SegmentType, StationState, Track
+from mammamiradio.playlist.downloader import is_rejected_cache_key
+
+_NORM_CACHE_KEY_RE = re.compile(r"^norm_(?P<cache_key>.+)_\d+k\.mp3$")
 
 
 def _identity_key(value: str) -> str:
@@ -63,6 +66,13 @@ def _norm_cache_identity_keys(path: Path) -> set[str]:
     return {key for key in keys if key}
 
 
+def _norm_cache_key(path: Path) -> str:
+    match = _NORM_CACHE_KEY_RE.fullmatch(path.name)
+    if not match:
+        return ""
+    return match.group("cache_key")
+
+
 def _recent_music_identity_keys(state: StationState) -> set[str]:
     recent_keys: set[str] = set()
     if state.now_streaming:
@@ -106,6 +116,7 @@ def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | Non
     banned (nothing left) the rescue degrades to ``None`` and the caller's next layer
     (canned clip / forced banter) keeps audio flowing rather than airing a banned song."""
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    norm_files = [path for path in norm_files if not is_rejected_cache_key(_norm_cache_key(path))]
     blocklist = getattr(state, "blocklist", None)
     if blocklist:
         norm_files = [path for path in norm_files if not _is_blocklisted(path, blocklist)]
