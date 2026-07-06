@@ -118,6 +118,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export â€
     _public_segment_metadata,
     _serialize_brand,
     _serialize_heading,
+    _serialize_identity,
     _serialize_source,
     _serialize_stream_log_entry,
     _serialize_track,
@@ -1811,7 +1812,7 @@ async def og_card(request: Request):
     config = request.app.state.config
     state = request.app.state.station_state
     track = state.current_track
-    cache_key = f"{config.brand.station_name}:{track.cache_key if track else 'idle'}"
+    cache_key = f"{config.display_station_name}:{track.cache_key if track else 'idle'}"
 
     cached = _og_card_cache.get(cache_key)
     if cached is None:
@@ -1891,7 +1892,7 @@ async def stream(request: Request):
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
     headers = {
-        "icy-name": config.station.name.replace("\r", "").replace("\n", ""),
+        "icy-name": config.display_station_name.replace("\r", "").replace("\n", ""),
         "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
@@ -4601,7 +4602,8 @@ def _public_status_payload(request: Request) -> dict:
 
     playback = _status_now_playback(state.now_streaming, now_ts)
     return {
-        "station": config.station.name,
+        "station": config.display_station_name,
+        "identity": _serialize_identity(config),
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),

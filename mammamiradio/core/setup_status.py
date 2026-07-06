@@ -123,6 +123,32 @@ def addon_options_snippet(config: StationConfig) -> str:
     return "\n".join(lines)
 
 
+def identity_status(config: StationConfig) -> dict:
+    """Return the operator-facing station identity projection."""
+    identity = getattr(config, "identity", None)
+    station_name = config.display_station_name
+    generated = getattr(identity, "generated", {}) or {}
+    return {
+        "station_name": station_name,
+        "source": getattr(identity, "source", "unknown") if identity is not None else "unknown",
+        "custom_copy_preserved": bool(getattr(identity, "custom_copy_preserved", False)),
+        "preview": {
+            "heard_on_air": generated.get("spoken_ident") or station_name,
+            "seen_by_listeners": generated.get("listener_title") or station_name,
+            "seen_in_home_assistant": generated.get("home_assistant_name") or station_name,
+        },
+        "stable_ids": {
+            "addon_slug": "mammamiradio",
+            "integration_domain": "mammamiradio",
+            "media_player": "media_player.mammamiradio",
+            "media_source": "media-source://mammamiradio/live",
+            "segment_sensor": "sensor.mammamiradio_segment_type",
+            "listeners_sensor": "sensor.mammamiradio_listeners",
+            "on_air_binary_sensor": "binary_sensor.mammamiradio_on_air",
+        },
+    }
+
+
 def build_setup_status(config: StationConfig, state: StationState) -> dict:
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
@@ -130,6 +156,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
     ytdlp_bin = shutil.which("yt-dlp")
     demo_playlist = _playlist_is_demo(state)
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
+    identity = identity_status(config)
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
     has_azure_tts = bool(config.azure_speech_key and config.azure_speech_region)
     has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
@@ -285,6 +312,12 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
 
     onboarding_steps = [
         {
+            "id": "identity",
+            "title": "Name Your Station",
+            "status": "done",
+            "detail": f"{identity['station_name']} is the name people see and hear.",
+        },
+        {
             "id": "mode",
             "title": "Choose Run Mode",
             "status": "done",
@@ -328,6 +361,8 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
     signature_data = {
         "mode": mode["detected"],
         "station_mode": station_mode["id"],
+        "identity": identity["station_name"],
+        "identity_source": identity["source"],
         "essentials": [(item["key"], item["status"]) for item in essentials],
         "checks": [(item["key"], item["status"]) for item in preflight_checks],
     }
@@ -337,6 +372,7 @@ def build_setup_status(config: StationConfig, state: StationState) -> dict:
         "detected_mode": mode["detected"],
         "available_modes": mode["modes"],
         "station_mode": station_mode,
+        "identity": identity,
         "onboarding_required": onboarding_required,
         "essentials": essentials,
         "preflight_checks": preflight_checks,

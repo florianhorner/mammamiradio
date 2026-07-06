@@ -74,6 +74,17 @@ async def test_station_block_has_required_fields():
 
 
 @pytest.mark.asyncio
+async def test_station_block_uses_resolved_station_identity(monkeypatch):
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    app = make_integrations_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/integrations/v1/now-playing")).json()
+
+    assert body["station"]["name"] == "Radio Test"
+
+
+@pytest.mark.asyncio
 async def test_stream_block_has_relative_url_and_audio_format():
     app = make_integrations_app()
     transport = httpx.ASGITransport(app=app)

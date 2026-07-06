@@ -72,6 +72,12 @@ check the status code before parsing the body.
 }
 ```
 
+`station.name` is the resolved station identity from the add-on's `station_name`
+option, environment override, or `radio.toml` fallback. It is safe to show to
+users as the station label. It is not a stable identifier; integrations should
+continue using the `mammamiradio` domain, `media_player.mammamiradio`, and
+`media-source://mammamiradio/live` for automation and routing.
+
 ### `segment_class` — display bucket (USE THIS)
 
 The stable bucket your UI branches on. Three classes, plus a sentinel:

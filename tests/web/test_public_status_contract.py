@@ -45,6 +45,24 @@ async def test_public_status_returns_brand_block():
 
 
 @pytest.mark.asyncio
+async def test_public_status_returns_resolved_identity(monkeypatch):
+    """Chosen station identity must agree across legacy and additive fields."""
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    for body in (public, admin):
+        assert body["station"] == "Radio Test"
+        assert body["brand"]["station_name"] == "Radio Test"
+        assert body["identity"]["station_name"] == "Radio Test"
+        assert body["identity"]["source"] == "env"
+        assert body["identity"]["preview"]["heard_on_air"].startswith("Radio Test")
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_capabilities():
     """Listener page reads capabilities every poll for client-side feature gating."""
     app = _make_test_app()
@@ -122,6 +140,7 @@ async def test_admin_listener_facts_agree():
     assert admin["session_stopped"] == public["session_stopped"]
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]
+    assert admin["identity"] == public["identity"]
     assert admin["capabilities"] == public["capabilities"]
     assert admin["upcoming"] == public["upcoming"]
     assert admin["upcoming_mode"] == public["upcoming_mode"]

@@ -18,6 +18,7 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -59,6 +60,18 @@ PACING_BOUNDS: dict[str, tuple[int, int]] = {
 # "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
 # identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
 DEFAULT_STATION_NAME = "Mamma Mi Radio"
+_MAX_STATION_NAME_LEN = 80
+
+_DEFAULT_SONIC_TAGLINE = "Da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_GEOGRAPHY = "Windor, Vergen"
+_DEFAULT_SONIC_FULL_IDENT = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_SWEEPERS = (
+    "Mamma Mi Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Mamma Mi Radio.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+)
 
 
 def coerce_bool(value: object, default: bool = False) -> bool:
@@ -627,6 +640,16 @@ class BrandSection:
 
 
 @dataclass
+class IdentitySection:
+    """Resolved station identity shared by every human-facing surface."""
+
+    station_name: str = DEFAULT_STATION_NAME
+    source: str = "default"
+    custom_copy_preserved: bool = False
+    generated: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class StationConfig:
     """Fully resolved application configuration used at runtime."""
 
@@ -644,6 +667,7 @@ class StationConfig:
     radio_events: list[RadioEventRule] = field(default_factory=list)
     moderation: ModerationSection = field(default_factory=ModerationSection)
     persona: PersonaSection = field(default_factory=PersonaSection)
+    identity: IdentitySection = field(default_factory=IdentitySection)
     brand: BrandSection = field(default_factory=BrandSection)
     brand_warnings: list[str] = field(default_factory=list)
     cache_dir: Path = Path("cache")
@@ -687,13 +711,8 @@ class StationConfig:
 
     @property
     def display_station_name(self) -> str:
-        """Canonical listener-facing station name — the single resolver, never blank.
-
-        Every user-visible surface (HA entities, clip sidecar, etc.) reads this
-        instead of re-deriving the name, so the value stays consistent. Resolves
-        brand → station → the canonical default.
-        """
-        return self.brand.station_name or self.station.name or DEFAULT_STATION_NAME
+        """Compatibility alias for the resolved listener-facing station name."""
+        return self.identity.station_name or DEFAULT_STATION_NAME
 
 
 def _normalize_tts_voices(config: StationConfig) -> None:
@@ -955,6 +974,7 @@ def _apply_addon_options() -> None:
             os.environ[env_key] = val
 
     env_map = {
+        "station_name": "STATION_NAME",
         "admin_password": "ADMIN_PASSWORD",
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
@@ -1337,6 +1357,107 @@ def _clean_str(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def sanitize_station_name(value: object) -> str:
+    """Return a safe, bounded station name for human-facing surfaces."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", " ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:_MAX_STATION_NAME_LEN].rstrip()
+
+
+def _is_default_station_name(value: object) -> bool:
+    return sanitize_station_name(value).casefold() == DEFAULT_STATION_NAME.casefold()
+
+
+def _default_identity_pack(station_name: str, sonic_brand: SonicBrandSection | None = None) -> dict[str, Any]:
+    """Deterministic station-copy pack derived from the chosen station name."""
+    name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    tagline = (
+        sanitize_station_name(getattr(sonic_brand, "tagline", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_TAGLINE
+    ) or _DEFAULT_SONIC_TAGLINE
+    geography = (
+        sanitize_station_name(getattr(sonic_brand, "geography", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_GEOGRAPHY
+    ) or _DEFAULT_SONIC_GEOGRAPHY
+    sweepers = [
+        f"{name}.",
+        f"{geography}... e tutto il mondo che ascolta.",
+        f"Sei su {name}.",
+        "La radio che tua nonna non approverebbe.",
+        "Da Windor a Vergen, nessuno è al sicuro.",
+    ]
+    return {
+        "spoken_ident": f"{name}... {tagline}",
+        "sweepers": sweepers,
+        "listener_title": name,
+        "share_title": f"{name} - live radio",
+        "home_assistant_name": name,
+    }
+
+
+def _resolve_identity(
+    *,
+    station_raw: dict,
+    brand: BrandSection,
+    sonic_brand: SonicBrandSection,
+    addon_mode: bool,
+    env_station_name: str,
+    brand_warnings: list[str],
+) -> IdentitySection:
+    """Resolve one station identity after TOML, env, and add-on inputs are known."""
+    station_raw_name = sanitize_station_name(station_raw.get("name"))
+    brand_name = sanitize_station_name(brand.station_name)
+
+    if env_station_name:
+        station_name = env_station_name
+        source = "ha_addon" if addon_mode else "env"
+    elif station_raw_name and not _is_default_station_name(station_raw_name):
+        station_name = station_raw_name
+        source = "station"
+    elif brand_name and not _is_default_station_name(brand_name):
+        station_name = brand_name
+        source = "brand"
+    else:
+        station_name = station_raw_name or brand_name or DEFAULT_STATION_NAME
+        source = "default"
+
+    station_name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    station_raw["name"] = station_name
+    pack = _default_identity_pack(station_name, sonic_brand)
+
+    custom_copy_preserved = False
+    if brand_name and not _is_default_station_name(brand_name) and brand_name != station_name:
+        custom_copy_preserved = True
+    brand.station_name = station_name
+
+    full_ident = str(sonic_brand.full_ident or "")
+    if not full_ident or full_ident == _DEFAULT_SONIC_FULL_IDENT:
+        sonic_brand.full_ident = str(pack["spoken_ident"])
+    elif station_name not in full_ident:
+        custom_copy_preserved = True
+
+    if not sonic_brand.sweepers or tuple(sonic_brand.sweepers) == _DEFAULT_SONIC_SWEEPERS:
+        sonic_brand.sweepers = list(pack["sweepers"])
+    elif not any(station_name in line for line in sonic_brand.sweepers):
+        custom_copy_preserved = True
+
+    if custom_copy_preserved:
+        brand_warnings.append(
+            "custom identity copy preserved; regenerate it deliberately if it should use the current station name"
+        )
+
+    return IdentitySection(
+        station_name=station_name,
+        source=source,
+        custom_copy_preserved=custom_copy_preserved,
+        generated=pack,
+    )
+
+
 def _parse_radio_event_rules(value: object) -> list[RadioEventRule]:
     """Parse ``[[home.radio_event]]`` rules.
 
@@ -1641,8 +1762,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
 
     # Env-var overrides for Docker/HA add-on: station identity and playlist
-    if os.getenv("STATION_NAME"):
-        station_raw["name"] = os.getenv("STATION_NAME")
+    env_station_name = sanitize_station_name(os.getenv("STATION_NAME", ""))
+    if env_station_name:
+        station_raw["name"] = env_station_name
     if os.getenv("STATION_THEME"):
         station_raw["theme"] = os.getenv("STATION_THEME")
     # Dynamic LLM routing: model IDs live in [models], never in code. Parse the
@@ -1685,6 +1807,14 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     # Validation is graceful — invalid values fall back to Volare Refined defaults
     # and surface as brand_warnings for the operator (Engine Room panel).
     brand, brand_warnings = _parse_brand(raw, hosts)
+    identity = _resolve_identity(
+        station_raw=station_raw,
+        brand=brand,
+        sonic_brand=sonic_brand,
+        addon_mode=addon_mode,
+        env_station_name=env_station_name,
+        brand_warnings=brand_warnings,
+    )
     if brand_warnings:
         import logging as _log
 
@@ -1707,6 +1837,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         radio_events=radio_events,
         moderation=moderation,
         persona=PersonaSection(**raw.get("persona", {})),
+        identity=identity,
         brand=brand,
         brand_warnings=brand_warnings,
         cache_dir=cache_dir,

@@ -241,6 +241,8 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
 async def test_station_id_uses_configured_sweeper_engine():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
+    config.sonic_brand.full_ident = ""
     config.sonic_brand.sweeper_voice = "marin"
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
@@ -257,6 +259,7 @@ async def test_station_id_uses_configured_sweeper_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.STATION_ID
+    assert mock_synthesize.call_args.args[0] == "Radio Test"
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == "openai"
     assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
@@ -266,10 +269,11 @@ async def test_station_id_uses_configured_sweeper_engine():
 async def test_sweeper_uses_configured_sweeper_engine():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
     config.sonic_brand.sweeper_voice = "marin"
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
-    config.sonic_brand.sweepers = ["Mamma Mi Radio."]
+    config.sonic_brand.sweepers = []
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     imaging = MagicMock()
     imaging.pick_sweeper_sting.side_effect = _fake_path
@@ -285,6 +289,7 @@ async def test_sweeper_uses_configured_sweeper_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.SWEEPER
+    assert mock_synthesize.call_args.args[0] == "Radio Test"
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == "openai"
     assert kwargs["edge_fallback_voice"] == "it-IT-GiuseppeMultilingualNeural"
@@ -294,6 +299,7 @@ async def test_sweeper_uses_configured_sweeper_engine():
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()
     config = _make_config()
+    config.identity.station_name = "Radio Test"
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -309,6 +315,7 @@ async def test_time_check_uses_host_engine_for_tts():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.TIME_CHECK
+    assert "Radio Test" in mock_synthesize.call_args.args[0]
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice

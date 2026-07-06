@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
+
 ### Fixed
 
 - **Recovery audio now gets in before the station slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.

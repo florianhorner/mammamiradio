@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_env():
-    """Prevent real API keys from leaking into tests via load_dotenv."""
+    """Prevent real operator settings from leaking into tests via load_dotenv."""
     sensitive = [
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
@@ -17,6 +17,8 @@ def _isolate_env():
         "AZURE_SPEECH_REGION",
         "ELEVENLABS_API_KEY",
         "HA_TOKEN",
+        "STATION_NAME",
+        "STATION_THEME",
     ]
     saved = {k: os.environ.pop(k, None) for k in sensitive}
     yield

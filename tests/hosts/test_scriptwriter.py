@@ -132,6 +132,19 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
+def test_system_prompt_uses_resolved_station_identity(config):
+    config.station.name = "Engine Internal"
+    config.brand.station_name = "Legacy Brand"
+    config.identity.station_name = "Radio Test"
+
+    prompt = _build_system_prompt(config)
+
+    assert 'called "Radio Test"' in prompt
+    assert 'The ONLY radio station name you may ever write is\n  "Radio Test"' in prompt
+    assert "Engine Internal" not in prompt
+    assert "Legacy Brand" not in prompt
+
+
 def test_prompt_world_constants_byte_stable():
     """Pin the moved prompt-fiction constants byte-for-byte (env-independent).
 
