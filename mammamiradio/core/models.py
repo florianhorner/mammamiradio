@@ -1294,6 +1294,9 @@ class Capabilities:
     home_context_ready: bool = False
     """A prompt-safe Home Assistant context slice is available."""
 
+    home_context_enabled: bool = False
+    """Home Assistant context polling/review is enabled when HA access exists."""
+
     jamendo: bool = False
     """Jamendo source is configured with a client ID."""
 

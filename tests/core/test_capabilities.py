@@ -15,6 +15,7 @@ def _config(**overrides):
     cfg.openai_api_key = overrides.get("openai_api_key", "")
     cfg.ha_token = overrides.get("ha_token", "")
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
+    cfg.homeassistant.context_enabled = overrides.get("ha_context_enabled", True)
     cfg.playlist.jamendo_client_id = overrides.get("jamendo_client_id", "")
     cfg.tts_degraded_voices = overrides.get("tts_degraded_voices", [])
     cfg.allow_ytdlp = overrides.get("allow_ytdlp", False)
@@ -112,7 +113,7 @@ def test_get_capabilities_all_on():
         ),
         _state(),
     )
-    assert caps == Capabilities(llm=True, ha=True)
+    assert caps == Capabilities(llm=True, ha=True, home_context_enabled=True)
 
 
 def test_get_capabilities_home_context_ready_controls_connected_tier():
@@ -169,6 +170,7 @@ def test_capabilities_to_dict_shape():
     assert d["capabilities"]["ha"] is False
     assert d["capabilities"]["homeassistant_access"] is False
     assert d["capabilities"]["home_context_ready"] is False
+    assert d["capabilities"]["home_context_enabled"] is False
     assert d["capabilities"]["jamendo"] is True
     assert d["capabilities"]["charts_reload"] is True
     assert d["tier"] == "full_ai"
@@ -182,8 +184,23 @@ def test_next_step_add_llm_when_no_llm():
 
 
 def test_next_step_review_ha_context_when_access_exists_without_context():
-    step = next_step(Capabilities(llm=True, ha=True))
+    step = next_step(Capabilities(llm=True, ha=True, home_context_enabled=True))
     assert step["key"] == "review_ha_context"
+
+
+def test_next_step_full_ai_without_ha_is_all_set():
+    step = next_step(Capabilities(llm=True, ha=False))
+    assert step == {"key": "all_set", "message": "", "action": "none"}
+
+
+def test_next_step_requested_ha_without_access_prompts_access():
+    step = next_step(Capabilities(llm=True, ha=False, home_context_enabled=True))
+    assert step["key"] == "enable_ha"
+
+
+def test_next_step_full_ai_with_ha_context_disabled_is_all_set():
+    step = next_step(Capabilities(llm=True, ha=True, home_context_enabled=False))
+    assert step == {"key": "all_set", "message": "", "action": "none"}
 
 
 def test_next_step_all_set_when_llm_and_home_context_ready():

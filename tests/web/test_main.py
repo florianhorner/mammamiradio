@@ -588,6 +588,9 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
     ledger = app.state.station_state.evening_ledger
     assert "k" not in ledger.buckets
     assert "other" in ledger.buckets
+    reloaded = EveningLedger.load(tmp_path)
+    assert "k" not in reloaded.buckets
+    assert "other" in reloaded.buckets
 
 
 @pytest.mark.asyncio

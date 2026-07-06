@@ -311,6 +311,7 @@ async def startup():
     )
     for _muted_entity_id in _muted_at_boot:
         evening_ledger.purge_entity(_muted_entity_id)
+    evening_ledger.save_if_dirty(config.cache_dir)
 
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not

@@ -248,6 +248,58 @@ def _home_context_copy(config: StationConfig, home_status: str) -> tuple[str, st
     )
 
 
+def _homeassistant_essential_status(
+    config: StationConfig,
+    guided_home_context: dict,
+) -> tuple[str, str, str]:
+    """Project guided HA context state into the legacy essentials row."""
+    readiness = guided_home_context.get("readiness")
+    status = guided_home_context.get("status")
+    if guided_home_context.get("home_context_ready"):
+        return (
+            "configured",
+            "Home Assistant context is available for references in banter.",
+            "Review the Home context preview when you want to mute or inspect entities.",
+        )
+    if readiness == "disabled":
+        summary = (
+            "Home Assistant context is off."
+            if guided_home_context.get("homeassistant_access")
+            else "Home Assistant integration is off."
+        )
+        next_action = (
+            "Nothing required. Enable Home Assistant context only if you want live home-aware banter."
+            if config.is_addon
+            else "Enable Home Assistant in radio.toml and provide HA_TOKEN if you want live home context."
+        )
+        return ("skipped", summary, next_action)
+    if readiness == "access_missing":
+        return (
+            "missing",
+            "Home Assistant is enabled, but no token is available.",
+            "Check the add-on configuration so the station can reach Home Assistant."
+            if config.is_addon
+            else "Set HA_TOKEN and HA_URL, then recheck Home Assistant context.",
+        )
+    if readiness == "empty":
+        return (
+            "warn",
+            "Home Assistant is connected, but no prompt-safe context is available yet.",
+            "Review the Home context preview, muted entities, and prompt-safe devices.",
+        )
+    if status == "waiting_ai":
+        return (
+            "warn",
+            "Home Assistant access is configured; AI hosts are needed before context can be used.",
+            "Add an Anthropic or OpenAI key before the hosts can use Home Assistant context.",
+        )
+    return (
+        "warn",
+        "Home Assistant access is configured; context is still being collected.",
+        "Wait for the next Home Assistant refresh or review the context preview.",
+    )
+
+
 def build_guided_setup(
     config: StationConfig,
     state: StationState,
@@ -383,10 +435,9 @@ def build_setup_status(
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
     has_azure_tts = bool(config.azure_speech_key and config.azure_speech_region)
     has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
-    has_ha = bool(config.homeassistant.enabled and config.ha_token)
-    is_ha_enabled = bool(config.homeassistant.enabled)
     guided_setup = build_guided_setup(config, state, golden_path=golden_path, provider_health=provider_health)
     stream_ready = guided_setup["stream"]["status"] == "ready"
+    ha_status, ha_summary, ha_next_action = _homeassistant_essential_status(config, guided_setup["home_context"])
 
     mode_by_id = {entry["id"]: entry for entry in mode["modes"]}
     detected_mode = mode_by_id.get(mode["detected"], {})
@@ -467,19 +518,9 @@ def build_setup_status(
             "label": "Home Assistant",
             "required": False,
             "required_label": "Optional ambient context",
-            "status": ("configured" if has_ha else "skipped" if not is_ha_enabled else "missing"),
-            "summary": (
-                "Home Assistant context is available for references in banter."
-                if has_ha
-                else "Home Assistant integration is off."
-                if not is_ha_enabled
-                else "Home Assistant is enabled, but no token is available."
-            ),
-            "next_action": (
-                "Nothing to do. Add-on mode wires this up automatically."
-                if config.is_addon
-                else "Enable Home Assistant in radio.toml and provide HA_TOKEN if you want live home context."
-            ),
+            "status": ha_status,
+            "summary": ha_summary,
+            "next_action": ha_next_action,
             "skip_outcome": "If you skip this, the hosts just stop referencing your home state.",
             "where": {
                 "ha_addon": "Automatic via Supervisor",

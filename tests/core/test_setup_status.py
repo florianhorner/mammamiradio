@@ -114,6 +114,9 @@ def test_build_setup_status_returns_expected_shape_for_addon():
     assert payload["guided_setup"]["stream"]["status"] == "ready"
     assert payload["guided_setup"]["ai_hosts"]["status"] == "missing"
     assert payload["guided_setup"]["home_context"]["status"] == "waiting_ai"
+    homeassistant = next(item for item in payload["essentials"] if item["key"] == "homeassistant")
+    assert homeassistant["status"] == "warn"
+    assert "AI hosts are needed" in homeassistant["summary"]
     strip = payload["guided_setup"]["strip"]
     assert strip["attention_required"] is True
     assert strip["primary_action"] == {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"}
@@ -236,6 +239,61 @@ def test_guided_setup_connected_home_requires_safe_context():
         "label": "Review home context",
         "target": "setup",
     }
+
+
+def test_build_setup_status_homeassistant_essential_requires_prompt_safe_context():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
+    state = _real_state()
+
+    payload = build_setup_status(config, state)
+    homeassistant = next(item for item in payload["essentials"] if item["key"] == "homeassistant")
+
+    assert payload["guided_setup"]["home_context"]["status"] == "checking"
+    assert homeassistant["status"] == "warn"
+    assert "still being collected" in homeassistant["summary"]
+    assert "available for references" not in homeassistant["summary"]
+
+    state.ha_context = "- Coffee machine: on"
+    payload = build_setup_status(config, state)
+    homeassistant = next(item for item in payload["essentials"] if item["key"] == "homeassistant")
+
+    assert payload["guided_setup"]["home_context"]["status"] == "ready"
+    assert homeassistant["status"] == "configured"
+    assert "available for references" in homeassistant["summary"]
+
+
+def test_build_setup_status_homeassistant_essential_marks_missing_token():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.ha_token = ""
+    state = _real_state()
+
+    payload = build_setup_status(config, state)
+    homeassistant = next(item for item in payload["essentials"] if item["key"] == "homeassistant")
+
+    assert payload["guided_setup"]["home_context"]["status"] == "blocked"
+    assert homeassistant["status"] == "missing"
+    assert "no token" in homeassistant["summary"]
+
+
+def test_build_setup_status_homeassistant_essential_marks_empty_context():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
+    state = _real_state()
+    state.ha_context_last_updated = 123.0
+
+    payload = build_setup_status(config, state)
+    homeassistant = next(item for item in payload["essentials"] if item["key"] == "homeassistant")
+
+    assert payload["guided_setup"]["home_context"]["status"] == "empty"
+    assert homeassistant["status"] == "warn"
+    assert "no prompt-safe context" in homeassistant["summary"]
 
 
 def test_guided_setup_home_context_empty_after_successful_empty_fetch():

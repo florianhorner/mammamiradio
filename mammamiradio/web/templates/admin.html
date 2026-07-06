@@ -3186,7 +3186,7 @@ function renderHomeContextPreview(data){
         <div class="ha-preview-meta">${esc(meta)}</div>
         <div class="ha-preview-id">${esc(row.entity_id)}</div>
       </div>
-      <button type="button" class="btn btn-util ha-preview-action" aria-label="${esc(aria)}" onclick="setHaEntityMuted('${esc(row.entity_id)}',${muted?'false':'true'},this)">${esc(action)}</button>
+      <button type="button" class="btn btn-util ha-preview-action" aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>
     </div>`;
   }).join('');
 }
@@ -3218,6 +3218,12 @@ async function setHaEntityMuted(entityId, muted, el){
   await loadHomeContextPreview();
   await refreshFast();
 }
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-ha-entity-id][data-ha-muted-next]');
+  if(!btn)return;
+  event.preventDefault();
+  setHaEntityMuted(btn.getAttribute('data-ha-entity-id')||'',btn.getAttribute('data-ha-muted-next')==='true',btn);
+});
 function renderSetup(setup){
   if(!setup) return;
   const _json=JSON.stringify(setup);
