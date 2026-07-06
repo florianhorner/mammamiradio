@@ -128,6 +128,19 @@ def test_get_capabilities_home_context_ready_controls_connected_tier():
     assert caps.tier == "connected_home"
 
 
+def test_get_capabilities_ignores_stale_context_without_ha_access():
+    caps = get_capabilities(
+        _config(
+            anthropic_api_key="sk-test",
+            ha_token="",
+            ha_enabled=False,
+        ),
+        _state(ha_context="- Coffee machine: on"),
+    )
+    assert caps.home_context_ready is False
+    assert caps.tier == "full_ai"
+
+
 def test_get_capabilities_sets_jamendo_flag():
     caps = get_capabilities(_config(jamendo_client_id="jamendo-client"), _state())
     assert caps.jamendo is True

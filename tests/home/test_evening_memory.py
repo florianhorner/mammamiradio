@@ -262,6 +262,14 @@ def test_muted_entity_cannot_still_fire_a_gag_after_purge(monkeypatch):
     assert led.select_and_render(now=BASE, rng=random.Random(0)) == ""
 
 
+def test_denylisted_bucket_cannot_fire_even_if_still_in_memory(monkeypatch):
+    monkeypatch.setattr("mammamiradio.home.evening_memory.GAG_INJECT_PROBABILITY", 1.0)
+    led = _ledger_with_hot_gag()
+    led.entity_denylist = frozenset({COFFEE})
+
+    assert led.select_and_render(now=BASE, rng=random.Random(0)) == ""
+
+
 # --- S2 empty fallback -------------------------------------------------------
 
 
@@ -313,6 +321,19 @@ def test_load_missing_starts_fresh(tmp_path):
     led = EveningLedger.load(tmp_path)
     assert led.session_id == 0
     assert led.buckets == {}
+
+
+def test_load_purges_entity_denylist_buckets(tmp_path):
+    led = _ledger_with_hot_gag()
+    led.buckets["other"] = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
+    led._dirty = True
+    led.save_if_dirty(tmp_path)
+
+    restored = EveningLedger.load(tmp_path, entity_denylist={COFFEE})
+
+    assert "k" not in restored.buckets
+    assert "other" in restored.buckets
+    assert restored._dirty is True
 
 
 def test_load_corrupt_starts_fresh_without_crashing(tmp_path):

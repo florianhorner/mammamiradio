@@ -107,6 +107,29 @@ def test_load_entity_policy_read_error_falls_back_to_last_known_good_not_empty(t
     assert degraded != empty_policy()
 
 
+def test_load_entity_policy_uses_mtime_cache_for_unchanged_file(tmp_path):
+    set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
+    good_policy = load_entity_policy(tmp_path)
+
+    with patch("pathlib.Path.read_text", side_effect=AssertionError("should use cached policy")):
+        cached = load_entity_policy(tmp_path)
+
+    assert cached == good_policy
+
+
+def test_load_entity_policy_last_good_isolated_per_cache_path(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    set_entity_muted(first, "switch.coffee_machine", True, label="Coffee")
+    assert load_entity_policy(first)["muted"]
+
+    bad_path = policy_path(second)
+    bad_path.parent.mkdir(parents=True)
+    bad_path.write_text("{not valid json")
+
+    assert load_entity_policy(second) == empty_policy()
+
+
 def test_clean_text_none_becomes_empty_string():
     assert _clean_text(None) == ""
 

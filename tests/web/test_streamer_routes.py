@@ -2586,6 +2586,7 @@ async def test_setup_status_and_capabilities_share_guided_setup_projection():
     assert capabilities_resp.json()["guided_setup"] == setup_resp.json()["guided_setup"]
     assert capabilities_resp.json()["guided_setup"]["ai_hosts"]["status"] == "ready"
     assert capabilities_resp.json()["guided_setup"]["home_context"]["status"] == "ready"
+    assert capabilities_resp.json()["guided_setup"]["strip"]["items"][2]["id"] == "home_context"
 
 
 @pytest.mark.asyncio
@@ -2801,6 +2802,12 @@ async def test_homeassistant_context_candidates_returns_sanitized_admin_preview(
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ready"
+    assert body["entities"]
+    assert body["entities"][0]["row_state"] == "used_by_hosts"
+    assert body["entities"][0]["entity_id"] == "switch.coffee_machine"
+    assert "sent_now" in body
+    assert "candidates" in body
+    assert "muted" in body
     row = body["sent_now"][0]
     assert row["entity_id"] == "switch.coffee_machine"
     assert row["label"] == "Coffee machine"
@@ -2852,6 +2859,29 @@ async def test_homeassistant_entity_policy_mute_persists_and_clears_prompt_state
     muted_rows = preview.json()["muted"]
     assert muted_rows[0]["entity_id"] == "switch.coffee_machine"
     assert muted_rows[0]["sent_to_prompt"] is False
+    entity_rows = {row["entity_id"]: row for row in preview.json()["entities"]}
+    assert entity_rows["switch.coffee_machine"]["row_state"] == "muted"
+    assert entity_rows["switch.coffee_machine"]["muted"] is True
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_queue(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    queued_segment = Segment(type=SegmentType.BANTER, path=Path("/tmp/already-rendered.mp3"), metadata={})
+    app.state.queue.put_nowait(queued_segment)
+    app.state.station_state.queued_segments = [{"type": "banter", "label": "Already rendered"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.coffee_machine", "muted": True},
+        )
+
+    assert resp.status_code == 200
+    assert app.state.queue.qsize() == 1
+    assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Already rendered"}]
 
 
 @pytest.mark.asyncio

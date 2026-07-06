@@ -600,6 +600,14 @@ def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:
     _assert_touch_target(".setup-inline-action")
 
 
+def test_setup_guided_controls_have_44px_touch_targets() -> None:
+    _assert_touch_target(".setup-strip-action")
+    _assert_touch_target(".setup-advanced summary")
+    _assert_touch_target(".ha-preview-action")
+    _assert_touch_target(".setup-home-preview-action")
+    _assert_touch_target(".setup-recheck-action")
+
+
 def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:
     declarations = _declarations_for_selector(_admin_css(), '.ha input[type="range"]')
     height = _effective_px(declarations, "height", "min-height")

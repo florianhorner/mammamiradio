@@ -6,8 +6,9 @@ import hashlib
 import json
 import platform
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import StationState
@@ -79,6 +80,40 @@ def has_safe_home_context(state: StationState) -> bool:
     )
 
 
+HomeContextReadiness = Literal["disabled", "access_missing", "collecting", "empty", "prompt_ready"]
+
+
+@dataclass(frozen=True)
+class HomeContextAvailability:
+    """User-facing HA context availability for setup and capability surfaces."""
+
+    readiness: HomeContextReadiness
+    homeassistant_access: bool
+    home_context_ready: bool
+
+
+def home_context_availability(config: StationConfig, state: StationState) -> HomeContextAvailability:
+    """Project Home Assistant context into typed setup-ready states."""
+    has_access = bool(config.homeassistant.enabled and config.ha_token)
+    home_ready = has_safe_home_context(state)
+    readiness: HomeContextReadiness
+    if not config.homeassistant.enabled:
+        readiness = "disabled"
+    elif not has_access:
+        readiness = "access_missing"
+    elif home_ready:
+        readiness = "prompt_ready"
+    elif state.ha_context_last_updated:
+        readiness = "empty"
+    else:
+        readiness = "collecting"
+    return HomeContextAvailability(
+        readiness=readiness,
+        homeassistant_access=has_access,
+        home_context_ready=readiness == "prompt_ready",
+    )
+
+
 def _llm_key_status(config: StationConfig, provider_health: dict | None = None) -> str:
     has_anthropic = bool(config.anthropic_api_key)
     has_openai = bool(config.openai_api_key)
@@ -109,6 +144,69 @@ def _stream_status(config: StationConfig, state: StationState, golden_path: dict
     return "checking" if config.allow_ytdlp else "blocked"
 
 
+def _legacy_home_context_status(has_llm: bool, availability: HomeContextAvailability) -> str:
+    if not has_llm:
+        return "waiting_ai"
+    return {
+        "disabled": "not_configured",
+        "access_missing": "blocked",
+        "collecting": "checking",
+        "empty": "empty",
+        "prompt_ready": "ready",
+    }[availability.readiness]
+
+
+def _setup_status_shape(status: str) -> dict[str, str]:
+    if status == "ready":
+        return {"tone": "ok", "shape": "ok", "display_status": "Ready"}
+    if status == "not_configured":
+        return {"tone": "info", "shape": "info", "display_status": "Optional"}
+    if status in {"blocked", "rejected", "stopped"}:
+        return {"tone": "error", "shape": "error", "display_status": "Needs setup"}
+    display = {
+        "missing": "Missing",
+        "waiting_ai": "Waiting for AI",
+        "checking": "Checking",
+        "empty": "No safe context yet",
+    }.get(status, status.replace("_", " ").title())
+    return {"tone": "warn", "shape": "warn", "display_status": display}
+
+
+def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for stage in stages:
+        status = str(stage.get("status") or "checking")
+        shape = _setup_status_shape(status)
+        items.append(
+            {
+                "id": stage.get("id") or stage.get("label", "setup").lower().replace(" ", "_"),
+                "label": stage.get("label") or "Setup",
+                "status": status,
+                **shape,
+            }
+        )
+    primary_action = {"kind": "open_listener", "label": "Open listener", "target": "listen"}
+    for stage in stages:
+        status = str(stage.get("status") or "checking")
+        action = str(stage.get("action") or "")
+        if action == "review_home_context":
+            primary_action = {"kind": "review_home_context", "label": "Review home context", "target": "setup"}
+            break
+        if status in {"ready", "not_configured"}:
+            continue
+        primary_action = {
+            "fix_stream": {"kind": "fix_stream", "label": "Fix stream", "target": "setup"},
+            "add_ai_key": {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"},
+        }.get(action, {"kind": "review_setup", "label": "Review setup", "target": "setup"})
+        break
+    attention_required = primary_action["kind"] != "open_listener"
+    return {
+        "items": items,
+        "attention_required": attention_required,
+        "primary_action": primary_action,
+    }
+
+
 def build_guided_setup(
     config: StationConfig,
     state: StationState,
@@ -118,80 +216,71 @@ def build_guided_setup(
 ) -> dict:
     """Canonical three-stage onboarding projection shared by admin APIs."""
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
-    has_ha_access = bool(config.homeassistant.enabled and config.ha_token)
-    home_ready = has_safe_home_context(state)
+    home_availability = home_context_availability(config, state)
+    has_ha_access = home_availability.homeassistant_access
+    home_ready = home_availability.home_context_ready
     stream_status = _stream_status(config, state, golden_path)
     ai_status = _llm_key_status(config, provider_health)
+    home_status = _legacy_home_context_status(has_llm, home_availability)
 
-    if not has_llm:
-        home_status = "waiting_ai"
-    elif home_ready:
-        home_status = "ready"
-    elif not config.homeassistant.enabled:
-        # Home Assistant is an optional upgrade, not a required completion
-        # state — a standalone station that never turned it on is done, not
-        # blocked. "blocked" stays reserved for HA enabled-but-not-working.
-        home_status = "not_configured"
-    elif has_ha_access and state.ha_context_last_updated:
-        home_status = "empty"
-    elif has_ha_access:
-        home_status = "checking"
-    else:
-        home_status = "blocked"
-
+    stream = {
+        "id": "stream",
+        "status": stream_status,
+        "label": "Stream",
+        "headline": "Demo Radio is ready to hear." if stream_status == "ready" else "Stream needs attention.",
+        "detail": (
+            "Open the listener and hear the station before adding keys."
+            if stream_status == "ready"
+            else "Start the station or add a music source before continuing."
+        ),
+        "action": "open_listener" if stream_status == "ready" else "fix_stream",
+    }
+    ai_hosts = {
+        "id": "ai_hosts",
+        "status": ai_status,
+        "label": "AI hosts",
+        "headline": "AI hosts are ready." if ai_status == "ready" else "Add one AI host key.",
+        "detail": (
+            "Anthropic or OpenAI can generate live host breaks."
+            if ai_status == "ready"
+            else "Add ANTHROPIC_API_KEY or OPENAI_API_KEY when you want generated banter and ads."
+        ),
+        "action": "review" if ai_status == "ready" else "add_ai_key",
+    }
+    home_context = {
+        "id": "home_context",
+        "status": home_status,
+        "readiness": home_availability.readiness,
+        "label": "Home context",
+        "headline": (
+            "Home context is available."
+            if home_status == "ready"
+            else "Home Assistant isn't connected."
+            if home_status == "not_configured"
+            else "Review home context after AI is ready."
+        ),
+        "detail": (
+            "Filtered Home Assistant context can be inspected and muted from the admin panel."
+            if home_status == "ready"
+            else "Optional — connect Home Assistant if you want the hosts to notice your house."
+            if home_status == "not_configured"
+            else ("Supervisor access is automatic in the add-on; AI hosts must be ready before home context is useful.")
+        ),
+        "action": (
+            "review_home_context"
+            if home_status in {"ready", "empty"}
+            else "none"
+            if home_status == "not_configured"
+            else "wait"
+        ),
+        "homeassistant_access": has_ha_access,
+        "home_context_ready": home_ready,
+    }
     return {
-        "stream": {
-            "status": stream_status,
-            "label": "Stream",
-            "headline": "Demo Radio is ready to hear." if stream_status == "ready" else "Stream needs attention.",
-            "detail": (
-                "Open the listener and hear the station before adding keys."
-                if stream_status == "ready"
-                else "Start the station or add a music source before continuing."
-            ),
-            "action": "open_listener" if stream_status == "ready" else "fix_stream",
-        },
-        "ai_hosts": {
-            "status": ai_status,
-            "label": "AI hosts",
-            "headline": "AI hosts are ready." if ai_status == "ready" else "Add one AI host key.",
-            "detail": (
-                "Anthropic or OpenAI can generate live host breaks."
-                if ai_status == "ready"
-                else "Add ANTHROPIC_API_KEY or OPENAI_API_KEY when you want generated banter and ads."
-            ),
-            "action": "review" if ai_status == "ready" else "add_ai_key",
-        },
-        "home_context": {
-            "status": home_status,
-            "label": "Home context",
-            "headline": (
-                "Home context is available."
-                if home_status == "ready"
-                else "Home Assistant isn't connected."
-                if home_status == "not_configured"
-                else "Review home context after AI is ready."
-            ),
-            "detail": (
-                "Filtered Home Assistant context can be inspected and muted from the admin panel."
-                if home_status == "ready"
-                else "Optional — connect Home Assistant if you want the hosts to notice your house."
-                if home_status == "not_configured"
-                else (
-                    "Supervisor access is automatic in the add-on; "
-                    "AI hosts must be ready before home context is useful."
-                )
-            ),
-            "action": (
-                "review_home_context"
-                if home_status in {"ready", "empty"}
-                else "none"
-                if home_status == "not_configured"
-                else "wait"
-            ),
-            "homeassistant_access": has_ha_access,
-            "home_context_ready": home_ready,
-        },
+        "strip": _build_setup_strip([stream, ai_hosts, home_context]),
+        "stream": {key: value for key, value in stream.items() if key != "id"},
+        "ai_hosts": {key: value for key, value in ai_hosts.items() if key != "id"},
+        "home_context": {key: value for key, value in home_context.items() if key != "id"},
     }
 
 
@@ -205,7 +294,7 @@ def classify_station_mode(
     if demo_playlist is None:
         demo_playlist = _playlist_is_demo(state)
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
-    has_ha_context = bool(config.homeassistant.enabled and config.ha_token and has_safe_home_context(state))
+    has_ha_context = home_context_availability(config, state).readiness == "prompt_ready"
 
     if has_llm and has_ha_context:
         return {

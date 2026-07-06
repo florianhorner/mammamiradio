@@ -62,35 +62,56 @@ def empty_policy() -> dict[str, Any]:
 # control, so an unreadable file degrades to the last confirmed-good policy
 # instead of "nothing is muted" (codex adversarial review).
 _LAST_GOOD_POLICY: dict[str, dict[str, Any]] = {}
+_POLICY_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+
+
+def _store_good_policy(path: Path, stat: os.stat_result | None, policy: dict[str, Any]) -> dict[str, Any]:
+    key = str(path)
+    _LAST_GOOD_POLICY[key] = policy
+    if stat is not None:
+        _POLICY_CACHE[key] = (stat.st_mtime_ns, stat.st_size, policy)
+    return policy
 
 
 def load_entity_policy(cache_dir: Path) -> dict[str, Any]:
     """Load entity policy; malformed/missing files degrade to an empty policy."""
     path = policy_path(cache_dir)
     key = str(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return empty_policy()
-    except (OSError, json.JSONDecodeError, TypeError) as exc:
-        logger.warning("Ignoring malformed HA entity policy %s: %s", path, exc)
-        return _LAST_GOOD_POLICY.get(key, empty_policy())
-    if not isinstance(data, dict):
-        logger.warning("Ignoring malformed HA entity policy %s: root is not an object", path)
-        return _LAST_GOOD_POLICY.get(key, empty_policy())
-    muted_raw = data.get("muted")
-    if not isinstance(muted_raw, dict):
-        return _LAST_GOOD_POLICY.get(key, empty_policy())
-    muted: dict[str, dict[str, Any]] = {}
-    for entity_id, entry in muted_raw.items():
-        if not isinstance(entity_id, str):
-            continue
-        clean = _clean_entry(entity_id, entry)
-        if clean is not None:
-            muted[entity_id] = clean
-    policy = {"schema_version": SCHEMA_VERSION, "muted": muted}
-    _LAST_GOOD_POLICY[key] = policy
-    return policy
+    with _LOCK:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            _POLICY_CACHE.pop(key, None)
+            return empty_policy()
+        except OSError as exc:
+            logger.warning("Could not stat HA entity policy %s: %s", path, exc)
+            return _LAST_GOOD_POLICY.get(key, empty_policy())
+        cached = _POLICY_CACHE.get(key)
+        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            _POLICY_CACHE.pop(key, None)
+            return empty_policy()
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning("Ignoring malformed HA entity policy %s: %s", path, exc)
+            return _LAST_GOOD_POLICY.get(key, empty_policy())
+        if not isinstance(data, dict):
+            logger.warning("Ignoring malformed HA entity policy %s: root is not an object", path)
+            return _LAST_GOOD_POLICY.get(key, empty_policy())
+        muted_raw = data.get("muted")
+        if not isinstance(muted_raw, dict):
+            return _LAST_GOOD_POLICY.get(key, empty_policy())
+        muted: dict[str, dict[str, Any]] = {}
+        for entity_id, entry in muted_raw.items():
+            if not isinstance(entity_id, str):
+                continue
+            clean = _clean_entry(entity_id, entry)
+            if clean is not None:
+                muted[entity_id] = clean
+        policy = {"schema_version": SCHEMA_VERSION, "muted": muted}
+        return _store_good_policy(path, stat, policy)
 
 
 def muted_entity_ids(cache_dir: Path | None) -> set[str]:
@@ -146,4 +167,9 @@ def set_entity_muted(
             muted_map.pop(entity_id, None)
         next_policy = {"schema_version": SCHEMA_VERSION, "muted": muted_map}
         _write_policy(cache_dir, next_policy)
+        try:
+            stat = policy_path(cache_dir).stat()
+        except OSError:
+            stat = None
+        _store_good_policy(policy_path(cache_dir), stat, next_policy)
         return next_policy

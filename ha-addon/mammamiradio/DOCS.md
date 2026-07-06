@@ -27,7 +27,7 @@ Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode,
 
 Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
 
-After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are not sent to prompts, public Casa moments, reactive triggers, or running-gag inputs.
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; already-rendered audio is not purged.
 
 Premium voice keys are optional and separate from the first AI-host unlock.
 
@@ -303,4 +303,4 @@ The dashboard shows one of three tiers based on your configuration:
 |------|--------------|---------------|
 | Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
 | Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env` (legacy add-on option fallback still works) |
-| Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |
+| Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |

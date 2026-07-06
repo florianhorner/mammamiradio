@@ -79,6 +79,19 @@ def test_classify_station_mode_ha_token_without_context_is_full_ai():
     assert mode["id"] == "full_ai"
 
 
+def test_classify_station_mode_stale_context_without_ha_access_is_full_ai():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant-test"
+    config.homeassistant.enabled = False
+    config.ha_token = ""
+    state = _real_state()
+    state.ha_context = "- Coffee machine: on"
+
+    mode = classify_station_mode(config, state)
+
+    assert mode["id"] == "full_ai"
+
+
 def test_build_setup_status_returns_expected_shape_for_addon():
     config = load_config()
     config.is_addon = True
@@ -96,6 +109,13 @@ def test_build_setup_status_returns_expected_shape_for_addon():
     assert payload["guided_setup"]["stream"]["status"] == "ready"
     assert payload["guided_setup"]["ai_hosts"]["status"] == "missing"
     assert payload["guided_setup"]["home_context"]["status"] == "waiting_ai"
+    strip = payload["guided_setup"]["strip"]
+    assert strip["attention_required"] is True
+    assert strip["primary_action"] == {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"}
+    assert [item["id"] for item in strip["items"]] == ["stream", "ai_hosts", "home_context"]
+    assert strip["items"][0]["display_status"] == "Ready"
+    assert strip["items"][0]["shape"] == "ok"
+    assert strip["items"][1]["tone"] == "warn"
     assert payload["essentials"][0]["key"] == "llm_keys"
     assert payload["preflight_checks"][0]["key"] == "ffmpeg"
     assert "/config/secrets.env" in payload["addon_options_snippet"]
@@ -127,6 +147,30 @@ def test_guided_setup_openai_only_marks_ai_hosts_ready():
 
     assert guided["stream"]["status"] == "ready"
     assert guided["ai_hosts"]["status"] == "ready"
+    assert guided["strip"]["attention_required"] is False
+    assert guided["strip"]["primary_action"] == {"kind": "open_listener", "label": "Open listener", "target": "listen"}
+
+
+def test_guided_setup_primary_action_prioritizes_stream_attention():
+    config = load_config()
+    config.allow_ytdlp = False
+    state = StationState()
+
+    guided = build_guided_setup(config, state)
+
+    assert guided["stream"]["status"] == "blocked"
+    assert guided["strip"]["primary_action"] == {"kind": "fix_stream", "label": "Fix stream", "target": "setup"}
+
+
+def test_guided_setup_primary_action_prompts_ai_key_when_stream_ready():
+    config = load_config()
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+
+    guided = build_guided_setup(config, _real_state())
+
+    assert guided["ai_hosts"]["status"] == "missing"
+    assert guided["strip"]["primary_action"] == {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"}
 
 
 def test_guided_setup_rejected_single_key_marks_ai_hosts_rejected():
@@ -179,7 +223,14 @@ def test_guided_setup_connected_home_requires_safe_context():
     assert build_guided_setup(config, state)["home_context"]["status"] == "checking"
 
     state.ha_context = "- Coffee machine: on"
-    assert build_guided_setup(config, state)["home_context"]["status"] == "ready"
+    guided = build_guided_setup(config, state)
+    assert guided["home_context"]["status"] == "ready"
+    assert guided["home_context"]["readiness"] == "prompt_ready"
+    assert guided["strip"]["primary_action"] == {
+        "kind": "review_home_context",
+        "label": "Review home context",
+        "target": "setup",
+    }
 
 
 def test_guided_setup_home_context_empty_after_successful_empty_fetch():
@@ -193,6 +244,12 @@ def test_guided_setup_home_context_empty_after_successful_empty_fetch():
     guided = build_guided_setup(config, state)
 
     assert guided["home_context"]["status"] == "empty"
+    assert guided["home_context"]["readiness"] == "empty"
+    assert guided["strip"]["primary_action"] == {
+        "kind": "review_home_context",
+        "label": "Review home context",
+        "target": "setup",
+    }
 
 
 def test_guided_setup_standalone_station_without_ha_is_not_configured_not_blocked():
@@ -205,7 +262,9 @@ def test_guided_setup_standalone_station_without_ha_is_not_configured_not_blocke
     guided = build_guided_setup(config, state)
 
     assert guided["home_context"]["status"] == "not_configured"
+    assert guided["home_context"]["readiness"] == "disabled"
     assert guided["home_context"]["action"] == "none"
+    assert guided["strip"]["items"][2]["display_status"] == "Optional"
 
 
 def test_guided_setup_ha_enabled_without_token_still_blocked():
@@ -217,7 +276,9 @@ def test_guided_setup_ha_enabled_without_token_still_blocked():
     config.ha_token = ""
     state = _real_state()
 
-    assert build_guided_setup(config, state)["home_context"]["status"] == "blocked"
+    guided = build_guided_setup(config, state)
+    assert guided["home_context"]["status"] == "blocked"
+    assert guided["home_context"]["readiness"] == "access_missing"
 
 
 def test_guided_setup_stream_stopped_and_no_source_states():

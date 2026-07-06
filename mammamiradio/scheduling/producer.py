@@ -1594,7 +1594,7 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     )
 
 
-def _has_real_home_context(ctx: HomeContext | None) -> bool:
+def _has_refresh_budget_context(ctx: HomeContext | None) -> bool:
     """True only for a genuinely populated context — not the empty timeout fallback.
 
     A successful fetch stamps ``timestamp`` (and usually fills ``scored``/``summary``);
@@ -1605,6 +1605,11 @@ def _has_real_home_context(ctx: HomeContext | None) -> bool:
     slow registry/weather warm-up could time out forever until restart.
     """
     return ctx is not None and (ctx.timestamp > 0 or bool(ctx.scored) or bool((ctx.summary or "").strip()))
+
+
+def _has_real_home_context(ctx: HomeContext | None) -> bool:
+    """Backward-compatible alias for refresh-budget context readiness."""
+    return _has_refresh_budget_context(ctx)
 
 
 async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
@@ -1618,7 +1623,7 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
     longer warm-up budget so the registry/weather snapshot can populate; every
     steady-state refresh gets the tight ``context_refresh_timeout``.
     """
-    have_context = _has_real_home_context(ha_cache) or _has_real_home_context(get_cached_home_context())
+    have_context = _has_refresh_budget_context(ha_cache) or _has_refresh_budget_context(get_cached_home_context())
     budget = (
         config.homeassistant.context_refresh_timeout
         if have_context

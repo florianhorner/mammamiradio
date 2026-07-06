@@ -22,6 +22,7 @@ from mammamiradio.home.ha_context import (
     HomeContext,
     HomeEvent,
     HomeRegistrySnapshot,
+    ScoredEntity,
     _apply_registry_area,
     _apply_registry_snapshot,
     _build_budgeted_summary,
@@ -42,6 +43,7 @@ from mammamiradio.home.ha_context import (
     classify_home_mood_en,
     fetch_home_context,
     fetch_weather_forecast,
+    get_cached_home_context,
     push_state_to_ha,
 )
 
@@ -914,6 +916,54 @@ async def test_fetch_home_context_prunes_muted_entities_from_fresh_cache(tmp_pat
     assert result.summary == ""
     assert list(result.events) == []
     assert result.events_summary == ""
+
+
+def test_get_cached_home_context_filters_muted_entities_on_copy(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
+    cached = HomeContext(
+        raw_states={muted_id: {"state": "on", "attributes": {"friendly_name": "Coffee"}}},
+        summary="- Macchina del caffè: acceso/a",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id=muted_id,
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        scored=[
+            ScoredEntity(
+                entity_id=muted_id,
+                area="Kitchen",
+                domain="switch",
+                score=99,
+                raw_state={"state": "on", "attributes": {"friendly_name": "Coffee"}},
+                label_it="La macchina del caffè",
+                label_en="Coffee machine",
+                summary_line="Coffee machine: on",
+            )
+        ],
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", cached):
+        filtered = get_cached_home_context(tmp_path)
+
+    assert filtered is not cached
+    assert filtered is not None
+    assert muted_id not in filtered.raw_states
+    assert list(filtered.events) == []
+    assert filtered.scored == []
+    assert muted_id in cached.raw_states
+    assert cached.events
+    assert cached.scored
 
 
 @pytest.mark.asyncio

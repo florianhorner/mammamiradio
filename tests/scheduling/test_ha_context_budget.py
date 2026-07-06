@@ -57,7 +57,9 @@ async def test_refresh_falls_back_to_stale_cache_on_timeout():
 
     with patch.object(producer, "fetch_home_context", _slow):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), stale)
-    assert out is stale
+    assert out is not stale
+    assert out.summary == "stale"
+    assert stale.summary == "stale"
 
 
 @pytest.mark.asyncio
@@ -139,7 +141,9 @@ async def test_refresh_uses_module_cache_when_passed_cache_is_none():
         patch.object(producer, "get_cached_home_context", lambda: module_cache),
     ):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), None)
-    assert out is module_cache
+    assert out is not module_cache
+    assert out.summary == "module"
+    assert module_cache.summary == "module"
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Capabilities, StationState
-from mammamiradio.core.setup_status import has_safe_home_context
+from mammamiradio.core.setup_status import home_context_availability
 
 
 def get_capabilities(config: StationConfig, state: StationState) -> Capabilities:
@@ -16,7 +16,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
     return Capabilities(
         llm=bool(config.anthropic_api_key or config.openai_api_key),
         ha=bool(config.homeassistant.enabled and config.ha_token),
-        home_context_ready=has_safe_home_context(state),
+        home_context_ready=home_context_availability(config, state).home_context_ready,
         jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
         charts_reload=bool(config.allow_ytdlp),
         tts_degraded=bool(getattr(config, "tts_degraded_voices", [])),

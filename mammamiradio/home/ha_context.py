@@ -391,6 +391,31 @@ class HomeContext:
         return time.time() - self.timestamp if self.timestamp else float("inf")
 
 
+def _copy_raw_state(state_data: dict) -> dict:
+    copied = dict(state_data)
+    attrs = copied.get("attributes")
+    if isinstance(attrs, dict):
+        copied["attributes"] = dict(attrs)
+    return copied
+
+
+def _copy_scored_entity(entity: ScoredEntity) -> ScoredEntity:
+    return replace(entity, raw_state=_copy_raw_state(entity.raw_state))
+
+
+def _copy_home_context(context: HomeContext) -> HomeContext:
+    """Copy mutable context containers before policy/view-specific filtering."""
+    return replace(
+        context,
+        raw_states={entity_id: _copy_raw_state(data) for entity_id, data in context.raw_states.items()},
+        events=deque(context.events, maxlen=context.events.maxlen or EVENT_BUFFER_SIZE),
+        radio_events=list(context.radio_events),
+        scored=[_copy_scored_entity(entity) for entity in context.scored],
+        label_stats=dict(context.label_stats),
+        denylist_hits=dict(context.denylist_hits),
+    )
+
+
 def _sanitize_state_value(value: str, max_len: int = 100) -> str:
     """Truncate and strip instruction-like patterns from HA state values."""
     value = str(value)[:max_len]
@@ -777,7 +802,8 @@ def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> Ho
     if cache_dir is None:
         return context
     muted_ids = muted_entity_ids(Path(cache_dir))
-    return _apply_muted_policy_to_context(context, muted_ids, cache_dir=cache_dir, now=time.time())
+    copied = _copy_home_context(context)
+    return _apply_muted_policy_to_context(copied, muted_ids, cache_dir=cache_dir, now=time.time())
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -1504,24 +1530,26 @@ async def fetch_home_context(
     effective_cache = _cache or _ha_cache
     muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
-        effective_cache = _apply_muted_policy_to_context(
-            effective_cache,
+        served_cache = effective_cache if cache_dir is None else _copy_home_context(effective_cache)
+        served_cache = _apply_muted_policy_to_context(
+            served_cache,
             muted_ids,
             cache_dir=cache_dir,
             now=time.time(),
         )
-        _ha_cache = effective_cache
+        if cache_dir is None:
+            _ha_cache = served_cache
         # Refresh event ages and prune expired entries even on cache hits, so
         # "X min fa" timestamps stay accurate and stale events are dropped.
         now = time.time()
-        effective_cache.events = _prune_muted_events(effective_cache.events, muted_ids, now=now)
-        effective_cache.events_summary = build_events_summary(effective_cache.events, now=now)
-        _, labels_en = _build_entity_label_maps(effective_cache.raw_states, cache_dir=cache_dir)
-        effective_cache.events_summary_en = build_events_summary_en(
-            effective_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=now
+        served_cache.events = _prune_muted_events(served_cache.events, muted_ids, now=now)
+        served_cache.events_summary = build_events_summary(served_cache.events, now=now)
+        _, labels_en = _build_entity_label_maps(served_cache.raw_states, cache_dir=cache_dir)
+        served_cache.events_summary_en = build_events_summary_en(
+            served_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=now
         )
-        effective_cache.radio_events = []
-        return effective_cache
+        served_cache.radio_events = []
+        return served_cache
 
     try:
         client = _get_ha_client()
@@ -1655,21 +1683,23 @@ async def fetch_home_context(
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
-            effective_cache = _apply_muted_policy_to_context(
-                effective_cache,
+            served_cache = effective_cache if cache_dir is None else _copy_home_context(effective_cache)
+            served_cache = _apply_muted_policy_to_context(
+                served_cache,
                 muted_ids,
                 cache_dir=cache_dir,
                 now=timestamp,
             )
-            effective_cache.events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp)
-            effective_cache.events_summary = build_events_summary(effective_cache.events, now=timestamp)
-            _, labels_en = _build_entity_label_maps(effective_cache.raw_states, cache_dir=cache_dir)
-            effective_cache.events_summary_en = build_events_summary_en(
-                effective_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp
+            served_cache.events = _prune_muted_events(served_cache.events, muted_ids, now=timestamp)
+            served_cache.events_summary = build_events_summary(served_cache.events, now=timestamp)
+            _, labels_en = _build_entity_label_maps(served_cache.raw_states, cache_dir=cache_dir)
+            served_cache.events_summary_en = build_events_summary_en(
+                served_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp
             )
-            effective_cache.radio_events = []
-            _ha_cache = effective_cache
-            return effective_cache
+            served_cache.radio_events = []
+            if cache_dir is None:
+                _ha_cache = served_cache
+            return served_cache
         return HomeContext()
 
 
@@ -1679,8 +1709,8 @@ def get_cached_home_context(cache_dir: Path | None = None) -> HomeContext | None
     The module cache is only refreshed by fetch_home_context()'s own poll
     cycle — a caller reading it directly between polls could otherwise see a
     just-muted entity that hasn't been purged from it yet (adversarial
-    review). Pass ``cache_dir`` to re-apply the live mute policy before
-    returning; omit it for callers that don't consume entity content.
+    review). Pass ``cache_dir`` to receive a live-policy-filtered copy; omit it
+    for callers that don't consume entity content.
     """
     if cache_dir is not None and _ha_cache is not None:
         return apply_entity_mute_policy(_ha_cache, cache_dir)

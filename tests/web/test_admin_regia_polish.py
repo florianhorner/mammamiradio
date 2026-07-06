@@ -167,11 +167,38 @@ def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
     html = _html()
     assert 'id="setupStrip"' in html
     assert 'id="setupStripChips"' in html
+    assert 'id="setupStripActions"' in html
     assert "openListener()" in html
     assert 'id="on-air"' in html and 'id="adminTabs"' in html
     assert html.index('id="on-air"') < html.index('id="setupStrip"') < html.index('id="adminTabs"')
     assert 'data-tab="motore">Motore' in html
     assert 'data-tab="setup"' not in html
+
+
+def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> None:
+    html = _html()
+    strip = html[html.index('id="setupStrip"') : html.index("</section>", html.index('id="setupStrip"'))]
+    assert 'id="setupStripActions"' in strip
+    assert 'id="setupStripListenerBtn"' not in strip
+    assert 'id="setupStripReviewBtn"' not in strip
+    block = html[html.index("function renderGuidedSetupStrip") : html.index("function shouldShowHomeContextPreview")]
+    assert "primary.label" in block
+    assert "primary.target" in block
+    assert "Open listener" in block
+    assert "setupStripListenerBtn" not in block
+    assert "setupStripReviewBtn" not in block
+
+
+def test_home_context_preview_loads_only_when_guided_action_is_reviewable() -> None:
+    html = _html()
+    assert 'id="homeContextPreviewSection"' in html
+    gate = html[html.index("function shouldShowHomeContextPreview") : html.index("function renderHomeContextPreview")]
+    assert "review_home_context" in gate
+    assert "home.status==='ready'" in gate
+    assert "home.status==='empty'" in gate
+    render_block = html[html.index("function renderSetup") : html.index("async function setupRecheck")]
+    assert "renderHomeContextPreviewGate(setup)" in render_block
+    assert "loadHomeContextPreview();" not in render_block
 
 
 def test_setup_strip_treats_not_configured_home_context_as_done_not_a_todo() -> None:
@@ -207,7 +234,8 @@ def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None
     assert "/api/homeassistant/context-candidates" in html
     assert "/api/homeassistant/entity-policy" in html
     block = html[html.index("function renderHomeContextPreview") : html.index("async function loadHomeContextPreview")]
-    assert "Mute home entity" in block
+    assert "Mute for future host use" in block
+    assert "aria-label" in block
     assert "Unmute" in block
     for forbidden in ("Approve", "Prefer", "Whitelist", "ranking", "score"):
         assert forbidden not in block

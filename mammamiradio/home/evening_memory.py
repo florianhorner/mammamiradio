@@ -352,7 +352,9 @@ class EveningLedger:
         eligible = [
             (key, bucket)
             for key, bucket in self.buckets.items()
-            if bucket.count >= MIN_COUNT_FOR_GAG and (now - bucket.last_spoken_ts) >= bucket.cooldown_seconds
+            if bucket.count >= MIN_COUNT_FOR_GAG
+            and (now - bucket.last_spoken_ts) >= bucket.cooldown_seconds
+            and bucket.entity_id not in self.entity_denylist
         ]
         # Weighted-random pick (not strict top, so a hot gag can't starve the rest)
         # + silence chance ("discovered, not announced"). Shared with the verbal
@@ -387,6 +389,17 @@ class EveningLedger:
         cannot still be offered as a running gag after the mute.
         """
         to_drop = [key for key, bucket in self.buckets.items() if bucket.entity_id == entity_id]
+        for key in to_drop:
+            del self.buckets[key]
+        if to_drop:
+            self._dirty = True
+        return bool(to_drop)
+
+    def purge_denied_entities(self) -> bool:
+        """Drop persisted buckets that current config/policy now denies."""
+        if not self.entity_denylist:
+            return False
+        to_drop = [key for key, bucket in self.buckets.items() if bucket.entity_id in self.entity_denylist]
         for key in to_drop:
             del self.buckets[key]
         if to_drop:
@@ -474,6 +487,7 @@ class EveningLedger:
             led.entity_allowlist = frozenset(entity_allowlist)
         if entity_denylist is not None:
             led.entity_denylist = frozenset(entity_denylist)
+            led.purge_denied_entities()
         return led
 
     def save_if_dirty(self, cache_dir: Path) -> None:

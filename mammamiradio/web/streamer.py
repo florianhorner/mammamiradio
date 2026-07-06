@@ -925,7 +925,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
     policy = load_entity_policy(config.cache_dir)
     muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
     muted_ids = set(muted_map)
-    ctx = get_cached_home_context()
+    ctx = get_cached_home_context(config.cache_dir)
     rows: dict[str, dict] = {}
     if ctx is not None:
         for entity in getattr(ctx, "scored", [])[:24]:
@@ -940,9 +940,10 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "area": status.get("area") or "",
                 "domain": status.get("domain") or entity_id.split(".", 1)[0],
                 "state_summary": status.get("summary") or str(status.get("state") or ""),
-                "reason": "Sent to host prompt" if entity_id not in muted_ids else "Muted by operator",
+                "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
                 "muted": entity_id in muted_ids,
                 "sent_to_prompt": entity_id not in muted_ids,
+                "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
                 "last_updated": getattr(ctx, "timestamp", 0.0) or None,
                 "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
             }
@@ -956,9 +957,10 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
             "area": status.get("area") or "",
             "domain": status.get("domain") or entity_id.split(".", 1)[0],
             "state_summary": status.get("summary") or str(status.get("state") or ""),
-            "reason": "Sent to host prompt" if entity_id not in muted_ids else "Muted by operator",
+            "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
             "muted": entity_id in muted_ids,
             "sent_to_prompt": entity_id not in muted_ids,
+            "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
             "last_updated": state.ha_context_last_updated or None,
             "stale": False,
         }
@@ -976,6 +978,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "reason": "Muted by operator",
                 "muted": True,
                 "sent_to_prompt": False,
+                "row_state": "muted",
                 "last_updated": entry.get("muted_at"),
                 "stale": False,
             },
@@ -983,20 +986,46 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
     sent_now = [row for row in rows.values() if row["sent_to_prompt"] and not row["muted"]]
     muted = [row for row in rows.values() if row["muted"]]
     candidates = [row for row in rows.values() if not row["sent_to_prompt"] and not row["muted"]]
+    entities = [*sent_now[:24], *candidates[:24], *muted[:24]]
     preview_status = "ready" if sent_now else "empty" if (ctx is not None or state.ha_scored_entities) else "checking"
     return {
         "ok": True,
         "status": preview_status,
+        "entities": entities[:32],
         "sent_now": sent_now[:12],
         "candidates": candidates[:12],
         "muted": muted[:24],
         "counts": {
             "sent_now": len(sent_now),
+            "used_by_hosts": len(sent_now),
             "candidates": len(candidates),
+            "not_sent": len(candidates),
             "muted": len(muted),
             "filtered": sum((getattr(ctx, "denylist_hits", {}) or {}).values()) if ctx is not None else 0,
         },
     }
+
+
+def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[str, str]:
+    """Resolve best-effort display metadata without depending on preview shape."""
+    ctx = get_cached_home_context(config.cache_dir)
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", []):
+            status = entity.to_status_dict()
+            if status.get("entity_id") == entity_id:
+                return {
+                    "label": str(status.get("label") or entity_id),
+                    "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                    "area": str(status.get("area") or ""),
+                }
+    for status in state.ha_scored_entities:
+        if status.get("entity_id") == entity_id:
+            return {
+                "label": str(status.get("label") or entity_id),
+                "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                "area": str(status.get("area") or ""),
+            }
+    return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
 
 
 def _clear_home_context_usage(state: StationState, entity_id: str | None = None) -> bool:
@@ -2308,19 +2337,13 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         raise HTTPException(status_code=422, detail="muted must be true or false")
 
     config = request.app.state.config
-    preview = _safe_home_entity_preview(request.app.state.station_state, config)
-    by_entity = {
-        row["entity_id"]: row
-        for group in ("sent_now", "candidates", "muted")
-        for row in preview.get(group, [])
-        if isinstance(row, dict) and row.get("entity_id")
-    }
     # No preview-membership gate: some entities (e.g. radio_event-only
     # entities, deliberately kept out of ambient context) never appear in the
     # sanitized preview but an operator still needs to be able to mute them by
     # id — over-inclusive muting can only exclude more, never expose more, so
     # any syntactically valid entity_id (already checked above) is accepted.
-    row = by_entity.get(entity_id, {})
+    state = request.app.state.station_state
+    row = _home_entity_metadata(state, config, entity_id)
     loop = asyncio.get_running_loop()
     try:
         policy = await loop.run_in_executor(
@@ -2342,7 +2365,6 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if muted:
-        state = request.app.state.station_state
         ledger_dirty = _clear_home_context_usage(state, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
