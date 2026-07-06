@@ -1238,6 +1238,7 @@ async def test_consecutive_failures_increment_counter(tmp_path):
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
         patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._get_last_music_file", return_value=None),
         patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
         patch(
             f"{MODULE}.generate_silence",
