@@ -16,7 +16,7 @@ Usage: scripts/pre-release-check.sh
 Pre-release sanity check. Run before bumping the version number.
 Verifies version consistency across pyproject.toml + addon config.yaml,
 CHANGELOG head matches the version, and all release invariants
-(FFmpeg eq chain count, test mocks, post-restart silence guard).
+(FFmpeg eq chain count, recovery audio, test mocks, post-restart guard).
 
 Catches the class of bugs that have caused production silence incidents.
 
@@ -106,21 +106,43 @@ else
     fail "music_eq_chain has $EQ_COUNT equalizer filters, expected 2 — audio quality regression"
 fi
 
-# ── 5. Test: _pick_canned_clip returns None (empty container scenario) ────────
+# ── 5. Packaged recovery audio ───────────────────────────────────────────────
 echo ""
-echo "5. Test coverage — empty fallback scenario"
+echo "5. Packaged recovery audio"
+
+if [ -d mammamiradio/assets/demo/recovery ]; then
+    RECOVERY_MP3_COUNT=$(find mammamiradio/assets/demo/recovery -maxdepth 1 -type f -name '*.mp3' -size +1024c | wc -l | tr -d ' ')
+else
+    RECOVERY_MP3_COUNT=0
+fi
+
+if [ "$RECOVERY_MP3_COUNT" -gt 0 ]; then
+    ok "packaged recovery clip is present ($RECOVERY_MP3_COUNT mp3 file(s))"
+else
+    fail "No packaged recovery MP3 under mammamiradio/assets/demo/recovery/ — image can fall through to technical fallback audio"
+fi
+
+if grep -q 'generate_silence' mammamiradio/scheduling/producer.py; then
+    fail "producer.py must not call generate_silence in recovery paths — use recovery clip, norm cache, or emergency tone"
+else
+    ok "producer recovery paths do not call generate_silence"
+fi
+
+# ── 6. Test: _pick_canned_clip returns None (missing packaged clip scenario) ──
+echo ""
+echo "6. Test coverage — missing packaged recovery scenario"
 
 CANNED_NONE=$(grep -rl '_pick_canned_clip.*return_value=None\|return_value=None.*_pick_canned_clip' tests/ 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "$CANNED_NONE" -gt 0 ]; then
     ok "_pick_canned_clip returning None is tested ($CANNED_NONE test file(s))"
 else
-    fail "No test mocks _pick_canned_clip to return None — empty container silence is untested"
+    fail "No test mocks _pick_canned_clip to return None — missing packaged recovery source is untested"
 fi
 
-# ── 6. Test: post-restart session_stopped scenario ───────────────────────────
+# ── 7. Test: post-restart session_stopped scenario ───────────────────────────
 echo ""
-echo "6. Test coverage — post-restart scenario"
+echo "7. Test coverage — post-restart scenario"
 
 RESTART_TEST=$(grep -rl 'session_stopped' tests/ 2>/dev/null | wc -l | tr -d ' ')
 
@@ -130,9 +152,9 @@ else
     fail "No test covers session_stopped — post-restart silence is untested"
 fi
 
-# ── 7. HA Green fallback performance gates ───────────────────────────────────
+# ── 8. HA Green fallback performance gates ───────────────────────────────────
 echo ""
-echo "7. HA Green fallback performance gates"
+echo "8. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
 if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'

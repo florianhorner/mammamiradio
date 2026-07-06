@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.web import streamer as streamer_module
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -294,6 +295,35 @@ async def test_repeated_identical_vote_does_not_bump_revision(tmp_path: Path) ->
     assert second["preference_revision"] == 1
     assert second["score"] == -1
     assert app.state.station_state.song_preferences[("al bano", "felicita")]["score"] == -1
+    _assert_preference_kept_playback_intact(app, before)
+
+
+@pytest.mark.asyncio
+async def test_repeated_identical_vote_retries_persistence_after_failed_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _make_app(tmp_path)
+    before = _seed_non_destructive_boundary(app)
+    attempts: list[dict[tuple[str, str], dict[str, Any]]] = []
+
+    def _flaky_save(_cache_dir: Path, preferences: dict[tuple[str, str], dict[str, Any]]) -> bool:
+        attempts.append(copy.deepcopy(preferences))
+        return len(attempts) > 1
+
+    monkeypatch.setattr(streamer_module, "save_preferences", _flaky_save)
+
+    async with _client(app) as client:
+        first = await _post_preference(client, {"index": 1, "vote": "down"})
+        second = await _post_preference(client, {"index": 1, "vote": "down"})
+
+    assert first["persisted"] is False
+    assert second["persisted"] is True
+    assert first["preference_revision"] == 1
+    assert second["preference_revision"] == 1
+    assert attempts == [
+        {("al bano", "felicita"): app.state.station_state.song_preferences[("al bano", "felicita")]},
+        {("al bano", "felicita"): app.state.station_state.song_preferences[("al bano", "felicita")]},
+    ]
     _assert_preference_kept_playback_intact(app, before)
 
 

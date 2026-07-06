@@ -51,10 +51,18 @@ def test_skip_records_skipped():
     assert led.rows[0]["aired_status"] == "skipped"
 
 
-def test_rescue_clip_records_fallback_rescue():
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"queue_drain_recovery": True},
+        {"rescue": True},
+        {"error_recovery": True},
+    ],
+)
+def test_rescue_clip_records_fallback_rescue(metadata):
     led = _FakeLedger()
     state = SimpleNamespace(ledger=led)
-    seg = _segment({"queue_drain_recovery": True})  # rescue flag, no fallback:True
+    seg = _segment(metadata)  # rescue flag, no fallback:True
     _emit_stream_result(state, seg, bytes_sent=4000, was_skipped=False, listeners=1)
     assert led.rows[0]["aired_status"] == "fallback_rescue"
     assert led.rows[0]["segment_id"] is None  # pure fallback, no provenance

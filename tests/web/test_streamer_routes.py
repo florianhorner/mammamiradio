@@ -653,6 +653,91 @@ async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_n
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_timeout_prefers_packaged_recovery_before_norm_cache(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.now_streaming.get("metadata", {}).get("title") != "Station continuity":
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream packaged recovery")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    now_meta = app.state.station_state.now_streaming["metadata"]
+    assert now_meta.get("fallback") is True
+    assert now_meta.get("rescue") is True
+    assert now_meta.get("canned") is True
+    assert pick_canned.call_args_list[0].args == ("recovery",)
+    assert all(call.args == ("recovery",) for call in pick_canned.call_args_list)
+    select_norm_cache_rescue.assert_not_called()
+    assert app.state.station_state.queue_empty_since is None
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_timeout_uses_legacy_welcome_after_recovery_and_banter_absent(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+
+    welcome_path = tmp_path / "welcome.mp3"
+    welcome_path.write_bytes(b"welcome-audio" * 512)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return welcome_path if subdir == "welcome" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while app.state.station_state.now_streaming.get("metadata", {}).get("title") != "Station continuity":
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not stream legacy welcome recovery")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert [call.args[0] for call in pick_canned.call_args_list[:3]] == ["recovery", "banter", "welcome"]
+    assert app.state.station_state.now_streaming["metadata"].get("rescue") is True
+    select_norm_cache_rescue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_stopped_session_never_selects_empty_queue_fallback(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
