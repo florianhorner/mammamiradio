@@ -440,6 +440,9 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        # This test is about operator recovery queue ordering. Keep the unrelated
+        # transition-stinger path from trying to inspect the fake MP3 fixture.
+        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=5.0),
         patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_record_sleep),
     ):
