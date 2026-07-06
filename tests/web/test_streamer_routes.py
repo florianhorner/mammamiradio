@@ -1645,8 +1645,8 @@ async def test_public_status_needs_music_source_and_building_queue_together(monk
     change that decouples them again must fail here, not silently in the UI."""
     import mammamiradio.web.streamer as streamer_mod
 
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None, raising=False)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0, raising=False)
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
 
     app = _make_test_app()
@@ -1668,8 +1668,8 @@ async def test_public_status_session_stopped_alongside_needs_music_source(monkey
     "no source" copy; the backend never collapses one signal into the other."""
     import mammamiradio.web.streamer as streamer_mod
 
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None)
-    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache", None, raising=False)
+    monkeypatch.setattr(streamer_mod, "_golden_path_cache_ts", 0.0, raising=False)
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
 
     app = _make_test_app()
