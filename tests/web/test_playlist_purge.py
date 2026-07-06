@@ -93,6 +93,7 @@ async def test_purge_empties_pool_and_drains_queue(tmp_path):
     assert state.queued_segments == []
     assert app.state.queue.empty()
     assert state.playlist_revision > rev_before
+    assert state.force_next == SegmentType.BANTER
     assert not app.state.skip_event.is_set()
     assert not (tmp_path / PERSISTED_SOURCE_FILENAME).exists()
 
@@ -117,6 +118,7 @@ async def test_purge_reports_not_persisted_but_still_clears_pool_and_queue(tmp_p
     assert state.playlist == []
     assert state.playlist_source is None
     assert state.queued_segments == []
+    assert state.force_next == SegmentType.BANTER
     assert app.state.queue.empty()
     assert not app.state.skip_event.is_set()
 
@@ -133,6 +135,7 @@ async def test_purge_on_empty_pool_is_a_clean_noop(tmp_path):
     assert body["ok"] is True
     assert body["purged"] == 0
     assert state.playlist == []
+    assert state.force_next == SegmentType.BANTER
     assert not app.state.skip_event.is_set()
 
 

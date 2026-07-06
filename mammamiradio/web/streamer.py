@@ -1383,17 +1383,25 @@ async def run_playback_loop(app) -> None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
 
-                # Serve a canned clip instead of dead air while the producer catches up
-                from mammamiradio.scheduling.producer import _pick_canned_clip
+                # Serve packaged continuity audio instead of dead air while the
+                # producer catches up. This shares the producer recovery order:
+                # recovery/ -> banter/ -> welcome/.
+                from mammamiradio.scheduling.producer import _pick_recovery_clip
 
-                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                fallback = _pick_recovery_clip(state)
                 if fallback:
-                    logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                    logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
                     state.queue_empty_since = None
                     segment = Segment(
                         type=SegmentType.BANTER,
                         path=fallback,
-                        metadata={"type": "banter", "canned": True, "fallback": True},
+                        metadata={
+                            "type": "banter",
+                            "canned": True,
+                            "fallback": True,
+                            "rescue": True,
+                            "title": "Station continuity",
+                        },
                         ephemeral=False,
                     )
                 else:
@@ -3374,17 +3382,19 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
     in-flight producer segment is discarded on commit), then purges the
     pre-produced lookahead queue so the cleared pool takes effect. The current
     segment is left to finish — purging the pool is not a reason to cut the air;
-    once it ends the starvation rescue covers the gap until a source is re-added
-    (INSTANT AUDIO — never dead air). Sources can be re-added from the toolbar.
+    the next producer pass is forced to banter/continuity until a source is
+    re-added (INSTANT AUDIO — never dead air). Sources can be re-added from the
+    toolbar.
     """
     state = request.app.state.station_state
     config = request.app.state.config
     source_switch_lock = request.app.state.source_switch_lock
     async with source_switch_lock:
         state.switch_playlist([], None)
+        state.force_next = SegmentType.BANTER
         persisted = _delete_persisted_source(config.cache_dir)
         purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
-    logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments", purged)
+    logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
     return {"ok": True, "purged": purged, "persisted": persisted}
 
 

@@ -161,7 +161,9 @@ async def test_queued_segment_uses_selected_track_identity_for_duplicate_cache_k
 
 @pytest.mark.asyncio
 async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
-    """Empty fallback audio delivery must not leak stale music attribution."""
+    """Empty fallback audio delivery must not leak stale music attribution or queue silence."""
+    from mammamiradio.scheduling import producer
+
     track = Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1", source="classic")
     state = StationState(playlist=[track], listeners_active=1)
     config = _make_config(tmp_path)
@@ -174,19 +176,34 @@ async def test_empty_fallback_keeps_attribution_defaults(tmp_path):
         metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
     )
 
-    with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no audio")),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
-        patch(f"{PRODUCER_MODULE}.generate_silence", side_effect=AssertionError("silence should be final fallback")),
-        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
-    ):
-        await _run_until_status_queued(queue, state, config)
+    orig_last_music = producer._last_music_file
+    producer._last_music_file = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(
+                f"{PRODUCER_MODULE}._render_music_track",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("no audio"),
+            ),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(
+                f"{PRODUCER_MODULE}.generate_silence",
+                side_effect=AssertionError("silence should never be a producer recovery fallback"),
+                create=True,
+            ) as mock_silence,
+            patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        ):
+            await _run_until_status_queued(queue, state, config)
+    finally:
+        producer._last_music_file = orig_last_music
 
     queued = state.queued_segments[-1]
     assert queued["playlist_index"] == -1
     assert queued["source_kind"] == ""
+    mock_silence.assert_not_called()
     assert queued["label"] == "Recovery sweeper"
 
 

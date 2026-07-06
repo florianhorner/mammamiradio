@@ -60,6 +60,8 @@ def _write_release_check_repo(
         'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
+    _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
+    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity.mp3", "x" * 2048)
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",

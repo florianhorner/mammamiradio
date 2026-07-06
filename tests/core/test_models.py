@@ -148,6 +148,45 @@ def test_on_stream_segment_skips_degraded_music_in_played_track_log():
     assert list(state.played_track_log) == []
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "title": "Station continuity",
+            "artist": "",
+            "audio_source": "emergency_tone",
+            "error_recovery": True,
+            "rescue": True,
+        },
+        {
+            "title": "Rescue Song",
+            "artist": "Test Artist",
+            "audio_source": "norm_cache",
+            "queue_drain_recovery": True,
+            "rescue": True,
+        },
+        {
+            "title": "Rescue Song",
+            "artist": "Test Artist",
+            "audio_source": "fallback_norm_cache",
+            "fallback": True,
+        },
+    ],
+)
+def test_on_stream_segment_skips_rescue_music_in_played_track_log(metadata):
+    state = StationState()
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/recovery_tone.mp3"),
+        duration_sec=2.0,
+        metadata=metadata,
+    )
+
+    state.on_stream_segment(seg)
+
+    assert list(state.played_track_log) == []
+
+
 def test_on_stream_segment_skips_placeholder_music_in_played_track_log():
     state = StationState()
     seg = Segment(
