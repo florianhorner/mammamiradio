@@ -335,6 +335,28 @@ body[data-stopped="true"] .btn-util {
 }
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
+.setup-strip{display:none;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+.setup-strip.show{display:flex}
+.setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
+.setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
+.setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
+.setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
+.setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
+.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"],.setup-strip-chip[data-s="stopped"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
+.setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.setup-strip-action{min-width:44px;min-height:44px;white-space:nowrap}
+.setup-note{font-size:11px;line-height:1.45;color:rgba(245,237,216,0.66);margin-top:6px}
+.setup-advanced{margin-top:10px;border:1px solid rgba(245,237,216,0.1);border-radius:8px;padding:8px 10px;background:rgba(20,17,15,0.2)}
+.setup-advanced summary{cursor:pointer;min-width:44px;min-height:44px;display:flex;align-items:center;font-size:12px;font-weight:700;color:var(--cream)}
+.setup-home-preview-section{display:none}
+.setup-home-preview-section.show{display:block}
+.ha-preview{display:grid;gap:8px}
+.ha-preview-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;min-height:48px;padding:9px 10px;border:1px solid rgba(245,237,216,0.1);border-radius:8px;background:rgba(20,17,15,0.22)}
+.ha-preview-title{font-size:12px;font-weight:800;color:var(--cream)}
+.ha-preview-meta{font-size:11px;color:rgba(245,237,216,0.65);line-height:1.45}
+.ha-preview-id{font-family:var(--font-mono);font-size:10px;color:rgba(245,237,216,0.45)}
+.ha-preview-action,.setup-home-preview-action,.setup-recheck-action{min-width:44px;min-height:44px}
+@media(max-width:720px){.setup-strip{align-items:flex-start;flex-direction:column}.setup-strip-actions{width:100%;flex-direction:column;align-items:stretch}.setup-strip-action{width:100%}.ha-preview-row{grid-template-columns:1fr}.ha-preview-action{width:100%}}
 /* Motore Setup group — collapsible <details>; auto-collapses when all-ready. */
 .setup-group > summary.setup-summary {
   display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none;
@@ -1701,6 +1723,12 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       </div>
     </section>
 
+    <section class="setup-strip" id="setupStrip" aria-label="Station setup">
+      <div class="setup-strip-title">Station setup</div>
+      <div class="setup-strip-chips" id="setupStripChips"></div>
+      <div class="setup-strip-actions" id="setupStripActions"></div>
+    </section>
+
     <!-- Legacy sticky strip — superseded by the pinned console; kept hidden so its JS writer targets stay valid -->
     <div class="a-topbar producer-sticky-strip" id="topBar" hidden style="display:none">
       <span class="live-pill"><span class="dot"></span> <span id="topBarStatus">In onda</span></span>
@@ -2046,20 +2074,35 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <button type="button" class="btn btn-util setup-inline-action" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
             <div id="setupKeysForm">
-              <div class="setup-subhead">Save Keys</div>
+              <div class="setup-subhead">AI hosts</div>
+              <div class="setup-note">One key is enough. Add Anthropic or OpenAI to unlock generated host breaks and ads; audio keeps playing while the key is checked.</div>
               <div class="setup-keys">
-                <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY (optional)" autocomplete="off" aria-label="Anthropic API key">
-                <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY (optional)" autocomplete="off" aria-label="OpenAI API key">
-                <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
-                <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
-                <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
+                <input class="input" id="setupAnthropicKey" type="password" placeholder="ANTHROPIC_API_KEY" autocomplete="off" aria-label="Anthropic API key">
+                <input class="input" id="setupOpenaiKey" type="password" placeholder="OPENAI_API_KEY" autocomplete="off" aria-label="OpenAI API key">
+                <details class="setup-advanced" id="setupPremiumVoices">
+                  <summary>Premium voices</summary>
+                  <div class="setup-note">Optional voice providers. These change voice rendering, not the first AI-host unlock.</div>
+                  <div class="setup-keys">
+                    <input class="input" id="setupAzureSpeechKey" type="password" placeholder="AZURE_SPEECH_KEY (optional)" autocomplete="off" aria-label="Azure Speech key">
+                    <input class="input" id="setupAzureSpeechRegion" type="text" placeholder="AZURE_SPEECH_REGION (optional)" autocomplete="off" aria-label="Azure Speech region">
+                    <input class="input" id="setupElevenlabsKey" type="password" placeholder="ELEVENLABS_API_KEY (optional)" autocomplete="off" aria-label="ElevenLabs API key">
+                  </div>
+                </details>
               </div>
               <div class="setup-actions" style="margin-top:10px">
-                <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save Keys</button>
+                <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save AI key</button>
+              </div>
+            </div>
+            <div class="setup-home-preview-section" id="homeContextPreviewSection">
+              <div class="setup-subhead">Home context preview</div>
+              <div class="setup-note">After an AI host key is ready, filtered Home Assistant context can be sent to that provider. Review what future host prompts may use and mute any entity locally.</div>
+              <div class="ha-preview" id="haContextPreview"><div class="empty">Home context preview will appear after the station has safe Home Assistant context.</div></div>
+              <div class="setup-actions">
+                <button type="button" class="btn btn-util setup-home-preview-action" onclick="loadHomeContextPreview()">Refresh home preview</button>
               </div>
             </div>
             <div class="setup-actions">
-              <button type="button" class="btn btn-util" onclick="setupRecheck(this)">Re-check</button>
+              <button type="button" class="btn btn-util setup-recheck-action" onclick="setupRecheck(this)">Re-check</button>
             </div>
             <div class="setup-snippet" id="setupSnippetWrap">
               <div class="setup-subhead" style="margin-top:0">Home Assistant secrets.env Snippet</div>
@@ -3095,11 +3138,106 @@ function setupRow(label, detail, status){
   const pill=setupPill(status);
   return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
+function openListener(){
+  window.open((_base||'')+'/listen','_blank','noopener');
+}
+function openSetupPanel(){
+  const motore=document.getElementById('tab-motore');
+  if(motore)motore.click();
+  const details=document.getElementById('setupGroup');
+  if(details){details.open=true;details.dataset.userPinned='true';}
+  setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
+}
+function renderGuidedSetupStrip(setup){
+  const strip=document.getElementById('setupStrip');
+  const chips=document.getElementById('setupStripChips');
+  const actions=document.getElementById('setupStripActions');
+  if(!strip||!chips||!actions)return;
+  const stripData=setup?.guided_setup?.strip||{};
+  const entries=Array.isArray(stripData.items)?stripData.items:[];
+  const show=Boolean(stripData.attention_required&&entries.length);
+  strip.classList.toggle('show',show);
+  if(!entries.length){chips.innerHTML='';actions.innerHTML='';return;}
+  chips.innerHTML=entries.map(item=>{
+    const shapeSym=item.shape&&SHAPE[item.shape]?SHAPE[item.shape]:SHAPE.info;
+    return `<span class="setup-strip-chip" data-s="${esc(item.status||'checking')}"><span aria-hidden="true">${shapeSym}</span>${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
+  }).join('');
+  const primary=stripData.primary_action||{};
+  const primaryKind=primary.kind||'review_setup';
+  const primaryLabel=primary.label||'Review setup';
+  const primaryTarget=primary.target||(primaryKind==='open_listener'?'listen':'setup');
+  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')?'openListener()':'openSetupPanel()';
+  actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
+}
+function shouldShowHomeContextPreview(setup){
+  const home=setup?.guided_setup?.home_context||{};
+  return home.action==='review_home_context'||home.status==='ready'||home.status==='empty';
+}
+function renderHomeContextPreview(data){
+  const box=document.getElementById('haContextPreview');
+  if(!box)return;
+  if(!data||data.ok===false){box.innerHTML='<div class="empty">Home context preview unavailable</div>';return;}
+  const rows=(Array.isArray(data.entities)&&data.entities.length?data.entities:[...(data.sent_now||[]),...(data.muted||[])]).slice(0,16);
+  if(!rows.length){
+    const copy=data.status==='checking'?'Home Assistant context is still being collected.':data.status==='empty'?'Home Assistant is connected, but nothing prompt-safe is available yet.':'Home context preview will appear after AI hosts and Home Assistant context are ready.';
+    box.innerHTML='<div class="empty">'+esc(copy)+'</div>';
+    return;
+  }
+  box.innerHTML=rows.map(row=>{
+    const muted=Boolean(row.muted);
+    const action=muted?'Unmute':'Mute for future host use';
+    const aria=(muted?'Unmute ':'Mute ')+(row.label||row.entity_id)+(muted?'':' for future host use');
+    const meta=[row.area,row.domain,row.state_summary,row.reason].filter(Boolean).join(' · ');
+    return `<div class="ha-preview-row" data-entity="${esc(row.entity_id)}">
+      <div>
+        <div class="ha-preview-title">${esc(row.label||row.entity_id)}</div>
+        <div class="ha-preview-meta">${esc(meta)}</div>
+        <div class="ha-preview-id">${esc(row.entity_id)}</div>
+      </div>
+      <button type="button" class="btn btn-util ha-preview-action" aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>
+    </div>`;
+  }).join('');
+}
+async function loadHomeContextPreview(){
+  try{
+    const resp=await api('GET','/api/homeassistant/context-candidates');
+    renderHomeContextPreview(resp);
+  }catch(e){
+    console.error('home_context_preview',e);
+    renderHomeContextPreview(null);
+  }
+}
+function renderHomeContextPreviewGate(setup){
+  const section=document.getElementById('homeContextPreviewSection');
+  const box=document.getElementById('haContextPreview');
+  const show=shouldShowHomeContextPreview(setup);
+  if(section)section.classList.toggle('show',show);
+  if(show){
+    loadHomeContextPreview();
+  }else if(box){
+    box.innerHTML='<div class="empty">Home context preview will appear after AI hosts and Home Assistant context are ready.</div>';
+  }
+}
+async function setHaEntityMuted(entityId, muted, el){
+  flash(el);
+  const resp=await api('PATCH','/api/homeassistant/entity-policy',{entity_id:entityId,muted:Boolean(muted)});
+  if(!resp.ok){toast(wayOut('update home context'));return}
+  toast(Boolean(muted)?'Home entity muted':'Home entity unmuted');
+  await loadHomeContextPreview();
+  await refreshFast();
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-ha-entity-id][data-ha-muted-next]');
+  if(!btn)return;
+  event.preventDefault();
+  setHaEntityMuted(btn.getAttribute('data-ha-entity-id')||'',btn.getAttribute('data-ha-muted-next')==='true',btn);
+});
 function renderSetup(setup){
   if(!setup) return;
   const _json=JSON.stringify(setup);
   if(_json===_lastSetupJson) return;
   _lastSetupJson=_json;
+  renderGuidedSetupStrip(setup);
   const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
   const modeLabel=mode?.label||setup.detected_mode||'unknown';
   const stationLabel=setup.station_mode?.label||'Unknown';
@@ -3173,6 +3311,7 @@ function renderSetup(setup){
 
   // Auto-collapse the Setup group when everything is ready (eng review T5/E5).
   if(typeof window.motoreSetupAutoCollapse==='function')window.motoreSetupAutoCollapse(!needsAction);
+  renderHomeContextPreviewGate(setup);
 }
 async function setupRecheck(el){
   flash(el);
@@ -3194,8 +3333,16 @@ async function setupSaveKeys(el){
   if(azureRegion) payload.AZURE_SPEECH_REGION=azureRegion;
   if(elevenlabs) payload.ELEVENLABS_API_KEY=elevenlabs;
   if(!Object.keys(payload).length){toast('Enter at least one key');return}
-  const resp=await api('POST','/api/setup/save-keys',payload);
+  let resp;
+  try{
+    resp=await api('POST','/api/setup/save-keys',payload);
+  }catch(e){
+    console.error('setup_save_keys',e);
+    toast(wayOut('save your keys'));
+    return;
+  }
   if(!resp.ok){toast(wayOut('save your keys'));return}
+  toast('Keys saved. Checking provider...');
   document.getElementById('setupAnthropicKey').value='';
   document.getElementById('setupOpenaiKey').value='';
   document.getElementById('setupAzureSpeechKey').value='';
@@ -3204,7 +3351,6 @@ async function setupSaveKeys(el){
   _keysEditMode=false;
   const updated=await api('POST','/api/setup/recheck');
   renderSetup(updated);
-  toast('Keys saved');
 }
 async function copySetupSnippet(){
   const txt=document.getElementById('setupSnippet')?.textContent||'';

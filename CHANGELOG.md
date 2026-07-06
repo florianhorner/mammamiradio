@@ -6,9 +6,17 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-07-07
+
+### Added
+
+- **A clearer setup guide shows exactly what's next.** The admin panel now tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention instead of one all-or-nothing "not set up yet" flag. Stations that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
+- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds even through a Home Assistant hiccup or a station restart.
+
 ### Changed
 
 - **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
+- **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A station only reaches the Connected Home tier once real, prompt-safe Home Assistant context is available. A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
 
 ## [2.16.1] - 2026-07-06
 
@@ -44,6 +52,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Added
 
+- **Tell the station which songs you want more or less often without banning them.** The admin console now has thumbs-up/thumbs-down controls on the on-air song and every rotation row. Thumbs nudge future rotation only: they do not interrupt what is playing, they never turn into bans, and only the control room sees them.
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **Steer the station with your own words.** A new "Direction" box in the admin panel lets you point the music where you want it — type "2000s female vocals" or "sunday morning italian" and the station finds matching songs and blends them into rotation in the background, without interrupting what's playing. Songs already in rotation join the course right away; the rest arrive as they download, and the course sticks across a restart until you tap "Back to auto". If a direction can't be filled the station says so plainly and stays on automatic rotation instead of pretending.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded, listener-safe cold-open campaign after an update, with delivery counted only when a real listener receives streamed audio. If the station restarts, it can also bring back a recently rendered music segment so the first listen after an update reaches live programming faster instead of starting from an empty queue.

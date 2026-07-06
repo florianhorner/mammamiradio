@@ -1330,6 +1330,12 @@ class Capabilities:
     ha: bool = False
     """Home Assistant token present and integration enabled."""
 
+    home_context_ready: bool = False
+    """A prompt-safe Home Assistant context slice is available."""
+
+    home_context_enabled: bool = False
+    """Home Assistant context polling/review is enabled when HA access exists."""
+
     jamendo: bool = False
     """Jamendo source is configured with a client ID."""
 
@@ -1342,7 +1348,7 @@ class Capabilities:
     @property
     def tier(self) -> str:
         """Derive a human-friendly tier label from capability flags."""
-        if self.llm and self.ha:
+        if self.llm and self.home_context_ready:
             return "connected_home"
         if self.llm:
             return "full_ai"

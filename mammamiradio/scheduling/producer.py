@@ -59,10 +59,12 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.catalog import schedule_label_generation
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
+    apply_entity_mute_policy,
     check_reactive_triggers,
     fetch_home_context,
     get_cached_home_context,
@@ -1845,7 +1847,7 @@ def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     )
 
 
-def _has_real_home_context(ctx: HomeContext | None) -> bool:
+def _has_refresh_budget_context(ctx: HomeContext | None) -> bool:
     """True only for a genuinely populated context — not the empty timeout fallback.
 
     A successful fetch stamps ``timestamp`` (and usually fills ``scored``/``summary``);
@@ -1856,6 +1858,11 @@ def _has_real_home_context(ctx: HomeContext | None) -> bool:
     slow registry/weather warm-up could time out forever until restart.
     """
     return ctx is not None and (ctx.timestamp > 0 or bool(ctx.scored) or bool((ctx.summary or "").strip()))
+
+
+def _has_real_home_context(ctx: HomeContext | None) -> bool:
+    """Backward-compatible alias for refresh-budget context readiness."""
+    return _has_refresh_budget_context(ctx)
 
 
 async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
@@ -1869,7 +1876,7 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
     longer warm-up budget so the registry/weather snapshot can populate; every
     steady-state refresh gets the tight ``context_refresh_timeout``.
     """
-    have_context = _has_real_home_context(ha_cache) or _has_real_home_context(get_cached_home_context())
+    have_context = _has_refresh_budget_context(ha_cache) or _has_refresh_budget_context(get_cached_home_context())
     budget = (
         config.homeassistant.context_refresh_timeout
         if have_context
@@ -1889,7 +1896,11 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
         )
     except TimeoutError:
         logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
-        return ha_cache or get_cached_home_context() or HomeContext()
+        stale = ha_cache or get_cached_home_context() or HomeContext()
+        # fetch_home_context() mute-filters on every return path; this fallback
+        # bypasses it entirely by reusing a context built before this call, so
+        # the live mute policy has to be re-applied here explicitly.
+        return apply_entity_mute_policy(stale, config.cache_dir)
 
 
 def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatch]) -> list[HomeEvent]:
@@ -2071,7 +2082,12 @@ async def run_producer(
                                 "Content-Type": "application/json",
                             }
                             timer_states: dict[str, dict] = {}
+                            muted_ids = muted_entity_ids(config.cache_dir)
+                            for muted_id in muted_ids:
+                                _timer_old_states.pop(muted_id, None)
                             for eid in _timer_entity_ids:
+                                if eid in muted_ids:
+                                    continue
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if r.status_code == 200:
                                     timer_states[eid] = r.json()
@@ -2091,6 +2107,11 @@ async def run_producer(
                                 state_translations={},
                                 now=time.time(),
                             )
+                            if muted_ids:
+                                timer_events = deque(
+                                    (event for event in timer_events if event.entity_id not in muted_ids),
+                                    maxlen=timer_events.maxlen,
+                                )
                             _timer_old_states.update(timer_states)
                             if timer_events:
                                 result = check_reactive_triggers(

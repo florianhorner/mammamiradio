@@ -15,6 +15,7 @@ def _config(**overrides):
     cfg.openai_api_key = overrides.get("openai_api_key", "")
     cfg.ha_token = overrides.get("ha_token", "")
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
+    cfg.homeassistant.context_enabled = overrides.get("ha_context_enabled", True)
     cfg.playlist.jamendo_client_id = overrides.get("jamendo_client_id", "")
     cfg.tts_degraded_voices = overrides.get("tts_degraded_voices", [])
     cfg.allow_ytdlp = overrides.get("allow_ytdlp", False)
@@ -23,9 +24,13 @@ def _config(**overrides):
 
 def _state(**overrides):
     """Create a station state with defaults."""
-    return StationState(
+    state = StationState(
         playlist=[],
     )
+    state.ha_context = overrides.get("ha_context", "")
+    state.ha_context_entity_count = overrides.get("ha_context_entity_count", 0)
+    state.ha_context_last_updated = overrides.get("ha_context_last_updated", 0.0)
+    return state
 
 
 # --- Capabilities dataclass ---
@@ -44,7 +49,7 @@ def test_tier_full_ai():
 
 
 def test_tier_connected_home():
-    c = Capabilities(llm=True, ha=True)
+    c = Capabilities(llm=True, ha=True, home_context_ready=True)
     assert c.tier == "connected_home"
 
 
@@ -108,7 +113,33 @@ def test_get_capabilities_all_on():
         ),
         _state(),
     )
-    assert caps == Capabilities(llm=True, ha=True)
+    assert caps == Capabilities(llm=True, ha=True, home_context_enabled=True)
+
+
+def test_get_capabilities_home_context_ready_controls_connected_tier():
+    caps = get_capabilities(
+        _config(
+            anthropic_api_key="sk-test",
+            ha_token="token",
+            ha_enabled=True,
+        ),
+        _state(ha_context="- Coffee machine: on"),
+    )
+    assert caps.home_context_ready is True
+    assert caps.tier == "connected_home"
+
+
+def test_get_capabilities_ignores_stale_context_without_ha_access():
+    caps = get_capabilities(
+        _config(
+            anthropic_api_key="sk-test",
+            ha_token="",
+            ha_enabled=False,
+        ),
+        _state(ha_context="- Coffee machine: on"),
+    )
+    assert caps.home_context_ready is False
+    assert caps.tier == "full_ai"
 
 
 def test_get_capabilities_sets_jamendo_flag():
@@ -137,6 +168,9 @@ def test_capabilities_to_dict_shape():
     assert "tier_label" in d
     assert d["capabilities"]["llm"] is True
     assert d["capabilities"]["ha"] is False
+    assert d["capabilities"]["homeassistant_access"] is False
+    assert d["capabilities"]["home_context_ready"] is False
+    assert d["capabilities"]["home_context_enabled"] is False
     assert d["capabilities"]["jamendo"] is True
     assert d["capabilities"]["charts_reload"] is True
     assert d["tier"] == "full_ai"
@@ -149,8 +183,28 @@ def test_next_step_add_llm_when_no_llm():
     assert step["action"] == "open_settings"
 
 
-def test_next_step_all_set_when_llm_and_ha_enabled():
-    step = next_step(Capabilities(llm=True, ha=True))
+def test_next_step_review_ha_context_when_access_exists_without_context():
+    step = next_step(Capabilities(llm=True, ha=True, home_context_enabled=True))
+    assert step["key"] == "review_ha_context"
+
+
+def test_next_step_full_ai_without_ha_is_all_set():
+    step = next_step(Capabilities(llm=True, ha=False))
+    assert step == {"key": "all_set", "message": "", "action": "none"}
+
+
+def test_next_step_requested_ha_without_access_prompts_access():
+    step = next_step(Capabilities(llm=True, ha=False, home_context_enabled=True))
+    assert step["key"] == "enable_ha"
+
+
+def test_next_step_full_ai_with_ha_context_disabled_is_all_set():
+    step = next_step(Capabilities(llm=True, ha=True, home_context_enabled=False))
+    assert step == {"key": "all_set", "message": "", "action": "none"}
+
+
+def test_next_step_all_set_when_llm_and_home_context_ready():
+    step = next_step(Capabilities(llm=True, ha=True, home_context_ready=True))
     assert step == {"key": "all_set", "message": "", "action": "none"}
 
 
@@ -162,7 +216,7 @@ def test_all_4_flag_combos():
     valid_tiers = {"demo", "full_ai", "connected_home"}
     for llm in (False, True):
         for ha in (False, True):
-            c = Capabilities(llm=llm, ha=ha)
+            c = Capabilities(llm=llm, ha=ha, home_context_ready=llm and ha)
             assert c.tier in valid_tiers, f"Invalid tier {c.tier!r} for flags llm={llm} ha={ha}"
             assert isinstance(c.tier_label, str)
             assert len(c.tier_label) > 0

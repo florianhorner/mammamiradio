@@ -36,6 +36,7 @@ def _has_any_mp3(path: Path) -> bool:
 
 _golden_path_cache: dict | None = None
 _golden_path_cache_ts: float = 0.0
+_golden_path_cache_key: tuple | None = None
 _GOLDEN_PATH_TTL = 10.0  # seconds — music sources change rarely
 
 _cache_size_mb_val: float = 0.0
@@ -57,14 +58,26 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
     return _cache_size_mb_val
 
 
-def _golden_path_status(config, state) -> dict:
+def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
-    global _golden_path_cache, _golden_path_cache_ts
+    global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
-    if _golden_path_cache is not None and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL:
+    env_allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+    allow_ytdlp = bool(getattr(config, "allow_ytdlp", env_allow_ytdlp))
+    cache_key = (
+        allow_ytdlp,
+        getattr(state, "playlist_revision", 0),
+        getattr(state, "source_revision", 0),
+        bool(getattr(state, "session_stopped", False)),
+    )
+    if (
+        not force_refresh
+        and _golden_path_cache is not None
+        and _golden_path_cache_key == cache_key
+        and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL
+    ):
         return _golden_path_cache
 
-    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
     has_demo_assets = _has_any_mp3(_ASSETS_DIR / "demo" / "music")
     has_local_music = _has_any_mp3(Path("music"))
 
@@ -73,6 +86,10 @@ def _golden_path_status(config, state) -> dict:
         sources.append("bundled demo tracks")
     if has_local_music:
         sources.append("local music/*.mp3 files")
+    playlist = getattr(state, "playlist", None)
+    if isinstance(playlist, list | tuple) and playlist:
+        source = getattr(state, "playlist_source", None)
+        sources.append(getattr(source, "label", "") or "loaded playlist")
     if allow_ytdlp:
         sources.append("yt-dlp downloads")
 
@@ -96,6 +113,7 @@ def _golden_path_status(config, state) -> dict:
             **shared,
         }
         _golden_path_cache = result
+        _golden_path_cache_key = cache_key
         _golden_path_cache_ts = now
         return result
 
@@ -111,6 +129,7 @@ def _golden_path_status(config, state) -> dict:
         **shared,
     }
     _golden_path_cache = result
+    _golden_path_cache_key = cache_key
     _golden_path_cache_ts = now
     return result
 

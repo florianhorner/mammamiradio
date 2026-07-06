@@ -178,6 +178,88 @@ def test_setup_group_is_collapsible_with_ready_badge() -> None:
     assert "All ready" in html
 
 
+def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
+    html = _html()
+    assert 'id="setupStrip"' in html
+    assert 'id="setupStripChips"' in html
+    assert 'id="setupStripActions"' in html
+    assert "openListener()" in html
+    assert 'id="on-air"' in html and 'id="adminTabs"' in html
+    assert html.index('id="on-air"') < html.index('id="setupStrip"') < html.index('id="adminTabs"')
+    assert 'data-tab="motore">Motore' in html
+    assert 'data-tab="setup"' not in html
+
+
+def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> None:
+    html = _html()
+    strip = html[html.index('id="setupStrip"') : html.index("</section>", html.index('id="setupStrip"'))]
+    assert 'id="setupStripActions"' in strip
+    assert 'id="setupStripListenerBtn"' not in strip
+    assert 'id="setupStripReviewBtn"' not in strip
+    block = html[html.index("function renderGuidedSetupStrip") : html.index("function shouldShowHomeContextPreview")]
+    assert "stripData=setup?.guided_setup?.strip" in block
+    assert "stripData.primary_action" in block
+    assert "primary.label" in block
+    assert "primary.target" in block
+    assert "guided.stream" not in block
+    assert "guidedShape" not in block
+    assert "setupStripListenerBtn" not in block
+    assert "setupStripReviewBtn" not in block
+
+
+def test_home_context_preview_loads_only_when_guided_action_is_reviewable() -> None:
+    html = _html()
+    assert 'id="homeContextPreviewSection"' in html
+    gate = html[html.index("function shouldShowHomeContextPreview") : html.index("function renderHomeContextPreview")]
+    assert "review_home_context" in gate
+    assert "home.status==='ready'" in gate
+    assert "home.status==='empty'" in gate
+    render_block = html[html.index("function renderSetup") : html.index("async function setupRecheck")]
+    assert "renderHomeContextPreviewGate(setup)" in render_block
+    assert "loadHomeContextPreview();" not in render_block
+
+
+def test_setup_strip_treats_not_configured_home_context_as_done_not_a_todo() -> None:
+    """Home Assistant is optional — a standalone station without it must not
+    show a permanent 'needs attention' banner (regression: it used to render
+    'blocked', an error-styled state that never resolved for non-HA users)."""
+    html = _html()
+    block = html[html.index("function renderGuidedSetupStrip") : html.index("async function setupRecheck")]
+    assert "stripData.attention_required&&entries.length" in block
+    assert "item.status!=='not_configured'" not in block
+    strip_chip_error_rule = next(
+        line for line in html.splitlines() if line.strip().startswith('.setup-strip-chip[data-s="blocked"]')
+    )
+    strip_chip_warn_rule = next(
+        line for line in html.splitlines() if line.strip().startswith('.setup-strip-chip[data-s="missing"]')
+    )
+    assert "not_configured" not in strip_chip_error_rule
+    assert "not_configured" not in strip_chip_warn_rule
+
+
+def test_setup_keys_prioritize_one_ai_host_key_and_collapse_premium_voices() -> None:
+    html = _html()
+    assert "One key is enough" in html
+    assert "AI hosts" in html
+    assert 'id="setupPremiumVoices"' in html
+    assert "Premium voices" in html
+    assert html.index('id="setupOpenaiKey"') < html.index('id="setupPremiumVoices"')
+    assert html.index('id="setupAzureSpeechKey"') > html.index('id="setupPremiumVoices"')
+
+
+def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None:
+    html = _html()
+    assert 'id="haContextPreview"' in html
+    assert "/api/homeassistant/context-candidates" in html
+    assert "/api/homeassistant/entity-policy" in html
+    block = html[html.index("function renderHomeContextPreview") : html.index("async function loadHomeContextPreview")]
+    assert "Mute for future host use" in block
+    assert "aria-label" in block
+    assert "Unmute" in block
+    for forbidden in ("Approve", "Prefer", "Whitelist", "ranking", "score"):
+        assert forbidden not in block
+
+
 def test_setup_auto_collapse_wired_into_render() -> None:
     html = _html()
     assert "motoreSetupAutoCollapse(!needsAction)" in html
@@ -395,7 +477,7 @@ def test_admin_host_controls_are_english_first() -> None:
 
 def test_setup_controls_are_english() -> None:
     html = _html()
-    for s in ("Save Keys", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
+    for s in ("Save AI key", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
         assert s in html
 
 

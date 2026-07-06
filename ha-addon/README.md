@@ -42,16 +42,17 @@ After installing, go to the add-on's **Configuration** tab:
 
 ### Provider keys (not in the Configuration tab)
 
-AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder — save them from the admin setup panel, which writes the file for you, or create it by hand. Supported keys are `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY`. Keys saved through the old Configuration-tab fields by earlier versions move into the secrets file automatically the first time the updated add-on starts; non-empty file values win per key.
+AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder. You do not need them before first listen: start the add-on, open the Web UI, and hear Demo Radio first. Then save one AI host key from **Motore → Setup → AI hosts**, which writes the file for you, or create it by hand. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts; `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY` are optional premium voice providers. Keys saved through the old Configuration-tab fields by earlier versions move into the secrets file automatically the first time the updated add-on starts; non-empty file values win per key.
 
 ## Usage
 
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
-3. The dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
+3. Hear Demo Radio with no provider keys; the dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
 4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
-5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` to `/config/secrets.env` to unlock live AI hosts
-6. Install the HACS integration for the controllable `media_player.mammamiradio`
+5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from **Motore → Setup → AI hosts** to unlock live AI hosts
+6. Review **Home context preview** and mute any entity the hosts should never use. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
+7. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.

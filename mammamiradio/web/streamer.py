@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import copy
+import functools
 import importlib
 import logging
 import math
@@ -47,8 +48,17 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.core.provider_checks import check_provider_keys
-from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
+from mammamiradio.core.setup_status import (
+    addon_options_snippet,
+    build_setup_status,
+    classify_station_mode,
+)
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
+from mammamiradio.home.entity_policy import (
+    load_entity_policy,
+    set_entity_muted,
+    valid_entity_id,
+)
 from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
@@ -1112,9 +1122,216 @@ def _generation_waste_snapshot(state: StationState) -> dict:
     }
 
 
+def _safe_home_entity_preview(state: StationState, config) -> dict:
+    """Return admin-only, sanitized HA context candidates for onboarding."""
+    policy = load_entity_policy(config.cache_dir)
+    muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
+    muted_ids = set(muted_map)
+    ctx = get_cached_home_context(config.cache_dir)
+    rows: dict[str, dict] = {}
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", [])[:24]:
+            status = entity.to_status_dict()
+            entity_id = str(status.get("entity_id") or "")
+            if not entity_id:
+                continue
+            stale_after = max(float(config.homeassistant.poll_interval) * 2, 120.0)
+            rows[entity_id] = {
+                "entity_id": entity_id,
+                "label": status.get("label") or entity_id,
+                "area": status.get("area") or "",
+                "domain": status.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": status.get("summary") or str(status.get("state") or ""),
+                "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
+                "muted": entity_id in muted_ids,
+                "sent_to_prompt": entity_id not in muted_ids,
+                "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+                "last_updated": getattr(ctx, "timestamp", 0.0) or None,
+                "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
+            }
+    for status in state.ha_scored_entities[:24]:
+        entity_id = str(status.get("entity_id") or "")
+        if not entity_id or entity_id in rows:
+            continue
+        rows[entity_id] = {
+            "entity_id": entity_id,
+            "label": status.get("label") or entity_id,
+            "area": status.get("area") or "",
+            "domain": status.get("domain") or entity_id.split(".", 1)[0],
+            "state_summary": status.get("summary") or str(status.get("state") or ""),
+            "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
+            "muted": entity_id in muted_ids,
+            "sent_to_prompt": entity_id not in muted_ids,
+            "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+            "last_updated": state.ha_context_last_updated or None,
+            "stale": False,
+        }
+    for entity_id, entry in muted_map.items():
+        if not isinstance(entry, dict) or not isinstance(entity_id, str):
+            continue
+        rows.setdefault(
+            entity_id,
+            {
+                "entity_id": entity_id,
+                "label": entry.get("label") or entity_id,
+                "area": entry.get("area") or "",
+                "domain": entry.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": "Muted locally",
+                "reason": "Muted by operator",
+                "muted": True,
+                "sent_to_prompt": False,
+                "row_state": "muted",
+                "last_updated": entry.get("muted_at"),
+                "stale": False,
+            },
+        )
+    sent_now = [row for row in rows.values() if row["sent_to_prompt"] and not row["muted"]]
+    muted = [row for row in rows.values() if row["muted"]]
+    candidates = [row for row in rows.values() if not row["sent_to_prompt"] and not row["muted"]]
+    entities = [*sent_now[:24], *candidates[:24], *muted[:24]]
+    has_reviewable_context = bool(ctx is not None or state.ha_scored_entities or muted)
+    preview_status = "ready" if sent_now else "empty" if has_reviewable_context else "checking"
+    return {
+        "ok": True,
+        "status": preview_status,
+        "entities": entities[:32],
+        "sent_now": sent_now[:12],
+        "candidates": candidates[:12],
+        "muted": muted[:24],
+        "counts": {
+            "sent_now": len(sent_now),
+            "used_by_hosts": len(sent_now),
+            "candidates": len(candidates),
+            "not_sent": len(candidates),
+            "muted": len(muted),
+            "filtered": sum((getattr(ctx, "denylist_hits", {}) or {}).values()) if ctx is not None else 0,
+        },
+    }
+
+
+def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[str, str]:
+    """Resolve best-effort display metadata without depending on preview shape."""
+    ctx = get_cached_home_context(config.cache_dir)
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", []):
+            status = entity.to_status_dict()
+            if status.get("entity_id") == entity_id:
+                return {
+                    "label": str(status.get("label") or entity_id),
+                    "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                    "area": str(status.get("area") or ""),
+                }
+    for status in state.ha_scored_entities:
+        if status.get("entity_id") == entity_id:
+            return {
+                "label": str(status.get("label") or entity_id),
+                "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                "area": str(status.get("area") or ""),
+            }
+    return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
+
+
+def _copy_home_context_to_state(state: StationState, context) -> None:
+    events = list(getattr(context, "events", []) or [])
+    newest_event = max(events, key=lambda event: event.timestamp) if events else None
+    state.ha_context = str(getattr(context, "summary", "") or "")
+    state.ha_events_summary = str(getattr(context, "events_summary", "") or "")
+    state.ha_home_mood = str(getattr(context, "mood", "") or "")
+    state.ha_weather_arc = str(getattr(context, "weather_arc", "") or "")
+    state.ha_recent_event_count = len(events)
+    state.ha_last_event_label = str(getattr(newest_event, "label", "") or "") if newest_event else ""
+    state.ha_last_event_ts = float(getattr(newest_event, "timestamp", 0.0) or 0.0) if newest_event else 0.0
+    state.ha_home_mood_en = str(getattr(context, "mood_en", "") or "")
+    state.ha_weather_arc_en = str(getattr(context, "weather_arc_en", "") or "")
+    state.ha_events_summary_en = str(getattr(context, "events_summary_en", "") or "")
+    state.ha_last_event_label_en = str(getattr(context, "last_event_label_en", "") or "")
+    state.ha_scored_entities = [entity.to_status_dict() for entity in getattr(context, "scored", [])]
+    state.ha_denylist_hits = dict(getattr(context, "denylist_hits", {}) or {})
+    state.ha_catalog_hit_rate = float(getattr(context, "catalog_hit_rate", 0.0) or 0.0)
+    state.ha_label_stats = dict(getattr(context, "label_stats", {}) or {})
+    state.ha_registry_source = str(getattr(context, "registry_source", "") or "")
+    timestamp = getattr(context, "timestamp", 0.0)
+    state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
+    state.ha_context_entity_count = len(getattr(context, "scored", []) or [])
+    state.ha_context_char_count = len(state.ha_context)
+
+
+def _blank_home_context_state(state: StationState) -> None:
+    state.ha_context = ""
+    state.ha_events_summary = ""
+    state.ha_home_mood = ""
+    state.ha_weather_arc = ""
+    state.ha_recent_event_count = 0
+    state.ha_last_event_label = ""
+    state.ha_last_event_ts = 0.0
+    state.ha_home_mood_en = ""
+    state.ha_weather_arc_en = ""
+    state.ha_events_summary_en = ""
+    state.ha_last_event_label_en = ""
+    state.ha_scored_entities = []
+    state.ha_denylist_hits = {}
+    state.ha_catalog_hit_rate = 0.0
+    state.ha_label_stats = {}
+    state.ha_registry_source = ""
+    state.ha_context_entity_count = 0
+    state.ha_context_char_count = 0
+
+
+def _set_live_gag_entity_denied(state: StationState, config, entity_id: str, muted: bool) -> bool:
+    ledger = state.evening_ledger
+    if ledger is None:
+        return False
+    denylist = set(ledger.entity_denylist)
+    if muted:
+        denylist.add(entity_id)
+    elif entity_id not in set(getattr(config.running_gags, "entity_denylist", []) or []):
+        denylist.discard(entity_id)
+    ledger.entity_denylist = frozenset(denylist)
+    return ledger.purge_entity(entity_id) if muted else False
+
+
+def _clear_home_context_usage(state: StationState, config, entity_id: str | None = None) -> bool:
+    """Clear prompt-facing HA fields after a hard mute policy change.
+
+    Returns True when the evening running-gag ledger was also purged and
+    needs `save_if_dirty()` — the caller owns persistence so this stays a
+    plain in-memory mutator (no synchronous disk I/O in an async route).
+    """
+    context = get_cached_home_context(config.cache_dir)
+    if context is not None:
+        _copy_home_context_to_state(state, context)
+    else:
+        _blank_home_context_state(state)
+    # These transient strings have no durable entity id in StationState, so a live
+    # mute clears them even when the rest of the filtered context can be preserved.
+    state.ha_pending_directive = ""
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
+    if entity_id and state.evening_ledger is not None:
+        return _set_live_gag_entity_denied(state, config, entity_id, True)
+    return False
+
+
 def _runtime_monotonic() -> float:
     """Monotonic clock for readiness and silence accounting."""
     return time.monotonic()
+
+
+def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[str, Any]:
+    """Build the shared onboarding snapshot used by setup and capability routes."""
+    _sync_runtime_state(request)
+    config = request.app.state.config
+    state = request.app.state.station_state
+    golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
+    provider_health = _provider_health_snapshot(config, state)
+    setup = build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
+    return {
+        "config": config,
+        "state": state,
+        "golden_path": golden_path,
+        "provider_health": provider_health,
+        "setup": setup,
+    }
 
 
 def _queue_empty_elapsed(state: StationState) -> float:
@@ -2133,17 +2350,13 @@ async def logs(request: Request, lines: int = 50, _: None = Depends(require_admi
 @router.get("/api/setup/status")
 async def setup_status(request: Request, _: None = Depends(require_admin_access)):
     """Return the current first-run setup snapshot for onboarding."""
-    config = request.app.state.config
-    state = request.app.state.station_state
-    return build_setup_status(config, state)
+    return _setup_projection(request)["setup"]
 
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
     """Force a fresh setup snapshot."""
-    config = request.app.state.config
-    state = request.app.state.station_state
-    return build_setup_status(config, state)
+    return _setup_projection(request, force_refresh=True)["setup"]
 
 
 @router.post("/api/setup/provider-check")
@@ -2298,16 +2511,16 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     The dashboard uses these flags to show/hide cards and determine the
     current feature tier (Demo Radio / Your Music / Full AI Radio).
     """
-    _sync_runtime_state(request)
-    config = request.app.state.config
-    state = request.app.state.station_state
+    setup_projection = _setup_projection(request)
+    config = setup_projection["config"]
+    state = setup_projection["state"]
     caps = get_capabilities(config, state)
     result = capabilities_to_dict(caps)
     capabilities = result.setdefault("capabilities", {})
     capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
-    provider_health = _provider_health_snapshot(config, state)
+    provider_health = setup_projection["provider_health"]
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
     # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
@@ -2342,7 +2555,8 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         "limit": SHAREWARE_CANNED_LIMIT,
         "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
     }
-    result["golden_path"] = _golden_path_status(config, state)
+    result["golden_path"] = setup_projection["golden_path"]
+    result["guided_setup"] = setup_projection["setup"]["guided_setup"]
     result["startup_source_error"] = state.startup_source_error or ""
     result["provider_health"] = provider_health
     return result
@@ -2356,7 +2570,7 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         raise HTTPException(status_code=409, detail="HA label generation already in progress")
     if not config.anthropic_api_key:
         return {"scheduled": False, "reason": "anthropic_key_missing"}
-    context = get_cached_home_context()
+    context = get_cached_home_context(config.cache_dir)
     if context is None or not context.raw_states:
         return {"scheduled": False, "reason": "home_context_unavailable"}
     scheduled = schedule_label_generation(
@@ -2374,6 +2588,70 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
             raise HTTPException(status_code=409, detail="HA label generation already in progress")
         return {"scheduled": False, "reason": "no_candidates"}
     return {"scheduled": True}
+
+
+@router.get("/api/homeassistant/context-candidates")
+async def homeassistant_context_candidates(request: Request, _: None = Depends(require_admin_access)):
+    """Return a sanitized admin-only preview of HA context candidates."""
+    return _safe_home_entity_preview(request.app.state.station_state, request.app.state.config)
+
+
+@router.patch("/api/homeassistant/entity-policy")
+async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
+    """Mute/unmute one Home Assistant entity for host context use."""
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    entity_id = body.get("entity_id")
+    muted = body.get("muted")
+    if not isinstance(entity_id, str) or not valid_entity_id(entity_id):
+        raise HTTPException(status_code=422, detail="entity_id must be a Home Assistant entity id")
+    if not isinstance(muted, bool):
+        raise HTTPException(status_code=422, detail="muted must be true or false")
+
+    config = request.app.state.config
+    # No preview-membership gate: some entities (e.g. radio_event-only
+    # entities, deliberately kept out of ambient context) never appear in the
+    # sanitized preview but an operator still needs to be able to mute them by
+    # id — over-inclusive muting can only exclude more, never expose more, so
+    # any syntactically valid entity_id (already checked above) is accepted.
+    state = request.app.state.station_state
+    row = _home_entity_metadata(state, config, entity_id)
+    loop = asyncio.get_running_loop()
+    try:
+        policy = await loop.run_in_executor(
+            None,
+            functools.partial(
+                set_entity_muted,
+                config.cache_dir,
+                entity_id,
+                muted,
+                label=row.get("label") or entity_id,
+                domain=row.get("domain") or entity_id.split(".", 1)[0],
+                area=row.get("area") or "",
+            ),
+        )
+    except OSError as exc:
+        logger.warning("Failed to save HA entity policy", exc_info=True)
+        raise HTTPException(status_code=500, detail="could not save entity policy") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if muted:
+        ledger_dirty = _clear_home_context_usage(state, config, entity_id)
+        if ledger_dirty and state.evening_ledger is not None:
+            await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
+    else:
+        _set_live_gag_entity_denied(state, config, entity_id, False)
+    return {
+        "ok": True,
+        "entity_id": entity_id,
+        "muted": muted,
+        "policy": {
+            "schema_version": policy.get("schema_version"),
+            "muted_count": len(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}),
+        },
+    }
 
 
 @router.post("/api/shuffle")
