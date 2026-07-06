@@ -316,6 +316,7 @@
     const container = $('slots');
     if (!container) return;
     const stopped = status && status.session_stopped === true;
+    const noMusicSource = status && status.golden_path && status.golden_path.stage === 'needs_music_source';
     const upcoming = (status && status.upcoming) || [];
     const now = !stopped && status && status.now_streaming;
     const cards = [];
@@ -343,17 +344,28 @@
       });
     });
 
-    while (cards.length < 4) {
+    if (!stopped && noMusicSource && cards.length < 4) {
       cards.push({
-        when: '—',
+        status: true,
         current: false,
         type: 'idle',
-        label: _t('np_building', 'Building schedule…'),
+        label: _t('np_no_source', 'No records are loaded yet — check back once the crate is filled.'),
+        host: '',
+      });
+    } else if (!stopped && status && status.upcoming_mode === 'building' && cards.length < 4) {
+      cards.push({
+        status: true,
+        current: false,
+        type: 'idle',
+        label: _t('np_building', 'The next records are being cued…'),
         host: '',
       });
     }
 
     container.innerHTML = cards.slice(0, 4).map((c, i) => {
+      if (c.status) {
+        return `<li class="status" role="status"><div class="m"><div class="title">${escHtml(c.label || _t('np_building', 'The next records are being cued…'))}</div></div></li>`;
+      }
       const liClass = c.current ? 'now' : i > 0 || (i === 0 && !c.current) ? 'next' : '';
       const timingClass = c.current ? 'pill-current' : 'pill-next';
       const typeClass = segmentPillClass(c.type);

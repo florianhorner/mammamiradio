@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentLogEntry, SegmentType
+from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
 
@@ -76,6 +76,32 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+
+
+@pytest.mark.asyncio
+async def test_public_status_current_source_is_loaded_playlist_source():
+    """`current_source` is the loaded playlist source, not the on-air segment."""
+    app = _make_test_app()
+    app.state.station_state.playlist_source = PlaylistSource(
+        kind="charts",
+        source_id="apple_music_it_top_100",
+        label="Italian charts",
+        track_count=75,
+        selected_at=1234.0,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["current_source"] == {
+        "kind": "charts",
+        "source_id": "apple_music_it_top_100",
+        "url": "",
+        "label": "Italian charts",
+        "track_count": 75,
+        "selected_at": 1234.0,
+    }
 
 
 @pytest.mark.asyncio
