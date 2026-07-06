@@ -182,9 +182,12 @@ def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> Non
     assert 'id="setupStripListenerBtn"' not in strip
     assert 'id="setupStripReviewBtn"' not in strip
     block = html[html.index("function renderGuidedSetupStrip") : html.index("function shouldShowHomeContextPreview")]
+    assert "stripData=setup?.guided_setup?.strip" in block
+    assert "stripData.primary_action" in block
     assert "primary.label" in block
     assert "primary.target" in block
-    assert "Open listener" in block
+    assert "guided.stream" not in block
+    assert "guidedShape" not in block
     assert "setupStripListenerBtn" not in block
     assert "setupStripReviewBtn" not in block
 
@@ -207,7 +210,8 @@ def test_setup_strip_treats_not_configured_home_context_as_done_not_a_todo() -> 
     'blocked', an error-styled state that never resolved for non-HA users)."""
     html = _html()
     block = html[html.index("function renderGuidedSetupStrip") : html.index("async function setupRecheck")]
-    assert "item.status!=='not_configured'" in block
+    assert "stripData.attention_required&&entries.length" in block
+    assert "item.status!=='not_configured'" not in block
     strip_chip_error_rule = next(
         line for line in html.splitlines() if line.strip().startswith('.setup-strip-chip[data-s="blocked"]')
     )

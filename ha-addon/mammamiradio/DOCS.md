@@ -83,7 +83,7 @@ HA Supervisor
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
-2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`.
+2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`, and maps the Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
 3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
 5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
@@ -253,9 +253,10 @@ The name appears roughly once every 3–4 banter exchanges, never forced. You ca
 ## Home Assistant entities
 
 The add-on automatically pushes a basic `media_player.mammamiradio` plus sensor
-state after each segment transition and every 30 seconds — no
-`configuration.yaml` changes required, so an add-on-only setup gets a media-player
-tile out of the box.
+state after each segment transition. The media-player heartbeat continues every
+30 seconds for add-on-only setups; unchanged auxiliary sensor payloads are
+deduped between bounded recovery heartbeats — no `configuration.yaml` changes
+required, so an add-on-only setup gets a media-player tile out of the box.
 
 For a registered, controllable `media_player.mammamiradio` and the native
 `media-source://mammamiradio/live` stream source, install the HACS integration in
@@ -266,12 +267,12 @@ flowing either way.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
-| `media_player.mammamiradio` | media_player | `playing` / `idle` | pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
-| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `off` | — |
-| `sensor.mammamiradio_listeners` | sensor | integer | `unit_of_measurement: listeners` |
-| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | — |
+| `media_player.mammamiradio` | media_player | `playing` / `idle` | `icon: mdi:radio`; pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `news_flash` / `station_id` / `sweeper` / `time_check` / `off` | dynamic `icon` matching the current segment type |
+| `sensor.mammamiradio_listeners` | sensor | integer | `icon: mdi:account-group`; `unit_of_measurement: listeners` |
+| `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | `icon: mdi:broadcast` |
 
-**30-second cold-start note:** after a HA or add-on restart, pushed entities reappear within 30 seconds via the heartbeat. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
+**Cold-start note:** after a HA or add-on restart, the media player reappears within 30 seconds via the heartbeat. Unchanged auxiliary sensors are republished by the bounded recovery heartbeat, or sooner when their state changes. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 
 **Lovelace media card** with the HACS integration:
 

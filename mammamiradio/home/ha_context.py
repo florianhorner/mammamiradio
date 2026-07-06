@@ -791,6 +791,31 @@ def _apply_muted_policy_to_context(
     return context
 
 
+def _serve_filtered_home_context(
+    context: HomeContext,
+    muted_ids: set[str],
+    *,
+    cache_dir: Path | None = None,
+    now: float | None = None,
+    update_global: bool = False,
+) -> HomeContext:
+    """Serve a cache/stale context through the live mute and summary policy."""
+    global _ha_cache
+    timestamp = time.time() if now is None else now
+    served = context if cache_dir is None else _copy_home_context(context)
+    served = _apply_muted_policy_to_context(served, muted_ids, cache_dir=cache_dir, now=timestamp)
+    # Cache returns still need live event ages and expired-event pruning; callers
+    # should not know which cached path they hit to receive prompt-safe context.
+    served.events = _prune_muted_events(served.events, muted_ids, now=timestamp)
+    served.events_summary = build_events_summary(served.events, now=timestamp)
+    _, labels_en = _build_entity_label_maps(served.raw_states, cache_dir=cache_dir)
+    served.events_summary_en = build_events_summary_en(served.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
+    served.radio_events = []
+    if update_global:
+        _ha_cache = served
+    return served
+
+
 def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> HomeContext:
     """Re-apply the live mute policy to a context obtained outside fetch_home_context.
 
@@ -802,8 +827,7 @@ def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> Ho
     if cache_dir is None:
         return context
     muted_ids = muted_entity_ids(Path(cache_dir))
-    copied = _copy_home_context(context)
-    return _apply_muted_policy_to_context(copied, muted_ids, cache_dir=cache_dir, now=time.time())
+    return _serve_filtered_home_context(context, muted_ids, cache_dir=cache_dir, now=time.time())
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -1530,26 +1554,13 @@ async def fetch_home_context(
     effective_cache = _cache or _ha_cache
     muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
-        served_cache = effective_cache if cache_dir is None else _copy_home_context(effective_cache)
-        served_cache = _apply_muted_policy_to_context(
-            served_cache,
+        return _serve_filtered_home_context(
+            effective_cache,
             muted_ids,
             cache_dir=cache_dir,
             now=time.time(),
+            update_global=cache_dir is None,
         )
-        if cache_dir is None:
-            _ha_cache = served_cache
-        # Refresh event ages and prune expired entries even on cache hits, so
-        # "X min fa" timestamps stay accurate and stale events are dropped.
-        now = time.time()
-        served_cache.events = _prune_muted_events(served_cache.events, muted_ids, now=now)
-        served_cache.events_summary = build_events_summary(served_cache.events, now=now)
-        _, labels_en = _build_entity_label_maps(served_cache.raw_states, cache_dir=cache_dir)
-        served_cache.events_summary_en = build_events_summary_en(
-            served_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=now
-        )
-        served_cache.radio_events = []
-        return served_cache
 
     try:
         client = _get_ha_client()
@@ -1683,23 +1694,13 @@ async def fetch_home_context(
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
-            served_cache = effective_cache if cache_dir is None else _copy_home_context(effective_cache)
-            served_cache = _apply_muted_policy_to_context(
-                served_cache,
+            return _serve_filtered_home_context(
+                effective_cache,
                 muted_ids,
                 cache_dir=cache_dir,
                 now=timestamp,
+                update_global=cache_dir is None,
             )
-            served_cache.events = _prune_muted_events(served_cache.events, muted_ids, now=timestamp)
-            served_cache.events_summary = build_events_summary(served_cache.events, now=timestamp)
-            _, labels_en = _build_entity_label_maps(served_cache.raw_states, cache_dir=cache_dir)
-            served_cache.events_summary_en = build_events_summary_en(
-                served_cache.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp
-            )
-            served_cache.radio_events = []
-            if cache_dir is None:
-                _ha_cache = served_cache
-            return served_cache
         return HomeContext()
 
 
@@ -1720,6 +1721,14 @@ def get_cached_home_context(cache_dir: Path | None = None) -> HomeContext | None
 _last_ha_push: float = 0.0  # debounce: skip playing pushes < 2s apart
 _last_ha_stop_push: float = 0.0  # debounce: skip consecutive stopped pushes < 2s apart
 _ha_push_lock: asyncio.Lock | None = None
+_HA_ENTITY_RECOVERY_REPUBLISH_SECONDS = 300.0
+_HA_DEDUPED_ENTITY_IDS = {
+    "sensor.mammamiradio_segment_type",
+    "sensor.mammamiradio_listeners",
+    "binary_sensor.mammamiradio_on_air",
+}
+_ha_entity_payload_fingerprints: dict[str, str] = {}
+_ha_entity_last_push_at: dict[str, float] = {}
 
 # Absolute fallback logo for the HA media_player entity_picture. HA's
 # media-control card does NOT clear a removed entity_picture — it keeps the last
@@ -1729,6 +1738,23 @@ _ha_push_lock: asyncio.Lock | None = None
 _DEFAULT_STATION_ARTWORK_URL = (
     "https://raw.githubusercontent.com/florianhorner/mammamiradio/main/ha-addon/mammamiradio/logo.png"
 )
+_HA_SEGMENT_TYPE_ICONS = {
+    "music": "mdi:music-note",
+    "banter": "mdi:microphone",
+    "ad": "mdi:bullhorn",
+    "news_flash": "mdi:newspaper",
+    "station_id": "mdi:radio-tower",
+    "sweeper": "mdi:waveform",
+    "time_check": "mdi:clock-outline",
+    "off": "mdi:power-standby",
+}
+_HA_SEGMENT_TYPE_FALLBACK_ICON = "mdi:radio"
+
+
+def _segment_type_icon(segment_type: object) -> str:
+    """Return the HA icon for a pushed segment-type sensor state."""
+    key = str(segment_type or "").strip().lower()
+    return _HA_SEGMENT_TYPE_ICONS.get(key, _HA_SEGMENT_TYPE_FALLBACK_ICON)
 
 
 def _get_ha_push_lock() -> asyncio.Lock:
@@ -1741,6 +1767,36 @@ def _get_ha_push_lock() -> asyncio.Lock:
 
 _GHOST_MEDIA_PLAYER_EID = "media_player.mammamiradio"
 _media_player_ghost_purged = False
+
+
+def _ha_payload_fingerprint(payload: dict) -> str:
+    """Stable payload fingerprint for unchanged HA sensor writes."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _ha_entity_write_due(eid: str, payload: dict, now: float) -> bool:
+    """Return whether this entity should be written to HA this cycle.
+
+    The media player is intentionally not deduped: its playback position changes
+    over time and add-on-only installs expect a regular card refresh. The
+    auxiliary sensors are much cheaper to recover from a slower forced heartbeat,
+    so unchanged payloads wait for the recovery interval instead of writing every
+    30 seconds forever.
+    """
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return True
+    fingerprint = _ha_payload_fingerprint(payload)
+    if _ha_entity_payload_fingerprints.get(eid) != fingerprint:
+        return True
+    last_push = _ha_entity_last_push_at.get(eid, 0.0)
+    return now - last_push >= _HA_ENTITY_RECOVERY_REPUBLISH_SECONDS
+
+
+def _remember_ha_entity_write(eid: str, payload: dict, now: float) -> None:
+    if eid not in _HA_DEDUPED_ENTITY_IDS:
+        return
+    _ha_entity_payload_fingerprints[eid] = _ha_payload_fingerprint(payload)
+    _ha_entity_last_push_at[eid] = now
 
 
 def _media_player_push_enabled() -> bool:
@@ -1858,6 +1914,7 @@ async def push_state_to_ha(
 
         media_attrs: dict = {
             "friendly_name": station_name,
+            "icon": "mdi:radio",
             "supported_features": 0,
             "media_title": media_title,
             "media_artist": media_artist,
@@ -1893,7 +1950,10 @@ async def push_state_to_ha(
                 "sensor.mammamiradio_segment_type",
                 {
                     "state": segment_type,
-                    "attributes": {"friendly_name": f"{station_name} Segment Type"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} Segment Type",
+                        "icon": _segment_type_icon(segment_type),
+                    },
                 },
             ),
             (
@@ -1902,6 +1962,7 @@ async def push_state_to_ha(
                     "state": listeners_active,
                     "attributes": {
                         "friendly_name": f"{station_name} Listeners",
+                        "icon": "mdi:account-group",
                         "unit_of_measurement": "listeners",
                     },
                 },
@@ -1910,7 +1971,10 @@ async def push_state_to_ha(
                 "binary_sensor.mammamiradio_on_air",
                 {
                     "state": "off" if session_stopped else "on",
-                    "attributes": {"friendly_name": f"{station_name} On Air"},
+                    "attributes": {
+                        "friendly_name": f"{station_name} On Air",
+                        "icon": "mdi:broadcast",
+                    },
                 },
             ),
         ]
@@ -1923,7 +1987,7 @@ async def push_state_to_ha(
             entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
             await _purge_ghost_media_player(base_url, headers, client)
 
-        async def _push_one(eid: str, p: dict) -> None:
+        async def _push_one(eid: str, p: dict) -> bool:
             # Always log the exception TYPE + repr. A bare str() on a timeout or
             # cancellation-style exception is empty, which is what produced the
             # unreadable "HA push failed for <eid>: " lines in production. Include
@@ -1951,23 +2015,28 @@ async def push_state_to_ha(
                             resp.status_code,
                             f" — {body}" if body else "",
                         )
-                    return
+                        return False
+                    return True
                 except httpx.TransportError as e:
                     last_exc = e
                     continue
                 except Exception as e:
                     logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
-                    return
+                    return False
             logger.warning(
                 "HA push failed for %s after retry: %s: %r",
                 eid,
                 type(last_exc).__name__,
                 last_exc,
             )
+            return False
 
         # Keep state writes ordered. Supervisor's API proxy can report noisy
         # request-body errors when all entity updates hit it at once during HA
         # slowness; the outer push lock already serializes push cycles, so this
         # preserves freshness while smoothing each cycle.
         for eid, payload in entities:
-            await _push_one(eid, payload)
+            if not _ha_entity_write_due(eid, payload, now):
+                continue
+            if await _push_one(eid, payload):
+                _remember_ha_entity_write(eid, payload, now)

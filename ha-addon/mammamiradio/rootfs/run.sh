@@ -186,6 +186,17 @@ if legacy_claude_model:
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)
+context_enabled = opts.get('ha_context_enabled', True)
+context_val = 'true' if context_enabled else 'false'
+print('export MAMMAMIRADIO_HA_CONTEXT_ENABLED=' + context_val)
+context_poll = opts.get('ha_context_poll_interval', 300)
+try:
+    context_poll_int = int(context_poll)
+    if context_poll_int <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    context_poll_int = 300
+print('export MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=' + shlex.quote(str(context_poll_int)))
 super_italian = opts.get('super_italian_mode', False)
 si_val = 'true' if super_italian else 'false'
 print('export MAMMAMIRADIO_SUPER_ITALIAN=' + si_val)

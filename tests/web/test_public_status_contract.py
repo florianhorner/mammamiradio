@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentLogEntry, SegmentType
+from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
 
@@ -61,6 +61,32 @@ async def test_public_status_returns_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_public_status_current_source_is_loaded_playlist_source():
+    """`current_source` is the loaded playlist source, not the on-air segment."""
+    app = _make_test_app()
+    app.state.station_state.playlist_source = PlaylistSource(
+        kind="charts",
+        source_id="apple_music_it_top_100",
+        label="Italian charts",
+        track_count=75,
+        selected_at=1234.0,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["current_source"] == {
+        "kind": "charts",
+        "source_id": "apple_music_it_top_100",
+        "url": "",
+        "label": "Italian charts",
+        "track_count": 75,
+        "selected_at": 1234.0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_public_status_does_not_expose_admin_cost_breakdown():
     app = _make_test_app()
     state = app.state.station_state
@@ -79,6 +105,35 @@ async def test_public_status_does_not_expose_admin_cost_breakdown():
     assert "consumption" not in public
     assert "cost_breakdown" not in str(public)
     assert admin["consumption"]["cost_breakdown"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_public_status_does_not_expose_operator_song_preferences():
+    app = _make_test_app()
+    app.state.station_state.song_preferences = {
+        ("modugno", "volare"): {
+            "score": 1,
+            "display": "Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+        preferences_resp = await client.get("/api/track/preferences")
+
+    public = public_resp.json()
+    admin = admin_resp.json()
+    preferences = preferences_resp.json()
+    assert "song_preferences" not in public
+    assert "current_track_preference" not in public
+    assert admin["song_preferences"]["count"] == 1
+    assert "preferences" not in admin["song_preferences"]
+    assert "current_track_preference" in admin
+    assert preferences["count"] == 1
 
 
 @pytest.mark.asyncio

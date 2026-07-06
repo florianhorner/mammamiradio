@@ -6,8 +6,13 @@
 
 - **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
 - **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the last-resort silence placeholder, so provider or download trouble feels intentional instead of like dead air.
+- **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
 
-## 2.16.0
+## 2.16.0 - 2026-07-06
+
+### Changed
+
+- **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
 
 ## 2.15.0 - 2026-07-06
 
@@ -15,7 +20,7 @@
 
 - **A clearer setup guide shows exactly what's next.** The admin panel tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention. Add-ons that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
 - **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds through a Home Assistant hiccup or an add-on restart.
-
+- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded cold-open campaign after an update, counted only when a real listener receives streamed audio. The station can also bring back a recently rendered music segment after restart so the first listen reaches live programming faster.
 - **Listener dediche can now reject configured real-name matches before they reach the hosts.** Operators can keep `blocked_names` under `[moderation]` in `radio.toml`; it ships empty, but when filled it catches names case-insensitively and accent-insensitively without echoing the private list back to listeners.
