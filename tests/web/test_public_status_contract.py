@@ -61,6 +61,29 @@ async def test_public_status_returns_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_public_status_exposes_only_coarse_ritual_family_labels():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_ritual_public_families = ["Kitchen ritual"]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.kitchen_fridge_door"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert public["ha_moments"] == {
+        "connected": True,
+        "mood": None,
+        "weather": None,
+        "ritual_families": ["Kitchen ritual"],
+    }
+    assert "ha_details" not in public
+    assert "binary_sensor.kitchen_fridge_door" not in str(public["ha_moments"])
+    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.kitchen_fridge_door"
+
+
+@pytest.mark.asyncio
 async def test_public_status_current_source_is_loaded_playlist_source():
     """`current_source` is the loaded playlist source, not the on-air segment."""
     app = _make_test_app()
