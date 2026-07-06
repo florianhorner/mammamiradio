@@ -278,8 +278,11 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-schedule li:hover { background: rgba(245,237,216,0.03); }
 .mmr-schedule li.now { background: rgba(236,204,48,0.05); border-left: 2px solid var(--brand-primary, var(--sun2)); }
 .mmr-schedule li.next { background: rgba(37,99,235,0.03); }
+.mmr-schedule li.status { display: block; padding: 18px; background: rgba(245,237,216,0.035); }
+.mmr-schedule li.status:hover { background: rgba(245,237,216,0.035); }
 .mmr-schedule .t { font-family: var(--font-mono); font-size: 13px; color: var(--brand-primary, var(--sun)); font-weight: 500; font-variant-numeric: tabular-nums; }
 .mmr-schedule .m .title { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 17px; color: var(--cream); }
+.mmr-schedule li.status .m .title { font-family: var(--font-body); font-style: normal; font-size: 14px; line-height: 1.5; color: var(--cream-dk); }
 .mmr-schedule .m .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 .mmr-schedule .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; padding: 4px 10px 4px 12px; border-radius: 999px; border: 1px solid rgba(245,237,216,0.12); color: var(--cream-dk); background: rgba(245,237,216,0.04); box-shadow: inset 3px 0 0 var(--pill-type, var(--muted)); }
 .mmr-schedule .pill.pill-current { border-color: rgba(236,204,48,0.45); background: rgba(236,204,48,0.12); color: var(--sun2); }

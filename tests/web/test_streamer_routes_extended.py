@@ -390,7 +390,7 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_move_to_next_updates_public_upcoming_preview():
+async def test_move_to_next_does_not_fake_public_upcoming_preview():
     app = _make_test_app()
     app.state.station_state.segments_produced = 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -400,10 +400,11 @@ async def test_move_to_next_updates_public_upcoming_preview():
 
     assert move_resp.status_code == 200
     assert move_resp.json()["ok"] is True
-    upcoming = status_resp.json()["upcoming"]
-    assert upcoming[0]["type"] == "music"
-    assert upcoming[0]["label"] == "Artist C – Song C"
-    assert upcoming[0]["playlist_index"] == 2
+    body = status_resp.json()
+    assert body["upcoming"] == []
+    assert body["upcoming_mode"] == "building"
+    assert app.state.station_state.pinned_track is not None
+    assert app.state.station_state.pinned_track.display == "Artist C – Song C"
 
 
 @pytest.mark.asyncio
