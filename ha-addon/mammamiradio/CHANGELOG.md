@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.17.0 - 2026-07-07
+
+### Added
+
+- **A clearer setup guide shows exactly what's next.** The admin panel tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention. Add-ons that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
+- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds through a Home Assistant hiccup or an add-on restart.
+
+### Changed
+
+- **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
+
 ## 2.16.1 - 2026-07-06
 
 ### Fixed
@@ -25,8 +36,6 @@
 
 ### Added
 
-- **A clearer setup guide shows exactly what's next.** The admin panel tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention. Add-ons that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
-- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds through a Home Assistant hiccup or an add-on restart.
 - **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded cold-open campaign after an update, counted only when a real listener receives streamed audio. The station can also bring back a recently rendered music segment after restart so the first listen reaches live programming faster.
@@ -36,7 +45,6 @@
 
 ### Changed
 
-- **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
 - **Durable listener memories now wait for a clean banter stream.** New listener theories and song reaction cues are extracted afterward from the final streamed script, so queued, skipped, fallback, or half-sent banter no longer writes durable listener or song-cue memory.
 - **The two language modes now do what they say.** With Super Italian Mode on, the hosts speak fully in Italian — no more English asides slipping through. In the default mode, the hosts now speak about 70% English with real Italian moments — including whole Italian sentences — and news flashes and ads follow the same mix rather than staying all-Italian inside an English-led show.
 - **Hosts push through a long thought instead of shrugging into filler.** When a host break runs longer than the writing budget allows, the station retries once with more room — first with its main writer, then with the backup — instead of quietly airing a generic filler line. The budget grew to match how much the hosts actually have to say, each attempt gets proportional breathing room under a hard time limit, and the music never waits on a chatty host.

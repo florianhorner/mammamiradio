@@ -773,7 +773,7 @@ def _apply_muted_policy_to_context(
         | {event.entity_id for event in context.events}
         | {entity.entity_id for entity in context.scored}
     )
-    if not affected_ids:
+    if not affected_ids and "weather.forecast_home" not in muted_ids:
         return context
 
     context.raw_states = {

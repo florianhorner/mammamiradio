@@ -40,6 +40,7 @@ from mammamiradio.home.ha_context import (
     _score_entity,
     _segment_type_icon,
     _write_registry_snapshot,
+    apply_entity_mute_policy,
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
@@ -1043,6 +1044,27 @@ async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path)
     assert result.weather_arc == ""
     assert result.weather_arc_en == ""
     assert "weather.forecast_home" not in result.raw_states
+
+
+def test_apply_entity_mute_policy_clears_stale_weather_arc_without_entity(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.forecast_home", True, label="Weather")
+    context = HomeContext(
+        weather_arc="Pioggia in arrivo",
+        weather_arc_en="Rain incoming",
+        raw_states={},
+        scored=[],
+        events=deque(maxlen=64),
+        timestamp=time.time(),
+    )
+
+    result = apply_entity_mute_policy(context, tmp_path)
+
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert context.weather_arc == "Pioggia in arrivo"
+    assert context.weather_arc_en == "Rain incoming"
 
 
 @pytest.mark.asyncio
