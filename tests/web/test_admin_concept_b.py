@@ -71,11 +71,34 @@ def test_pl_key_mirrors_server_normalized_track_key() -> None:
     assert "(title||'').trim().toLowerCase()" in html
 
 
+def test_record_hunt_matches_are_highlighted_without_hiding_next_action() -> None:
+    """Active Record Hunt rows stay in the full rotation list, gain a visible
+    Hunt-pick marker, and keep the existing Next action available."""
+    html = _html()
+    update = html[html.index("function updatePl(") : html.index("async function loadMorePlaylist")]
+
+    assert "const activeHeadingId=_st?.heading?.active?_st.heading.id:''" in update
+    assert "t.heading_id===activeHeadingId" in update
+    assert "record-hunt-match" in update
+    assert "data-heading-id" in update
+    assert '<span class="hunt-pick">Hunt pick</span>' in update
+    assert "sourceChip(t.source)" in update
+    assert "moveNext(${idx})" in update
+
+    assert ".pl-row.record-hunt-match" in html
+    assert ".hunt-pick" in html
+
+
 def test_console_and_tabbar_share_one_sticky_deck() -> None:
     """Desktop pins one deck; mobile lets the upper deck scroll away."""
     html = _html()
     assert 'class="mmr-deck"' in html
-    assert ".mmr-deck{position:sticky" in html
+    assert ".mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate" in html
+    assert (
+        '.mmr-deck::before{content:"";position:absolute;inset:0 0 -16px 0;background:var(--bg);'
+        "z-index:0;pointer-events:none}" in html
+    )
+    assert ".mmr-tabpanel:focus-visible{outline:none;box-shadow:inset 0 0 0 2px" in html
     assert re.search(r"@media \(max-width:768px\)\{\s*\.mmr-deck\{position:static;top:auto;z-index:auto\}", html)
     # the individual elements must NOT each declare their own sticky/top
     assert ".mmr-console{position:sticky" not in html
