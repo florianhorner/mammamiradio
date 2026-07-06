@@ -983,8 +983,8 @@ class StationState:
         if segment.metadata.get("canned"):
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
-        if raw_audio_source or segment.metadata.get("fallback") or segment.type == SegmentType.MUSIC:
-            fallback_active = is_fallback_active(segment.metadata)
+        fallback_active = is_fallback_active(segment.metadata)
+        if raw_audio_source or segment.metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
             audio_source = raw_audio_source
             if not audio_source and fallback_active:
                 audio_source = "canned"
@@ -1023,7 +1023,7 @@ class StationState:
             has_real_title = title_key not in placeholder_titles and not (
                 title_key == label_key and label_key in placeholder_titles
             )
-            if not segment.metadata.get("error") and duration_ms > 0 and has_real_title:
+            if not segment.metadata.get("error") and not fallback_active and duration_ms > 0 and has_real_title:
                 self.played_track_log.append(
                     PlayedEntry(
                         track=Track(

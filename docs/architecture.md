@@ -398,7 +398,7 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
 
-Once playback is running, the producer's recovery layers (last-known-good music recycle, demo-asset rescue, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
+Once playback is running, the producer's recovery layers (packaged recovery clip, last-known-good music recycle, emergency tone, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
 
 ### Operator song blocklist
 
@@ -625,7 +625,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions first try canned recovery audio, then a bounded branded recovery sweeper, then a short silence segment only if recovery audio cannot be rendered in time
+- producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks
@@ -634,6 +634,8 @@ This repo is biased toward "keep the station on air."
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
+
+**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. `mammamiradio/playlist/downloader.py`'s `_generate_silence()` (writing `_silence_*.mp3` placeholders when a track download fails) is a similar out-of-scope path. Both are deliberately out of scope for the producer-exception rescue ladder above; closing them is separate follow-up work.
 
 ## File map
 

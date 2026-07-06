@@ -31,7 +31,6 @@ from mammamiradio.audio.normalizer import (
     concat_files,
     crossfade_voice_over_music,
     generate_bumper_jingle,
-    generate_silence,
     generate_station_id_bed,
     generate_tone,
     humanize_norm_filename,
@@ -297,6 +296,18 @@ async def _render_music_track(
     return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
+_RECOVERY_CLIP_SUBDIRS = ("recovery", "banter", "welcome")
+
+
+def _pick_recovery_clip(state: StationState) -> Path | None:
+    """Pick a packaged continuity clip for recovery ladders."""
+    for subdir in _RECOVERY_CLIP_SUBDIRS:
+        clip = _pick_canned_clip(subdir, state=state)
+        if clip:
+            return clip
+    return None
+
+
 async def _queue_continuity_bridge(
     queue_segment: Callable[[Segment], Awaitable[bool]],
     state: StationState,
@@ -309,7 +320,7 @@ async def _queue_continuity_bridge(
     canned_metadata: dict | None = None,
 ) -> bool:
     """Queue the best available producer-side continuity bridge."""
-    fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+    fallback = _pick_recovery_clip(state)
     if fallback:
         metadata = {
             "type": "banter",
@@ -321,7 +332,7 @@ async def _queue_continuity_bridge(
         if canned_metadata:
             protected_keys = {"type", "canned", bridge_flag, "rescue", "title"}
             metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
-        logger.warning("%s bridge: inserting canned clip", bridge_type.capitalize())
+        logger.warning("%s bridge: inserting packaged recovery clip", bridge_type.capitalize())
         ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
@@ -382,6 +393,118 @@ async def _queue_continuity_bridge(
     return ok
 
 
+async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
+    """Build the best non-silent segment for broad producer exception recovery."""
+    fallback_path = _pick_recovery_clip(state)
+    if fallback_path:
+        logger.info("Error recovery: using packaged recovery clip")
+        return Segment(
+            type=SegmentType.BANTER,
+            path=fallback_path,
+            metadata={
+                "type": "banter",
+                "canned": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": "Station continuity",
+            },
+            ephemeral=False,
+        )
+
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if norm_path:
+        metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
+        logger.warning("Error recovery: using norm-cache rescue instead of silence: %s", log_label)
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            metadata=metadata,
+            ephemeral=False,
+        )
+
+    last_good = _get_last_music_file(state)
+    last_good_title = ""
+    last_good_artist = ""
+    if last_good:
+        last_good_meta = load_track_metadata(last_good) or {}
+        last_good_raw_title = str(last_good_meta.get("title") or "").strip()
+        last_good_raw_artist = str(last_good_meta.get("artist") or "").strip()
+        if state.blocklist:
+            if last_good_raw_title and last_good_raw_artist:
+                last_good_key = (last_good_raw_artist.lower(), last_good_raw_title.lower())
+                if last_good_key in state.blocklist:
+                    logger.warning(
+                        "Error recovery: skipping blocklisted last-known-good music: %s - %s",
+                        last_good_raw_artist,
+                        last_good_raw_title,
+                    )
+                    last_good = None
+            else:
+                logger.warning(
+                    "Error recovery: skipping unidentified last-known-good music while blocklist is active: %s",
+                    last_good.name,
+                )
+                last_good = None
+        if last_good_raw_title:
+            last_good_title = strip_foreign_station_name(
+                last_good_raw_title, config.display_station_name, prefix_only=True
+            )
+        elif last_good:
+            last_good_title = last_good.name
+        last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
+    if last_good:
+        logger.warning(
+            "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
+            last_good.name,
+        )
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=last_good,
+            metadata={
+                "type": "music",
+                "recycled": True,
+                "error_recovery": True,
+                "rescue": True,
+                "title": last_good_title or last_good.name,
+                "artist": last_good_artist,
+                "title_only": last_good_title or last_good.name,
+                "audio_source": "last_known_good",
+            },
+            ephemeral=False,
+        )
+
+    try:
+        logger.warning(
+            "No packaged recovery clips, norm cache, or last-known-good music available — inserting recovery sweeper"
+        )
+        return await asyncio.wait_for(
+            _build_recovery_sweeper_segment(config, state),
+            timeout=RECOVERY_SWEEPER_TIMEOUT_SECONDS,
+        )
+    except Exception as sweeper_err:
+        logger.warning("Recovery sweeper failed — inserting emergency tone: %s", sweeper_err)
+
+    tone_path = config.tmp_dir / f"recovery_tone_{uuid4().hex[:8]}.mp3"
+    logger.error("No packaged recovery clips, norm cache, or recovery sweeper available — inserting emergency tone")
+    try:
+        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
+    except Exception:
+        logger.exception("Emergency tone recovery failed")
+        return None
+    return Segment(
+        type=SegmentType.MUSIC,
+        path=tone_path,
+        metadata={
+            "title": "Station continuity",
+            "artist": "",
+            "error_recovery": True,
+            "rescue": True,
+            "audio_source": "emergency_tone",
+        },
+        ephemeral=True,
+    )
+
+
 async def _queue_drain_recovery_bridge(
     queue_segment: Callable[[Segment], Awaitable[bool]],
     state: StationState,
@@ -394,7 +517,7 @@ async def _queue_drain_recovery_bridge(
         config,
         bridge_type="drain",
         bridge_flag="queue_drain_recovery",
-        canned_title="Recovery banter",
+        canned_title="Station continuity",
     )
 
 
@@ -529,8 +652,8 @@ def _adjacency_type_for(segment: Segment) -> SegmentType | None:
     """The tail-adjacency classification of a queued segment — the SINGLE rule shared by the
     enqueue funnel, the air-next tail recompute, and the producer-start seed.
 
-    Returns ``None`` for a continuity BREAK — a failed render that aired as brief silence, or
-    the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
+    Returns ``None`` for a continuity BREAK — a failed render that aired as recovery audio,
+    or the synthetic 440Hz emergency-tone fill — so a non-song MUSIC-shaped segment is never
     treated as an adjacent song a later speech bed could bleed (#641). Otherwise returns the
     segment's real type.
     """
@@ -577,7 +700,7 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
       ``source_path`` is their pre-egress (clean) path. This is what closes #641.
 
     Front-insert is intentionally excluded by the caller: air-next changes head order, while
-    speech-bed adjacency follows normal tail appends. A continuity-break fill (errored silence
+    speech-bed adjacency follows normal tail appends. A continuity-break fill (recovery audio
     or the emergency tone) resolves to ``None`` via ``_adjacency_type_for``, so the next speech
     never beds a song the break severed. ``prev_seg_type`` uses the same classifier at
     queue-time updates so transition stingers do not treat a rescue tone as real music either.
@@ -1177,7 +1300,7 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
 
     For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
     clips have been streamed to the listener, returns None to force TTS fallback.
-    Welcome clips are not subject to the limit.
+    Recovery and welcome clips are not subject to the limit.
     """
     # Shareware gate: stop serving canned banter after the trial limit
     if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
@@ -1219,6 +1342,7 @@ async def _render_sweeper_audio(
     state: StationState,
     *,
     prefix: str,
+    validate_dry: bool = False,
 ) -> Path:
     """Render a short station-imaging sweeper with the configured voice and sting."""
     sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
@@ -1231,6 +1355,12 @@ async def _render_sweeper_audio(
         edge_fallback_voice=sweeper_fallback,
         state=state,
     )
+    if validate_dry:
+        try:
+            await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+        except (AudioQualityError, AudioToolError):
+            audio_path.unlink(missing_ok=True)
+            raise
     loop = asyncio.get_running_loop()
     sting_path = config.tmp_dir / f"{prefix}_sting_{uuid4().hex[:8]}.mp3"
     mixed_path = config.tmp_dir / f"{prefix}_mixed_{uuid4().hex[:8]}.mp3"
@@ -1250,10 +1380,21 @@ async def _render_sweeper_audio(
 
 
 async def _build_recovery_sweeper_segment(config: StationConfig, state: StationState) -> Segment:
-    """Build a branded rescue sweeper before falling through to silence."""
+    """Build a branded rescue sweeper before falling through to emergency tone."""
     station_name = config.display_station_name or config.station.name
     sweeper_text = random.choice(RECOVERY_SWEEPER_LINES).format(station=station_name)
-    audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="recovery_sweeper")
+    audio_path = await _render_sweeper_audio(
+        sweeper_text,
+        config,
+        state,
+        prefix="recovery_sweeper",
+        validate_dry=True,
+    )
+    try:
+        await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+    except (AudioQualityError, AudioToolError):
+        audio_path.unlink(missing_ok=True)
+        raise
     return Segment(
         type=SegmentType.SWEEPER,
         path=audio_path,
@@ -2040,6 +2181,12 @@ async def run_producer(
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
+        if seg_type == SegmentType.MUSIC and not state.playlist:
+            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
+            seg_type = SegmentType.BANTER
+            if is_operator_forced:
+                state.operator_force_pending = None
+                is_operator_forced = False
         segment: Segment | None = None
         generation_revision = state.playlist_revision
         # source_revision bumps ONLY on a true source switch (switch_playlist),
@@ -2262,7 +2409,7 @@ async def run_producer(
 
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
-                # pre-bundled banter clip (when the rejection is due to silence — i.e. all
+                # packaged recovery clip (when the rejection is due to silence — i.e. all
                 # tracks are silence placeholders and playing them would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
@@ -2280,12 +2427,12 @@ async def run_producer(
                             if "silence" in str(exc).lower():
                                 # All available tracks are silence placeholders.  Playing
                                 # them would break the illusion with dead air.  Insert a
-                                # bundled banter clip instead so the stream stays alive.
-                                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                                # packaged recovery clip instead so the stream stays alive.
+                                fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
                                         "Quality gate circuit breaker: %d consecutive silence rejections — "
-                                        "inserting fallback banter to prevent dead air (%s: %s)",
+                                        "inserting packaged recovery clip to prevent dead air (%s: %s)",
                                         MUSIC_QUALITY_GATE_REJECTION_LIMIT,
                                         norm_path.name,
                                         exc,
@@ -2301,13 +2448,13 @@ async def run_producer(
                                                 "canned": True,
                                                 "silence_fallback": True,
                                                 "rescue": True,
-                                                "title": "Recovery banter",
+                                                "title": "Station continuity",
                                             },
                                             ephemeral=False,
                                         )
                                     )
                                     continue
-                                # No banter clips — recycle the last known-good music
+                                # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
                                 if last_good:
@@ -2334,7 +2481,7 @@ async def run_producer(
                                         )
                                     )
                                     continue
-                                # No banter, no last-known-good.  Drop this track and let
+                                # No recovery clip, no last-known-good.  Drop this track and let
                                 # the streamer's rescue path handle the gap — queueing a
                                 # silent file would break the illusion.
                                 logger.error(
@@ -3388,8 +3535,7 @@ async def run_producer(
                 success_callback = _ad_callback
 
         except Exception as e:
-            # Recoverable: network/ffmpeg/disk/httpx errors — use branded cover audio
-            # before the final silence safety net.
+            # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -3405,46 +3551,11 @@ async def run_producer(
                     consecutive,
                     post_failure_backoff,
                 )
-            # Prefer canned clips, then synthesize a short station sweeper. Silence is
-            # only the final safety net when even TTS/imaging cannot produce cover.
-            fallback_path = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
-            if fallback_path:
-                logger.info("Error recovery: using canned clip instead of silence")
-                segment = Segment(
-                    type=SegmentType.BANTER,
-                    path=fallback_path,
-                    metadata={
-                        "type": "banter",
-                        "canned": True,
-                        "error_recovery": True,
-                        "rescue": True,
-                        "title": "Recovery banter",
-                    },
-                    ephemeral=False,
-                )
-            else:
-                try:
-                    logger.warning("No canned clips available — inserting recovery sweeper")
-                    segment = await asyncio.wait_for(
-                        _build_recovery_sweeper_segment(config, state),
-                        timeout=RECOVERY_SWEEPER_TIMEOUT_SECONDS,
-                    )
-                except Exception as sweeper_err:
-                    logger.warning("Recovery sweeper failed — inserting silence: %s", sweeper_err)
-                    silence_path = config.tmp_dir / f"silence_{uuid4().hex[:8]}.mp3"
-                    try:
-                        loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, partial(generate_silence, silence_path, 5.0, rescue=True))
-                    except Exception as silence_err:
-                        logger.error("Cannot generate silence (ffmpeg broken?): %s", silence_err)
-                        await asyncio.sleep(0.5)
-                        await _sleep_post_failure_backoff(post_failure_backoff)
-                        continue
-                    segment = Segment(
-                        type=seg_type,
-                        path=silence_path,
-                        metadata={"error": str(e), "rescue": True, "title": "Brief silence"},
-                    )
+            segment = await _producer_error_recovery_segment(state, config)
+            if segment is None:
+                await asyncio.sleep(0.5)
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
