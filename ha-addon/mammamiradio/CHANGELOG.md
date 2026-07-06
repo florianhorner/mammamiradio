@@ -21,6 +21,10 @@
 
 ## 2.16.0 - 2026-07-06
 
+### Added
+
+- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
+
 ### Changed
 
 - **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
@@ -29,7 +33,6 @@
 
 ### Added
 
-- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
 - **Impossible Hours can now opt into specific Home Assistant events.** `radio.toml` supports commented `[[home.radio_event]]` rules that promote explicit state, attribute, or numeric-threshold changes into next-break directives or evening running-gag material without broadening the ambient Home Assistant prompt context.
 - **New releases can now introduce themselves on air.** A packaged release beat can give the hosts a bounded cold-open campaign after an update, counted only when a real listener receives streamed audio. The station can also bring back a recently rendered music segment after restart so the first listen reaches live programming faster.
 - **Listener dediche can now reject configured real-name matches before they reach the hosts.** Operators can keep `blocked_names` under `[moderation]` in `radio.toml`; it ships empty, but when filled it catches names case-insensitively and accent-insensitively without echoing the private list back to listeners.
