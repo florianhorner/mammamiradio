@@ -1,0 +1,9 @@
+make check (ruff lint + format-check + mypy + pytest with coverage gate)
+Branch: florianhorner/fix/fake-scaletta
+Commit: f44c77dd
+
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 93.02%
+3891 passed, 2 skipped, 19 deselected in 90.59s (0:01:30)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
