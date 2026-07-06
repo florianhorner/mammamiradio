@@ -3252,7 +3252,7 @@ async def run_producer(
                 logger.info("Producing STATION ID")
                 sb = config.sonic_brand
                 # Use full ident text, or fall back to station name
-                ident_text = sb.full_ident or config.station.name
+                ident_text = sb.full_ident or config.display_station_name
 
                 try:
                     # Generate voice tag + musical sting in parallel
@@ -3302,7 +3302,7 @@ async def run_producer(
                 sb = config.sonic_brand
 
                 try:
-                    sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.station.name
+                    sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.display_station_name
                     audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
@@ -3320,7 +3320,7 @@ async def run_producer(
                 dt_now = datetime.datetime.now()
                 hour = dt_now.hour
                 minute = dt_now.minute
-                station_name = config.station.name
+                station_name = config.display_station_name
                 # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
                 hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
                 if minute == 0:

@@ -124,6 +124,10 @@ def test_build_setup_status_returns_expected_shape_for_addon():
     assert strip["items"][0]["display_status"] == "Ready"
     assert strip["items"][0]["shape"] == "ok"
     assert strip["items"][1]["tone"] == "warn"
+    assert payload["identity"]["station_name"] == config.display_station_name
+    assert payload["identity"]["preview"]["heard_on_air"]
+    assert payload["identity"]["stable_ids"]["media_player"] == "media_player.mammamiradio"
+    assert payload["onboarding_steps"][0]["id"] == "identity"
     assert payload["essentials"][0]["key"] == "llm_keys"
     assert payload["preflight_checks"][0]["key"] == "ffmpeg"
     assert "/config/secrets.env" in payload["addon_options_snippet"]
@@ -485,6 +489,19 @@ def test_guided_setup_stream_stopped_and_no_source_states():
 
     config.allow_ytdlp = False
     assert build_guided_setup(config, state)["stream"]["status"] == "blocked"
+
+
+def test_build_setup_status_identity_preview_uses_station_name(monkeypatch):
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    config = load_config()
+    state = _demo_state()
+
+    payload = build_setup_status(config, state)
+
+    assert payload["identity"]["station_name"] == "Radio Test"
+    assert payload["identity"]["source"] == "env"
+    assert payload["identity"]["preview"]["heard_on_air"].startswith("Radio Test")
+    assert "mammamiradio" in payload["identity"]["stable_ids"]["integration_domain"]
 
 
 # --- detect_run_mode ---

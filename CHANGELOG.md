@@ -15,6 +15,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
 - **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A station only reaches the Connected Home tier once real, prompt-safe Home Assistant context is available. A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
 
 ## [2.16.1] - 2026-07-06

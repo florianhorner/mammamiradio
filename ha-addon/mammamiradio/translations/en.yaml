@@ -1,7 +1,7 @@
 configuration:
   station_name:
     name: Station Name
-    description: Your radio station's name, shown in the UI and stream metadata.
+    description: Your radio station's name, shown to listeners, used in stream metadata, and used by default station IDs, sweepers, and Home Assistant friendly names. Entity IDs and media-source paths stay mammamiradio.
   enable_home_assistant:
     name: Enable Home Assistant Integration
     description: "Allow the add-on to talk to Home Assistant for entity publishing, optional host context, and timer interrupts. Turn this Off only if the station should run without Home Assistant access."

@@ -252,6 +252,25 @@ def _serialize_brand(brand) -> dict:
     }
 
 
+def _serialize_identity(config) -> dict:
+    """Serialize the resolved station identity through one additive block."""
+    identity = getattr(config, "identity", None)
+    station_name = (
+        getattr(identity, "station_name", "") or getattr(config, "display_station_name", "") or "Mamma Mi Radio"
+    )
+    generated = getattr(identity, "generated", {}) or {}
+    return {
+        "station_name": station_name,
+        "source": getattr(identity, "source", "unknown") if identity is not None else "unknown",
+        "custom_copy_preserved": bool(getattr(identity, "custom_copy_preserved", False)),
+        "preview": {
+            "heard_on_air": generated.get("spoken_ident") or station_name,
+            "seen_by_listeners": generated.get("listener_title") or station_name,
+            "seen_in_home_assistant": generated.get("home_assistant_name") or station_name,
+        },
+    }
+
+
 def _track_preference_score(track: Track, preferences: object) -> int:
     return preference_score(preferences, normalized_track_key(track))
 
