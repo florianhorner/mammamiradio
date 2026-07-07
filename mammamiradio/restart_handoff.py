@@ -503,27 +503,21 @@ def _candidate_rejection_reason(
     blocklist: Mapping[BlockKey, object] | None,
     duration_probe: DurationProbe,
 ) -> str | None:
-    if candidate.segment_class != "music":
-        return "non_music_segment_class"
+    if reason := _segment_class_rejection_reason(candidate.segment_class):
+        return reason
     if candidate.ephemeral:
         return "ephemeral"
-    if not candidate.artist.strip() or not candidate.title.strip():
-        return "missing_identity"
-    if blocklist and (_normalize_identity(candidate.artist), _normalize_identity(candidate.title)) in blocklist:
-        return "blocklisted"
-    if _has_blocked_metadata_marker(candidate.metadata):
-        return "ephemeral_or_dynamic_marker"
+    if reason := _identity_metadata_rejection_reason(
+        candidate.artist,
+        candidate.title,
+        candidate.metadata,
+        blocklist=blocklist,
+    ):
+        return reason
     if not _is_cache_backed(candidate.path, cache_dir):
         return "not_cache_backed"
-    if _looks_temporary_path(candidate.path):
-        return "temporary_path"
-    if not candidate.path.exists():
-        return "missing_file"
-    try:
-        if candidate.path.stat().st_size <= 0:
-            return "empty_file"
-    except OSError:
-        return "missing_file"
+    if reason := _file_presence_rejection_reason(candidate.path):
+        return reason
     if _validated_duration(candidate.path, candidate.duration_sec, duration_probe) is None:
         return "invalid_duration"
     return None
@@ -540,14 +534,15 @@ def _entry_rejection_reason(
     max_age_sec: float,
     duration_probe: DurationProbe,
 ) -> str | None:
-    if entry.segment_class != "music":
-        return "non_music_segment_class"
-    if not entry.artist.strip() or not entry.title.strip():
-        return "missing_identity"
-    if blocklist and entry.block_key in blocklist:
-        return "blocklisted"
-    if _has_blocked_metadata_marker(entry.metadata):
-        return "ephemeral_or_dynamic_marker"
+    if reason := _segment_class_rejection_reason(entry.segment_class):
+        return reason
+    if reason := _identity_metadata_rejection_reason(
+        entry.artist,
+        entry.title,
+        entry.metadata,
+        blocklist=blocklist,
+    ):
+        return reason
     if entry.created_at <= 0 or entry.created_at > now + 60:
         return "invalid_created_at"
     if now - entry.created_at > max_age_sec:
@@ -558,16 +553,12 @@ def _entry_rejection_reason(
     path = entry.path(cache_dir)
     if path is None:
         return "invalid_path"
-    if _looks_temporary_path(path):
-        return "temporary_path"
-    if not path.exists():
-        return "missing_file"
+    if reason := _file_presence_rejection_reason(path):
+        return reason
     try:
         stat = path.stat()
     except OSError:
         return "missing_file"
-    if stat.st_size <= 0:
-        return "empty_file"
     if stat.st_size != entry.size_bytes:
         return "size_mismatch"
     try:
@@ -582,6 +573,41 @@ def _entry_rejection_reason(
     admission_reason = _music_admission_rejection_reason(entry, playlist=playlist, pacing=pacing)
     if admission_reason is not None:
         return admission_reason
+    return None
+
+
+def _segment_class_rejection_reason(segment_class: str) -> str | None:
+    if segment_class != "music":
+        return "non_music_segment_class"
+    return None
+
+
+def _identity_metadata_rejection_reason(
+    artist: str,
+    title: str,
+    metadata: Mapping[str, Any],
+    *,
+    blocklist: Mapping[BlockKey, object] | None,
+) -> str | None:
+    if not artist.strip() or not title.strip():
+        return "missing_identity"
+    if blocklist and (_normalize_identity(artist), _normalize_identity(title)) in blocklist:
+        return "blocklisted"
+    if _has_blocked_metadata_marker(metadata):
+        return "ephemeral_or_dynamic_marker"
+    return None
+
+
+def _file_presence_rejection_reason(path: Path) -> str | None:
+    if _looks_temporary_path(path):
+        return "temporary_path"
+    if not path.exists():
+        return "missing_file"
+    try:
+        if path.stat().st_size <= 0:
+            return "empty_file"
+    except OSError:
+        return "missing_file"
     return None
 
 

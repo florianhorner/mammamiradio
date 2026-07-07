@@ -60,6 +60,9 @@ jobs:
       - name: Merge-gate drift check self-test
         run: bash tests/workflows/test_check_merge_gate.sh
 
+      - name: ShellCheck scripts
+        run: docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0 scripts/*.sh
+
       - name: Ruff lint
         run: ruff check .
 

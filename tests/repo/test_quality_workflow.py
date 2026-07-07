@@ -56,3 +56,11 @@ def test_quality_workflow_passes_coverage_snapshot_by_artifact() -> None:
     assert re.search(r"actions/download-artifact@v\d+", ratchet_block) is not None
     assert "name: coverage-ratchet-current" in ratchet_block
     assert "COVERAGE_RATCHET_INPUT: coverage-ratchet-current.json" in ratchet_block
+
+
+def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
+    quality_block = _job_block(_workflow_text(), "quality")
+
+    assert "ShellCheck scripts" in quality_block
+    assert "koalaman/shellcheck:v0.11.0" in quality_block
+    assert "scripts/*.sh" in quality_block
