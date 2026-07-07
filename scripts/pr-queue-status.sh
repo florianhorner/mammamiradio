@@ -15,57 +15,87 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
 
 root="$(git rev-parse --show-toplevel)"
 
-worktree_paths() {
-  git -C "$root" worktree list --porcelain | awk '
-    /^worktree / { print substr($0, 10) }
-  '
+# Enumerate every worktree (path, local branch, upstream tracking branch)
+# ONCE and reuse it for every PR lookup below, instead of re-running
+# `git worktree list --porcelain` (and an upstream rev-parse per worktree)
+# once per open PR. Worktree state can't change mid-run of a read-only
+# script, so one pass is always correct. Fields are tab-separated.
+build_worktree_index() {
+  local path="" branch=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)
+        path="${line#worktree }"
+        branch=""
+        ;;
+      "branch "*)
+        branch="${line#branch }"
+        ;;
+      "")
+        if [ -n "$path" ]; then
+          local upstream=""
+          upstream="$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+          printf '%s\t%s\t%s\n' "$path" "$branch" "$upstream"
+        fi
+        path=""
+        branch=""
+        ;;
+    esac
+  done < <(git -C "$root" worktree list --porcelain)
+  # `git worktree list --porcelain` may or may not end with a trailing blank
+  # line depending on git version; flush a pending record either way.
+  if [ -n "$path" ]; then
+    local upstream=""
+    upstream="$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    printf '%s\t%s\t%s\n' "$path" "$branch" "$upstream"
+  fi
 }
 
+worktree_index="$(build_worktree_index)"
+
 worktree_for_branch() {
-  local target="$1" path branch
+  local target="$1"
+  local wanted="refs/heads/$target" wanted_upstream="origin/$target"
+  local path branch upstream
 
   # Prefer an exact local branch match.
-  path="$(
-    git -C "$root" worktree list --porcelain | awk -v wanted="refs/heads/$target" '
-      /^worktree / { path = substr($0, 10); branch = "" }
-      /^branch / { branch = $2 }
-      /^$/ {
-        if (branch == wanted) { print path; found = 1; exit }
-        path = ""; branch = ""
-      }
-      END {
-        if (!found && branch == wanted) { print path }
-      }
-    '
-  )"
-  if [ -n "$path" ]; then
-    printf '%s\n' "$path"
-    return 0
-  fi
-
-  # Some Conductor worktrees use a local suffix branch that tracks the PR head.
-  while IFS= read -r path; do
+  while IFS=$'\t' read -r path branch upstream; do
     [ -n "$path" ] || continue
-    [ -d "$path" ] || continue
-    branch="$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-    if [ "$branch" = "origin/$target" ]; then
+    if [ "$branch" = "$wanted" ]; then
       printf '%s\n' "$path"
       return 0
     fi
-  done < <(worktree_paths)
+  done <<<"$worktree_index"
+
+  # Some Conductor worktrees use a local suffix branch that tracks the PR
+  # head under a different local name. First upstream match wins; if more
+  # than one worktree somehow tracks the same branch, iteration order (as
+  # returned by `git worktree list`) decides, and that's an accepted,
+  # deliberately unhandled edge case for this advisory-only tool.
+  while IFS=$'\t' read -r path branch upstream; do
+    [ -n "$path" ] || continue
+    if [ "$upstream" = "$wanted_upstream" ]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done <<<"$worktree_index"
 }
 
+# Prints "<status>\t<display text>" where status is the enum "clean"/"dirty".
+# Keeping the enum in its own field (rather than having callers infer
+# dirtiness from the free-text display string) means the wording below can
+# change without silently breaking recommendation()'s control flow.
 dirty_summary() {
   local path="$1" status count first
   status="$(git -C "$path" status --porcelain 2>/dev/null || true)"
   if [ -z "$status" ]; then
-    say "clean"
+    printf 'clean\tclean\n'
     return 0
   fi
 
   count="$(printf '%s\n' "$status" | sed '/^$/d' | wc -l | tr -d ' ')"
   first="$(printf '%s\n' "$status" | sed -n '1,3p' | tr '\n' '; ' | sed 's/[; ]*$//')"
-  say "dirty ($count file(s): $first)"
+  printf 'dirty\tdirty (%s file(s): %s)\n' "$count" "$first"
 }
 
 local_base_summary() {
@@ -82,12 +112,12 @@ local_base_summary() {
 }
 
 recommendation() {
-  local is_draft="$1" merge_state="$2" worktree="$3" dirty="$4"
+  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4"
   if [ "$is_draft" = "true" ]; then
     say "draft"
   elif [ "$merge_state" = "DIRTY" ]; then
     say "conflict/manual"
-  elif [ -n "$worktree" ] && [ "$dirty" != "clean" ]; then
+  elif [ -n "$worktree" ] && [ "$dirty_status" = "dirty" ]; then
     say "commit dirty work"
   elif [ -z "$worktree" ]; then
     say "inspect/no local worktree"
@@ -127,13 +157,14 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
   short_head="${head:0:12}"
 
   wt="$(worktree_for_branch "$branch" || true)"
+  dirty_status="n/a"
   dirty="n/a"
   local_base="n/a"
   if [ -n "$wt" ]; then
-    dirty="$(dirty_summary "$wt")"
+    IFS=$'\t' read -r dirty_status dirty <<<"$(dirty_summary "$wt")"
     local_base="$(local_base_summary "$wt")"
   fi
-  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty")"
+  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status")"
 
   say ""
   say "PR #$number: $title"
