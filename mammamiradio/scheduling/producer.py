@@ -88,7 +88,7 @@ from mammamiradio.playlist.music_admission import classify_youtube_candidate, is
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
-from mammamiradio.scheduling.scheduler import next_segment_type
+from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
@@ -106,6 +106,16 @@ RECOVERY_SWEEPER_LINES = (
     "Un attimo in cabina. La musica torna tra pochissimo.",
     "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
 )
+# Directory for pre-bundled continuity and demo clips that ship with the package.
+_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
+_RUNWAY_GOVERNED_TYPES = {
+    SegmentType.BANTER,
+    SegmentType.AD,
+    SegmentType.NEWS_FLASH,
+    SegmentType.STATION_ID,
+    SegmentType.TIME_CHECK,
+}
+RUNWAY_FLOOR_SECONDS = 240
 FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE = (
     "FIRST CONNECTED HOME MOMENT: Use one or two concrete home details naturally. "
     "Do not list sensors. Make it feel like a host casually noticing the home."
@@ -164,7 +174,23 @@ def _probe_segment_duration(path: Path) -> float:
     return probe_duration_sec(path) or 0.0
 
 
+def _is_packaged_asset(path: Path) -> bool:
+    """True if path lives under the read-only packaged demo assets tree."""
+    try:
+        resolved = path.resolve()
+    except (AttributeError, OSError, TypeError):
+        return False
+    if not isinstance(resolved, Path):
+        return False
+    try:
+        return resolved.is_relative_to(_DEMO_ASSETS_DIR.resolve())
+    except OSError:
+        return False
+
+
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
+    if _is_packaged_asset(segment.path):
+        return False
     if segment.ephemeral:
         return True
     try:
@@ -381,29 +407,32 @@ async def _queue_continuity_bridge(
     bridge_type: str,
     bridge_flag: str,
     canned_title: str,
-    canned_ephemeral: bool = True,
     canned_metadata: dict | None = None,
 ) -> bool:
     """Queue the best available producer-side continuity bridge."""
     fallback = _pick_recovery_clip(state)
     if fallback:
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback)
+        duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         metadata = {
             "type": "banter",
             "canned": True,
             bridge_flag: True,
             "rescue": True,
             "title": canned_title,
+            **duration_fields,
         }
         if canned_metadata:
-            protected_keys = {"type", "canned", bridge_flag, "rescue", "title"}
+            protected_keys = {"type", "canned", bridge_flag, "rescue", "title", "duration_ms"}
             metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
         logger.warning("%s bridge: inserting packaged recovery clip", bridge_type.capitalize())
         ok = await queue_segment(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
+                duration_sec=duration_sec,
                 metadata=metadata,
-                ephemeral=canned_ephemeral,
+                ephemeral=False,
             )
         )
         if ok:
@@ -449,9 +478,11 @@ async def _queue_continuity_bridge(
         Segment(
             type=SegmentType.MUSIC,
             path=tone_path,
+            duration_sec=2.0,
             metadata={
                 "title": "Station continuity",
                 "artist": "",
+                "duration_ms": 2000,
                 bridge_flag: True,
                 "rescue": True,
                 "audio_source": "emergency_tone",
@@ -468,16 +499,20 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     """Build the best non-silent segment for broad producer exception recovery."""
     fallback_path = _pick_recovery_clip(state)
     if fallback_path:
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback_path)
+        duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         logger.info("Error recovery: using packaged recovery clip")
         return Segment(
             type=SegmentType.BANTER,
             path=fallback_path,
+            duration_sec=duration_sec,
             metadata={
                 "type": "banter",
                 "canned": True,
                 "error_recovery": True,
                 "rescue": True,
                 "title": "Station continuity",
+                **duration_fields,
             },
             ephemeral=False,
         )
@@ -489,6 +524,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         return Segment(
             type=SegmentType.MUSIC,
             path=norm_path,
+            duration_sec=_duration_sec_from_metadata(metadata),
             metadata=metadata,
             ephemeral=False,
         )
@@ -524,6 +560,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             last_good_title = last_good.name
         last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
     if last_good:
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good)
         logger.warning(
             "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
             last_good.name,
@@ -531,6 +568,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         return Segment(
             type=SegmentType.MUSIC,
             path=last_good,
+            duration_sec=duration_sec,
             metadata={
                 "type": "music",
                 "recycled": True,
@@ -565,9 +603,11 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     return Segment(
         type=SegmentType.MUSIC,
         path=tone_path,
+        duration_sec=2.0,
         metadata={
             "title": "Station continuity",
             "artist": "",
+            "duration_ms": 2000,
             "error_recovery": True,
             "rescue": True,
             "audio_source": "emergency_tone",
@@ -678,10 +718,6 @@ async def _maybe_start_session(state: StationState) -> None:
         persona = await persona_store.get_persona()
         logger.info("Listener session #%d started", persona.session_count)
 
-
-# Directory for pre-bundled banter and ad clips that ship with the package.
-# These provide station personality on day 1 without an Anthropic API key.
-_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 
 # SFX assets (alert jingle used as interrupt bridge audio).
 _SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
@@ -1020,7 +1056,7 @@ def _front_insert_queue_and_shadow(
     """
     if state.session_stopped:
         state.record_discard(segment, reason=GenerationWasteReason.SESSION_STOPPED)
-        if segment.ephemeral:
+        if segment.ephemeral and not _is_packaged_asset(segment.path):
             segment.path.unlink(missing_ok=True)
         # The forced render is abandoned — release the one-at-a-time guard so the
         # operator can retry after resume instead of being locked out until restart.
@@ -1047,7 +1083,7 @@ def _front_insert_queue_and_shadow(
     state.queued_segments.insert(0, shadow_entry)
     for seg in dropped:
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
-        if getattr(seg, "ephemeral", False):
+        if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
             seg.path.unlink(missing_ok=True)
     if dropped and len(state.queued_segments) > 1:
         drop_n = min(len(dropped), len(state.queued_segments) - 1)
@@ -1248,7 +1284,7 @@ async def _enqueue_with_egress(
         if _key in state.blocklist:
             logger.info("Blocklist gate: dropped a banned song at the enqueue funnel (%s - %s)", _key[0], _key[1])
             state.record_discard(segment, reason=GenerationWasteReason.BLOCKLIST_GATE)
-            if segment.ephemeral:
+            if segment.ephemeral and not _is_packaged_asset(segment.path):
                 segment.path.unlink(missing_ok=True)
             return False
 
@@ -1267,7 +1303,7 @@ async def _enqueue_with_egress(
     if stale_check is not None and stale_check():
         logger.info("Discarding %s: source changed during egress (post-egress stale gate)", segment.type.value)
         state.record_discard(segment, reason=GenerationWasteReason.EGRESS_STALE)
-        if segment.ephemeral:
+        if segment.ephemeral and not _is_packaged_asset(segment.path):
             segment.path.unlink(missing_ok=True)
         return False
     if front_insert:
@@ -1394,6 +1430,54 @@ _canned_clip_cache: dict[str, list[Path]] = {}
 SHAREWARE_CANNED_LIMIT = 3
 
 
+def _clip_is_serviceable(path: Path) -> bool:
+    """Cheap liveness check for a cached clip Path — no ffprobe on rescue paths."""
+    try:
+        return path.is_file() and path.stat().st_size > 1024
+    except OSError:
+        return False
+
+
+def _producer_buffered_seconds(queue: asyncio.Queue[Segment]) -> float:
+    """Return ready-audio seconds from the real producer queue."""
+    internal = getattr(queue, "_queue", None)
+    if internal is None:
+        return 0.0
+    return buffered_audio_seconds(seg.duration_sec for seg in list(internal))
+
+
+def _max_observable_runway_slots(queue: asyncio.Queue[Segment], lookahead_segments: int) -> int:
+    """Slots the producer can see filled immediately before a natural decision."""
+    maxsize = int(getattr(queue, "maxsize", 0) or 0)
+    if maxsize > 0:
+        return max(0, maxsize - 1)
+    return max(0, int(lookahead_segments) - 1)
+
+
+def _runway_fill_needed(queue: asyncio.Queue[Segment]) -> bool:
+    """Whether the producer should keep filling past lookahead to build seconds runway."""
+    if RUNWAY_FLOOR_SECONDS <= 0 or _producer_buffered_seconds(queue) >= RUNWAY_FLOOR_SECONDS:
+        return False
+    maxsize = int(getattr(queue, "maxsize", 0) or 0)
+    return maxsize > 0 and queue.qsize() < maxsize
+
+
+def _should_defer_for_runway(queue: asyncio.Queue[Segment], lookahead_segments: int) -> tuple[bool, float]:
+    """Return whether optional speech should yield to music, plus observed seconds."""
+    buffered = _producer_buffered_seconds(queue)
+    if RUNWAY_FLOOR_SECONDS <= 0 or buffered >= RUNWAY_FLOOR_SECONDS:
+        return False, buffered
+
+    # The producer only makes a natural pacing decision when it is below the
+    # bounded queue's hard cap. If the observed queue is already as full as it
+    # can get before this decision, the fixed seconds floor is unreachable with
+    # the current content mix; let the due speech air instead of starving it.
+    observable_slots = _max_observable_runway_slots(queue, lookahead_segments)
+    if observable_slots == 0 or queue.qsize() >= observable_slots:
+        return False, buffered
+    return True, buffered
+
+
 def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
     """Pick a pre-bundled clip from assets/demo/{subdir}/, avoiding recent repeats.
 
@@ -1413,9 +1497,12 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
         return None
     # Avoid recently played clips
     eligible = [c for c in clips if c.name not in _recently_played_clips]
+    eligible = [c for c in eligible if _clip_is_serviceable(c)]
     if not eligible:
         _recently_played_clips.clear()
-        eligible = clips
+        eligible = [c for c in clips if _clip_is_serviceable(c)]
+    if not eligible:
+        return None
     pick = random.choice(eligible)
     _recently_played_clips.append(pick.name)
     return pick
@@ -1736,7 +1823,11 @@ async def _fire_interrupt(
     state.last_interrupt_ts = now
 
     # Release any bridge clip a prior interrupt generated but never played.
-    if state.interrupt_slot_ephemeral and state.interrupt_slot is not None:
+    if (
+        state.interrupt_slot_ephemeral
+        and state.interrupt_slot is not None
+        and not _is_packaged_asset(state.interrupt_slot)
+    ):
         state.interrupt_slot.unlink(missing_ok=True)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
@@ -1747,7 +1838,7 @@ async def _fire_interrupt(
         try:
             seg = queue.get_nowait()
             state.record_discard(seg, reason=GenerationWasteReason.INTERRUPT, already_counted_in_produced=True)
-            if seg.ephemeral:
+            if seg.ephemeral and not _is_packaged_asset(seg.path):
                 seg.path.unlink(missing_ok=True)
             queue.task_done()
             purged += 1
@@ -1998,7 +2089,7 @@ async def run_producer(
         nonlocal prev_seg_type
         if state.session_stopped:
             state.record_discard(segment, reason=GenerationWasteReason.SESSION_STOPPED)
-            if segment.ephemeral:
+            if segment.ephemeral and not _is_packaged_asset(segment.path):
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
@@ -2187,7 +2278,6 @@ async def run_producer(
                     bridge_type="resume",
                     bridge_flag="resume_bridge",
                     canned_title="Resume bridge",
-                    canned_ephemeral=False,
                 )
 
         if state.listeners_active == 0:
@@ -2231,6 +2321,7 @@ async def run_producer(
 
         if (
             queue.qsize() >= config.pacing.lookahead_segments
+            and not _runway_fill_needed(queue)
             and state.force_next is None
             and state.chaos_pending is None
         ):
@@ -2306,6 +2397,16 @@ async def run_producer(
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
+            if seg_type in _RUNWAY_GOVERNED_TYPES:
+                should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)
+                if should_defer:
+                    logger.info(
+                        "Runway governor: %.0fs buffered < %ds floor; airing music instead of %s",
+                        buffered,
+                        RUNWAY_FLOOR_SECONDS,
+                        seg_type.value,
+                    )
+                    seg_type = SegmentType.MUSIC
         if seg_type == SegmentType.MUSIC and not state.playlist:
             logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
             seg_type = SegmentType.BANTER
@@ -2683,6 +2784,7 @@ async def run_producer(
                 segment = Segment(
                     type=SegmentType.MUSIC,
                     path=norm_path,
+                    duration_sec=(track.duration_ms or 0) / 1000.0,
                     metadata={
                         "title": track.display,
                         "artist": track.artist,
@@ -3726,7 +3828,7 @@ async def run_producer(
                         raise
                     finally:
                         sting_path.unlink(missing_ok=True)
-                    if pre_sting_ephemeral:
+                    if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
                         pre_sting_path.unlink(missing_ok=True)
                     segment = replace(segment, path=merged_path, ephemeral=True)
                 except Exception as exc:

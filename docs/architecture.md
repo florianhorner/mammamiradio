@@ -129,6 +129,7 @@ always remains best-effort and never blocks or delays audio.
 - the first segment is always music
 - ad breaks trigger when `songs_since_ad >= songs_between_ads`
 - banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
+- after a natural pacing decision, `producer.py` applies a runway governor to optional speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`): if the real queued audio is below 240 seconds and the bounded queue can still build more runway, that pick becomes `MUSIC`; if the queue is effectively saturated below the floor, the due speech is allowed; operator forces, chaos first-strike, release-campaign forced banter, bridges, and error recovery stay outside that gate
 
 `producer.py` turns that pacing decision into actual audio files:
 
@@ -628,7 +629,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 This repo is biased toward "keep the station on air."
 
-- producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
+- producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; packaged recovery clips are non-ephemeral package resources and every producer/playback segment-cleanup path guards `mammamiradio/assets/demo/` before unlinking; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - missing yt-dlp falls back to local files or demo tracks

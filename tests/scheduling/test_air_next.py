@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
+from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
 
 
@@ -84,6 +86,22 @@ def test_front_insert_dropped_when_session_stopped(tmp_path):
     assert state.discard_by_reason == {GenerationWasteReason.SESSION_STOPPED: 1}
 
 
+def test_front_insert_stopped_keeps_packaged_asset_even_if_ephemeral(tmp_path):
+    """The stopped-discard path must not delete packaged demo assets."""
+    demo_root = tmp_path / "assets" / "demo"
+    packaged = demo_root / "recovery" / "continuity_1.mp3"
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"\x00" * 2048)
+    q: asyncio.Queue = asyncio.Queue(maxsize=5)
+    state = StationState(session_stopped=True, operator_force_pending=SegmentType.BANTER)
+    banter = Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True)
+
+    with patch.object(producer, "_DEMO_ASSETS_DIR", demo_root):
+        assert _front_insert_queue_and_shadow(q, state, banter, _shadow("banter")) is False
+
+    assert packaged.exists()
+
+
 def test_front_insert_drops_furthest_future_tail_on_full_queue():
     """The dead-air landmine: on a full bounded queue a front-insert would push
     N+1 and raise QueueFull. Instead the furthest-future tail is dropped so the
@@ -128,3 +146,22 @@ def test_front_insert_unlinks_dropped_ephemeral_tail(tmp_path):
     assert f0.exists()  # non-ephemeral survivor kept
     assert state.discarded_segments_total == 1
     assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
+def test_front_insert_overflow_keeps_packaged_asset_even_if_ephemeral(tmp_path):
+    """Overflow tail cleanup also respects the packaged asset guard."""
+    demo_root = tmp_path / "assets" / "demo"
+    packaged = demo_root / "recovery" / "continuity_1.mp3"
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"\x00" * 2048)
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
+    state = StationState()
+    tail = Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True)
+    q.put_nowait(tail)
+    state.queued_segments = [_shadow("tail")]
+
+    front = _seg("front", seg_type=SegmentType.BANTER)
+    with patch.object(producer, "_DEMO_ASSETS_DIR", demo_root):
+        assert _front_insert_queue_and_shadow(q, state, front, _shadow("front")) is True
+
+    assert packaged.exists()
