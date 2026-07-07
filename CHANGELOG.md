@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the Home Assistant ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
+
 ### Refactored
 
 - **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.

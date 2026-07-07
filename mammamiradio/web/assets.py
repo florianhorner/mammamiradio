@@ -24,7 +24,7 @@ _ASSETS_DIR = _PKG_ROOT / "assets"
 def _static_asset_digest() -> str:
     """Return a short content hash for browser-visible CSS/JS assets."""
     digest = hashlib.sha256()
-    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "sw.js"):
+    for name in ("tokens.css", "base.css", "listener.css", "waveform.js", "listener.js", "admin.js", "sw.js"):
         path = _STATIC_DIR / name
         if path.exists():
             digest.update(name.encode("utf-8"))

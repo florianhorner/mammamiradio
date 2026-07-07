@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the add-on's ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
+
 ## 2.17.0 - 2026-07-07
 
 ### Added

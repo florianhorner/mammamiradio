@@ -31,6 +31,42 @@
   const MAX_ERROR_TOASTS = 2; // errors share safe-space, but never evict undo
   const DEFAULT_TTL = 5000; // eng review D4 — 5s window, auto-dismiss = commit
 
+  function isHomeAssistantQuickBarShortcut(event) {
+    const key = String(event.key || '').toLowerCase();
+    const code = String(event.code || '').toLowerCase();
+    return (
+      (event.metaKey || event.ctrlKey) &&
+      !(event.altKey || event.shiftKey) &&
+      (key === 'k' || code === 'keyk')
+    );
+  }
+
+  function forwardHomeAssistantQuickBarShortcut(event) {
+    if (!isHomeAssistantQuickBarShortcut(event) || event.defaultPrevented) return;
+    try {
+      const parentWindow = window.parent;
+      if (!parentWindow || parentWindow === window) return;
+      const ParentKeyboardEvent = parentWindow.KeyboardEvent || KeyboardEvent;
+      const forwarded = new ParentKeyboardEvent('keydown', {
+        key: event.key || 'k',
+        code: event.code || 'KeyK',
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        altKey: false,
+        shiftKey: false,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      const parentAccepted = parentWindow.dispatchEvent(forwarded);
+      if (!parentAccepted || forwarded.defaultPrevented) event.preventDefault();
+    } catch (e) {
+      /* HA parent window unavailable - leave the browser/app shortcut untouched. */
+    }
+  }
+
+  document.addEventListener('keydown', forwardHomeAssistantQuickBarShortcut, { capture: true });
+
   let _stackEl = null;
   const _live = []; // {el, timer, committed, kind}
 
