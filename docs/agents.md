@@ -15,6 +15,18 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
 
+## PR Landing Queue
+
+- For multi-PR or coordinator landing sessions, run `scripts/pr-queue-status.sh`
+  at the start and again after each confirmed merge so the remaining queue is
+  based on current GitHub/worktree state rather than chat memory.
+- The single landing conductor owns the full output and merge order. Individual
+  PR agents may include the relevant script output as their readiness receipt
+  before handing off.
+- For ordinary single-PR work, `scripts/pr-queue-status.sh` is optional and
+  advisory only. It must not be treated as a merge gate; `scripts/land-pr.sh`
+  remains the only required landing path.
+
 ## Dependabot Batches
 
 - Start with `gh pr list` state, current head SHAs/checks, and a clean tracked

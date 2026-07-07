@@ -26,6 +26,10 @@
 # UI/API on purpose.
 #
 # Multiple PR numbers are processed sequentially: land #1, update #2, land #2.
+#
+# For multi-PR/coordinator landing sessions, scripts/pr-queue-status.sh is an
+# optional read-only preflight that summarizes open-PR/worktree state before
+# you decide order here. It is advisory only, not a gate.
 set -euo pipefail
 
 # Freshness grace: /ship pushes mechanical commits (version bump, changelog)
