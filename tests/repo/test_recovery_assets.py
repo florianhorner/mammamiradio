@@ -1,12 +1,12 @@
-"""Packaged recovery-audio invariants."""
+"""Source/package-resource recovery-audio invariants."""
 
 from __future__ import annotations
 
 from importlib import resources
 
 
-def test_packaged_recovery_clip_exists() -> None:
-    """The app image must carry at least one real recovery MP3."""
+def test_packaged_recovery_resource_exists() -> None:
+    """The Python package resources include at least one nontrivial recovery MP3."""
     recovery_dir = resources.files("mammamiradio").joinpath("assets", "demo", "recovery")
     clips = [clip for clip in recovery_dir.iterdir() if clip.name.endswith(".mp3")]
 

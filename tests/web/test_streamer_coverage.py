@@ -18,11 +18,13 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     _golden_path_status,
     _has_any_mp3,
+    _is_packaged_asset,
     _preview_tracks,
     _purge_queue_and_shadow,
     _purge_segment_queue,
     _serialize_source,
     _tail_log,
+    _unlink_ephemeral_best_effort,
 )
 
 # ---------------------------------------------------------------------------
@@ -136,6 +138,32 @@ async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_purge_queue_and_shadow_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch):
+    """Package data must survive queue purges even with a bad ephemeral flag."""
+    from mammamiradio.web import streamer
+
+    demo_root = tmp_path / "assets" / "demo"
+    packaged = demo_root / "recovery" / "continuity_1.mp3"
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"\x00" * 2048)
+    tmp_render = tmp_path / "tmp" / "render.mp3"
+    tmp_render.parent.mkdir()
+    tmp_render.write_bytes(b"\x00" * 2048)
+    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+
+    q = asyncio.Queue()
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, ephemeral=True))
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=tmp_render, ephemeral=True))
+    state = StationState()
+    state.queued_segments = [{"label": "asset"}, {"label": "tmp"}]
+
+    assert _purge_queue_and_shadow(q, state) == 2
+    assert packaged.exists()
+    assert not tmp_render.exists()
+    assert _is_packaged_asset(packaged) is True
+
+
+@pytest.mark.asyncio
 async def test_purge_queue_and_shadow_records_discard_reason(tmp_path):
     """Operator purges record each drained segment with the supplied reason."""
     q = asyncio.Queue()
@@ -242,6 +270,47 @@ async def test_purge_segment_queue_ephemeral_unlinks(tmp_path):
     purged = _purge_segment_queue(q)
     assert purged == 1
     assert not audio.exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_segment_queue_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch):
+    from mammamiradio.web import streamer
+
+    demo_root = tmp_path / "assets" / "demo"
+    packaged = demo_root / "recovery" / "continuity_1.mp3"
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"\x00" * 2048)
+    tmp_render = tmp_path / "tmp" / "render.mp3"
+    tmp_render.parent.mkdir()
+    tmp_render.write_bytes(b"\x00" * 2048)
+    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+
+    q = asyncio.Queue()
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=tmp_render, metadata={}, ephemeral=True))
+
+    assert _purge_segment_queue(q) == 2
+    assert packaged.exists()
+    assert not tmp_render.exists()
+
+
+def test_unlink_ephemeral_best_effort_keeps_packaged_asset(tmp_path, monkeypatch):
+    from mammamiradio.web import streamer
+
+    demo_root = tmp_path / "assets" / "demo"
+    packaged = demo_root / "recovery" / "continuity_1.mp3"
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"\x00" * 2048)
+    tmp_render = tmp_path / "tmp" / "render.mp3"
+    tmp_render.parent.mkdir()
+    tmp_render.write_bytes(b"\x00" * 2048)
+    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+
+    _unlink_ephemeral_best_effort(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
+    _unlink_ephemeral_best_effort(Segment(type=SegmentType.BANTER, path=tmp_render, metadata={}, ephemeral=True))
+
+    assert packaged.exists()
+    assert not tmp_render.exists()
 
 
 def test_golden_path_with_local_music(tmp_path, monkeypatch):

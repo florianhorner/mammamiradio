@@ -86,6 +86,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
     _ASSETS_DIR,
@@ -149,6 +150,7 @@ from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
 _LONGFORM_NOTICE_REASON = "longform_audio"
+_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 
 # Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
@@ -272,11 +274,42 @@ def _drain_segment_queue(q) -> list:
     return items
 
 
+def _is_packaged_asset(path: Path) -> bool:
+    """True if path lives under the read-only packaged demo assets tree."""
+    try:
+        resolved = path.resolve()
+    except (AttributeError, OSError, TypeError):
+        return False
+    if not isinstance(resolved, Path):
+        return False
+    try:
+        return resolved.is_relative_to(_DEMO_ASSETS_DIR.resolve())
+    except OSError:
+        return False
+
+
+def _queued_audio_seconds(q) -> float:
+    """Sum ready-audio seconds from the real playback queue."""
+    internal = getattr(q, "_queue", None)
+    if internal is None:
+        return 0.0
+
+    def _duration(item) -> float | None:
+        value = item.get("duration_sec") if isinstance(item, dict) else getattr(item, "duration_sec", None)
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        return None
+
+    return buffered_audio_seconds(_duration(item) for item in list(internal))
+
+
 def _purge_segment_queue(q) -> int:
     """Drain all pre-produced segments from the queue and unlink temp files."""
     items = _drain_segment_queue(q)
     for seg in items:
-        if seg.ephemeral:
+        if seg.ephemeral and not _is_packaged_asset(seg.path):
             seg.path.unlink(missing_ok=True)
     return len(items)
 
@@ -289,7 +322,7 @@ def _unlink_ephemeral_best_effort(seg) -> None:
     swallows a missing file; a real ``OSError`` would otherwise abort the purge
     mid-loop and leave the UI shadow stale behind a half-drained queue.
     """
-    if getattr(seg, "ephemeral", False):
+    if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
         try:
             seg.path.unlink(missing_ok=True)
         except Exception:
@@ -1006,10 +1039,9 @@ def _runtime_status_snapshot(
 def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
     """Best-effort producer runway status for Pi-sized render latency."""
     config = request.app.state.config
-    state = request.app.state.station_state
     target_segments = max(4, int(config.pacing.lookahead_segments))
     queue_depth = int(runtime_health.get("queue_depth", 0))
-    buffered_audio_sec = round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1)
+    buffered_audio_sec = _queued_audio_seconds(getattr(request.app.state, "queue", None))
     queue_capacity = int(runtime_health.get("queue_capacity", -1))
     headroom_ok = queue_depth >= target_segments
     return {
@@ -2845,7 +2877,11 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
     # Drop any pending interrupt/forced segment so it can't fire as stale audio on
     # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
-    if state.interrupt_slot is not None and state.interrupt_slot_ephemeral:
+    if (
+        state.interrupt_slot is not None
+        and state.interrupt_slot_ephemeral
+        and not _is_packaged_asset(state.interrupt_slot)
+    ):
         state.interrupt_slot.unlink(missing_ok=True)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
@@ -5570,10 +5606,9 @@ async def status(
             "queue_depth": segment_queue.qsize(),
             # Honest airtime-ahead readout for the admin panel: the summed
             # duration of the rendered queue. Surfaces SECONDS of buffered audio,
-            # not item count (3 short banters are not 3 songs of runway). The
-            # shadow carries duration_sec per entry; best-effort and never gates
-            # audio.
-            "buffered_audio_sec": round(sum(max(seg.get("duration_sec") or 0, 0) for seg in state.queued_segments), 1),
+            # not item count (3 short banters are not 3 songs of runway). Reads
+            # the real asyncio queue, matching the producer runway governor.
+            "buffered_audio_sec": _queued_audio_seconds(segment_queue),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),

@@ -21,7 +21,8 @@ root="$(git rev-parse --show-toplevel)"
 # once per open PR. Worktree state can't change mid-run of a read-only
 # script, so one pass is always correct. Fields are tab-separated.
 build_worktree_index() {
-  local path="" branch=""
+  local listing line path="" branch=""
+  listing="$(git -C "$root" worktree list --porcelain)"
   while IFS= read -r line; do
     case "$line" in
       "worktree "*)
@@ -41,7 +42,7 @@ build_worktree_index() {
         branch=""
         ;;
     esac
-  done < <(git -C "$root" worktree list --porcelain)
+  done <<<"$listing"
   # `git worktree list --porcelain` may or may not end with a trailing blank
   # line depending on git version; flush a pending record either way.
   if [ -n "$path" ]; then

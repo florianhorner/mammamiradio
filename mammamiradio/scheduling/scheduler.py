@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 
 from mammamiradio.core.config import PacingSection
 from mammamiradio.core.models import SegmentType, StationState, Track
+
+
+def buffered_audio_seconds(durations: Iterable[float | None]) -> float:
+    """Sum ready-audio seconds, clamping unknown or invalid durations to zero."""
+    return round(sum(max(duration or 0.0, 0.0) for duration in durations), 1)
 
 
 def _reason_for_decision(reason_key: str, *, threshold: int = 0) -> str:

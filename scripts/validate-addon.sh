@@ -49,6 +49,88 @@ extract_yaml_block() {
         in_section { print }
     ' "$file"
 }
+assert_image_recovery_assets() {
+    local image="$1"
+    if docker run --rm -i "$image" python3 - <<'PY'
+from importlib import resources
+import subprocess
+
+try:
+    recovery_dir = resources.files("mammamiradio").joinpath("assets", "demo", "recovery")
+except ModuleNotFoundError as exc:
+    raise SystemExit(f"cannot import mammamiradio package: {exc}") from exc
+
+try:
+    clips = sorted(
+        (clip for clip in recovery_dir.iterdir() if clip.is_file() and clip.name.endswith(".mp3")),
+        key=lambda clip: clip.name,
+    )
+except (FileNotFoundError, NotADirectoryError, OSError) as exc:
+    raise SystemExit(f"missing recovery asset directory in installed image: {exc}") from exc
+
+if not clips:
+    raise SystemExit("no installed recovery MP3s found under mammamiradio/assets/demo/recovery/")
+
+serviceable = []
+for clip in clips:
+    try:
+        size = len(clip.read_bytes())
+    except OSError as exc:
+        raise SystemExit(f"could not read installed recovery MP3 {clip.name}: {exc}") from exc
+    if size > 1024:
+        serviceable.append((clip, size))
+
+if not serviceable:
+    names = ", ".join(clip.name for clip in clips)
+    raise SystemExit(f"installed recovery MP3s are missing or too small: {names}")
+
+failures = []
+for clip, size in serviceable:
+    try:
+        with resources.as_file(clip) as path:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "csv=p=0",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+    except FileNotFoundError as exc:
+        raise SystemExit("ffprobe is not installed in the image") from exc
+    except subprocess.TimeoutExpired:
+        failures.append(f"{clip.name}: ffprobe timed out")
+        continue
+
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    if result.returncode == 0 and "audio" in stdout.lower():
+        print(f"recovery asset OK: {clip.name} ({size} bytes)")
+        raise SystemExit(0)
+    failures.append(f"{clip.name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
+
+raise SystemExit(
+    "no ffprobe-playable installed recovery MP3 found; "
+    + "; ".join(failures)
+)
+PY
+    then
+        pass "Installed recovery MP3 present and ffprobe-playable"
+        return 0
+    else
+        fail "Installed recovery MP3 missing, too small, or unplayable"
+        return 1
+    fi
+}
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
@@ -517,6 +599,9 @@ if [ "${1:-}" = "--build" ]; then
         --build-arg BUILD_ARCH="$BUILD_ARCH" \
         -t mammamiradio-addon-test:local 2>&1 | tail -5; then
         pass "Docker build succeeded"
+
+        echo "  Checking installed recovery assets..."
+        assert_image_recovery_assets "mammamiradio-addon-test:local" || true
 
         echo "  Testing container startup..."
         # Create minimal options.json
