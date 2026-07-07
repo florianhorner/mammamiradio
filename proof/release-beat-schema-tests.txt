@@ -1,0 +1,33 @@
+# release-beat schema validation evidence (2026-07-06T23:58:48Z)
+
+$ pytest tests/core/test_release_beat_schema.py tests/scripts/test_validate_release_beat.py tests/test_release_campaign.py tests/hosts/test_release_beat_scriptwriter.py tests/scheduling/test_release_campaign_producer.py tests/web/test_stream_result.py tests/web/test_shadow_queue_sync.py::test_purge_restores_queued_release_beat_attempt
+
+99 passed in 1.52s
+EXITCODE=0
+
+$ pytest tests/web/test_ui_control_contracts.py -k remove_release_beat_segment_restores_campaign_attempt
+
+1 passed, 88 deselected in 0.68s
+EXITCODE=0
+
+$ ruff check scripts/validate-release-beat.py tests/core/test_release_beat_schema.py
+
+All checks passed!
+EXITCODE=0
+
+$ ruff format --check scripts/validate-release-beat.py tests/core/test_release_beat_schema.py
+
+2 files already formatted
+EXITCODE=0
+
+$ bash scripts/check-version-sync.sh
+$ bash scripts/check-changelog-lint.sh
+$ bash scripts/check-changelog-sync.sh
+$ bash scripts/check-release-invariants.sh
+$ bash scripts/pre-release-check.sh
+all passed
+
+$ make check
+4224 passed, 2 skipped, 21 deselected, 1 warning in 98.93s
+Coverage: 92.81%
+All checks passed

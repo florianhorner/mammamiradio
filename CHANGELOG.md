@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Refactored
+
+- **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
+
 ## [2.17.0] - 2026-07-07
 
 ### Added

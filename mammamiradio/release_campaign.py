@@ -20,11 +20,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from mammamiradio.core.release_beat_schema import RUNTIME_CONSUMED_KEYS
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 LEDGER_FILENAME = "release_campaign_ledger.json"
 RELEASE_BEAT_RESOURCE = ("assets", "release", "release_beat.toml")
+RELEASE_BEAT_RUNTIME_KEYS = RUNTIME_CONSUMED_KEYS
 
 ACTIVE = "active"
 QUEUED_ATTEMPT = "queued_attempt"
