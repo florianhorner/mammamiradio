@@ -631,6 +631,33 @@ def test_admission_rejects_invalid_duration_from_manifest_or_probe(tmp_path):
     assert [rejection.reason for rejection in probe_admission.rejected] == ["invalid_duration"]
 
 
+def test_admission_rejects_legacy_longform_youtube_manifest(tmp_path):
+    path = _write_spooled_file(tmp_path, "legacy-longform.mp3", b"longform")
+    entry = _entry_for_path(
+        tmp_path,
+        path,
+        duration_sec=7_200.0,
+        artist="Artist",
+        title="Extended Live Set",
+        metadata={
+            "youtube_id": "longform123",
+            "duration_ms": 7_200_000,
+            "title": "Artist - Extended Live Set",
+            "artist": "Artist",
+        },
+    )
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path,
+        RestartHandoffManifest(entries=(entry,), created_at=100.0),
+        now=120.0,
+        duration_probe=lambda _path: 7_200.0,
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["music_admission:longform_duration"]
+    assert admission.accepted == ()
+
+
 def test_admission_rejects_too_old_entry(tmp_path):
     path = _write_spooled_file(tmp_path)
     entry = _entry_for_path(tmp_path, path, created_at=10.0)

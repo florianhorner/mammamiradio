@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import copy
+import functools
 import importlib
 import logging
 import math
@@ -24,7 +25,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
-from mammamiradio.audio.normalizer import configure_broadcast_chain, humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.normalizer import (
+    configure_broadcast_chain,
+    humanize_norm_filename,
+    load_track_metadata,
+    norm_cache_duration_sec,
+    probe_duration_sec,
+)
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import PACING_BOUNDS
@@ -41,8 +48,17 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.core.provider_checks import check_provider_keys
-from mammamiradio.core.setup_status import addon_options_snippet, build_setup_status, classify_station_mode
+from mammamiradio.core.setup_status import (
+    addon_options_snippet,
+    build_setup_status,
+    classify_station_mode,
+)
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
+from mammamiradio.home.entity_policy import (
+    load_entity_policy,
+    set_entity_muted,
+    valid_entity_id,
+)
 from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
@@ -52,7 +68,12 @@ from mammamiradio.playlist.direction import (
     expand_direction,
     find_existing_direction_tracks,
     normalize_direction_text,
-    track_from_direction_search,
+    resolve_direction_search_results,
+)
+from mammamiradio.playlist.music_admission import (
+    YOUTUBE_ADMISSION_SEARCH_DEPTH,
+    classify_youtube_candidate,
+    is_youtube_music_candidate,
 )
 from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
@@ -64,6 +85,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_heading,
     write_persisted_source,
 )
+from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
     _ASSETS_DIR,
@@ -117,6 +139,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _public_segment_metadata,
     _serialize_brand,
     _serialize_heading,
+    _serialize_identity,
     _serialize_source,
     _serialize_stream_log_entry,
     _serialize_track,
@@ -125,6 +148,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
 from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
+_LONGFORM_NOTICE_REASON = "longform_audio"
 
 # Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
@@ -419,6 +443,194 @@ def _apply_unban(state: StationState, config, keys: list[tuple[str, str]]) -> di
     return {"ok": True, "unbanned": unbanned, "persisted": persisted}
 
 
+def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | None:
+    if not isinstance(raw_key, list | tuple) or len(raw_key) != 2:
+        return None
+    artist_raw = str(raw_key[0] or "").strip()
+    title_raw = str(raw_key[1] or "").strip()
+    artist = artist_raw.lower()
+    title = title_raw.lower()
+    if not (artist and title):
+        return None
+    display = f"{artist_raw} - {title_raw}"
+    return (artist, title), display
+
+
+def _split_artist_title_label(value: object) -> tuple[str, str] | None:
+    label = str(value or "").strip()
+    parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
+    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+def _fold_identity_part(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def _now_playing_music_track(now_seg: object) -> Track | None:
+    if not isinstance(now_seg, dict) or now_seg.get("type") != "music":
+        return None
+    meta = now_seg.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    artist = str(meta.get("artist") or "").strip()
+    title = str(meta.get("title_only") or "").strip()
+    raw_title = str(meta.get("title") or "").strip()
+    if artist and not title and raw_title:
+        parsed_title = _split_artist_title_label(raw_title)
+        if parsed_title is None:
+            title = raw_title
+        else:
+            left, right = parsed_title
+            folded_artist = _fold_identity_part(artist)
+            if _fold_identity_part(left) == folded_artist:
+                title = right
+            elif _fold_identity_part(right) == folded_artist:
+                title = left
+            else:
+                title = raw_title
+    if not (artist and title):
+        parsed_label = _split_artist_title_label(now_seg.get("label"))
+        if parsed_label is not None:
+            artist, title = parsed_label
+    if not (artist and title):
+        return None
+    return Track(title=title, artist=artist, duration_ms=0)
+
+
+def _now_playing_preference_target(state: StationState) -> tuple[tuple[str, str], str] | None:
+    track = _now_playing_music_track(state.now_streaming or {})
+    if track is None:
+        return None
+    return normalized_track_key(track), track.display
+
+
+def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[str, str], str, str] | JSONResponse:
+    raw_target = str(body.get("target") or "").strip().lower()
+    legacy_now_playing = raw_target in {"current-song", "current_song", "now-playing", "now_playing"}
+    target_count = (
+        int(body.get("now_playing") is True or legacy_now_playing) + int("index" in body) + int("key" in body)
+    )
+    if target_count != 1:
+        return JSONResponse(
+            content={"ok": False, "error": "Choose exactly one preference target."},
+            status_code=422,
+        )
+
+    if body.get("now_playing") is True or legacy_now_playing:
+        target = _now_playing_preference_target(state)
+        if target is None:
+            return JSONResponse(
+                content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
+            )
+        key, display = target
+        return key, display, "now_playing"
+
+    if "index" in body:
+        idx = _as_int_index(body.get("index"))
+        if idx < 0 or idx >= len(state.playlist):
+            return JSONResponse(content={"ok": False, "error": "Invalid song index."}, status_code=422)
+        track = state.playlist[idx]
+        return normalized_track_key(track), track.display, "index"
+
+    target = _normalize_preference_key(body.get("key"))
+    if target is None:
+        return JSONResponse(content={"ok": False, "error": "Invalid song key."}, status_code=422)
+    key, display = target
+    return key, display, "key"
+
+
+def _apply_preference(
+    state: StationState,
+    config,
+    key: tuple[str, str],
+    display: str,
+    vote: str,
+    target: str,
+) -> dict:
+    score_by_vote = {"up": 1, "down": -1, "clear": 0}
+    score = score_by_vote[vote]
+    updated_at = time.time()
+    updated_by = "operator"
+    existing = state.song_preferences.get(key)
+    existing_score = preference_score(state.song_preferences, key)
+    existing_display = str(existing.get("display") or "") if isinstance(existing, dict) else ""
+    changed = False
+    if score == 0:
+        changed = clear_preference(state.song_preferences, key)
+    else:
+        changed = existing_score != score or existing_display != display
+        if isinstance(existing, dict) and not changed:
+            meta = existing
+        else:
+            meta = set_preference(state.song_preferences, key, score, display, updated_by=updated_by)
+        raw_updated_at = meta.get("updated_at")
+        if isinstance(raw_updated_at, str | int | float):
+            updated_at = float(raw_updated_at)
+        updated_by = str(meta.get("updated_by", updated_by) or updated_by)
+    if changed:
+        state.song_preferences_revision += 1
+    persisted = save_preferences(config.cache_dir, state.song_preferences)
+    return {
+        "ok": True,
+        "target": target,
+        "key": list(key),
+        "display": display,
+        "vote": vote,
+        "score": score,
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+        "persisted": persisted,
+        "preference_revision": state.song_preferences_revision,
+    }
+
+
+def _serialize_preference_summary(state: StationState) -> dict:
+    rows = []
+    up = 0
+    down = 0
+    for key, meta in state.song_preferences.items():
+        score = preference_score(state.song_preferences, key)
+        if score > 0:
+            up += 1
+        elif score < 0:
+            down += 1
+        rows.append(
+            {
+                "artist": key[0],
+                "title": key[1],
+                "key": list(key),
+                "score": score,
+                "display": meta.get("display") or f"{key[0]} - {key[1]}",
+                "updated_at": meta.get("updated_at", 0.0),
+                "updated_by": meta.get("updated_by", "operator"),
+            }
+        )
+    rows.sort(key=lambda row: row["updated_at"], reverse=True)
+    return {
+        "count": len(rows),
+        "counts": {"up": up, "down": down},
+        "revision": state.song_preferences_revision,
+        "preferences": rows,
+    }
+
+
+def _serialize_preference_status(state: StationState) -> dict:
+    return {
+        "count": len(state.song_preferences),
+        "revision": state.song_preferences_revision,
+    }
+
+
+def _current_track_preference_score(state: StationState) -> int:
+    target = _now_playing_preference_target(state)
+    if target is None:
+        return 0
+    key, _display = target
+    return preference_score(state.song_preferences, key)
+
+
 def _session_stopped_flag(config) -> Path:
     """Return the persisted operator-stop marker path."""
     return config.cache_dir / SESSION_STOPPED_FLAG
@@ -437,6 +649,8 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
     state.session_stopped = False
+    if isinstance(state.now_streaming, dict) and state.now_streaming.get("type") == "stopped":
+        state.now_streaming = {}
     state.last_state_change_at = time.time()
     state.resume_event.set()
     _persist_session_stopped(config, False)
@@ -908,9 +1122,216 @@ def _generation_waste_snapshot(state: StationState) -> dict:
     }
 
 
+def _safe_home_entity_preview(state: StationState, config) -> dict:
+    """Return admin-only, sanitized HA context candidates for onboarding."""
+    policy = load_entity_policy(config.cache_dir)
+    muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
+    muted_ids = set(muted_map)
+    ctx = get_cached_home_context(config.cache_dir)
+    rows: dict[str, dict] = {}
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", [])[:24]:
+            status = entity.to_status_dict()
+            entity_id = str(status.get("entity_id") or "")
+            if not entity_id:
+                continue
+            stale_after = max(float(config.homeassistant.poll_interval) * 2, 120.0)
+            rows[entity_id] = {
+                "entity_id": entity_id,
+                "label": status.get("label") or entity_id,
+                "area": status.get("area") or "",
+                "domain": status.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": status.get("summary") or str(status.get("state") or ""),
+                "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
+                "muted": entity_id in muted_ids,
+                "sent_to_prompt": entity_id not in muted_ids,
+                "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+                "last_updated": getattr(ctx, "timestamp", 0.0) or None,
+                "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
+            }
+    for status in state.ha_scored_entities[:24]:
+        entity_id = str(status.get("entity_id") or "")
+        if not entity_id or entity_id in rows:
+            continue
+        rows[entity_id] = {
+            "entity_id": entity_id,
+            "label": status.get("label") or entity_id,
+            "area": status.get("area") or "",
+            "domain": status.get("domain") or entity_id.split(".", 1)[0],
+            "state_summary": status.get("summary") or str(status.get("state") or ""),
+            "reason": "Used by future host prompts" if entity_id not in muted_ids else "Muted by operator",
+            "muted": entity_id in muted_ids,
+            "sent_to_prompt": entity_id not in muted_ids,
+            "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+            "last_updated": state.ha_context_last_updated or None,
+            "stale": False,
+        }
+    for entity_id, entry in muted_map.items():
+        if not isinstance(entry, dict) or not isinstance(entity_id, str):
+            continue
+        rows.setdefault(
+            entity_id,
+            {
+                "entity_id": entity_id,
+                "label": entry.get("label") or entity_id,
+                "area": entry.get("area") or "",
+                "domain": entry.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": "Muted locally",
+                "reason": "Muted by operator",
+                "muted": True,
+                "sent_to_prompt": False,
+                "row_state": "muted",
+                "last_updated": entry.get("muted_at"),
+                "stale": False,
+            },
+        )
+    sent_now = [row for row in rows.values() if row["sent_to_prompt"] and not row["muted"]]
+    muted = [row for row in rows.values() if row["muted"]]
+    candidates = [row for row in rows.values() if not row["sent_to_prompt"] and not row["muted"]]
+    entities = [*sent_now[:24], *candidates[:24], *muted[:24]]
+    has_reviewable_context = bool(ctx is not None or state.ha_scored_entities or muted)
+    preview_status = "ready" if sent_now else "empty" if has_reviewable_context else "checking"
+    return {
+        "ok": True,
+        "status": preview_status,
+        "entities": entities[:32],
+        "sent_now": sent_now[:12],
+        "candidates": candidates[:12],
+        "muted": muted[:24],
+        "counts": {
+            "sent_now": len(sent_now),
+            "used_by_hosts": len(sent_now),
+            "candidates": len(candidates),
+            "not_sent": len(candidates),
+            "muted": len(muted),
+            "filtered": sum((getattr(ctx, "denylist_hits", {}) or {}).values()) if ctx is not None else 0,
+        },
+    }
+
+
+def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[str, str]:
+    """Resolve best-effort display metadata without depending on preview shape."""
+    ctx = get_cached_home_context(config.cache_dir)
+    if ctx is not None:
+        for entity in getattr(ctx, "scored", []):
+            status = entity.to_status_dict()
+            if status.get("entity_id") == entity_id:
+                return {
+                    "label": str(status.get("label") or entity_id),
+                    "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                    "area": str(status.get("area") or ""),
+                }
+    for status in state.ha_scored_entities:
+        if status.get("entity_id") == entity_id:
+            return {
+                "label": str(status.get("label") or entity_id),
+                "domain": str(status.get("domain") or entity_id.split(".", 1)[0]),
+                "area": str(status.get("area") or ""),
+            }
+    return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
+
+
+def _copy_home_context_to_state(state: StationState, context) -> None:
+    events = list(getattr(context, "events", []) or [])
+    newest_event = max(events, key=lambda event: event.timestamp) if events else None
+    state.ha_context = str(getattr(context, "summary", "") or "")
+    state.ha_events_summary = str(getattr(context, "events_summary", "") or "")
+    state.ha_home_mood = str(getattr(context, "mood", "") or "")
+    state.ha_weather_arc = str(getattr(context, "weather_arc", "") or "")
+    state.ha_recent_event_count = len(events)
+    state.ha_last_event_label = str(getattr(newest_event, "label", "") or "") if newest_event else ""
+    state.ha_last_event_ts = float(getattr(newest_event, "timestamp", 0.0) or 0.0) if newest_event else 0.0
+    state.ha_home_mood_en = str(getattr(context, "mood_en", "") or "")
+    state.ha_weather_arc_en = str(getattr(context, "weather_arc_en", "") or "")
+    state.ha_events_summary_en = str(getattr(context, "events_summary_en", "") or "")
+    state.ha_last_event_label_en = str(getattr(context, "last_event_label_en", "") or "")
+    state.ha_scored_entities = [entity.to_status_dict() for entity in getattr(context, "scored", [])]
+    state.ha_denylist_hits = dict(getattr(context, "denylist_hits", {}) or {})
+    state.ha_catalog_hit_rate = float(getattr(context, "catalog_hit_rate", 0.0) or 0.0)
+    state.ha_label_stats = dict(getattr(context, "label_stats", {}) or {})
+    state.ha_registry_source = str(getattr(context, "registry_source", "") or "")
+    timestamp = getattr(context, "timestamp", 0.0)
+    state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
+    state.ha_context_entity_count = len(getattr(context, "scored", []) or [])
+    state.ha_context_char_count = len(state.ha_context)
+
+
+def _blank_home_context_state(state: StationState) -> None:
+    state.ha_context = ""
+    state.ha_events_summary = ""
+    state.ha_home_mood = ""
+    state.ha_weather_arc = ""
+    state.ha_recent_event_count = 0
+    state.ha_last_event_label = ""
+    state.ha_last_event_ts = 0.0
+    state.ha_home_mood_en = ""
+    state.ha_weather_arc_en = ""
+    state.ha_events_summary_en = ""
+    state.ha_last_event_label_en = ""
+    state.ha_scored_entities = []
+    state.ha_denylist_hits = {}
+    state.ha_catalog_hit_rate = 0.0
+    state.ha_label_stats = {}
+    state.ha_registry_source = ""
+    state.ha_context_entity_count = 0
+    state.ha_context_char_count = 0
+
+
+def _set_live_gag_entity_denied(state: StationState, config, entity_id: str, muted: bool) -> bool:
+    ledger = state.evening_ledger
+    if ledger is None:
+        return False
+    denylist = set(ledger.entity_denylist)
+    if muted:
+        denylist.add(entity_id)
+    elif entity_id not in set(getattr(config.running_gags, "entity_denylist", []) or []):
+        denylist.discard(entity_id)
+    ledger.entity_denylist = frozenset(denylist)
+    return ledger.purge_entity(entity_id) if muted else False
+
+
+def _clear_home_context_usage(state: StationState, config, entity_id: str | None = None) -> bool:
+    """Clear prompt-facing HA fields after a hard mute policy change.
+
+    Returns True when the evening running-gag ledger was also purged and
+    needs `save_if_dirty()` — the caller owns persistence so this stays a
+    plain in-memory mutator (no synchronous disk I/O in an async route).
+    """
+    context = get_cached_home_context(config.cache_dir)
+    if context is not None:
+        _copy_home_context_to_state(state, context)
+    else:
+        _blank_home_context_state(state)
+    # These transient strings have no durable entity id in StationState, so a live
+    # mute clears them even when the rest of the filtered context can be preserved.
+    state.ha_pending_directive = ""
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
+    if entity_id and state.evening_ledger is not None:
+        return _set_live_gag_entity_denied(state, config, entity_id, True)
+    return False
+
+
 def _runtime_monotonic() -> float:
     """Monotonic clock for readiness and silence accounting."""
     return time.monotonic()
+
+
+def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[str, Any]:
+    """Build the shared onboarding snapshot used by setup and capability routes."""
+    _sync_runtime_state(request)
+    config = request.app.state.config
+    state = request.app.state.station_state
+    golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
+    provider_health = _provider_health_snapshot(config, state)
+    setup = build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
+    return {
+        "config": config,
+        "state": state,
+        "golden_path": golden_path,
+        "provider_health": provider_health,
+        "setup": setup,
+    }
 
 
 def _queue_empty_elapsed(state: StationState) -> float:
@@ -1182,17 +1603,25 @@ async def run_playback_loop(app) -> None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
 
-                # Serve a canned clip instead of dead air while the producer catches up
-                from mammamiradio.scheduling.producer import _pick_canned_clip
+                # Serve packaged continuity audio instead of dead air while the
+                # producer catches up. This shares the producer recovery order:
+                # recovery/ -> banter/ -> welcome/.
+                from mammamiradio.scheduling.producer import _pick_recovery_clip
 
-                fallback = _pick_canned_clip("banter", state=state) or _pick_canned_clip("welcome")
+                fallback = _pick_recovery_clip(state)
                 if fallback:
-                    logger.info("Queue empty — serving fallback clip: %s", fallback.name)
+                    logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
                     state.queue_empty_since = None
                     segment = Segment(
                         type=SegmentType.BANTER,
                         path=fallback,
-                        metadata={"type": "banter", "canned": True, "fallback": True},
+                        metadata={
+                            "type": "banter",
+                            "canned": True,
+                            "fallback": True,
+                            "rescue": True,
+                            "title": "Station continuity",
+                        },
                         ephemeral=False,
                     )
                 else:
@@ -1214,15 +1643,16 @@ async def run_playback_loop(app) -> None:
                                 # now-playing artist/label. Strip it and drop to
                                 # title-only rather than airing a competitor's name.
                                 clean_artist = strip_foreign_station_name(
-                                    sidecar["artist"], config.display_station_name
+                                    str(sidecar["artist"]), config.display_station_name
                                 )
                                 # prefix_only on the song title: drop a "Radio X - Song"
                                 # rescue prefix but keep a song really titled "Radio Ga Ga".
+                                raw_sidecar_title = str(sidecar["title"])
                                 song_title = (
                                     strip_foreign_station_name(
-                                        sidecar["title"], config.display_station_name, prefix_only=True
+                                        raw_sidecar_title, config.display_station_name, prefix_only=True
                                     )
-                                    or sidecar["title"]
+                                    or raw_sidecar_title
                                 )
                                 if clean_artist:
                                     rescue_title = f"{clean_artist} – {song_title}"
@@ -1233,13 +1663,17 @@ async def run_playback_loop(app) -> None:
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
+                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
+                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
                                 type=SegmentType.MUSIC,
                                 path=rescue,
+                                duration_sec=duration_sec,
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
                                     **({"artist": rescue_artist} if rescue_artist else {}),
+                                    **duration_fields,
                                     "audio_source": "fallback_norm_cache",
                                     "fallback": True,
                                 },
@@ -1274,13 +1708,17 @@ async def run_playback_loop(app) -> None:
                                 rescue.name,
                             )
                             state.queue_empty_since = None
+                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
+                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
                                 type=SegmentType.MUSIC,
                                 path=rescue,
+                                duration_sec=duration_sec,
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
                                     "artist": rescue_artist,
+                                    **duration_fields,
                                     "audio_source": "fallback_demo_asset",
                                     "fallback": True,
                                 },
@@ -1810,7 +2248,7 @@ async def og_card(request: Request):
     config = request.app.state.config
     state = request.app.state.station_state
     track = state.current_track
-    cache_key = f"{config.brand.station_name}:{track.cache_key if track else 'idle'}"
+    cache_key = f"{config.display_station_name}:{track.cache_key if track else 'idle'}"
 
     cached = _og_card_cache.get(cache_key)
     if cached is None:
@@ -1890,7 +2328,7 @@ async def stream(request: Request):
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
     headers = {
-        "icy-name": config.station.name.replace("\r", "").replace("\n", ""),
+        "icy-name": config.display_station_name.replace("\r", "").replace("\n", ""),
         "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
@@ -1912,17 +2350,13 @@ async def logs(request: Request, lines: int = 50, _: None = Depends(require_admi
 @router.get("/api/setup/status")
 async def setup_status(request: Request, _: None = Depends(require_admin_access)):
     """Return the current first-run setup snapshot for onboarding."""
-    config = request.app.state.config
-    state = request.app.state.station_state
-    return build_setup_status(config, state)
+    return _setup_projection(request)["setup"]
 
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
     """Force a fresh setup snapshot."""
-    config = request.app.state.config
-    state = request.app.state.station_state
-    return build_setup_status(config, state)
+    return _setup_projection(request, force_refresh=True)["setup"]
 
 
 @router.post("/api/setup/provider-check")
@@ -2077,16 +2511,16 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     The dashboard uses these flags to show/hide cards and determine the
     current feature tier (Demo Radio / Your Music / Full AI Radio).
     """
-    _sync_runtime_state(request)
-    config = request.app.state.config
-    state = request.app.state.station_state
+    setup_projection = _setup_projection(request)
+    config = setup_projection["config"]
+    state = setup_projection["state"]
     caps = get_capabilities(config, state)
     result = capabilities_to_dict(caps)
     capabilities = result.setdefault("capabilities", {})
     capabilities["script_llm"] = bool(config.anthropic_api_key or config.openai_api_key)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
-    provider_health = _provider_health_snapshot(config, state)
+    provider_health = setup_projection["provider_health"]
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
     # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
@@ -2121,7 +2555,8 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         "limit": SHAREWARE_CANNED_LIMIT,
         "exhausted": state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT,
     }
-    result["golden_path"] = _golden_path_status(config, state)
+    result["golden_path"] = setup_projection["golden_path"]
+    result["guided_setup"] = setup_projection["setup"]["guided_setup"]
     result["startup_source_error"] = state.startup_source_error or ""
     result["provider_health"] = provider_health
     return result
@@ -2135,7 +2570,7 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         raise HTTPException(status_code=409, detail="HA label generation already in progress")
     if not config.anthropic_api_key:
         return {"scheduled": False, "reason": "anthropic_key_missing"}
-    context = get_cached_home_context()
+    context = get_cached_home_context(config.cache_dir)
     if context is None or not context.raw_states:
         return {"scheduled": False, "reason": "home_context_unavailable"}
     scheduled = schedule_label_generation(
@@ -2153,6 +2588,70 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
             raise HTTPException(status_code=409, detail="HA label generation already in progress")
         return {"scheduled": False, "reason": "no_candidates"}
     return {"scheduled": True}
+
+
+@router.get("/api/homeassistant/context-candidates")
+async def homeassistant_context_candidates(request: Request, _: None = Depends(require_admin_access)):
+    """Return a sanitized admin-only preview of HA context candidates."""
+    return _safe_home_entity_preview(request.app.state.station_state, request.app.state.config)
+
+
+@router.patch("/api/homeassistant/entity-policy")
+async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
+    """Mute/unmute one Home Assistant entity for host context use."""
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    entity_id = body.get("entity_id")
+    muted = body.get("muted")
+    if not isinstance(entity_id, str) or not valid_entity_id(entity_id):
+        raise HTTPException(status_code=422, detail="entity_id must be a Home Assistant entity id")
+    if not isinstance(muted, bool):
+        raise HTTPException(status_code=422, detail="muted must be true or false")
+
+    config = request.app.state.config
+    # No preview-membership gate: some entities (e.g. radio_event-only
+    # entities, deliberately kept out of ambient context) never appear in the
+    # sanitized preview but an operator still needs to be able to mute them by
+    # id — over-inclusive muting can only exclude more, never expose more, so
+    # any syntactically valid entity_id (already checked above) is accepted.
+    state = request.app.state.station_state
+    row = _home_entity_metadata(state, config, entity_id)
+    loop = asyncio.get_running_loop()
+    try:
+        policy = await loop.run_in_executor(
+            None,
+            functools.partial(
+                set_entity_muted,
+                config.cache_dir,
+                entity_id,
+                muted,
+                label=row.get("label") or entity_id,
+                domain=row.get("domain") or entity_id.split(".", 1)[0],
+                area=row.get("area") or "",
+            ),
+        )
+    except OSError as exc:
+        logger.warning("Failed to save HA entity policy", exc_info=True)
+        raise HTTPException(status_code=500, detail="could not save entity policy") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if muted:
+        ledger_dirty = _clear_home_context_usage(state, config, entity_id)
+        if ledger_dirty and state.evening_ledger is not None:
+            await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
+    else:
+        _set_live_gag_entity_denied(state, config, entity_id, False)
+    return {
+        "ok": True,
+        "entity_id": entity_id,
+        "muted": muted,
+        "policy": {
+            "schema_version": policy.get("schema_version"),
+            "muted_count": len(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}),
+        },
+    }
 
 
 @router.post("/api/shuffle")
@@ -3164,17 +3663,19 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
     in-flight producer segment is discarded on commit), then purges the
     pre-produced lookahead queue so the cleared pool takes effect. The current
     segment is left to finish — purging the pool is not a reason to cut the air;
-    once it ends the starvation rescue covers the gap until a source is re-added
-    (INSTANT AUDIO — never dead air). Sources can be re-added from the toolbar.
+    the next producer pass is forced to banter/continuity until a source is
+    re-added (INSTANT AUDIO — never dead air). Sources can be re-added from the
+    toolbar.
     """
     state = request.app.state.station_state
     config = request.app.state.config
     source_switch_lock = request.app.state.source_switch_lock
     async with source_switch_lock:
         state.switch_playlist([], None)
+        state.force_next = SegmentType.BANTER
         persisted = _delete_persisted_source(config.cache_dir)
         purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
-    logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments", purged)
+    logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
     return {"ok": True, "purged": purged, "persisted": persisted}
 
 
@@ -3277,28 +3778,16 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     if now_seg.get("type") != "music":
         return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
 
-    meta = now_seg.get("metadata") or {}
-    artist = str(meta.get("artist") or "").strip()
     # Prefer ``title_only`` so the blocklist key matches both the queue-purge key and
-    # the clean ``Track.title`` used at every ingest doorway; fall back to parsing the
-    # "Artist — Title" label (never the raw ``title``, which can carry the combined
-    # label and would forge a key that matches nothing).
-    title = str(meta.get("title_only") or "").strip()
-    if not (artist or title):
-        # A label is "Artist — Title"; only accept it when BOTH sides are present.
-        # A one-sided label ("Mina —") is malformed and would forge a half-key — fall
-        # through to the way-out message instead of banning on a guessed fragment.
-        label = str(now_seg.get("label") or "").strip()
-        parts = _re.split(r"\s[—–-]\s", label, maxsplit=1)
-        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-            artist, title = parts[0].strip(), parts[1].strip()
-    if not (artist or title):
+    # the clean ``Track.title`` used at every ingest doorway. Fall back through the
+    # shared now-playing identity resolver so Ban and Like/Dislike never persist
+    # different keys for the same on-air song.
+    track = _now_playing_music_track(now_seg)
+    if track is None:
         return {
             "ok": False,
             "error": "I can’t tell which song this is to ban it. Ban it from the rotation list instead.",
         }
-
-    track = Track(title=title, artist=artist, duration_ms=0)
     # Ban FIRST (this purges any queued copies of the same song), THEN skip — so the
     # bridge decision inside _request_skip sees the post-purge queue depth.
     result = _apply_ban(state, config, [track], queue=request.app.state.queue)
@@ -3316,6 +3805,44 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
         # segment can advance in that window).
         "key": list(normalized_track_key(track)),
     }
+
+
+@router.post("/api/track/preference")
+async def prefer_track(request: Request, _: None = Depends(require_admin_access)):
+    """Set or clear an operator-only soft preference for one song.
+
+    Body: ``{"vote": "up"|"down"|"clear", "now_playing": true}``,
+    ``{"vote": ..., "index": N}``, or ``{"vote": ..., "key": [artist, title]}``.
+    This deliberately does not skip, purge the queue, or touch the blocklist.
+    """
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    vote = str(body.get("vote") or "").strip().lower()
+    if not vote and "score" in body:
+        raw_score = body.get("score")
+        try:
+            score = int(raw_score) if raw_score is not None else 0
+        except (TypeError, ValueError):
+            score = 0
+        vote = "up" if score > 0 else "down" if score < 0 else "clear"
+    if vote not in {"up", "down", "clear"}:
+        return JSONResponse(
+            content={"ok": False, "error": "Preference vote must be up, down, or clear."},
+            status_code=422,
+        )
+    state = request.app.state.station_state
+    target = _resolve_preference_target(state, body)
+    if isinstance(target, JSONResponse):
+        return target
+    key, display, target_label = target
+    return _apply_preference(state, request.app.state.config, key, display, vote, target_label)
+
+
+@router.get("/api/track/preferences")
+async def track_preferences(request: Request, _: None = Depends(require_admin_access)):
+    """List operator song preferences for the admin control room."""
+    return {"ok": True, **_serialize_preference_summary(request.app.state.station_state)}
 
 
 @router.post("/api/track/unban")
@@ -3381,7 +3908,13 @@ async def playlist_tracks(
     """Return a bounded playlist page for admin lazy loading."""
     offset, limit = _page_bounds(offset, limit, default_limit=80, max_limit=200)
     state = request.app.state.station_state
-    return _paginated_tracks(state.playlist, offset, limit, revision=state.playlist_revision)
+    return _paginated_tracks(
+        state.playlist,
+        offset,
+        limit,
+        revision=state.playlist_revision,
+        preferences=state.song_preferences,
+    )
 
 
 @router.get("/api/search")
@@ -3513,6 +4046,23 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
         youtube_id=youtube_id,
         album_art=album_art,
     )
+    verdict = classify_youtube_candidate(track, state.playlist, config.pacing, metadata=dict(body))
+    if not verdict.accepted:
+        logger.info(
+            "External track held out of rotation before download: %s (yt:%s reason=%s)",
+            track.display,
+            youtube_id,
+            verdict.reason,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": verdict.notice_reason,
+                "reason": verdict.reason,
+                "message": verdict.message,
+            },
+            status_code=409,
+        )
 
     # Fire the download in the background and return before the ingress proxy
     # times out the long yt-dlp fetch. The task pins the track to play next once
@@ -3552,11 +4102,12 @@ async def _commit_external_download(
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
     the rotation pool but the play-next slot was occupied), "banned" (the song is on
-    the operator blocklist and was refused), or "dropped" (source switched / consumed).
+    the operator blocklist and was refused), "held" (long-form/non-rotation audio
+    refused after download), or "dropped" (source switched / consumed).
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
-    from mammamiradio.playlist.downloader import download_external_track
+    from mammamiradio.playlist.downloader import download_external_track, reject_cached_download
 
     state = app_state.station_state
     config = app_state.config
@@ -3570,7 +4121,14 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    actual_duration_sec: float | None = None
+    try:
+        downloaded_path = Path(downloaded_path)
+        if downloaded_path.exists():
+            actual_duration_sec = await asyncio.to_thread(probe_duration_sec, downloaded_path)
+    except (OSError, TypeError, ValueError):
+        logger.debug("Skipping external duration probe for %s", track.display, exc_info=True)
     # Serialize the commit decision with source switches. /api/playlist/load holds
     # source_switch_lock across the slow load and only bumps source_revision at the
     # very end (switch_playlist). Without this lock a download finishing mid-load
@@ -3579,6 +4137,7 @@ async def _commit_external_download(
     # Acquiring the lock makes us wait out any in-flight switch, then re-check the
     # (now bumped) revision. The block below is synchronous — it never awaits while
     # holding the lock, so it can't deadlock the switch routes.
+    rejected_download_reason = ""
     async with app_state.source_switch_lock:
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
@@ -3586,22 +4145,41 @@ async def _commit_external_download(
         # resurrect a banned song. A distinct "banned" status (not "dropped") lets
         # each caller surface an honest, specific message — the admin sees "it's
         # banned", the listener stops spinning on "searching…" with a real answer.
-        if normalized_track_key(track) in state.blocklist:
-            return "banned"
-        state.playlist.append(track)
-        state.playlist_revision += 1
-        # Don't clobber a pin that's still pending — claim the play-next slot only
-        # when the caller's guard says it's free. Otherwise the track is in
-        # rotation and the caller surfaces that it's queued-behind, not next.
-        if not should_pin():
-            return "queued"
-        state.pinned_track = track
-        # Only force MUSIC when nothing else is already forced. An operator trigger
-        # (banter/ad/news) or a mode change may have set force_next; that directive
-        # plays first, then the pinned track lands on the next music slot.
-        if state.force_next is None:
-            state.force_next = SegmentType.MUSIC
-        return "pinned"
+        if is_youtube_music_candidate(track):
+            verdict = classify_youtube_candidate(
+                track,
+                state.playlist,
+                config.pacing,
+                actual_duration_sec=actual_duration_sec if actual_duration_sec and actual_duration_sec > 0 else None,
+            )
+            if not verdict.accepted:
+                rejected_download_reason = verdict.reason
+        if not rejected_download_reason:
+            if normalized_track_key(track) in state.blocklist:
+                return "banned"
+            state.playlist.append(track)
+            state.playlist_revision += 1
+            # Don't clobber a pin that's still pending — claim the play-next slot only
+            # when the caller's guard says it's free. Otherwise the track is in
+            # rotation and the caller surfaces that it's queued-behind, not next.
+            if not should_pin():
+                return "queued"
+            state.pinned_track = track
+            # Only force MUSIC when nothing else is already forced. An operator trigger
+            # (banter/ad/news) or a mode change may have set force_next; that directive
+            # plays first, then the pinned track lands on the next music slot.
+            if state.force_next is None:
+                state.force_next = SegmentType.MUSIC
+            return "pinned"
+
+    await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
+    logger.info(
+        "External track held out of rotation after download: %s (yt:%s reason=%s)",
+        track.display,
+        getattr(track, "youtube_id", ""),
+        rejected_download_reason,
+    )
+    return "held"
 
 
 async def _download_admin_external_track(track: Any, app_state: Any, originating_source_revision: int) -> None:
@@ -3638,6 +4216,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
         _notice(False, "banned")
         return
 
+    if status == "held":
+        logger.info("Admin external track held out of rotation: %s", track.display)
+        _notice(False, _LONGFORM_NOTICE_REASON)
+        return
+
     if status == "dropped":
         logger.info("Admin external track dropped — playlist source changed: %s", track.display)
         _notice(False, "source_changed")
@@ -3655,7 +4238,11 @@ async def _download_admin_external_track(track: Any, app_state: Any, originating
     logger.info("Queued external track: %s (yt:%s)", track.display, track.youtube_id)
 
 
-async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) -> list[Track]:
+async def _resolve_direction_tracks_for_route(
+    targets: list[DirectionTarget],
+    state: StationState | None = None,
+    config: Any | None = None,
+) -> list[Track]:
     """Resolve direction targets to YouTube-backed tracks without downloading audio."""
     from mammamiradio.playlist.downloader import search_ytdlp_metadata
 
@@ -3663,13 +4250,28 @@ async def _resolve_direction_tracks_for_route(targets: list[DirectionTarget]) ->
 
     async def _search_one(target: DirectionTarget) -> Track | None:
         try:
-            results = await loop.run_in_executor(_direction_search_executor, search_ytdlp_metadata, target.query, 1)
+            results = await loop.run_in_executor(
+                _direction_search_executor,
+                search_ytdlp_metadata,
+                target.query,
+                YOUTUBE_ADMISSION_SEARCH_DEPTH,
+            )
         except Exception:
             logger.debug("Direction metadata search failed for %s", target.query, exc_info=True)
             return None
-        if not results:
-            return None
-        return track_from_direction_search(target, results[0])
+        playlist = state.playlist if state is not None and config is not None else None
+        pacing = config.pacing if state is not None and config is not None else None
+        resolution = resolve_direction_search_results(target, results, playlist=playlist, pacing=pacing)
+        if resolution.track is not None:
+            return resolution.track
+        if state is not None and resolution.rejected_track is not None:
+            _record_direction_notice(
+                state,
+                resolution.rejected_track,
+                ok=False,
+                reason=resolution.rejected_reason or _LONGFORM_NOTICE_REASON,
+            )
+        return None
 
     try:
         resolved = await asyncio.wait_for(
@@ -3763,6 +4365,9 @@ async def _download_direction_track(
     elif status == "banned":
         logger.info("Direction track refused because it is blocklisted: %s", track.display)
         _record_direction_notice(state, track, ok=False, reason="banned")
+    elif status == "held":
+        logger.info("Direction track held out of rotation: %s", track.display)
+        _record_direction_notice(state, track, ok=False, reason=_LONGFORM_NOTICE_REASON)
     else:
         logger.info("Direction track skipped after %s: %s", status, track.display)
         _record_direction_notice(state, track, ok=False, reason="source_changed")
@@ -3956,7 +4561,7 @@ async def _set_direction_text(request: Request, text: str):
 
     resolved_tracks: list[Track] = []
     if config.allow_ytdlp:
-        resolved_tracks = await _resolve_direction_tracks_for_route(expansion.targets)
+        resolved_tracks = await _resolve_direction_tracks_for_route(expansion.targets, state, config)
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
 
     source_switch_lock = request.app.state.source_switch_lock
@@ -4577,7 +5182,7 @@ def _public_status_payload(request: Request) -> dict:
     upcoming_mode = "queued" if upcoming else "building"
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
-    if state.ha_context:
+    if state.ha_context or state.ha_ritual_public_families:
         ha_moments = {
             "connected": True,
             "mood": state.ha_home_mood or None,
@@ -4589,13 +5194,21 @@ def _public_status_payload(request: Request) -> dict:
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+        if state.ha_ritual_public_families:
+            ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         # Hide card if nothing interesting to show
-        if not ha_moments.get("mood") and not ha_moments.get("weather") and not ha_moments.get("last_event_label"):
+        if (
+            not ha_moments.get("mood")
+            and not ha_moments.get("weather")
+            and not ha_moments.get("last_event_label")
+            and not ha_moments.get("ritual_families")
+        ):
             ha_moments = None
 
     playback = _status_now_playback(state.now_streaming, now_ts)
     return {
-        "station": config.station.name,
+        "station": config.display_station_name,
+        "identity": _serialize_identity(config),
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),
@@ -4950,6 +5563,7 @@ async def status(
         playlist_offset,
         playlist_limit,
         revision=state.playlist_revision,
+        preferences=state.song_preferences,
     )
     payload.update(
         {
@@ -5035,6 +5649,8 @@ async def status(
             # false-light the "Triggered" row.
             "operator_force_pending": (state.operator_force_pending.value if state.operator_force_pending else None),
             "session_stopped": state.session_stopped,
+            "song_preferences": _serialize_preference_status(state),
+            "current_track_preference": _current_track_preference_score(state),
             "playlist": playlist_page["tracks"],
             "playlist_page": {
                 "total": playlist_page["total"],

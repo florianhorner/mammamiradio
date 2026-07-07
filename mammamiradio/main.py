@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
@@ -40,6 +41,7 @@ from mammamiradio.playlist.playlist import (
     read_persisted_source,
     write_persisted_heading,
 )
+from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
@@ -111,8 +113,12 @@ async def _restore_direction_targets_background(app_state, heading_id: str, raw_
         targets = target_dicts_to_targets(raw_targets)
         if not targets:
             return
-        resolved_tracks = await resolve_direction_tracks(targets)
         state = app_state.station_state
+        resolved_tracks = await resolve_direction_tracks(
+            targets,
+            playlist=list(state.playlist),
+            pacing=app_state.config.pacing,
+        )
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
         download_tracks = []
         async with app_state.source_switch_lock:
@@ -157,6 +163,8 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
     admission = admit_restart_handoff_entries(
         config.cache_dir,
         blocklist=state.blocklist,
+        playlist=state.playlist,
+        pacing=config.pacing,
     )
     accepted = 0
     for segment in admission.to_segments(config.cache_dir):
@@ -212,7 +220,7 @@ async def startup():
     global _producer_task, _playback_task, _prewarm_task
 
     config = load_config()
-    logger.info("Station: %s (%s)", config.station.name, config.station.language)
+    logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
 
     # One integrated-LUFS target across every segment type: configure the
     # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
@@ -294,12 +302,22 @@ async def startup():
     # resumes the same session and gags instead of resetting them. Missing or
     # corrupt files start fresh and never block boot. Candidacy policy comes from
     # config ([home.running_gags]); empty lists keep the built-in domain default.
+    # The mute policy's entity_denylist is static (config-only) and doesn't
+    # purge already-persisted buckets on its own, so a mute applied in a prior
+    # session (or a purge whose save_if_dirty() failed) would otherwise
+    # survive a restart and still be offerable as a running gag (codex
+    # adversarial review). Merge the current mute policy into the denylist
+    # AND purge any matching buckets already on disk.
+    _muted_at_boot = muted_entity_ids(config.cache_dir)
     evening_ledger = EveningLedger.load(
         config.cache_dir,
         domain_allowlist=config.running_gags.domain_allowlist or None,
         entity_allowlist=config.running_gags.entity_allowlist or None,
-        entity_denylist=config.running_gags.entity_denylist or None,
+        entity_denylist=(set(config.running_gags.entity_denylist) | _muted_at_boot) or None,
     )
+    for _muted_entity_id in _muted_at_boot:
+        evening_ledger.purge_entity(_muted_entity_id)
+    evening_ledger.save_if_dirty(config.cache_dir)
 
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not
@@ -347,6 +365,8 @@ async def startup():
             "Blocklist: filtered %d banned track(s) from the startup pool",
             pre_blocklist_count - len(tracks),
         )
+    song_preferences = load_preferences(config.cache_dir)
+    logger.info("Song preferences: loaded %d preference(s)", len(song_preferences))
 
     persisted_heading = read_persisted_heading(config.cache_dir)
     pending_direction_targets: list[dict[str, str]] = []
@@ -430,6 +450,7 @@ async def startup():
         if persisted_heading is not None and persisted_heading.announced
         else "",
         blocklist=blocklist,
+        song_preferences=song_preferences,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
         verbal_gag_ledger=verbal_gag_ledger,

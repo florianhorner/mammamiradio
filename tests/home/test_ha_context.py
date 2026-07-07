@@ -23,6 +23,7 @@ from mammamiradio.home.ha_context import (
     HomeContext,
     HomeEvent,
     HomeRegistrySnapshot,
+    ScoredEntity,
     _apply_registry_area,
     _apply_registry_snapshot,
     _build_budgeted_summary,
@@ -39,11 +40,13 @@ from mammamiradio.home.ha_context import (
     _score_entity,
     _segment_type_icon,
     _write_registry_snapshot,
+    apply_entity_mute_policy,
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
     fetch_home_context,
     fetch_weather_forecast,
+    get_cached_home_context,
     push_state_to_ha,
 )
 
@@ -745,11 +748,15 @@ async def test_fetch_cached_context_does_not_repeat_radio_events():
         summary="cached",
         timestamp=time.time(),
         radio_events=[object()],
+        ritual_recipe_matches=[object()],
+        ritual_public_families=["Kitchen ritual"],
     )
     with patch("mammamiradio.home.ha_context._ha_cache", None):
         result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=cache)
     assert result is cache
     assert result.radio_events == []
+    assert result.ritual_recipe_matches == []
+    assert result.ritual_public_families == []
 
 
 @pytest.mark.asyncio
@@ -785,6 +792,279 @@ async def test_fetch_calls_api_when_stale():
     assert result.timestamp > stale_cache.timestamp
     assert "macchina del caff" in result.summary
     assert "macchina del caff" in result.events_summary
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_exception_fallback_still_honors_mute(tmp_path):
+    """When the live HA call itself throws, the stale-cache fallback must still
+    exclude a muted entity — mute enforcement can't depend on the happy path."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_entity = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_entity, True, label="Coffee machine")
+    stale_cache = HomeContext(
+        raw_states={muted_entity: {"state": "on", "attributes": {}}},
+        summary="- Macchina del caffè: acceso/a",
+        timestamp=time.time() - 120.0,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = RuntimeError("HA unreachable")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=stale_cache,
+            cache_dir=tmp_path,
+        )
+
+    assert muted_entity not in result.raw_states
+    assert "caff" not in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_applies_muted_policy_before_context_fanout(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(
+        tmp_path,
+        "switch.bar_kaffeemaschine_steckdose",
+        True,
+        label="Coffee machine",
+        domain="switch",
+        area="Kitchen",
+    )
+    stale_cache = HomeContext(
+        raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}}},
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="switch.bar_kaffeemaschine_steckdose",
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        timestamp=time.time() - 120.0,
+    )
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=stale_cache,
+            cache_dir=tmp_path,
+        )
+
+    assert "switch.bar_kaffeemaschine_steckdose" not in result.raw_states
+    assert "caff" not in result.summary.lower()
+    assert "caff" not in result.events_summary.lower()
+    assert all(entity.entity_id != "switch.bar_kaffeemaschine_steckdose" for entity in result.scored)
+    assert all(event.entity_id != "switch.bar_kaffeemaschine_steckdose" for event in result.events)
+    assert result.denylist_hits["user_muted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_prunes_muted_entities_from_fresh_cache(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "switch.bar_kaffeemaschine_steckdose", True, label="Coffee machine")
+    cache = HomeContext(
+        raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee"}}},
+        summary="- Macchina del caffè: acceso/a",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id="switch.bar_kaffeemaschine_steckdose",
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=cache,
+            cache_dir=tmp_path,
+        )
+
+    assert result.raw_states == {}
+    assert result.summary == ""
+    assert list(result.events) == []
+    assert result.events_summary == ""
+
+
+def test_get_cached_home_context_filters_muted_entities_on_copy(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
+    cached = HomeContext(
+        raw_states={muted_id: {"state": "on", "attributes": {"friendly_name": "Coffee"}}},
+        summary="- Macchina del caffè: acceso/a",
+        events=deque(
+            [
+                HomeEvent(
+                    entity_id=muted_id,
+                    label="Coffee machine",
+                    old_state="off",
+                    new_state="on",
+                    timestamp=time.time(),
+                )
+            ],
+            maxlen=20,
+        ),
+        scored=[
+            ScoredEntity(
+                entity_id=muted_id,
+                area="Kitchen",
+                domain="switch",
+                score=99,
+                raw_state={"state": "on", "attributes": {"friendly_name": "Coffee"}},
+                label_it="La macchina del caffè",
+                label_en="Coffee machine",
+                summary_line="Coffee machine: on",
+            )
+        ],
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", cached):
+        filtered = get_cached_home_context(tmp_path)
+
+    assert filtered is not cached
+    assert filtered is not None
+    assert muted_id not in filtered.raw_states
+    assert list(filtered.events) == []
+    assert filtered.scored == []
+    assert muted_id in cached.raw_states
+    assert cached.events
+    assert cached.scored
+
+
+def test_get_cached_home_context_user_muted_count_is_stable_across_serves(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    present_muted = "switch.bar_kaffeemaschine_steckdose"
+    absent_muted = "switch.absent"
+    set_entity_muted(tmp_path, present_muted, True, label="Coffee machine")
+    set_entity_muted(tmp_path, absent_muted, True, label="Absent switch")
+    cached = HomeContext(
+        raw_states={present_muted: {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}},
+        scored=[
+            ScoredEntity(
+                entity_id=present_muted,
+                area="Kitchen",
+                domain="switch",
+                score=0.7,
+                raw_state={"state": "on", "attributes": {"friendly_name": "Coffee machine"}},
+                label_it="Coffee machine",
+                label_en="Coffee machine",
+                summary_line="Coffee machine: on",
+            )
+        ],
+        denylist_hits={"user_muted": 1},
+        timestamp=time.time(),
+    )
+
+    with patch("mammamiradio.home.ha_context._ha_cache", cached):
+        first = get_cached_home_context(tmp_path)
+        second = get_cached_home_context(tmp_path)
+
+    assert first is not None
+    assert second is not None
+    assert first.denylist_hits["user_muted"] == 1
+    assert second.denylist_hits["user_muted"] == 1
+    assert first.denylist_hits == second.denylist_hits
+    assert present_muted not in first.raw_states
+    assert absent_muted not in first.raw_states
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.forecast_home", True, label="Weather")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock) as weather,
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+        )
+
+    weather.assert_not_called()
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert "weather.forecast_home" not in result.raw_states
+
+
+def test_apply_entity_mute_policy_clears_stale_weather_arc_without_entity(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.forecast_home", True, label="Weather")
+    context = HomeContext(
+        weather_arc="Pioggia in arrivo",
+        weather_arc_en="Rain incoming",
+        raw_states={},
+        scored=[],
+        events=deque(maxlen=64),
+        timestamp=time.time(),
+    )
+
+    result = apply_entity_mute_policy(context, tmp_path)
+
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert context.weather_arc == "Pioggia in arrivo"
+    assert context.weather_arc_en == "Rain incoming"
 
 
 @pytest.mark.asyncio
@@ -837,6 +1117,109 @@ async def test_fetch_matches_radio_events_without_ambient_script_visibility():
     assert "script.kitchen_tts" not in result.raw_states
     assert len(result.radio_events) == 1
     assert result.radio_events[0].directive == "One of the house voices just spoke."
+
+
+@pytest.mark.asyncio
+async def test_fetch_home_context_muted_entity_cannot_trigger_a_radio_event(tmp_path):
+    """A muted entity must not be able to fire a configured radio_event
+    directive — the mute promise covers reactive triggers, and radio_events
+    are a reactive-trigger mechanism (codex adversarial review: match_radio_events
+    ran against the unfiltered entity_map before mute filtering)."""
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "script.kitchen_tts", True, label="Kitchen TTS")
+    rule = RadioEventRule(
+        id="tts_script_started",
+        entity_glob="script.*tts*",
+        trigger="state",
+        from_state="off",
+        to_state="on",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+    )
+    states = [
+        {
+            "entity_id": "script.kitchen_tts",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen TTS"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._radio_event_state_cache",
+            {"script.kitchen_tts": {"state": "off", "attributes": {}}},
+        ),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+            radio_event_rules=[rule],
+        )
+
+    assert result.radio_events == []
+    assert "script.kitchen_tts" not in result.raw_states
+
+
+@pytest.mark.asyncio
+async def test_fetch_matches_ritual_recipes_and_public_family_label():
+    states = [
+        {
+            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+        },
+        *_mock_ha_response(),
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = states
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch(
+            "mammamiradio.home.ha_context._ritual_recipe_state_cache",
+            {
+                "binary_sensor.kitchen_fridge_door": {
+                    "state": "off",
+                    "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
+                }
+            },
+        ),
+    ):
+        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+
+    assert len(result.ritual_recipe_matches) == 1
+    assert result.ritual_recipe_matches[0].recipe.id == "fridge_freezer_raid"
+    assert result.ritual_public_families == ["Kitchen ritual"]
+    fridge_audit = next(item for item in result.ritual_recipe_audit if item["recipe_id"] == "fridge_freezer_raid")
+    assert fridge_audit["status"] == "instrumented"
 
 
 @pytest.mark.asyncio

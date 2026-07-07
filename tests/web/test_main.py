@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -528,12 +529,68 @@ async def test_startup_wires_running_gag_policy_from_config():
 
         await startup()
 
+    # entity_denylist is now the config denylist merged with the current mute
+    # policy (empty here — no entity_policy.json at TEST_CACHE), so startup()
+    # passes a set rather than the raw config list; EveningLedger.load() casts
+    # either to frozenset internally so the two are behaviorally identical.
     m_ledger.load.assert_called_once_with(
         TEST_CACHE,
         domain_allowlist=["light"],
         entity_allowlist=None,
-        entity_denylist=["binary_sensor.flappy"],
+        entity_denylist={"binary_sensor.flappy"},
     )
+
+
+@pytest.mark.asyncio
+async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_session(tmp_path):
+    """A bucket persisted before a mute (or from a session whose purge-on-mute
+    save_if_dirty() failed) must not survive a restart and still be offerable
+    as a running gag (codex adversarial review)."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
+
+    seed_ledger = EveningLedger()
+    seed_ledger.buckets["k"] = GagBucket(muted_id, "Coffee machine", "off", "on", count=3, last_ts=time.time())
+    seed_ledger.buckets["other"] = GagBucket(
+        "switch.bad_gross_waschmaschine_steckdose", "Washer", "off", "on", count=3, last_ts=time.time()
+    )
+    seed_ledger._dirty = True
+    seed_ledger.save_if_dirty(tmp_path)
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 500
+    mock_config.tmp_dir = tmp_path
+    mock_config.cache_dir = tmp_path
+    mock_config.running_gags.domain_allowlist = []
+    mock_config.running_gags.entity_allowlist = []
+    mock_config.running_gags.entity_denylist = []
+
+    demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    ledger = app.state.station_state.evening_ledger
+    assert "k" not in ledger.buckets
+    assert "other" in ledger.buckets
+    reloaded = EveningLedger.load(tmp_path)
+    assert "k" not in reloaded.buckets
+    assert "other" in reloaded.buckets
 
 
 @pytest.mark.asyncio
@@ -1554,6 +1611,7 @@ def _heading_startup_config(tmp_path: Path) -> MagicMock:
     mock_config.bind_host = "127.0.0.1"
     mock_config.port = 8000
     mock_config.pacing.lookahead_segments = 3
+    mock_config.pacing.songs_between_banter = 2
     mock_config.max_cache_size_mb = 500
     mock_config.tmp_dir = tmp_path / "tmp"
     mock_config.cache_dir = tmp_path / "cache"
@@ -1878,6 +1936,60 @@ async def test_direction_background_restore_clears_heading_when_nothing_lands(tm
 
     assert state.heading is None
     assert read_persisted_heading(mock_config.cache_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_background_restore_skips_longform_first_hit(tmp_path: Path):
+    from mammamiradio.core.models import Heading, StationState, Track
+    from mammamiradio.main import _restore_direction_targets_background
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading(
+        "h-direction",
+        "direction://fkj tadow",
+        "FKJ Tadow",
+        1.0,
+        "operator",
+        targets=[{"artist": "FKJ", "title": "Tadow"}],
+    )
+    state = StationState(
+        playlist=[Track(title="Base", artist="Base Artist", duration_ms=200_000, youtube_id="base0000001")],
+        heading=heading,
+    )
+    app_state = SimpleNamespace(
+        station_state=state,
+        source_switch_lock=asyncio.Lock(),
+        config=mock_config,
+        background_tasks=set(),
+    )
+    longform = {
+        "youtube_id": "set00000001",
+        "title": "FKJ - Tadow DJ Set Full Album",
+        "artist": "FKJ",
+        "duration_ms": 7_200_000,
+    }
+    single = {
+        "youtube_id": "song0000001",
+        "title": "FKJ - Tadow official audio",
+        "artist": "FKJ",
+        "duration_ms": 240_000,
+    }
+
+    async def _land_direction_track(track, app_state, *_args):
+        app_state.station_state.playlist.append(track)
+        return "queued"
+
+    with (
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[longform, single]),
+        patch(f"{MODULE}._download_direction_track", side_effect=_land_direction_track) as download_direction,
+    ):
+        await _restore_direction_targets_background(app_state, heading.id, heading.targets, state.source_revision)
+
+    download_direction.assert_called_once()
+    restored = download_direction.call_args.args[0]
+    assert restored.youtube_id == "song0000001"
+    assert restored.heading_id == heading.id
+    assert state.heading is heading
 
 
 @pytest.mark.asyncio

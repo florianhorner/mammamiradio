@@ -9,10 +9,30 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
 Add: `https://github.com/florianhorner/mammamiradio`
 
-### 2. Configure provider secrets
+### 2. Start the add-on
+
+Click Start. Watch the log for:
+- `[mammamiradio] Starting add-on...`
+- `[mammamiradio] Home Assistant API access configured via Supervisor`
+- `Producer started`
+- `Station ready`
+
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. Once the station is ready, the listener stream should produce audio quickly. No AI key is required for this first proof: Demo Radio plays with stock host copy and fallback voices.
+
+### 3. Open the Web UI and listen
+
+Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys.
+
+### 4. Add one AI host key, then review home context
+
+Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
+
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; already-rendered audio is not purged.
+
+Premium voice keys are optional and separate from the first AI-host unlock.
 
 Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
-`ANTHROPIC_API_KEY` (recommended for AI banter and ads), `OPENAI_API_KEY` (script fallback and OpenAI
+`ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
 `ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
 longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
@@ -41,20 +61,6 @@ Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
 Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
-
-### 3. Start the add-on
-
-Click Start. Watch the log for:
-- `[mammamiradio] Starting add-on...`
-- `[mammamiradio] Home Assistant API access configured via Supervisor`
-- `Producer started`
-- `Station ready`
-
-First boot is slow (30–90 seconds) — yt-dlp downloads Italian chart tracks before playback begins.
-
-### 4. Open the listener page
-
-Click Open Web UI or navigate to the ingress URL in the sidebar. Italian radio should start within 10 seconds.
 
 ## Architecture
 
@@ -182,7 +188,14 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
-  |     HA_ENABLED (from enable_home_assistant)
+  |     HA_ENABLED (from enable_home_assistant),
+  |     MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
+  |     MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
+  |     MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER,
+  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS,
+  |     MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK,
+  |     JAMENDO_CLIENT_ID
   |
   +-- run.sh maps Supervisor token
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
@@ -234,15 +247,32 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 
 ## Renaming the station
 
-The station name is what the hosts say on air. If you call it "Radio Florian", the hosts will say "Radio Florian" — naturally, mid-conversation, the way a real DJ does.
+The station name is the operator-facing identity people see and hear. If you
+call it "Radio Florian", the listener page, stream metadata, admin setup preview,
+Home Assistant friendly labels, and the default generated station IDs and
+sweepers use "Radio Florian" naturally, the way a real station would.
 
 **To rename:**
 
 1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
 2. Click Save, then restart the add-on.
-3. Within a few minutes of playback, the hosts will start using the new name.
+3. Reopen the add-on. The admin setup panel shows an **Identity** preview for
+   what listeners hear, what listeners see, and what Home Assistant shows.
+4. Within a few minutes of playback, new generated IDs, sweepers, and host copy
+   will start using the new name.
 
-The name appears roughly once every 3–4 banter exchanges, never forced. You can also set it via environment variable: `STATION_NAME=Radio Florian`.
+The stable add-on slug, integration domain, entity IDs, and media-source path do
+not change: `mammamiradio`, `media_player.mammamiradio`,
+`sensor.mammamiradio_*`, `binary_sensor.mammamiradio_on_air`, and
+`media-source://mammamiradio/live` remain the automation contract.
+
+Custom sonic-brand copy in `radio.toml` is preserved deliberately. If you wrote
+your own `full_ident` or sweeper lines, the setup Identity preview keeps them and
+flags that custom copy may still mention the old name. Blank or default copy is
+regenerated from the new station name.
+
+You can also set the name via environment variable:
+`STATION_NAME=Radio Florian`.
 
 ## Home Assistant entities
 
@@ -298,4 +328,4 @@ The dashboard shows one of three tiers based on your configuration:
 |------|--------------|---------------|
 | Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
 | Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env` (legacy add-on option fallback still works) |
-| Connected Home | Above + home-aware banter | API key + HA running (automatic in addon mode) |
+| Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |

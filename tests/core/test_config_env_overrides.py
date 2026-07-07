@@ -201,6 +201,46 @@ def test_station_name_override(monkeypatch):
     monkeypatch.setenv("STATION_NAME", "Radio Test")
     config = load_config(TOML_PATH)
     assert config.station.name == "Radio Test"
+    assert config.brand.station_name == "Radio Test"
+    assert config.display_station_name == "Radio Test"
+    assert config.identity.station_name == "Radio Test"
+    assert config.identity.source == "env"
+    assert config.identity.custom_copy_preserved is False
+    assert "Radio Test" in config.sonic_brand.full_ident
+    assert any("Radio Test" in line for line in config.sonic_brand.sweepers)
+
+
+def test_station_name_override_sanitizes_controls(monkeypatch):
+    monkeypatch.setenv("STATION_NAME", "Radio Test\r\nX-Evil: 1")
+    config = load_config(TOML_PATH)
+    assert config.display_station_name == "Radio Test X-Evil: 1"
+    assert "\r" not in config.display_station_name
+    assert "\n" not in config.display_station_name
+
+
+def test_station_name_override_preserves_custom_sonic_copy(monkeypatch, tmp_path):
+    source = Path(TOML_PATH)
+    custom = source.read_text().replace(
+        'full_ident = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"',
+        'full_ident = "Old Custom Radio... handcrafted station id!"',
+    )
+    custom = custom.replace(
+        '"Mamma Mi Radio.",',
+        '"Old Custom Radio.",',
+        1,
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    config = load_config(str(custom_path))
+
+    assert config.display_station_name == "Radio Test"
+    assert config.brand.station_name == "Radio Test"
+    assert config.sonic_brand.full_ident == "Old Custom Radio... handcrafted station id!"
+    assert "Old Custom Radio." in config.sonic_brand.sweepers
+    assert config.identity.custom_copy_preserved is True
+    assert any("custom identity copy preserved" in warning for warning in config.brand_warnings)
 
 
 def test_station_theme_override(monkeypatch):

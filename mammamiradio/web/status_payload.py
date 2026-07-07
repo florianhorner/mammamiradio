@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.playlist.playlist import normalized_track_key
+from mammamiradio.playlist.preferences import preference_score
 from mammamiradio.web.assets import _ASSETS_DIR
 
 
@@ -34,6 +36,7 @@ def _has_any_mp3(path: Path) -> bool:
 
 _golden_path_cache: dict | None = None
 _golden_path_cache_ts: float = 0.0
+_golden_path_cache_key: tuple | None = None
 _GOLDEN_PATH_TTL = 10.0  # seconds — music sources change rarely
 
 _cache_size_mb_val: float = 0.0
@@ -55,14 +58,26 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
     return _cache_size_mb_val
 
 
-def _golden_path_status(config, state) -> dict:
+def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
-    global _golden_path_cache, _golden_path_cache_ts
+    global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
-    if _golden_path_cache is not None and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL:
+    env_allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
+    allow_ytdlp = bool(getattr(config, "allow_ytdlp", env_allow_ytdlp))
+    cache_key = (
+        allow_ytdlp,
+        getattr(state, "playlist_revision", 0),
+        getattr(state, "source_revision", 0),
+        bool(getattr(state, "session_stopped", False)),
+    )
+    if (
+        not force_refresh
+        and _golden_path_cache is not None
+        and _golden_path_cache_key == cache_key
+        and (now - _golden_path_cache_ts) < _GOLDEN_PATH_TTL
+    ):
         return _golden_path_cache
 
-    allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
     has_demo_assets = _has_any_mp3(_ASSETS_DIR / "demo" / "music")
     has_local_music = _has_any_mp3(Path("music"))
 
@@ -71,6 +86,10 @@ def _golden_path_status(config, state) -> dict:
         sources.append("bundled demo tracks")
     if has_local_music:
         sources.append("local music/*.mp3 files")
+    playlist = getattr(state, "playlist", None)
+    if isinstance(playlist, list | tuple) and playlist:
+        source = getattr(state, "playlist_source", None)
+        sources.append(getattr(source, "label", "") or "loaded playlist")
     if allow_ytdlp:
         sources.append("yt-dlp downloads")
 
@@ -94,6 +113,7 @@ def _golden_path_status(config, state) -> dict:
             **shared,
         }
         _golden_path_cache = result
+        _golden_path_cache_key = cache_key
         _golden_path_cache_ts = now
         return result
 
@@ -109,15 +129,23 @@ def _golden_path_status(config, state) -> dict:
         **shared,
     }
     _golden_path_cache = result
+    _golden_path_cache_key = cache_key
     _golden_path_cache_ts = now
     return result
 
 
 def _ha_details_payload(state: StationState) -> dict | None:
-    has_ha_observability = bool(state.ha_context or state.ha_scored_entities or state.ha_denylist_hits)
+    has_ha_observability = bool(
+        state.ha_context
+        or state.ha_scored_entities
+        or state.ha_denylist_hits
+        or state.ha_ritual_public_families
+        or state.ha_ritual_matches
+        or state.ha_ritual_recipe_audit
+    )
     if not has_ha_observability:
         return None
-    return {
+    payload: dict[str, object] = {
         "mood": state.ha_home_mood or None,
         "weather_arc": state.ha_weather_arc or None,
         "events_summary": state.ha_events_summary or None,
@@ -138,6 +166,13 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "context_last_updated": state.ha_context_last_updated or None,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
+    if state.ha_ritual_public_families or state.ha_ritual_matches or state.ha_ritual_recipe_audit:
+        payload["rituals"] = {
+            "public_families": list(state.ha_ritual_public_families),
+            "matches": copy.deepcopy(state.ha_ritual_matches[:8]),
+            "audit": copy.deepcopy(state.ha_ritual_recipe_audit[:16]),
+        }
+    return payload
 
 
 def _serialize_source(source: PlaylistSource | None) -> dict | None:
@@ -217,8 +252,31 @@ def _serialize_brand(brand) -> dict:
     }
 
 
-def _serialize_track(track: Track) -> dict:
+def _serialize_identity(config) -> dict:
+    """Serialize the resolved station identity through one additive block."""
+    identity = getattr(config, "identity", None)
+    station_name = (
+        getattr(identity, "station_name", "") or getattr(config, "display_station_name", "") or "Mamma Mi Radio"
+    )
+    generated = getattr(identity, "generated", {}) or {}
     return {
+        "station_name": station_name,
+        "source": getattr(identity, "source", "unknown") if identity is not None else "unknown",
+        "custom_copy_preserved": bool(getattr(identity, "custom_copy_preserved", False)),
+        "preview": {
+            "heard_on_air": generated.get("spoken_ident") or station_name,
+            "seen_by_listeners": generated.get("listener_title") or station_name,
+            "seen_in_home_assistant": generated.get("home_assistant_name") or station_name,
+        },
+    }
+
+
+def _track_preference_score(track: Track, preferences: object) -> int:
+    return preference_score(preferences, normalized_track_key(track))
+
+
+def _serialize_track(track: Track, *, preferences: object | None = None) -> dict:
+    payload = {
         "title": track.title,
         "artist": track.artist,
         "display": track.display,
@@ -230,13 +288,23 @@ def _serialize_track(track: Track) -> dict:
         "duration_ms": track.duration_ms,
         "heading_id": track.heading_id,
     }
+    if preferences is not None:
+        payload["preference"] = _track_preference_score(track, preferences)
+    return payload
 
 
-def _paginated_tracks(tracks: list[Track], offset: int, limit: int, *, revision: int | None = None) -> dict[str, Any]:
+def _paginated_tracks(
+    tracks: list[Track],
+    offset: int,
+    limit: int,
+    *,
+    revision: int | None = None,
+    preferences: object | None = None,
+) -> dict[str, Any]:
     total = len(tracks)
     page = tracks[offset : offset + limit]
     payload: dict[str, Any] = {
-        "tracks": [_serialize_track(track) for track in page],
+        "tracks": [_serialize_track(track, preferences=preferences) for track in page],
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -265,7 +333,15 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
     return None
 
 
-_INTERNAL_SEGMENT_METADATA_KEYS = frozenset({"memory_extraction"})
+_INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
+    {
+        "memory_extraction",
+        "ritual_recipe_match",
+        "ritual_recipe_matches",
+        "ritual_recipe_audit",
+        "ritual_directive",
+    }
+)
 
 
 def _public_segment_metadata(metadata: object) -> dict:

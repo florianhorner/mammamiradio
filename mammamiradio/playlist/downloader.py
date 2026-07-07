@@ -53,6 +53,27 @@ YOUTUBE_VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
 _REJECTED_CACHE_KEYS: set[str] = set()
 
 
+def _rejected_cache_artifacts(cache_dir: Path, cache_key: str) -> list[Path]:
+    raw_name = f"{cache_key}.mp3"
+    norm_prefix = f"norm_{cache_key}_"
+    fm_prefix = f"fm_norm_{cache_key}_"
+    try:
+        entries = list(cache_dir.iterdir())
+    except OSError:
+        return [cache_dir / raw_name]
+    artifacts: list[Path] = []
+    for path in entries:
+        name = path.name
+        if (
+            name == raw_name
+            or name == f"{raw_name}.json"
+            or (name.startswith(norm_prefix) and (name.endswith(".mp3") or name.endswith(".mp3.json")))
+            or (name.startswith(fm_prefix) and (name.endswith(".mp3") or ".staging_" in name))
+        ):
+            artifacts.append(path)
+    return artifacts
+
+
 def reject_cached_download(cache_dir: Path, cache_key: str, reason: str) -> bool:
     """Purge a rejected download from cache and denylist the key for the session.
 
@@ -66,15 +87,16 @@ def reject_cached_download(cache_dir: Path, cache_key: str, reason: str) -> bool
     if not cache_key:
         return False
     _REJECTED_CACHE_KEYS.add(cache_key)
-    path = cache_dir / f"{cache_key}.mp3"
-    try:
-        if path.exists():
-            path.unlink()
-            logger.warning("Purged rejected cache file %s: %s", path.name, reason)
-            return True
-    except OSError as exc:
-        logger.warning("Failed to purge rejected cache file %s: %s", path, exc)
-    return False
+    removed = False
+    for path in _rejected_cache_artifacts(cache_dir, cache_key):
+        try:
+            if path.exists():
+                path.unlink()
+                removed = True
+                logger.warning("Purged rejected cache artifact %s: %s", path.name, reason)
+        except OSError as exc:
+            logger.warning("Failed to purge rejected cache artifact %s: %s", path, exc)
+    return removed
 
 
 def is_rejected_cache_key(cache_key: str) -> bool:
@@ -547,7 +569,15 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
                 continue
             title = e.get("title") or ""
             artist = e.get("uploader") or e.get("channel") or ""
-            duration_s = e.get("duration") or 0
+            raw_duration_s = e.get("duration")
+            if raw_duration_s in (None, ""):
+                duration_ms = 0
+            else:
+                try:
+                    duration_ms = max(0, int(float(raw_duration_s) * 1000))
+                except (TypeError, ValueError, OverflowError):
+                    logger.debug("Skipping yt-dlp result with invalid duration: %r", raw_duration_s)
+                    continue
             thumbnail = e.get("thumbnail") or ""
             if not thumbnail and e.get("thumbnails"):
                 thumbnail = (e.get("thumbnails") or [{}])[-1].get("url") or ""
@@ -557,7 +587,7 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
                     "youtube_id": e["id"],
                     "title": title,
                     "artist": artist,
-                    "duration_ms": int(duration_s * 1000),
+                    "duration_ms": duration_ms,
                     "album_art": thumbnail,
                     "display": display,
                 }

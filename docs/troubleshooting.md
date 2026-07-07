@@ -15,7 +15,7 @@ pip install -e .
 
 If you run tests or the app from the system Python and see missing modules like `dotenv`, you are not in the repo environment.
 
-If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on available API keys.
+If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on AI host keys and whether a prompt-safe Home Assistant context slice is available.
 
 Useful probe endpoints:
 
@@ -138,8 +138,9 @@ Check:
 - `[homeassistant].enabled = true` in `radio.toml`
 - `homeassistant.url` is correct
 - `HA_TOKEN` is present in `.env`
+- the admin Home context preview has at least one prompt-safe entity available
 
-Even when configured correctly, HA references are opportunistic. The prompt only encourages one casual reference when it fits.
+Even when configured correctly, HA references are opportunistic. A saved token alone stays Full AI Radio until a prompt-safe context slice exists, and the prompt only encourages one casual reference when it fits.
 
 ## Admin access
 

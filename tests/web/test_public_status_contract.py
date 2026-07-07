@@ -45,6 +45,24 @@ async def test_public_status_returns_brand_block():
 
 
 @pytest.mark.asyncio
+async def test_public_status_returns_resolved_identity(monkeypatch):
+    """Chosen station identity must agree across legacy and additive fields."""
+    monkeypatch.setenv("STATION_NAME", "Radio Test")
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    for body in (public, admin):
+        assert body["station"] == "Radio Test"
+        assert body["brand"]["station_name"] == "Radio Test"
+        assert body["identity"]["station_name"] == "Radio Test"
+        assert body["identity"]["source"] == "env"
+        assert body["identity"]["preview"]["heard_on_air"].startswith("Radio Test")
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_capabilities():
     """Listener page reads capabilities every poll for client-side feature gating."""
     app = _make_test_app()
@@ -58,6 +76,29 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+
+
+@pytest.mark.asyncio
+async def test_public_status_exposes_only_coarse_ritual_family_labels():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.ha_ritual_public_families = ["Kitchen ritual"]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.kitchen_fridge_door"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert public["ha_moments"] == {
+        "connected": True,
+        "mood": None,
+        "weather": None,
+        "ritual_families": ["Kitchen ritual"],
+    }
+    assert "ha_details" not in public
+    assert "binary_sensor.kitchen_fridge_door" not in str(public["ha_moments"])
+    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.kitchen_fridge_door"
 
 
 @pytest.mark.asyncio
@@ -108,6 +149,35 @@ async def test_public_status_does_not_expose_admin_cost_breakdown():
 
 
 @pytest.mark.asyncio
+async def test_public_status_does_not_expose_operator_song_preferences():
+    app = _make_test_app()
+    app.state.station_state.song_preferences = {
+        ("modugno", "volare"): {
+            "score": 1,
+            "display": "Modugno - Volare",
+            "updated_at": 1.0,
+            "updated_by": "operator",
+        }
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_resp = await client.get("/public-status")
+        admin_resp = await client.get("/status")
+        preferences_resp = await client.get("/api/track/preferences")
+
+    public = public_resp.json()
+    admin = admin_resp.json()
+    preferences = preferences_resp.json()
+    assert "song_preferences" not in public
+    assert "current_track_preference" not in public
+    assert admin["song_preferences"]["count"] == 1
+    assert "preferences" not in admin["song_preferences"]
+    assert "current_track_preference" in admin
+    assert preferences["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_uptime_and_tracks():
     """Cross-page invariant facts that must match admin /status."""
     app = _make_test_app()
@@ -148,6 +218,7 @@ async def test_admin_listener_facts_agree():
     assert admin["session_stopped"] == public["session_stopped"]
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]
+    assert admin["identity"] == public["identity"]
     assert admin["capabilities"] == public["capabilities"]
     assert admin["upcoming"] == public["upcoming"]
     assert admin["upcoming_mode"] == public["upcoming_mode"]
@@ -288,6 +359,10 @@ async def test_public_status_no_admin_secrets_leak():
         "consumption",
         "produced_log",
         "ha_details",
+        "homeassistant_context_candidates",
+        "context_candidates",
+        "entity_policy",
+        "muted_entities",
         "scored_entities",
         "denylist_hits",
         "catalog_hit_rate",
