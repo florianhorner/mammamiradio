@@ -1,0 +1,40 @@
+=== pytest tests/repo/test_pr_queue_status.py -v ===
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /Users/florianhorner/conductor/workspaces/mammamiradio/cambridge-v1/.venv/bin/python
+cachedir: .pytest_cache
+Using --randomly-seed=404514199
+rootdir: /Users/florianhorner/conductor/workspaces/mammamiradio/cambridge-v1
+configfile: pyproject.toml
+plugins: cov-7.1.0, xdist-3.8.0, timeout-2.4.0, asyncio-1.4.0, randomly-4.1.0, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_reports_missing_local_worktree_as_advisory PASSED [ 12%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_dies_when_gh_pr_list_fails PASSED [ 25%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_dies_on_malformed_pr_json PASSED [ 37%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending PASSED [ 50%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_marks_clean_and_dirty_worktrees PASSED [ 62%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_reports_local_origin_main_unavailable PASSED [ 75%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_reports_empty_open_queue PASSED [ 87%]
+tests/repo/test_pr_queue_status.py::test_pr_queue_status_resolves_renamed_local_branch_via_upstream PASSED [100%]
+
+============================== 8 passed in 3.66s ===============================
+
+=== shellcheck scripts/pr-queue-status.sh scripts/land-pr.sh ===
+shellcheck: clean
+
+=== ruff check tests/repo/test_pr_queue_status.py ===
+All checks passed!
+
+=== ruff format --check tests/repo/test_pr_queue_status.py ===
+1 file already formatted
+
+=== mypy tests/repo/test_pr_queue_status.py ===
+Success: no issues found in 1 source file
+
+=== full suite: pytest tests/ -q ===
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+............................................................             [100%]
+4234 passed, 2 skipped, 21 deselected in 81.57s (0:01:21)
