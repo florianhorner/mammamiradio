@@ -48,6 +48,29 @@ from mammamiradio.web.streamer import (
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
 
+def _scripted_clock(values):
+    """Monotonic-clock stand-in: play the scripted values, then hold the last.
+
+    run_playback_loop reads the clock a variable number of times per iteration
+    (gap bookkeeping, elapsed, air stamp); a bare finite side_effect list dies
+    with StopIteration mid-loop when the count drifts, turning assertion
+    failures into opaque poll timeouts. Holding the final value keeps the
+    scripted timeline and stays exhaustion-proof.
+    """
+    it = iter(values)
+    last = values[-1]
+
+    def clock():
+        nonlocal last
+        try:
+            last = next(it)
+        except StopIteration:
+            pass
+        return last
+
+    return clock
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -685,7 +708,9 @@ async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cach
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
         patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
-        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 103.0, 104.0])
+        ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -738,7 +763,9 @@ async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(t
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
         patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
-        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 103.0, 104.0])
+        ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -790,7 +817,7 @@ async def test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_bante
         # past the 60s forced-banter threshold while rung 4 re-serves.
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 101.1, 165.0, 166.0, 167.0, 168.0],
+            side_effect=_scripted_clock([100.0, 101.1, 165.0, 166.0, 167.0, 168.0]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
@@ -856,6 +883,113 @@ async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
         await _packaged_recovery_segment(unprobeable)
         await _packaged_recovery_segment(unprobeable)
     assert probe.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp_path, caplog):
+    """The instant clip must serve again in a LATER gap once real audio aired.
+
+    A dropped gap_clips_served reset on the queue-pull path would serve the
+    instant continuity clip exactly once per process lifetime — every later
+    gap would open on silence until the 60s forced-banter rung, the inverse
+    of the deathloop — while the rest of the suite stays green.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    caplog.set_level(logging.INFO)
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+    real_song = tmp_path / "real_song.mp3"
+    real_song.write_bytes(b"music-bytes" * 512)
+    empty_assets = tmp_path / "empty_assets"
+    empty_assets.mkdir()
+
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=real_song,
+            metadata={"type": "music", "title": "Real Song"},
+            ephemeral=False,
+        )
+    )
+
+    # Call 1 forces the first gap (clip serves); call 2 lets the real queued
+    # segment through (resetting the gap counter); later calls force a second
+    # gap that must open with the instant clip again.
+    calls = {"n": 0}
+
+    async def _scripted_wait(awaitable, *_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return await awaitable
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_scripted_wait)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while len(app.state.station_state.stream_log) < 3:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not reach the second gap")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    stream_log = list(app.state.station_state.stream_log)
+    assert [entry.metadata.get("canned") for entry in stream_log[:3]] == [True, None, True]
+    assert stream_log[1].metadata.get("title") == "Real Song"
+    # Both clip airings must be the instant rung-1 serve, never the rung-4
+    # last-resort re-serve — that would mean the counter never re-armed.
+    messages = [r.getMessage() for r in caplog.records]
+    first_serves = [m for m in messages if "Queue empty — serving packaged recovery clip" in m]
+    reserves = [m for m in messages if "re-serving packaged recovery clip" in m]
+    assert len(first_serves) == 2
+    assert not reserves
+
+
+def test_silence_gate_requires_no_air_not_just_an_empty_queue():
+    """/healthz must not report a station audibly bridging on clips as silent.
+
+    queue_empty_since keeps running across continuity-clip serves so the
+    rescue ladder can escalate — but a fresh install looping its bridge clip
+    during the first track render is airing audio, and flagging it silent
+    would hand the add-on watchdog a reason to restart mid-render.
+    """
+    from mammamiradio.web.streamer import _silence_with_listeners
+
+    state = StationState(playlist=[])
+    state.listeners_active = 1
+
+    with patch("mammamiradio.web.streamer._runtime_monotonic", return_value=200.0):
+        # Queue empty past the threshold, but a clip started airing 2s ago.
+        state.last_air_monotonic = 198.0
+        assert _silence_with_listeners(state, 35.0) is False
+        # Nothing started airing for 35s — genuine dead air.
+        state.last_air_monotonic = 165.0
+        assert _silence_with_listeners(state, 35.0) is True
+
+    # Never aired anything at all — silence.
+    state.last_air_monotonic = None
+    assert _silence_with_listeners(state, 35.0) is True
+    # Below the queue-empty threshold — never silence.
+    assert _silence_with_listeners(state, 5.0) is False
+    # Empty room — never silence.
+    state.listeners_active = 0
+    assert _silence_with_listeners(state, 35.0) is False
 
 
 @pytest.mark.asyncio
@@ -1002,7 +1136,9 @@ async def test_run_playback_loop_timeout_uses_norm_cache_at_first_byte_grace(tmp
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5, 101.6, 101.7],
+            side_effect=_scripted_clock(
+                [100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5, 101.6, 101.7]
+            ),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1056,7 +1192,7 @@ async def test_run_playback_loop_norm_cache_rescue_status_exposes_progress_durat
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5],
+            side_effect=_scripted_clock([100.0, 100.0 + FIRST_BYTE_GRACE_SECONDS + 0.1, 101.2, 101.3, 101.4, 101.5]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1117,7 +1253,7 @@ async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog)
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1170,7 +1306,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1226,7 +1362,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1272,7 +1408,7 @@ async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, capl
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -1318,7 +1454,7 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
     ):
@@ -1392,7 +1528,7 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
         # elapsed = 101.0 - 100.0 = 1.0s, well under QUEUE_FALLBACK_WAIT_SECONDS.
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 101.0, 101.1, 101.2, 101.3, 101.4],
+            side_effect=_scripted_clock([100.0, 101.0, 101.1, 101.2, 101.3, 101.4]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
     ):
@@ -1538,7 +1674,7 @@ async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_ste
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[100.0, 130.5, 130.6, 130.7, 130.8, 130.9],
+            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
     ):

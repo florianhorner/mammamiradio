@@ -1,16 +1,18 @@
-# Rescue clip probe: bounded ffmpeg slot + duration cache — verification
-# date: 2026-07-08T19:12:50Z
-# branch: florianhorner/fix-banter-deathloop @ f134d6ea + working tree
+# Rescue clip probe + silence-gate honesty — verification
+# date: 2026-07-08T19:40:25Z
+# branch: florianhorner/fix-banter-deathloop @ 8c799004 + working tree
 
 ## New regression tests
-tests/web/test_streamer_routes.py::test_packaged_recovery_segment_caches_duration_per_clip PASSED [ 33%]
-tests/web/test_streamer_routes.py::test_packaged_recovery_segment_probe_not_blocked_by_norm_slots PASSED [ 66%]
-tests/web/test_streamer_routes.py::test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_banter PASSED [100%]
-====================== 3 passed, 168 deselected in 0.81s =======================
+tests/web/test_streamer_routes.py::test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment PASSED [ 20%]
+tests/web/test_streamer_routes.py::test_packaged_recovery_segment_caches_duration_per_clip PASSED [ 40%]
+tests/web/test_streamer_routes.py::test_silence_gate_requires_no_air_not_just_an_empty_queue PASSED [ 60%]
+tests/web/test_streamer_routes.py::test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_banter PASSED [ 80%]
+tests/web/test_streamer_routes.py::test_packaged_recovery_segment_probe_not_blocked_by_norm_slots PASSED [100%]
+====================== 5 passed, 173 deselected in 0.49s =======================
 
 ## make check (full suite + lint + format + mypy + coverage ratchet)
 All checks passed!
-Success: no issues found in 243 source files
-Required test coverage of 92.0% reached. Total coverage: 92.86%
-4274 passed, 2 skipped, 21 deselected, 1 warning in 127.47s (0:02:07)
+Success: no issues found in 244 source files
+Required test coverage of 92.0% reached. Total coverage: 92.87%
+4281 passed, 2 skipped, 21 deselected, 1 warning in 131.35s (0:02:11)
 All checks passed

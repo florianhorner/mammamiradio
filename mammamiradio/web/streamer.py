@@ -1362,7 +1362,19 @@ def _queue_empty_elapsed(state: StationState) -> float:
 
 
 def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
-    return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
+    """True only when listeners are connected and nothing is airing.
+
+    queue_empty_since intentionally keeps running while continuity clips
+    bridge an empty queue (the rescue ladder escalates on it), so an empty
+    queue alone is not silence: a station audibly looping its bridge clip on
+    a fresh install must not trip the add-on watchdog mid-first-render. Real
+    dead air means the playback loop also stopped starting segments.
+    """
+    if queue_empty_elapsed <= SILENCE_FAILURE_SECONDS or state.listeners_active <= 0:
+        return False
+    if state.last_air_monotonic is None:
+        return True
+    return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -1831,6 +1843,7 @@ async def run_playback_loop(app) -> None:
             state.queue_empty_since = None
             gap_clips_served = 0
             continue
+        state.last_air_monotonic = _runtime_monotonic()
         state.on_stream_segment(segment)
         if state.runtime_events:
             new_last_provider_event = state.runtime_events[-1]
