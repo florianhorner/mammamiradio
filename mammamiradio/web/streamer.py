@@ -1337,8 +1337,10 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
     # These transient strings have no durable entity id in StationState, so a live
     # mute clears them even when the rest of the filtered context can be preserved.
     state.ha_pending_directive = ""
+    state.ha_pending_directive_moment_id = ""
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
+    state.ha_running_gag_moment_id = ""
     if entity_id and state.evening_ledger is not None:
         return _set_live_gag_entity_denied(state, config, entity_id, True)
     return False
@@ -1957,6 +1959,37 @@ def _schedule_banter_memory_extraction_after_send(
         logger.warning("memory_extract: scheduling failed", exc_info=True)
 
 
+def _finalize_moment_receipts(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Record the TRUE outcome on any Moment Receipt this segment carried.
+
+    Independent of the provenance ledger (runs even when Show Memory is off).
+    Uses classify_stream_outcome verbatim, so a skipped, unheard, or rescue
+    send can never mint a false "aired" receipt. In-memory only — the dirty
+    store is flushed at the producer's save site, never from the playback loop.
+    """
+    store = getattr(state, "moment_store", None)
+    if store is None:
+        return
+    try:
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+        moment_ids = [str(meta.get(key) or "") for key in ("ritual_moment_id", "gag_moment_id")]
+        moment_ids = [moment_id for moment_id in moment_ids if moment_id]
+        if not moment_ids:
+            return
+        status = classify_stream_outcome(
+            was_skipped=was_skipped,
+            bytes_sent=bytes_sent,
+            listeners=listeners,
+            fallback_active=is_fallback_active(meta),
+        )
+        for moment_id in moment_ids:
+            store.finalize(moment_id, status)
+    except Exception as exc:  # pragma: no cover - receipts must never break audio
+        logger.debug("Moment receipt finalize failed: %s", exc)
+
+
 def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
 
@@ -1964,6 +1997,7 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
     failed sends too. Never raises into the stream.
     """
     _emit_release_campaign_result(state, segment, bytes_sent, was_skipped, listeners)
+    _finalize_moment_receipts(state, segment, bytes_sent, was_skipped, listeners)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -2156,6 +2190,7 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
             f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
         )
+        state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
         state.pending_actions.append(
             {
                 "type": "ha_directive",
@@ -5218,7 +5253,21 @@ def _public_status_payload(request: Request) -> dict:
     upcoming_mode = "queued" if upcoming else "building"
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
-    if state.ha_context or state.ha_ritual_public_families:
+    # Moment Receipts strip: aired moments as generic family labels + coarse
+    # age only — the same exposure ritual_families already accepts on this
+    # unauthenticated endpoint. An "airing" row shows only while it belongs to
+    # the segment now_streaming is playing (send-start is provisional).
+    recent_moments: list[dict] = []
+    moment_store = getattr(state, "moment_store", None)
+    if moment_store is not None:
+        try:
+            _ns_meta = (state.now_streaming or {}).get("metadata") or {}
+            _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
+            recent_moments = moment_store.to_public_rows(now=now_ts, active_ids=_active_ids, limit=3)
+        except Exception:  # pragma: no cover - receipts must never break status
+            logger.debug("Moment receipt public rows failed", exc_info=True)
+            recent_moments = []
+    if state.ha_context or state.ha_ritual_public_families or recent_moments:
         ha_moments = {
             "connected": True,
             "mood": state.ha_home_mood or None,
@@ -5232,12 +5281,15 @@ def _public_status_payload(request: Request) -> dict:
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
+        if recent_moments:
+            ha_moments["recent"] = recent_moments
         # Hide card if nothing interesting to show
         if (
             not ha_moments.get("mood")
             and not ha_moments.get("weather")
             and not ha_moments.get("last_event_label")
             and not ha_moments.get("ritual_families")
+            and not ha_moments.get("recent")
         ):
             ha_moments = None
 
@@ -5634,6 +5686,10 @@ async def status(
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
             "ha_details": _ha_details_payload(state),
+            # Moment Receipts full trail (admin-only): entity, lane, confidence,
+            # and status trail stay behind admin auth — the public payload gets
+            # only generic labels via ha_moments.recent.
+            "moments_admin": (state.moment_store.to_admin_rows(limit=25) if state.moment_store is not None else None),
             "pending_actions": list(state.pending_actions)[-10:] or None,
             # Background queue-from-search outcomes the admin couldn't see
             # synchronously; the UI toasts new entries by ts. Return the whole

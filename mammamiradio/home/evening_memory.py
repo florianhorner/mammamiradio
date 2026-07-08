@@ -166,6 +166,10 @@ class GagBucket:
     last_ts: float = 0.0
     last_spoken_ts: float = 0.0
     cooldown_seconds: float = GAG_COOLDOWN_SECONDS
+    # Ritual-recipe provenance (empty for plain home events): lets a Moment
+    # Receipt built at offer time name its ritual family — the recipe match is
+    # long gone by the time offer_gag() picks this bucket.
+    ritual_family: str = ""
 
     def salience(self, *, now: float) -> float:
         """tier_weight x log(count+1) x recency_decay(now - last_ts)."""
@@ -184,6 +188,7 @@ class GagBucket:
             "last_ts": self.last_ts,
             "last_spoken_ts": self.last_spoken_ts,
             "cooldown_seconds": self.cooldown_seconds,
+            "ritual_family": self.ritual_family,
         }
 
     @classmethod
@@ -198,6 +203,7 @@ class GagBucket:
             last_ts=float(data.get("last_ts", 0.0) or 0.0),
             last_spoken_ts=float(data.get("last_spoken_ts", 0.0) or 0.0),
             cooldown_seconds=float(data.get("cooldown_seconds", GAG_COOLDOWN_SECONDS) or GAG_COOLDOWN_SECONDS),
+            ritual_family=str(data.get("ritual_family", "") or ""),
         )
 
 
@@ -320,10 +326,15 @@ class EveningLedger:
                         if getattr(event, "gag_cooldown_seconds", 0.0) > 0
                         else GAG_COOLDOWN_SECONDS
                     ),
+                    ritual_family=getattr(event, "ritual_family", "") or "",
                 )
                 self.buckets[key] = bucket
             elif getattr(event, "gag_cooldown_seconds", 0.0) > 0:
                 bucket.cooldown_seconds = event.gag_cooldown_seconds
+            if getattr(event, "ritual_family", "") and not bucket.ritual_family:
+                # A ritual event landing in a bucket first created by a plain
+                # home event upgrades it with provenance (never downgrades).
+                bucket.ritual_family = event.ritual_family
             bucket.count += 1
             bucket.last_ts = event.timestamp
             changed = True

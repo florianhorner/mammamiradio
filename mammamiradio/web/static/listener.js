@@ -429,7 +429,8 @@
   function updateCasa(ha) {
     const el = $('casa-card');
     if (!el) return;
-    if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label)) {
+    const recent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label && !recent.length)) {
       el.setAttribute('hidden', '');
       return;
     }
@@ -445,6 +446,34 @@
         event.textContent = ha.last_event_label + ago;
       } else {
         event.textContent = '';
+      }
+    }
+    /* "Live from your home" — Moment Receipts strip. Generic labels + coarse
+       age only (the server never sends more). textContent throughout: nothing
+       from the wire is ever interpreted as HTML. */
+    const momentsWrap = $('casa-moments');
+    const momentsRows = $('casa-moments-rows');
+    if (momentsWrap && momentsRows) {
+      if (!recent.length) {
+        momentsWrap.setAttribute('hidden', '');
+        momentsRows.textContent = '';
+      } else {
+        momentsWrap.removeAttribute('hidden');
+        momentsRows.textContent = '';
+        recent.forEach((m) => {
+          const row = document.createElement('div');
+          row.className = 'row' + (m.status === 'airing' ? '' : ' dim');
+          const ico = document.createElement('span');
+          ico.className = 'ico';
+          ico.textContent = m.status === 'airing' ? '●' : '·';
+          const text = document.createElement('span');
+          text.textContent = m.status === 'airing'
+            ? (m.label || '') + ' · in onda ora'
+            : (m.label || '') + ' · ' + (m.ago_min || 1) + ' min fa';
+          row.appendChild(ico);
+          row.appendChild(text);
+          momentsRows.appendChild(row);
+        });
       }
     }
   }

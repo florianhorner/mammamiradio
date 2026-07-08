@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Your house can now interrupt the station — and now you can see it.** When something happens at home — the coffee machine waking up, the fridge raided one time too many, a leak sensor crying for help — the AI hosts already react on air. Now those moments leave a visible trace. The listener page shows a small "Live from your home" strip on the Casa card: the last few home moments the hosts actually reacted to, as plain labels like "Morning launch · 2 min ago" — never device names or details. The admin panel gets a full "Home moments" trail that answers both "why did the host just say that?" and "why did nothing happen?": each moment shows whether it made it to air, is on air right now, was cut short by a skip, played to an empty room, or stepped aside because another moment was already lined up. A moment only counts as "made it to air" once it truly streamed to a listener — backup clips and rescue audio never claim credit for the house. The trail survives restarts and updates, keeps only the recent past, and can never interrupt the music: if its bookkeeping ever hiccups, the show plays on and the trail catches up on its own.
+
 ### Fixed
 
 - **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the Home Assistant ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.

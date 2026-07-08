@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import random
 import re
@@ -21,6 +22,7 @@ from mammamiradio.playlist.preferences import preference_score_map, preference_w
 
 if TYPE_CHECKING:
     from mammamiradio.home.evening_memory import EveningLedger
+    from mammamiradio.home.moment_receipts import MomentStore
     from mammamiradio.hosts.persona import PersonaStore
     from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
     from mammamiradio.release_campaign import ReleaseCampaign
@@ -541,12 +543,24 @@ class StationState:
     ha_weather_arc: str = ""
     # Phase 4: pending reactive directive (consumed after one use)
     ha_pending_directive: str = ""
+    # Moment Receipt id travelling WITH the pending directive (ritual lanes
+    # only; empty for radio-event/reactive/skip directives, which have no
+    # receipt in v1). Set and cleared strictly alongside ha_pending_directive.
+    ha_pending_directive_moment_id: str = ""
+    # Handoff slot: the moment id the scriptwriter actually consumed for the
+    # banter it just wrote (same lifetime as last_banter_script). The producer
+    # copies it into the segment's metadata at build time and clears it —
+    # never read live at build, so a fresh HA poll can't cross the wires.
+    last_banter_ritual_moment_id: str = ""
     # Impossible Moments v2 (A): one rendered evening running-gag for the next
     # banter (consumed after one use); populated by the producer from the ledger.
     ha_running_gag: str = ""
     # Ledger bucket key for the offered gag, so the producer can spend its
     # cooldown (mark_spoken) only after generated banter actually airs.
     ha_running_gag_key: str = ""
+    # Moment Receipt id for the offered gag (empty when the offered bucket has
+    # no ritual provenance). Lifecycle mirrors ha_running_gag_key exactly.
+    ha_running_gag_moment_id: str = ""
     # Dashboard HA moments: last notable event (for Casa card)
     ha_recent_event_count: int = 0
     ha_last_event_label: str = ""
@@ -630,6 +644,10 @@ class StationState:
     persona_store: PersonaStore | None = None
     # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup
     evening_ledger: EveningLedger | None = None
+    # Moment Receipts store (ritual-recipe moment trail); set by main.py at startup.
+    # Streamer paths only mutate it in memory (dirty flag) — disk writes happen at
+    # the producer's save site so the playback loop never does JSON I/O.
+    moment_store: MomentStore | None = None
     # Verbal running-gag ledger — cross-domain banter callbacks; set by main.py.
     # In-memory only (session-ephemeral), so a restart correctly forgets gags.
     verbal_gag_ledger: VerbalGagLedger | None = None
@@ -1031,6 +1049,21 @@ class StationState:
                 ),
                 timestamp=now,
             )
+        # Moment Receipts: a home-triggered segment just started streaming.
+        # Provisional (send-start, not delivery proof) — the playback loop's
+        # finally records the true outcome via classify_stream_outcome. Rescue
+        # and fallback fills never carry a real moment, and must never mint a
+        # receipt even if their metadata leaks a stale id.
+        if self.moment_store is not None and not fallback_active and not segment.metadata.get("rescue"):
+            try:
+                for _moment_key in ("ritual_moment_id", "gag_moment_id"):
+                    _moment_id = segment.metadata.get(_moment_key)
+                    if _moment_id:
+                        self.moment_store.mark_airing(str(_moment_id), now=now)
+            except Exception:  # pragma: no cover - receipts must never break audio
+                logging.getLogger("mammamiradio.moment_receipts").debug(
+                    "Moment receipt airing mark failed", exc_info=True
+                )
         # Only add to studio-bleed pool once banter truly starts streaming.
         if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)

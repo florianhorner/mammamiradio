@@ -1856,6 +1856,9 @@ async def _fire_interrupt(
     # interrupt feels immediate. Bridge-tone generation (below) can take seconds
     # on a loaded Pi — it must never block the skip.
     state.ha_pending_directive = spec.directive
+    # Reactive-trigger interrupts carry no receipt; the ritual caller overwrites
+    # this with its row id right after a successful fire.
+    state.ha_pending_directive_moment_id = ""
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
     state.chaos_cutover_epoch += 1
@@ -2006,8 +2009,42 @@ def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatc
         if state.ha_pending_directive:
             continue
         state.ha_pending_directive = match.directive
+        # Radio-event directives have no Moment Receipt in v1 — clear any stale
+        # ritual id so it cannot attach to the wrong banter.
+        state.ha_pending_directive_moment_id = ""
         commit_radio_event_directive(match)
     return gag_events
+
+
+def _record_ritual_moment(
+    state: StationState,
+    match: RitualRecipeMatch,
+    *,
+    lane: str,
+    status: str = "elected",
+    drop_reason: str = "",
+) -> str:
+    """Best-effort Moment Receipt row for a ritual match. Never raises.
+
+    Returns the row id ("" when the store is absent or the write failed) so
+    callers can thread it toward the consuming segment's metadata.
+    """
+    store = state.moment_store
+    if store is None:
+        return ""
+    try:
+        return store.record(
+            lane=lane,
+            family=match.recipe.family,
+            public_label=match.recipe.public_family_label,
+            entity_id=match.entity_id,
+            confidence=match.confidence,
+            status=status,
+            drop_reason=drop_reason,
+        )
+    except Exception as exc:  # pragma: no cover - receipts must never break production
+        logger.debug("Moment receipt record failed: %s", exc)
+        return ""
 
 
 def _apply_ritual_recipe_matches(
@@ -2031,6 +2068,9 @@ def _apply_ritual_recipe_matches(
                 or state.operator_force_pending is not None
                 or state.force_next is not None
             ):
+                # Cleared the matcher but lost the slot — visible in the admin
+                # Moments panel so "why did nothing happen" has an answer.
+                _record_ritual_moment(state, match, lane=lane, status="dropped", drop_reason="interrupt_slot_busy")
                 continue
             interrupt = _PendingRitualInterrupt(
                 match=match,
@@ -2044,8 +2084,12 @@ def _apply_ritual_recipe_matches(
         if lane != "directive" or not match.recipe.directive:
             continue
         if state.ha_pending_directive:
+            _record_ritual_moment(state, match, lane=lane, status="dropped", drop_reason="directive_slot_busy")
             continue
         state.ha_pending_directive = match.recipe.directive
+        # The receipt id travels WITH the directive: the scriptwriter hands it
+        # off to the segment build, and confirmed-air flips it to aired.
+        state.ha_pending_directive_moment_id = _record_ritual_moment(state, match, lane=lane)
         commit_ritual_recipe_match(match)
     return gag_events, interrupt
 
@@ -2069,6 +2113,7 @@ def _maybe_arm_first_home_context_moment(
         return
 
     state.ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
     if seg_type != SegmentType.BANTER:
         state.force_next = SegmentType.BANTER
 
@@ -2557,6 +2602,7 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+                    state.ha_pending_directive_moment_id = ""  # not a ritual moment
             radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
             ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
             if ritual_interrupt is not None:
@@ -2570,6 +2616,20 @@ async def run_producer(
                 )
                 if fired:
                     commit_ritual_recipe_match(ritual_interrupt.match)
+                    # _fire_interrupt planted the directive (and blanked the
+                    # receipt id); attach this moment's row so the urgent
+                    # banter that consumes it carries the receipt to air.
+                    state.ha_pending_directive_moment_id = _record_ritual_moment(
+                        state, ritual_interrupt.match, lane="interrupt"
+                    )
+                else:
+                    _record_ritual_moment(
+                        state,
+                        ritual_interrupt.match,
+                        lane="interrupt",
+                        status="dropped",
+                        drop_reason="interrupt_cooldown",
+                    )
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,
@@ -2592,13 +2652,36 @@ async def run_producer(
                     offered = state.evening_ledger.offer_gag(now=_now)
                     if offered is not None:
                         state.ha_running_gag_key, state.ha_running_gag = offered
+                        # Moment Receipt for ritual-sourced gags only: the
+                        # bucket's ritual_family provenance (threaded in via
+                        # HomeEvent) is what makes a receipt legitimate — a
+                        # plain home-event gag has no ritual moment in v1.
+                        state.ha_running_gag_moment_id = ""
+                        if state.moment_store is not None:
+                            try:
+                                _bucket = state.evening_ledger.buckets.get(state.ha_running_gag_key)
+                                if _bucket is not None and _bucket.ritual_family:
+                                    state.ha_running_gag_moment_id = state.moment_store.record(
+                                        lane="running_gag",
+                                        family=_bucket.ritual_family,
+                                        public_label=_bucket.label,
+                                        entity_id=_bucket.entity_id,
+                                        count=_bucket.count,
+                                        now=_now,
+                                    )
+                            except Exception as exc:  # pragma: no cover - never break production
+                                logger.debug("Moment receipt gag record failed: %s", exc)
                     else:
                         state.ha_running_gag = ""
                         state.ha_running_gag_key = ""
+                        state.ha_running_gag_moment_id = ""
                 else:
                     state.ha_running_gag = ""
                     state.ha_running_gag_key = ""
+                    state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
+            if state.moment_store is not None:
+                state.moment_store.save_if_dirty(config.cache_dir)
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
@@ -3209,11 +3292,29 @@ async def run_producer(
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
                         "ledger_segment_id": _banter_attempt_id or None,
+                        # Moment Receipt ids (opaque; safe to cross public payload
+                        # boundaries). Generated banter only — canned fallbacks and
+                        # pre-rendered impossible-moment clips never carried the
+                        # directive or the gag on air. The handoff slot covers the
+                        # consumed directive; the live id covers the interrupt lane
+                        # (deliberately unconsumed until queue-commit).
+                        "ritual_moment_id": (
+                            (state.last_banter_ritual_moment_id or state.ha_pending_directive_moment_id or None)
+                            if canned is None and not impossible_tts
+                            else None
+                        ),
+                        "gag_moment_id": (
+                            (state.ha_running_gag_moment_id or None) if canned is None and not impossible_tts else None
+                        ),
                         **release_beat_metadata,
                         **memory_extraction_metadata,
                     },
                     ephemeral=canned is None,
                 )
+                # The handoff slot is single-use: consumed into this segment's
+                # metadata (or intentionally not, for canned fallbacks — the
+                # elected row then simply never airs and ages out honestly).
+                state.last_banter_ritual_moment_id = ""
 
                 def _banter_callback(
                     *,
@@ -3223,6 +3324,7 @@ async def run_producer(
                     _used_generated_banter=(canned is None and not impossible_tts),
                     _first_home_context_moment_pending=first_home_context_moment_pending,
                     _gag_key=state.ha_running_gag_key,
+                    _gag_moment_id=state.ha_running_gag_moment_id,
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
                     _pending_gag=state.pending_verbal_gag,
@@ -3250,7 +3352,16 @@ async def run_producer(
                     if _used_generated_banter and _ledger is not None and _gag_key:
                         _ledger.mark_spoken(_gag_key, now=time.time())
                         _ledger.save_if_dirty(_cache_dir)
+                    elif _gag_moment_id and state.moment_store is not None:
+                        # The gag never rode this banter (canned clip or
+                        # pre-rendered moment aired instead) — demote its
+                        # receipt honestly; offer_gag can re-elect it later.
+                        try:
+                            state.moment_store.mark_dropped(_gag_moment_id, "canned_fallback")
+                        except Exception:  # pragma: no cover - receipts never break the callback
+                            logger.debug("Moment receipt gag drop failed", exc_info=True)
                     state.ha_running_gag_key = ""
+                    state.ha_running_gag_moment_id = ""
                     # Commit the banter-seeded verbal gag to the cross-domain
                     # ledger ONLY now that the banter actually queued (B-i). A
                     # discarded banter never reaches this callback, so it never
@@ -3894,6 +4005,7 @@ async def run_producer(
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
                 state.ha_pending_directive = ""
+                state.ha_pending_directive_moment_id = ""
                 # The safety-belt force_next was set when the interrupt fired.
                 # chaos_pending already produced the banter; clearing here
                 # prevents the producer from queueing an extra banter next cycle.

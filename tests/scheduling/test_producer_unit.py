@@ -1807,6 +1807,274 @@ async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_sup
     commit.assert_not_called()
 
 
+# --- Moment Receipts wiring (elected / dropped rows per delivery lane) ---
+
+
+def _moment_store():
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    return MomentStore()
+
+
+def _coffee_directive_matches(now: float):
+    return match_ritual_recipes(
+        None,
+        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        now=now,
+    )
+
+
+def test_ritual_directive_records_elected_moment_and_threads_id():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    matches = _coffee_directive_matches(400.0)
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"):
+        _apply_ritual_recipe_matches(state, matches)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "elected"
+    assert row.lane == "directive"
+    assert row.family == "morning_launch"
+    assert row.public_label == "Morning launch"
+    assert row.entity_id == "sensor.kitchen_coffee_power"
+    # The receipt id travels with the directive toward the consuming banter.
+    assert state.ha_pending_directive_moment_id == row.id
+
+
+def test_ritual_directive_slot_busy_records_dropped_moment():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    state.ha_pending_directive = "legacy directive"
+    matches = _coffee_directive_matches(410.0)
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
+        _apply_ritual_recipe_matches(state, matches)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "directive_slot_busy"
+    assert state.ha_pending_directive_moment_id == ""
+    commit.assert_not_called()
+
+
+def test_ritual_interrupt_slot_busy_records_dropped_moment():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    state.force_next = SegmentType.BANTER  # interrupt lane guard trips
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=420.0,
+    )
+
+    gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert interrupt is None
+    assert gag_events == []
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_slot_busy"
+    assert row.lane == "interrupt"
+
+
+def test_ritual_moment_recording_survives_store_failure():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    matches = _coffee_directive_matches(430.0)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+        patch.object(state.moment_store, "record", side_effect=RuntimeError("disk on fire")),
+    ):
+        _apply_ritual_recipe_matches(state, matches)
+
+    # Recording failed silently; the directive still landed (audio-path first).
+    assert "Morning launch" in state.ha_pending_directive
+    assert state.ha_pending_directive_moment_id == ""
+
+
+def test_ritual_lanes_work_without_a_store():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    assert state.moment_store is None
+    matches = _coffee_directive_matches(440.0)
+
+    with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"):
+        _apply_ritual_recipe_matches(state, matches)
+
+    assert "Morning launch" in state.ha_pending_directive
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_elected_on_fire():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=450.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    elected = [r for r in state.moment_store.rows if r.status == "elected"]
+    assert len(elected) == 1
+    assert elected[0].lane == "interrupt"
+    assert elected[0].family == "safety_saves"
+    assert state.ha_pending_directive_moment_id == elected[0].id
+
+
+@pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = match_ritual_recipes(
+        None,
+        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
+        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
+        now=460.0,
+    )
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_cooldown"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    ledger = EveningLedger()
+    ledger.buckets["binary_sensor.fridge_door|off->on"] = GagBucket(
+        entity_id="binary_sensor.fridge_door",
+        label="Kitchen ritual",
+        old_state="chiuso",
+        new_state="aperto",
+        count=3,
+        first_ts=100.0,
+        last_ts=200.0,
+        ritual_family="fridge_freezer_raid",
+    )
+    state.evening_ledger = ledger
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    ha_context = _ha_ctx_mock()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch.object(
+            ledger,
+            "offer_gag",
+            return_value=("binary_sensor.fridge_door|off->on", "Il frigo, di nuovo stasera."),
+        ),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.lane == "running_gag"
+    assert row.family == "fridge_freezer_raid"
+    assert row.public_label == "Kitchen ritual"
+    assert row.count == 3
+    # This harness has no LLM, so the banter fell back to a canned clip: the
+    # elected row is honestly demoted by the queue-commit callback (the gag
+    # never rode the aired banter) and the id slot is consumed.
+    assert row.status == "dropped"
+    assert row.drop_reason == "canned_fallback"
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_no_gag_moment_for_plain_bucket():
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    ledger = EveningLedger()
+    ledger.buckets["switch.fan|off->on"] = GagBucket(
+        entity_id="switch.fan",
+        label="Ventilatore",
+        old_state="spento",
+        new_state="acceso",
+        count=4,
+    )
+    state.evening_ledger = ledger
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    ha_context = _ha_ctx_mock()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch.object(ledger, "offer_gag", return_value=("switch.fan|off->on", "Il ventilatore, di nuovo.")),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    # A plain home-event gag has no ritual moment in v1 — no receipt row.
+    assert state.moment_store.rows == []
+    assert state.ha_running_gag_moment_id == ""
+
+
 @pytest.mark.asyncio
 async def test_producer_passes_radio_event_rules_and_applies_directive_match():
     """Producer loop wires configured radio-event rules through HA refresh."""
