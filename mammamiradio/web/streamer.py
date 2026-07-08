@@ -47,6 +47,8 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
+from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import (
     addon_options_snippet,
@@ -150,7 +152,6 @@ from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
 _LONGFORM_NOTICE_REASON = "longform_audio"
-_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 
 # Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
@@ -275,17 +276,7 @@ def _drain_segment_queue(q) -> list:
 
 
 def _is_packaged_asset(path: Path) -> bool:
-    """True if path lives under the read-only packaged demo assets tree."""
-    try:
-        resolved = path.resolve()
-    except (AttributeError, OSError, TypeError):
-        return False
-    if not isinstance(resolved, Path):
-        return False
-    try:
-        return resolved.is_relative_to(_DEMO_ASSETS_DIR.resolve())
-    except OSError:
-        return False
+    return is_packaged_asset(path, _DEMO_ASSETS_DIR)
 
 
 def _queued_audio_seconds(q) -> float:
@@ -1371,7 +1362,19 @@ def _queue_empty_elapsed(state: StationState) -> float:
 
 
 def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> bool:
-    return queue_empty_elapsed > SILENCE_FAILURE_SECONDS and state.listeners_active > 0
+    """True only when listeners are connected and nothing is airing.
+
+    queue_empty_since intentionally keeps running while continuity clips
+    bridge an empty queue (the rescue ladder escalates on it), so an empty
+    queue alone is not silence: a station audibly looping its bridge clip on
+    a fresh install must not trip the add-on watchdog mid-first-render. Real
+    dead air means the playback loop also stopped starting segments.
+    """
+    if queue_empty_elapsed <= SILENCE_FAILURE_SECONDS or state.listeners_active <= 0:
+        return False
+    if state.last_air_monotonic is None:
+        return True
+    return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
 def _provider_health_snapshot(config, state: StationState) -> dict:
@@ -1551,6 +1554,39 @@ class LiveStreamHub:
                 pass
 
 
+# Packaged clips are read-only shipped assets, so a probed duration is stable
+# for the process lifetime. Caching it keeps rescue re-serves ffprobe-free.
+_packaged_clip_duration_cache: dict[Path, float] = {}
+
+
+async def _packaged_recovery_segment(fallback: Path) -> Segment:
+    """Build a packaged continuity Segment for the playback rescue ladder."""
+    duration_sec = _packaged_clip_duration_cache.get(fallback, 0.0)
+    if duration_sec <= 0:
+        # rescue=True: this fill airs instead of dead air, so the probe must
+        # take the bounded rescue ffmpeg slot, never queue behind ordinary
+        # normalization jobs (#2 INSTANT AUDIO).
+        probed = await asyncio.to_thread(probe_duration_sec, fallback, rescue=True)
+        duration_sec = probed or 0.0
+        if duration_sec > 0:
+            _packaged_clip_duration_cache[fallback] = duration_sec
+    duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
+    return Segment(
+        type=SegmentType.BANTER,
+        path=fallback,
+        duration_sec=duration_sec,
+        metadata={
+            "type": "banter",
+            "canned": True,
+            "fallback": True,
+            "rescue": True,
+            "title": "Station continuity",
+            **duration_fields,
+        },
+        ephemeral=False,
+    )
+
+
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
     chunk_size = 4096
@@ -1562,10 +1598,12 @@ async def run_playback_loop(app) -> None:
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
+    gap_clips_served = 0
 
     while True:
         if state.session_stopped:
             state.queue_empty_since = None
+            gap_clips_served = 0
             try:
                 await asyncio.wait_for(state.resume_event.wait(), timeout=1.0)
             except TimeoutError:
@@ -1577,6 +1615,7 @@ async def run_playback_loop(app) -> None:
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
             state.queue_empty_since = None
+            gap_clips_served = 0
             # Wait on the listener-arrived event instead of a fixed 1s poll, so a
             # connect to an empty room resumes playback immediately. Clear then
             # re-check (no await between) to avoid a lost wakeup if a listener
@@ -1604,6 +1643,7 @@ async def run_playback_loop(app) -> None:
                 )
                 state.interrupt_slot_ephemeral = False
                 state.queue_empty_since = None
+                gap_clips_served = 0
             else:
                 logger.warning("Interrupt slot path missing: %s — skipping bridge", bridge_path)
                 state.interrupt_slot_ephemeral = False
@@ -1622,41 +1662,33 @@ async def run_playback_loop(app) -> None:
                 segment = await asyncio.wait_for(segment_queue.get(), timeout=FIRST_BYTE_GRACE_SECONDS)
                 pulled_from_queue = True
                 state.queue_empty_since = None
+                gap_clips_served = 0
             except TimeoutError:
                 if state.session_stopped:
                     state.queue_empty_since = None
+                    gap_clips_served = 0
                     continue
 
                 if not hub._listeners:
                     state.queue_empty_since = None
+                    gap_clips_served = 0
                     continue
 
                 if state.queue_empty_since is None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
 
-                # Serve packaged continuity audio instead of dead air while the
-                # producer catches up. This shares the producer recovery order:
-                # recovery/ -> banter/ -> welcome/.
                 from mammamiradio.scheduling.producer import _pick_recovery_clip
 
-                fallback = _pick_recovery_clip(state)
-                if fallback:
+                segment_ready = False
+
+                if gap_clips_served == 0 and (fallback := _pick_recovery_clip(state)):
                     logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
-                    state.queue_empty_since = None
-                    segment = Segment(
-                        type=SegmentType.BANTER,
-                        path=fallback,
-                        metadata={
-                            "type": "banter",
-                            "canned": True,
-                            "fallback": True,
-                            "rescue": True,
-                            "title": "Station continuity",
-                        },
-                        ephemeral=False,
-                    )
-                else:
+                    segment = await _packaged_recovery_segment(fallback)
+                    gap_clips_served += 1
+                    segment_ready = True
+
+                if not segment_ready:
                     rescued_from_norm = False
                     if elapsed >= FIRST_BYTE_GRACE_SECONDS:
                         rescue = _select_norm_cache_rescue(config.cache_dir, state)
@@ -1667,6 +1699,7 @@ async def run_playback_loop(app) -> None:
                                 rescue.name,
                             )
                             state.queue_empty_since = None
+                            gap_clips_served = 0
                             rescued_from_norm = True
                             sidecar = load_track_metadata(rescue)
                             if sidecar:
@@ -1716,7 +1749,8 @@ async def run_playback_loop(app) -> None:
                         pass
                     else:
                         # Try bundled demo assets as a last-resort audio source before
-                        # forcing banter. Raw (un-normalized) audio beats dead air.
+                        # repeating clips or forcing banter. Raw (un-normalized) audio
+                        # beats dead air.
                         demo_music_dir = _ASSETS_DIR / "demo" / "music"
                         demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
                         if demo_files:
@@ -1740,6 +1774,7 @@ async def run_playback_loop(app) -> None:
                                 rescue.name,
                             )
                             state.queue_empty_since = None
+                            gap_clips_served = 0
                             duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
                             duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
@@ -1756,8 +1791,21 @@ async def run_playback_loop(app) -> None:
                                 },
                                 ephemeral=False,
                             )
+                        elif fallback := _pick_recovery_clip(state):
+                            logger.warning(
+                                "Queue empty %ds - re-serving packaged recovery clip: %s",
+                                int(elapsed),
+                                fallback.name,
+                            )
+                            segment = await _packaged_recovery_segment(fallback)
+                            gap_clips_served += 1
+                            segment_ready = True
 
-                    if rescued_from_norm or (segment_queue.empty() and state.queue_empty_since is None):
+                    if (
+                        rescued_from_norm
+                        or segment_ready
+                        or (segment_queue.empty() and state.queue_empty_since is None)
+                    ):
                         pass
                     elif elapsed >= 60.0:
                         # Request forced banter once per silence episode to avoid producer thrash.
@@ -1793,7 +1841,9 @@ async def run_playback_loop(app) -> None:
             if pulled_from_queue:
                 segment_queue.task_done()
             state.queue_empty_since = None
+            gap_clips_served = 0
             continue
+        state.last_air_monotonic = _runtime_monotonic()
         state.on_stream_segment(segment)
         if state.runtime_events:
             new_last_provider_event = state.runtime_events[-1]

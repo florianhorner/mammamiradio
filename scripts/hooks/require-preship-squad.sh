@@ -5,12 +5,15 @@
 #      /ship logs the squad as a review-log entry with skill="review" (Step 9)
 #      or "adversarial-review" (Step 11); this guard requires such an entry
 #      whose commit is in HEAD's recent (<=2h) history.
-#   2. `gh pr merge` is denied OUTRIGHT — landing goes through
+#   2. Raw merge attempts are denied OUTRIGHT — landing goes through
 #      scripts/land-pr.sh (the landing contract in CLAUDE.md "Quality gates").
-#      The wrapper does its own squad check with code-state freshness (entry
-#      commit covers the PR head AND nothing was pushed after the entry), so
-#      soaked PRs land without ritual review re-runs. The wrapper's internal
-#      gh calls run inside its own process and never hit this hook.
+#      This blocks `gh pr merge` and mutating `gh api` merge calls (REST
+#      /pulls/<n>/merge PUT, plus GraphQL mergePullRequest/auto-merge
+#      mutations). The wrapper does its own squad check with code-state
+#      freshness (entry commit covers the PR head AND nothing was pushed after
+#      the entry), so soaked PRs land without ritual review re-runs. The
+#      wrapper's internal gh calls run inside its own process and never hit this
+#      hook.
 #      Exception: `gh pr merge --disable-auto` (disarming a queued merge) is
 #      a cancel operation and passes.
 #
@@ -31,10 +34,75 @@
 #
 # FAILS OPEN: any internal error (no jq, not a git repo, no gstack, parse failure)
 # exits 0 (allow). A bug in this guard can never block a PR. The ONLY paths that
-# block are the two explicit denies below.
+# block are the explicit deny families below.
 
 input="$(cat 2>/dev/null)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" || exit 0
+
+deny_raw_merge() {
+  cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it verifies the pre-ship squad against the PR head, updates the branch if behind (CI re-runs), and arms auto-merge pinned to the exact reviewed head (--match-head-commit). This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
+JSON
+  exit 0
+}
+
+_graphql_merge_pattern='mergePullRequest|enablePullRequestAutoMerge'
+
+strip_hook_quotes() {
+  local value="$1"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "$value"
+}
+
+graphql_payload_file_is_unsafe() {
+  local path="$1"
+  path="${path#@}"
+  path="$(strip_hook_quotes "$path")"
+  [ -n "$path" ] || return 0
+  # Stdin or unreadable file payloads cannot be inspected by this grep-based
+  # guard. Treat them as unsafe instead of creating a file-backed merge bypass.
+  [ "$path" = "-" ] && return 0
+  [ -r "$path" ] || return 0
+  grep -Eq "$_graphql_merge_pattern" "$path"
+}
+
+graphql_file_payload_mentions_merge() {
+  local token prev
+  prev=""
+  for token in $cmd; do
+    token="$(strip_hook_quotes "$token")"
+    case "$prev" in
+      --input)
+        graphql_payload_file_is_unsafe "$token" && return 0
+        ;;
+      -F | --field | -f | --raw-field)
+        case "$token" in
+          query=@*) graphql_payload_file_is_unsafe "${token#query=@}" && return 0 ;;
+        esac
+        ;;
+    esac
+    prev=""
+
+    case "$token" in
+      --input)
+        prev="--input"
+        ;;
+      --input=*)
+        graphql_payload_file_is_unsafe "${token#--input=}" && return 0
+        ;;
+      -F | --field | -f | --raw-field)
+        prev="$token"
+        ;;
+      -F=query=@* | --field=query=@* | -f=query=@* | --raw-field=query=@*)
+        graphql_payload_file_is_unsafe "${token#*=query=@}" && return 0
+        ;;
+    esac
+  done
+  return 1
+}
 
 # Rule 2: deny raw `gh pr merge` (except --disable-auto). Landing = land-pr.sh.
 if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
@@ -44,10 +112,21 @@ if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+
   if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
     exit 0
   fi
-  cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw gh pr merge is retired. Land via scripts/land-pr.sh <PR#> — it verifies the pre-ship squad against the PR head, updates the branch if behind (CI re-runs), and arms auto-merge pinned to the exact reviewed head (--match-head-commit). Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
-JSON
-  exit 0
+  deny_raw_merge
+fi
+
+# Rule 2b: deny raw GitHub API merge attempts. Read-only `gh api` calls still
+# pass; the REST deny requires the pull merge endpoint AND an explicit PUT.
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api([[:space:]]|$)'; then
+  if printf '%s' "$cmd" | grep -Eq '/pulls/[0-9]+/merge([^[:alnum:]_-]|$)' \
+    && printf '%s' "$cmd" | grep -Eiq '(^|[[:space:]])((--method)(=|[[:space:]]+)PUT|-X(=|[[:space:]]*)PUT)([^A-Za-z]|$)'; then
+    deny_raw_merge
+  fi
+
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
+    && { printf '%s' "$cmd" | grep -Eq "$_graphql_merge_pattern" || graphql_file_payload_mentions_merge; }; then
+    deny_raw_merge
+  fi
 fi
 
 # Rule 1: only guard `gh pr create` beyond this point. Everything else (incl.
