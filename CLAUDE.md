@@ -467,7 +467,7 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 - lint: ruff check .
 - test: pytest
 - deadcode: vulture mammamiradio/
-- shell: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
+- shell: CI enforces shellcheck scripts/*.sh; broader local sweep: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
 
 
 
