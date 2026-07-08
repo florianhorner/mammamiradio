@@ -1,0 +1,25 @@
+Pre-ship raw GitHub API merge gate validation
+Date: 2026-07-08
+Branch: florianhorner/fix-banter-deathloop
+
+Commands:
+- bash -n scripts/hooks/require-preship-squad.sh
+  Result: passed
+- bash -n tests/workflows/test_preship_squad_gate.sh
+  Result: passed
+- bash tests/workflows/test_preship_squad_gate.sh
+  Result: all 33 pre-ship squad gate cases passed
+
+Covered cases:
+- raw `gh pr merge` remains denied
+- `gh pr merge --disable-auto` remains allowed
+- `scripts/land-pr.sh <PR#>` remains allowed
+- read-only `gh api` REST calls remain allowed
+- read-only `gh api graphql` queries remain allowed
+- REST `gh api` PUT calls to `/pulls/<n>/merge` are denied
+- compact REST `gh api -XPUT` calls to `/pulls/<n>/merge` are denied
+- compact REST `gh api -XGET` calls to `/pulls/<n>/merge` remain allowed
+- GraphQL `mergePullRequest` and `enablePullRequestAutoMerge` attempts are denied
+- file-backed GraphQL merge mutation payloads are denied
+- stdin-backed GraphQL payloads are denied because the hook cannot inspect them safely
+- file-backed read-only GraphQL payloads remain allowed when the payload file is inspectable

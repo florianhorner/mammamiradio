@@ -687,6 +687,13 @@ class StationState:
     listeners_total: int = 0
     new_listeners_pending: int = 0
     queue_empty_since: float | None = None
+    # Monotonic stamp of the last segment the playback loop started airing —
+    # including continuity clips and rescue fills. The /healthz - /readyz
+    # silence gate needs "is anything reaching listeners", not "is the queue
+    # empty": queue_empty_since keeps running across clip serves (so the
+    # rescue ladder can escalate), but a station audibly airing bridge clips
+    # is not silent and must not trip the watchdog.
+    last_air_monotonic: float | None = None
     # Runtime integrity counters for long-lived sessions
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0

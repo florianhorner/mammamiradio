@@ -865,6 +865,7 @@ async def test_idle_bridge_updates_boundary_before_next_music(tmp_path):
     try:
         with (
             patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=bridge),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
             patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
             patch(
                 f"{PRODUCER_MODULE}._render_music_track",
