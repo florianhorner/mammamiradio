@@ -724,6 +724,17 @@ def test_admission_rejects_missing_identity(tmp_path):
     assert [rejection.reason for rejection in admission.rejected] == ["missing_identity"]
 
 
+def test_admission_rejects_missing_title(tmp_path):
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="Artist", title="")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path, RestartHandoffManifest(entries=(entry,), created_at=100.0), now=120.0, duration_probe=_duration
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["missing_identity"]
+
+
 def test_admission_rejects_non_music_and_ephemeral_overlay_markers(tmp_path):
     voice_path = _write_spooled_file(tmp_path, "voice.mp3", b"voice")
     overlay_path = _write_spooled_file(tmp_path, "overlay.mp3", b"overlay")
