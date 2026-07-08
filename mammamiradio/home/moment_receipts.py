@@ -284,8 +284,21 @@ class MomentStore:
             if row.id:
                 rows.append(row)
         store = cls(rows=rows)
-        store._prune(time.time())
-        store._dirty = False
+        # A restart severs every live row's path to air: the pending directive
+        # and offered gag live only in memory, and an "airing" row's finalize
+        # was lost with the playback loop. Demote them honestly instead of
+        # letting the admin panel claim "waiting for its break" / "on air right
+        # now" for up to a week about moments that can no longer happen.
+        now = time.time()
+        for row in store.rows:
+            if row.status in _LIVE_STATUSES:
+                row.status = STATUS_DROPPED
+                row.drop_reason = "restart"
+                row.final_ts = now
+                store._dirty = True
+        store._prune(now)
+        # Demotions/prunes leave the store dirty on purpose — the producer's
+        # save site persists them on its next cycle.
         return store
 
     def save_if_dirty(self, cache_dir: Path) -> None:
@@ -302,5 +315,7 @@ class MomentStore:
             tmp.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
             tmp.replace(path)
             self._dirty = False
-        except OSError as exc:  # disk full / permissions — never crash the caller
+        except Exception as exc:  # disk full / permissions / anything — the caller
+            # is the producer loop, and this module's contract is that a receipt
+            # bug never becomes an audio bug, so the net is wider than OSError.
             logger.warning("Could not persist moment store to %s: %s", path, exc)

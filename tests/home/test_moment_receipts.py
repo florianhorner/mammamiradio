@@ -169,12 +169,17 @@ def test_admin_rows_full_detail_capped():
 
 
 def test_save_and_load_round_trip(tmp_path):
+    from unittest.mock import patch
+
     store = MomentStore()
     mid = _elected(store)
     store.mark_airing(mid, now=NOW)
     store.finalize(mid, "aired", now=NOW + 1)
     store.save_if_dirty(tmp_path)
-    loaded = MomentStore.load(tmp_path)
+    # Pin the load clock: load prunes by retention and demotes live rows with
+    # real time, and this suite's NOW is a fixed epoch.
+    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 60):
+        loaded = MomentStore.load(tmp_path)
     assert [r.to_dict() for r in loaded.rows] == [r.to_dict() for r in store.rows]
 
 
@@ -203,11 +208,14 @@ def test_load_missing_file_starts_fresh(tmp_path):
 
 
 def test_load_skips_malformed_rows_keeps_good_ones(tmp_path):
+    from unittest.mock import patch
+
     good = {"id": "abc123def456", "ts": NOW, "lane": "directive", "family": "f", "public_label": "L"}
     payload = {"schema_version": 1, "rows": [good, "junk", {"id": ""}, {"ts": "not-a-number", "id": "x"}]}
     (tmp_path / STORE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
     # Malformed rows are skipped without raising; the parsable good row survives.
-    loaded = MomentStore.load(tmp_path)
+    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 60):
+        loaded = MomentStore.load(tmp_path)
     assert [r.id for r in loaded.rows] == ["abc123def456"]
 
 
@@ -294,3 +302,7 @@ def test_ritual_family_upgrades_plain_bucket_never_downgrades():
     ledger.observe([ritual, plain_later], now=NOW + 30)
     (bucket,) = ledger.buckets.values()
     assert bucket.ritual_family == "shower_bathroom"
+    # The label upgrades with the provenance: a receipt built from this bucket
+    # must show the generic family label on the public strip, never the device
+    # label the plain event carried ("Ventilatore").
+    assert bucket.label == "Bathroom ritual"

@@ -24,6 +24,7 @@ COPY: dict[str, dict[str, str]] = {
         "footer_listen": "Listen",
         # Listener page — stat labels under hero
         "stat_airtime": "On Air Today",
+        "casa_moments_title": "Live from your home",
         "stat_tracks": "Tracks in Rotation",
         "stat_hosts": "Hosts",
         # Listener page — placeholders / loading copy
@@ -78,6 +79,7 @@ COPY: dict[str, dict[str, str]] = {
         "install_app": "Installa app",
         "footer_listen": "Ascolta",
         "stat_airtime": "In onda oggi",
+        "casa_moments_title": "In diretta da casa tua",
         "stat_tracks": "Tracce in playlist",
         "stat_hosts": "I conduttori",
         "tuning_in": "Stiamo accendendo la radio…",

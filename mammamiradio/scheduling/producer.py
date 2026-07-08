@@ -1855,6 +1855,15 @@ async def _fire_interrupt(
     # Inject directive + pissed tone, then cut the current segment FIRST so the
     # interrupt feels immediate. Bridge-tone generation (below) can take seconds
     # on a loaded Pi — it must never block the skip.
+    # An interrupt clobbers whatever directive was pending. If that directive
+    # carried an elected Moment Receipt (same-poll directive+interrupt election,
+    # or a timer-poll interrupt landing on a waiting ritual directive), demote
+    # it honestly — its recipe cooldown is already spent and it can never air.
+    if state.ha_pending_directive_moment_id and state.moment_store is not None:
+        try:
+            state.moment_store.mark_dropped(state.ha_pending_directive_moment_id, "interrupt_override")
+        except Exception:  # pragma: no cover - receipts never break an interrupt
+            logger.debug("Moment receipt interrupt-override drop failed", exc_info=True)
     state.ha_pending_directive = spec.directive
     # Reactive-trigger interrupts carry no receipt; the ritual caller overwrites
     # this with its row id right after a successful fire.
@@ -2680,8 +2689,13 @@ async def run_producer(
                     state.ha_running_gag_key = ""
                     state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
-            if state.moment_store is not None:
-                state.moment_store.save_if_dirty(config.cache_dir)
+        # Flush Moment Receipts once per cycle at loop level, NOT inside the HA
+        # block: streamer-side finalizes (airing → true outcome) set the dirty
+        # flag from the playback loop, and must still reach disk when HA context
+        # is disabled or its refresh stalls. Dirty-gated — a clean store is a
+        # no-op, so this costs nothing on quiet cycles.
+        if state.moment_store is not None:
+            state.moment_store.save_if_dirty(config.cache_dir)
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
@@ -2902,6 +2916,18 @@ async def run_producer(
                 # LLM success path, so a canned/failed banter never leaves a stale
                 # gag for the success callback to commit (B-i).
                 state.pending_verbal_gag = None
+                # Reset the Moment Receipt handoff the same way: a previous cycle
+                # that consumed a directive but then died before the build (TTS
+                # failure, quality-gate reject, chaos discard) must not leave its
+                # id behind for an unrelated banter to wear on air. Its consumed
+                # directive is gone, so the elected row is demoted honestly
+                # instead of reading "waiting for its break" until retention.
+                if state.last_banter_ritual_moment_id and state.moment_store is not None:
+                    try:
+                        state.moment_store.mark_dropped(state.last_banter_ritual_moment_id, "generation_failed")
+                    except Exception:  # pragma: no cover - receipts never break production
+                        logger.debug("Moment receipt stale-handoff drop failed", exc_info=True)
+                state.last_banter_ritual_moment_id = ""
 
                 # Track listening sessions for compounding persona
                 await _maybe_start_session(state)
@@ -3295,11 +3321,13 @@ async def run_producer(
                         # Moment Receipt ids (opaque; safe to cross public payload
                         # boundaries). Generated banter only — canned fallbacks and
                         # pre-rendered impossible-moment clips never carried the
-                        # directive or the gag on air. The handoff slot covers the
-                        # consumed directive; the live id covers the interrupt lane
-                        # (deliberately unconsumed until queue-commit).
+                        # directive or the gag on air. ONLY the scriptwriter's
+                        # handoff slot is read (both lanes set it at directive
+                        # inclusion; the stock-copy except path clears it) — never
+                        # live state, which survives a stock-copy fallback and
+                        # would mint a false aired receipt.
                         "ritual_moment_id": (
-                            (state.last_banter_ritual_moment_id or state.ha_pending_directive_moment_id or None)
+                            (state.last_banter_ritual_moment_id or None)
                             if canned is None and not impossible_tts
                             else None
                         ),
@@ -4004,6 +4032,20 @@ async def run_producer(
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
+                # An interrupt banter that fell back to stock copy queued WITHOUT
+                # its receipt id (the scriptwriter's except path cleared the
+                # handoff) — and the directive is consumed right here, so there
+                # is no retry. Demote the elected row honestly instead of leaving
+                # it "waiting for its break" until retention ages it out.
+                if (
+                    state.ha_pending_directive_moment_id
+                    and not segment.metadata.get("ritual_moment_id")
+                    and state.moment_store is not None
+                ):
+                    try:
+                        state.moment_store.mark_dropped(state.ha_pending_directive_moment_id, "generation_failed")
+                    except Exception:  # pragma: no cover - receipts never break queue commit
+                        logger.debug("Moment receipt interrupt drop failed", exc_info=True)
                 state.ha_pending_directive = ""
                 state.ha_pending_directive_moment_id = ""
                 # The safety-belt force_next was set when the interrupt fired.

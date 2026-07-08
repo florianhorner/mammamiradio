@@ -1951,6 +1951,35 @@ async def test_producer_records_interrupt_moment_elected_on_fire():
 
 
 @pytest.mark.asyncio
+async def test_fire_interrupt_demotes_clobbered_directive_receipt(tmp_path):
+    """A live cut-in overwrites any pending directive; if that directive carried
+    an elected receipt (its recipe cooldown already spent), the row is demoted —
+    it can never air, and 'waiting for its break' would be a lie."""
+    from mammamiradio.core.models import InterruptSpec as _Spec
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    state.ha_pending_directive = "React to the coffee machine."
+    state.ha_pending_directive_moment_id = row_id
+
+    fired = await _fire_interrupt(
+        state,
+        _Spec(directive="Leak! React NOW.", urgency="urgent", cooldown=600),
+        asyncio.Queue(maxsize=4),
+        None,
+        bridge_tmp_dir=tmp_path,
+    )
+
+    assert fired is True
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_override"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
 async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression():
     clear_ritual_recipe_cooldowns()
     state = _make_state()
@@ -2073,6 +2102,127 @@ async def test_producer_records_no_gag_moment_for_plain_bucket():
     # A plain home-event gag has no ritual moment in v1 — no receipt row.
     assert state.moment_store.rows == []
     assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_stock_copy_fallback_banter_never_wears_a_receipt(tmp_path):
+    """REGRESSION (pre-ship audit P0): a stock-copy fallback return from
+    write_banter leaves the LIVE directive id restored in state. The segment
+    build must read ONLY the scriptwriter handoff slot, or the stock lines air
+    wearing the moment's id and mint a false "aired" receipt."""
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    state.ha_pending_directive = "React to the coffee machine."
+    state.ha_pending_directive_moment_id = row_id
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    # A plain return WITHOUT setting the handoff slot is exactly the stock-copy
+    # fallback contract (the real except path clears the slot before returning).
+    stock_lines = [(host, "Che serata, amici."), (host, "Davvero.")]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(stock_lines, None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("ritual_moment_id") is None
+    # The row never airs on stock copy; it stays live for the real retry.
+    (row,) = state.moment_store.rows
+    assert row.status == "elected"
+
+
+@pytest.mark.asyncio
+async def test_stale_handoff_id_never_leaks_onto_unrelated_banter(tmp_path):
+    """REGRESSION (pre-ship audit P1): a prior cycle that consumed a directive
+    but died before the build (TTS failure, quality reject) must not leave its
+    handoff id behind for the NEXT, unrelated banter to wear on air."""
+    state = _make_state()
+    state.moment_store = _moment_store()
+    state.last_banter_ritual_moment_id = "stale-id-from-dead-cycle"
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Nessuna direttiva qui.")], None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.metadata.get("ritual_moment_id") is None
+
+
+@pytest.mark.asyncio
+async def test_interrupt_stock_copy_demotes_receipt_at_queue_commit(tmp_path):
+    """REGRESSION (pre-ship audit P0, interrupt lane): an urgent-interrupt
+    banter that fell back to stock copy queues without its id AND consumes the
+    directive at commit — no retry exists, so the elected row must be demoted
+    honestly instead of claiming to wait for a break that will never come."""
+    from mammamiradio.core.models import ChaosSubtype
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="interrupt", family="safety_saves", public_label="Safety moment")
+    state.ha_pending_directive = "Safety moment. React NOW."
+    state.ha_pending_directive_moment_id = row_id
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        # Stock-copy contract: returns lines, handoff slot NOT set.
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Momento, amici...")], None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.metadata.get("ritual_moment_id") is None
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "generation_failed"
+    assert state.ha_pending_directive_moment_id == ""
 
 
 @pytest.mark.asyncio

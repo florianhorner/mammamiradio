@@ -1336,11 +1336,30 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
         _blank_home_context_state(state)
     # These transient strings have no durable entity id in StationState, so a live
     # mute clears them even when the rest of the filtered context can be preserved.
+    # Their elected Moment Receipt rows are demoted honestly at the same time —
+    # otherwise the admin trail would show "waiting for its break" for up to a
+    # week about a moment the operator just muted.
+    _moment_store = getattr(state, "moment_store", None)
+    if _moment_store is not None:
+        try:
+            for _moment_id in (
+                state.ha_pending_directive_moment_id,
+                state.ha_running_gag_moment_id,
+                # A directive already consumed into an in-flight generation
+                # parks its id in the handoff slot — the mute kills that
+                # receipt too, or the muted moment would still earn "aired".
+                state.last_banter_ritual_moment_id,
+            ):
+                if _moment_id:
+                    _moment_store.mark_dropped(_moment_id, "muted")
+        except Exception:  # pragma: no cover - receipts must never break a mute
+            logger.debug("Moment receipt mute drop failed", exc_info=True)
     state.ha_pending_directive = ""
     state.ha_pending_directive_moment_id = ""
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
     state.ha_running_gag_moment_id = ""
+    state.last_banter_ritual_moment_id = ""
     if entity_id and state.evening_ledger is not None:
         return _set_live_gag_entity_denied(state, config, entity_id, True)
     return False

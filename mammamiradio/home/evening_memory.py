@@ -334,7 +334,12 @@ class EveningLedger:
             if getattr(event, "ritual_family", "") and not bucket.ritual_family:
                 # A ritual event landing in a bucket first created by a plain
                 # home event upgrades it with provenance (never downgrades).
+                # The label upgrades WITH it: a plain bucket's label is a real
+                # device label, and a ritual-sourced receipt shows its label on
+                # the unauthenticated listener strip — only the generic
+                # public_family_label (this event's label) may travel there.
                 bucket.ritual_family = event.ritual_family
+                bucket.label = event.label
             bucket.count += 1
             bucket.last_ts = event.timestamp
             changed = True

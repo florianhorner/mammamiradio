@@ -3046,6 +3046,9 @@ function momentStatusLabel(row){
     if(r==='generation_failed')return{text:"the hosts couldn't work it in — it can come around again",color:'var(--muted)'};
     if(r==='canned_fallback')return{text:'a stand-in clip aired instead — it can come around again',color:'var(--muted)'};
     if(r==='directive_slot_busy'||r==='interrupt_slot_busy')return{text:'stepped aside — another moment was already lined up',color:'var(--muted)'};
+    if(r==='interrupt_override')return{text:'bumped by a live cut-in',color:'var(--muted)'};
+    if(r==='muted')return{text:'set aside — you muted this device',color:'var(--muted)'};
+    if(r==='restart')return{text:'cut off by a restart',color:'var(--muted)'};
     return{text:"didn't make it to air",color:'var(--muted)'};
   }
   return{text:s||'—',color:'var(--muted)'};

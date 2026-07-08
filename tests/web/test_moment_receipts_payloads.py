@@ -198,6 +198,42 @@ def test_finalize_uses_true_outcome_vocabulary(kwargs, expected):
     assert state.moment_store.rows[0].status == expected
 
 
+@pytest.mark.parametrize(
+    "rescue_metadata",
+    [
+        {"rescue": True},
+        {"queue_drain_recovery": True},
+        {"audio_source": "fallback_demo_asset"},
+    ],
+)
+def test_finalize_classifies_rescue_sends_as_fallback_never_aired(rescue_metadata):
+    """S2: every documented rescue flag must route through is_fallback_active —
+    a clean send of backup audio is fallback_rescue, never aired."""
+    state = StationState()
+    state.moment_store, moment_id = _airing_store()
+    segment = _banter_segment(ritual_moment_id=moment_id, **rescue_metadata)
+    _finalize_moment_receipts(state, segment, bytes_sent=4096, was_skipped=False, listeners=2)
+    assert state.moment_store.rows[0].status == "fallback_rescue"
+
+
+def test_lifecycle_guards_are_silent_noops():
+    """Edge guards: empty status, unknown ids, and wrong-state transitions."""
+    store = MomentStore()
+    moment_id = store.record(lane="directive", family="f", public_label="L", now=NOW)
+    store.finalize(moment_id, "", now=NOW + 1)  # empty status — ignored
+    assert store.rows[0].status == "elected"
+    store.mark_dropped("unknown-id", "whatever", now=NOW + 2)  # unknown — no raise
+    store.mark_dropped(moment_id, "muted", now=NOW + 3)
+    store.mark_airing(moment_id, now=NOW + 4)  # dropped rows can't air
+    assert store.rows[0].status == "dropped"
+    # A row finalized while still elected (mark_airing swallowed upstream)
+    # falls back to final_ts/ts for its public age — and still shows.
+    second = store.record(lane="directive", family="f", public_label="Second", now=NOW + 10)
+    store.finalize(second, "aired", now=NOW + 70)
+    (row,) = store.to_public_rows(now=NOW + 130)
+    assert row == {"label": "Second", "ago_min": 1, "status": "aired"}
+
+
 def test_finalize_runs_with_provenance_ledger_off():
     state = StationState()
     assert getattr(state, "ledger", None) is None  # Show Memory off (standalone default)
@@ -245,7 +281,8 @@ async def test_aired_moments_survive_restart(tmp_path):
     store.save_if_dirty(tmp_path)
 
     app = _make_test_app()
-    app.state.station_state.moment_store = MomentStore.load(tmp_path)
+    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 300):
+        app.state.station_state.moment_store = MomentStore.load(tmp_path)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         body = (await client.get("/public-status")).json()
@@ -253,18 +290,64 @@ async def test_aired_moments_survive_restart(tmp_path):
     assert body["ha_moments"]["recent"][0]["label"] == "Morning launch"
 
 
-def test_airing_row_from_before_restart_is_not_shown_as_active(tmp_path):
-    """A row stuck 'airing' by a hard kill must not resurface as live after boot.
-
-    After a restart nothing is streaming, so its id is never in active_ids —
-    the provisional row stays off the strip until (if ever) it truly airs.
-    """
+def test_restart_demotes_live_rows_honestly(tmp_path):
+    """Elected and airing rows can never reach air after a restart (the pending
+    directive and offered gag were in-memory; the airing finalize died with the
+    playback loop) — load demotes them so the admin trail never claims
+    'waiting for its break' or 'on air right now' about a dead moment."""
     store = MomentStore()
-    moment_id = store.record(lane="directive", family="f", public_label="L", now=NOW)
-    store.mark_airing(moment_id, now=NOW + 1)
+    elected = store.record(lane="directive", family="f", public_label="Elected", now=NOW)
+    airing = store.record(lane="interrupt", family="f", public_label="Airing", now=NOW)
+    store.mark_airing(airing, now=NOW + 1)
+    aired = store.record(lane="directive", family="f", public_label="Aired", now=NOW)
+    store.mark_airing(aired, now=NOW + 2)
+    store.finalize(aired, "aired", now=NOW + 3)
     store.save_if_dirty(tmp_path)
-    reloaded = MomentStore.load(tmp_path)
-    assert reloaded.to_public_rows(now=NOW + 60) == []
+
+    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 300):
+        reloaded = MomentStore.load(tmp_path)
+
+    by_id = {row.id: row for row in reloaded.rows}
+    assert by_id[elected].status == "dropped" and by_id[elected].drop_reason == "restart"
+    assert by_id[airing].status == "dropped" and by_id[airing].drop_reason == "restart"
+    assert by_id[aired].status == "aired"  # finished rows are untouched
+    # The demotion persists via the producer's next save (store left dirty).
+    assert reloaded._dirty is True
+    # And nothing demoted ever reaches the listener strip.
+    assert reloaded.to_public_rows(now=NOW + 360) == [{"label": "Aired", "ago_min": 6, "status": "aired"}]
+
+
+# --- live mute demotes receipts honestly -------------------------------------------
+
+
+def test_mute_demotes_all_pending_receipts_and_clears_ids():
+    """A live entity mute must kill every in-flight receipt — pending directive,
+    offered gag, AND a directive already consumed into an in-flight generation
+    (handoff slot) — or the muted moment still earns 'aired'."""
+    from mammamiradio.web.streamer import _clear_home_context_usage
+
+    app = _make_test_app()
+    state = app.state.station_state
+    config = app.state.config
+    store = MomentStore()
+    directive_id = store.record(lane="directive", family="f", public_label="Pending", now=NOW)
+    gag_id = store.record(lane="running_gag", family="f", public_label="Gag", now=NOW)
+    handoff_id = store.record(lane="directive", family="f", public_label="InFlight", now=NOW)
+    state.moment_store = store
+    state.ha_pending_directive = "some directive"
+    state.ha_pending_directive_moment_id = directive_id
+    state.ha_running_gag = "some gag"
+    state.ha_running_gag_key = "bucket|off->on"
+    state.ha_running_gag_moment_id = gag_id
+    state.last_banter_ritual_moment_id = handoff_id
+
+    _clear_home_context_usage(state, config)
+
+    assert {row.drop_reason for row in store.rows} == {"muted"}
+    assert {row.status for row in store.rows} == {"dropped"}
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_running_gag_moment_id == ""
+    assert state.last_banter_ritual_moment_id == ""
 
 
 # --- opaque-id leak guard ----------------------------------------------------------
