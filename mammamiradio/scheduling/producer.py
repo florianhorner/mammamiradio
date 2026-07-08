@@ -169,9 +169,14 @@ def _arm_accepted_heading_announcement(state: StationState, track: Track) -> Non
     state._arm_heading_announcement_if_needed(track)
 
 
-def _probe_segment_duration(path: Path) -> float:
-    """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
-    return probe_duration_sec(path) or 0.0
+def _probe_segment_duration(path: Path, *, rescue: bool = False) -> float:
+    """Run ffprobe on path and return duration in seconds; 0.0 if probe fails.
+
+    ``rescue`` routes the probe through the bounded rescue ffmpeg slot —
+    bridge and error-recovery fills must never queue behind ordinary
+    normalization jobs holding both plain slots (#2 INSTANT AUDIO).
+    """
+    return probe_duration_sec(path, rescue=rescue) or 0.0
 
 
 def _is_packaged_asset(path: Path) -> bool:
@@ -403,7 +408,7 @@ async def _queue_continuity_bridge(
     """Queue the best available producer-side continuity bridge."""
     fallback = _pick_recovery_clip(state)
     if fallback:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         metadata = {
             "type": "banter",
@@ -519,7 +524,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     """Build the best non-silent segment for broad producer exception recovery."""
     fallback_path = _pick_recovery_clip(state)
     if fallback_path:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback_path)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback_path, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         logger.info("Error recovery: using packaged recovery clip")
         return Segment(
@@ -580,7 +585,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             last_good_title = last_good.name
         last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
     if last_good:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good, rescue=True)
         logger.warning(
             "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
             last_good.name,
