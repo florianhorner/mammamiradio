@@ -516,7 +516,8 @@ def _candidate_rejection_reason(
         return reason
     if not _is_cache_backed(candidate.path, cache_dir):
         return "not_cache_backed"
-    if reason := _file_presence_rejection_reason(candidate.path):
+    reason, _stat = _file_presence_rejection_reason(candidate.path)
+    if reason:
         return reason
     if _validated_duration(candidate.path, candidate.duration_sec, duration_probe) is None:
         return "invalid_duration"
@@ -553,12 +554,10 @@ def _entry_rejection_reason(
     path = entry.path(cache_dir)
     if path is None:
         return "invalid_path"
-    if reason := _file_presence_rejection_reason(path):
+    reason, stat = _file_presence_rejection_reason(path)
+    if reason:
         return reason
-    try:
-        stat = path.stat()
-    except OSError:
-        return "missing_file"
+    assert stat is not None  # invariant: reason is None only when stat was fetched
     if stat.st_size != entry.size_bytes:
         return "size_mismatch"
     try:
@@ -598,17 +597,18 @@ def _identity_metadata_rejection_reason(
     return None
 
 
-def _file_presence_rejection_reason(path: Path) -> str | None:
+def _file_presence_rejection_reason(path: Path) -> tuple[str | None, os.stat_result | None]:
     if _looks_temporary_path(path):
-        return "temporary_path"
+        return "temporary_path", None
     if not path.exists():
-        return "missing_file"
+        return "missing_file", None
     try:
-        if path.stat().st_size <= 0:
-            return "empty_file"
+        stat = path.stat()
     except OSError:
-        return "missing_file"
-    return None
+        return "missing_file", None
+    if stat.st_size <= 0:
+        return "empty_file", None
+    return None, stat
 
 
 def _music_admission_rejection_reason(
