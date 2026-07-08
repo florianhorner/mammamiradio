@@ -198,7 +198,9 @@ def language_mode_rule(super_italian: bool, language_code: str) -> str:
     a KeyError inside a prompt build.
     """
     if super_italian:
-        return f"ALL text in {_LANGUAGE_NAMES.get(language_code, language_code)}."
+        code = language_code.strip()
+        language_name = _LANGUAGE_NAMES.get(code, code) if code else "Italian"
+        return f"ALL text in {language_name}."
     return (
         "Roughly 70% English / 30% Italian: English carries the information, "
         "Italian the flavor — Italian moments land without translation."

@@ -520,13 +520,21 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
     candidates = [
         RestartHandoffCandidate(good, 180.0, "Artist", "Ephemeral", ephemeral=True),
         RestartHandoffCandidate(good, 180.0, "Artist", "Overlay", metadata={"dynamic_overlay": True}),
+        RestartHandoffCandidate(good, 180.0, "", "Missing Artist"),
+        RestartHandoffCandidate(good, 180.0, "Artist", "Blocked"),
         RestartHandoffCandidate(temp, 180.0, "Artist", "Temp"),
         RestartHandoffCandidate(outside, 180.0, "Artist", "Outside"),
         RestartHandoffCandidate(good, 180.0, "Artist", "Talk", segment_class="voice"),
         RestartHandoffCandidate(good, 180.0, "Artist", "Good"),
     ]
 
-    manifest = write_restart_handoff_spool(cache_dir, candidates, now=100.0, duration_probe=_duration)
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        candidates,
+        blocklist={("artist", "blocked"): {"display": "Artist - Blocked"}},
+        now=100.0,
+        duration_probe=_duration,
+    )
 
     assert [entry.title for entry in manifest.entries] == ["Good"]
 
@@ -703,6 +711,28 @@ def test_admission_rejects_blocklisted_artist_title(tmp_path):
     )
 
     assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
+
+
+def test_admission_rejects_missing_identity(tmp_path):
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="", title="Song")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path, RestartHandoffManifest(entries=(entry,), created_at=100.0), now=120.0, duration_probe=_duration
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["missing_identity"]
+
+
+def test_admission_rejects_missing_title(tmp_path):
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="Artist", title="")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path, RestartHandoffManifest(entries=(entry,), created_at=100.0), now=120.0, duration_probe=_duration
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["missing_identity"]
 
 
 def test_admission_rejects_non_music_and_ephemeral_overlay_markers(tmp_path):

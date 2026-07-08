@@ -1,0 +1,54 @@
+# Unmocked run_playback_loop ladder runs — real ffmpeg-generated cache, real shipped continuity clip, real timing
+# date: 2026-07-08T19:44:12Z  branch: florianhorner/fix-banter-deathloop @ 7519be9f
+
+## Scenario A - warm norm cache: clip once per gap, then cached music (never clip->clip)
+
+===== SCENARIO A — 14s real run =====
+  t=  1.44s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t=  1.47s  >>> NOW STREAMING banter: Station continuity
+  t=  3.58s  Queue empty 3s - rescuing with norm cache: norm_e2e_song1_192k.mp3
+  t=  3.58s  >>> NOW STREAMING music: E2E Artist – E2E Song 1
+  t=  7.62s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t=  7.62s  >>> NOW STREAMING banter: Station continuity
+  t=  9.73s  Queue empty 3s - rescuing with norm cache: norm_e2e_song2_192k.mp3
+  t=  9.73s  >>> NOW STREAMING music: E2E Artist – E2E Song 2
+  t= 13.77s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t= 13.77s  >>> NOW STREAMING banter: Station continuity
+  bytes streamed to listener: 215112
+  loop task crashed: False
+  aired sequence: ['clip', 'music', 'clip', 'music', 'clip']
+RESULT: PASS
+
+## Scenario B - empty cache, no demo music: honest last-resort clip repeats, no dead air, no premature forced banter
+
+===== SCENARIO B — 10s real run =====
+  t=  1.26s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t=  1.29s  >>> NOW STREAMING banter: Station continuity
+  t=  3.40s  Queue empty 3s - re-serving packaged recovery clip: continuity_1.mp3
+  t=  3.40s  >>> NOW STREAMING banter: Station continuity
+  t=  5.52s  Queue empty 5s - re-serving packaged recovery clip: continuity_1.mp3
+  t=  5.52s  >>> NOW STREAMING banter: Station continuity
+  t=  7.63s  Queue empty 7s - re-serving packaged recovery clip: continuity_1.mp3
+  t=  7.63s  >>> NOW STREAMING banter: Station continuity
+  t=  9.75s  Queue empty 9s - re-serving packaged recovery clip: continuity_1.mp3
+  t=  9.75s  >>> NOW STREAMING banter: Station continuity
+  bytes streamed to listener: 118848
+  loop task crashed: False
+RESULT: PASS
+
+## Scenario C - warm cache with BOTH plain ffmpeg admission slots held: first clip still airs promptly via bounded rescue slot
+
+===== SCENARIO C — 10s real run =====
+  t=  1.33s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t=  1.36s  >>> NOW STREAMING banter: Station continuity
+  t=  3.48s  Queue empty 3s - rescuing with norm cache: norm_e2e_song1_192k.mp3
+  t=  3.48s  >>> NOW STREAMING music: E2E Artist – E2E Song 1
+  t=  7.52s  Queue empty — serving packaged recovery clip: continuity_1.mp3
+  t=  7.52s  >>> NOW STREAMING banter: Station continuity
+  t=  9.63s  Queue empty 3s - rescuing with norm cache: norm_e2e_song3_192k.mp3
+  t=  9.63s  >>> NOW STREAMING music: E2E Artist – E2E Song 3
+  bytes streamed to listener: 146484
+  loop task crashed: False
+  aired sequence: ['clip', 'music', 'clip', 'music']
+  first clip serve at t=1.3346413750114152
+RESULT: PASS

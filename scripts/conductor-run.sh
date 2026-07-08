@@ -13,7 +13,8 @@ if [ -f "$_ENV_SAFE" ]; then
   set +a
 elif [ -f "$ROOT/.env" ]; then
   set -a
-  # shellcheck disable=SC1090
+  # Optional local developer file is not present in CI's ShellCheck container.
+  # shellcheck disable=SC1091
   source "$ROOT/.env"
   set +a
 fi
