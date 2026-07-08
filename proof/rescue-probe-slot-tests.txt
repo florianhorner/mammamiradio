@@ -1,0 +1,16 @@
+# Rescue clip probe: bounded ffmpeg slot + duration cache — verification
+# date: 2026-07-08T19:12:50Z
+# branch: florianhorner/fix-banter-deathloop @ f134d6ea + working tree
+
+## New regression tests
+tests/web/test_streamer_routes.py::test_packaged_recovery_segment_caches_duration_per_clip PASSED [ 33%]
+tests/web/test_streamer_routes.py::test_packaged_recovery_segment_probe_not_blocked_by_norm_slots PASSED [ 66%]
+tests/web/test_streamer_routes.py::test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_banter PASSED [100%]
+====================== 3 passed, 168 deselected in 0.81s =======================
+
+## make check (full suite + lint + format + mypy + coverage ratchet)
+All checks passed!
+Success: no issues found in 243 source files
+Required test coverage of 92.0% reached. Total coverage: 92.86%
+4274 passed, 2 skipped, 21 deselected, 1 warning in 127.47s (0:02:07)
+All checks passed

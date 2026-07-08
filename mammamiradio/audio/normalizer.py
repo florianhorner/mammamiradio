@@ -646,14 +646,16 @@ def normalize(
     return output_path
 
 
-def probe_duration_sec(path: Path) -> float | None:
+def probe_duration_sec(path: Path, *, rescue: bool = False) -> float | None:
     """Best-effort mp3 duration probe; None if ffprobe fails.
 
     Used by concat_files for a duration-invariant sanity check. We don't want
-    a probe failure to crash a concat — just skip the check.
+    a probe failure to crash a concat — just skip the check. ``rescue`` routes
+    the probe through the bounded rescue admission slot so a dead-air fill is
+    never queued indefinitely behind ordinary normalization jobs.
     """
     try:
-        with ffmpeg_slot():
+        with ffmpeg_slot(rescue=rescue):
             result = subprocess.run(
                 [
                     "ffprobe",

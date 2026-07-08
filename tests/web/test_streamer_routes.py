@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,7 @@ from mammamiradio.web.streamer import (
     SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
     _copy_home_context_to_state,
+    _packaged_recovery_segment,
     _persist_completed_music,
     _record_provider_verdict,
     _run_provider_verdict,
@@ -637,7 +639,7 @@ async def test_run_playback_loop_timeout_fallback_keeps_queue_empty_clock_and_du
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=fallback_path),
-        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -682,7 +684,7 @@ async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cach
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
-        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
         patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
     ):
         task = asyncio.create_task(run_playback_loop(app))
@@ -735,7 +737,7 @@ async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(t
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
-        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
         patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
         patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
@@ -755,6 +757,105 @@ async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(t
     assert [entry.metadata.get("duration_ms") for entry in stream_log[:2]] == [1700, 1700]
     assert app.state.station_state.force_next is None
     assert app.state.station_state.queue_empty_since is not None
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_banter(tmp_path):
+    """A last-resort clip re-serve past the 60s threshold must not also request
+    forced banter in the same iteration — the segment_ready guard makes them
+    mutually exclusive, and the elapsed clock keeps running for /readyz."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+    empty_assets = tmp_path / "empty_assets"
+    empty_assets.mkdir()
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        # First miss at elapsed 1.1s serves the clip; every later miss lands
+        # past the 60s forced-banter threshold while rung 4 re-serves.
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=[100.0, 101.1, 165.0, 166.0, 167.0, 168.0],
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while len(app.state.station_state.stream_log) < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not re-serve clip past 60s")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    stream_log = list(app.state.station_state.stream_log)
+    assert [entry.metadata.get("canned") for entry in stream_log[:2]] == [True, True]
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.queue_empty_since == 100.0
+
+
+@pytest.mark.asyncio
+async def test_packaged_recovery_segment_probe_not_blocked_by_norm_slots(tmp_path):
+    """The rescue probe takes the bounded rescue ffmpeg slot: a dead-air fill
+    must never queue indefinitely behind ordinary normalization jobs holding
+    both _NORM_SEM slots (the exact load pattern that starves the queue)."""
+    from mammamiradio.audio import admission
+
+    clip = tmp_path / "continuity_slots.mp3"
+    clip.write_bytes(b"recovery-audio" * 512)
+
+    fake_probe = subprocess.CompletedProcess(args=[], returncode=0, stdout="1.7\n", stderr="")
+    held = [admission._NORM_SEM.acquire(timeout=1), admission._NORM_SEM.acquire(timeout=1)]
+    assert all(held)
+    try:
+        with patch("mammamiradio.audio.normalizer.subprocess.run", return_value=fake_probe):
+            segment = await asyncio.wait_for(_packaged_recovery_segment(clip), timeout=5.0)
+    finally:
+        for ok in held:
+            if ok:
+                admission._NORM_SEM.release()
+
+    assert segment.duration_sec == 1.7
+    assert segment.metadata["duration_ms"] == 1700
+    assert segment.metadata["rescue"] is True
+
+
+@pytest.mark.asyncio
+async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
+    """A packaged clip's duration is probed once (as rescue) then reused, so
+    rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
+    clip = tmp_path / "continuity_cache.mp3"
+    clip.write_bytes(b"recovery-audio" * 512)
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7) as probe:
+        first = await _packaged_recovery_segment(clip)
+        second = await _packaged_recovery_segment(clip)
+    probe.assert_called_once_with(clip, rescue=True)
+    assert first.metadata["duration_ms"] == second.metadata["duration_ms"] == 1700
+
+    unprobeable = tmp_path / "continuity_unprobeable.mp3"
+    unprobeable.write_bytes(b"x")
+    with patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None) as probe:
+        await _packaged_recovery_segment(unprobeable)
+        await _packaged_recovery_segment(unprobeable)
+    assert probe.call_count == 2
 
 
 @pytest.mark.asyncio

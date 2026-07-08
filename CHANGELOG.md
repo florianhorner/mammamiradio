@@ -8,7 +8,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
-- **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the station now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders.
+- **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the station now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the station's audio workers are busy, and its length is remembered so replays never wait on a re-measure.
 - **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the Home Assistant ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
 - **Packaged recovery audio is harder to lose during cleanup.** The station now treats bundled continuity clips as durable package assets, even if a cleanup path sees a bad ephemeral flag, so producer and playback purges cannot remove the recovery audio needed to cover a thin queue.
 - **Optional speech now waits for enough real music runway.** Natural banter, ads, news flashes, station IDs, and time checks yield to music while the ready-audio buffer is below the runway floor and the queue can still build, keeping Home Assistant Green-class installs from spending a scarce buffer on optional speech.

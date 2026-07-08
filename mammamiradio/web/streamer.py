@@ -1542,11 +1542,22 @@ class LiveStreamHub:
                 pass
 
 
-async def _packaged_recovery_segment(fallback: Path) -> Segment:
-    """Build a packaged continuity Segment without importing producer at module load."""
-    from mammamiradio.scheduling.producer import _probe_segment_duration
+# Packaged clips are read-only shipped assets, so a probed duration is stable
+# for the process lifetime. Caching it keeps rescue re-serves ffprobe-free.
+_packaged_clip_duration_cache: dict[Path, float] = {}
 
-    duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback)
+
+async def _packaged_recovery_segment(fallback: Path) -> Segment:
+    """Build a packaged continuity Segment for the playback rescue ladder."""
+    duration_sec = _packaged_clip_duration_cache.get(fallback, 0.0)
+    if duration_sec <= 0:
+        # rescue=True: this fill airs instead of dead air, so the probe must
+        # take the bounded rescue ffmpeg slot, never queue behind ordinary
+        # normalization jobs (#2 INSTANT AUDIO).
+        probed = await asyncio.to_thread(probe_duration_sec, fallback, rescue=True)
+        duration_sec = probed or 0.0
+        if duration_sec > 0:
+            _packaged_clip_duration_cache[fallback] = duration_sec
     duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
     return Segment(
         type=SegmentType.BANTER,
