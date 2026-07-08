@@ -5,6 +5,8 @@
 ### Fixed
 
 - **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the add-on's ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
+- **Packaged recovery audio is harder to lose during cleanup.** The add-on now treats bundled continuity clips as durable package assets, even if a cleanup path sees a bad ephemeral flag, so producer and playback purges cannot remove the recovery audio needed to cover a thin queue.
+- **Optional speech now waits for enough real music runway.** Natural banter, ads, news flashes, station IDs, and time checks yield to music while the ready-audio buffer is below the runway floor and the queue can still build, keeping Home Assistant Green-class installs from spending a scarce buffer on optional speech.
 
 ## 2.17.0 - 2026-07-07
 

@@ -1,0 +1,24 @@
+# Proof: HA Green continuity durability + runway governor
+
+Branch: florianhorner/chore/review-workspace-changes
+Commit: 69d8270 fix: harden HA Green continuity runway
+Generated: 2026-07-07
+
+Summary:
+- Packaged demo/recovery audio is protected from producer and streamer ephemeral cleanup.
+- Natural optional speech yields to music while real queued audio remains below the HA Green runway floor and queue capacity remains.
+- Add-on validation and CI assert installed recovery MP3 presence.
+- No version, HTTP API, route, auth, environment variable, or config-key changes.
+
+Local validation:
+- Targeted producer/web/scheduler suites: passed.
+- pytest -m requires_ffmpeg -q: 21 passed.
+- ./scripts/validate-addon.sh: passed.
+- bash scripts/check-release-invariants.sh: 10 passed.
+- make check: 4266 passed, 2 skipped, 21 deselected; coverage 92.81%.
+- git diff --check: passed.
+- .context diff: clean.
+
+Build note:
+- ./scripts/validate-addon.sh --build was attempted in the sandbox.
+- The non-Docker preflight passed, but the Docker build path could not run because Docker is not installed in this environment: docker: command not found.

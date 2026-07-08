@@ -9,7 +9,7 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - writable `tmp/` and `cache/` directories
 - outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from packaged recovery clips, then the norm cache, then from bundled demo music assets when present, and as a final fallback requests forced banter from the producer so the queue recovers without crashing or stalling on silence. A connecting listener does not wait long for that rescue: on an empty queue the whole rescue ladder (packaged clip, then norm cache, then demo asset) opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
+Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from packaged recovery clips, then the norm cache, then from bundled demo music assets when present, and as a final fallback requests forced banter from the producer so the queue recovers without crashing or stalling on silence. Packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, not temp renders: producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the whole rescue ladder (packaged clip, then norm cache, then demo asset) opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
 
 Downloads that fail `validate_download` (missing file, too-short duration, corrupt) are purged from the cache directory and added to a process-local denylist so the same track is not re-selected endlessly. The main producer loop, prefetch, and prewarm all short-circuit on denylisted keys via a bounded retry around `select_next_track`. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they drop the cached normalization only and rely on the 3-consecutive-rejection circuit breaker to recover. Log signatures:
 
@@ -207,13 +207,18 @@ bridge. The fields:
 - `queue_capacity` — the queue's hard cap.
 - `lookahead_target` — the runway target, `max(4, pacing.lookahead_segments)`
   (default `lookahead_segments = 4`).
-- `buffered_audio_sec` — total seconds of audio already queued, summed from
-  segment durations.
+- `buffered_audio_sec` — total seconds of audio already queued in the real
+  playback queue, summed from segment durations.
 - `headroom_ok` — `true` once `queue_depth >= lookahead_target`.
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
-This is observability only; the producer's own backpressure (`lookahead_segments`)
-governs how deep it prefetches.
+The fields are operator-facing observability. The same real-queue seconds
+calculation also informs the producer's runway governor: when natural optional
+speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`) would run below
+the floor while the bounded queue can still build more runway, the producer
+chooses music instead. If the bounded queue is effectively saturated and still
+cannot reach the seconds floor, the due speech is allowed so optional breaks do
+not starve forever on short-track stations.
 
 ### Detecting a not-working provider key
 

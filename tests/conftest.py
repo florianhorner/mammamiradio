@@ -71,3 +71,14 @@ def _reset_broadcast_chain():
     configure_broadcast_chain(False)
     yield
     configure_broadcast_chain(False)
+
+
+@pytest.fixture(autouse=True)
+def _disable_runway_governor_by_default():
+    """Keep legacy producer tests focused unless they explicitly opt into runway gating."""
+    from mammamiradio.scheduling import producer
+
+    old_runway_floor = producer.RUNWAY_FLOOR_SECONDS
+    producer.RUNWAY_FLOOR_SECONDS = 0
+    yield
+    producer.RUNWAY_FLOOR_SECONDS = old_runway_floor

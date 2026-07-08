@@ -15,6 +15,12 @@ def _make_state(**kwargs) -> StationState:
     )
 
 
+def test_buffered_audio_seconds_clamps_unknown_and_negative_values():
+    from mammamiradio.scheduling.scheduler import buffered_audio_seconds
+
+    assert buffered_audio_seconds([10.04, None, -5.0, 0.0, 2.02]) == 12.1
+
+
 def test_first_segment_is_music():
     """First segment produced should always be MUSIC."""
     from mammamiradio.scheduling.scheduler import next_segment_type

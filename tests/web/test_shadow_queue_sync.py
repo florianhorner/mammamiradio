@@ -65,11 +65,12 @@ def _seg(title: str = "Track A") -> dict:
     return {"type": "music", "label": title, "metadata": {"title": title}}
 
 
-def _queue_segment(title: str = "Track A") -> Segment:
+def _queue_segment(title: str = "Track A", *, duration_sec: float = 0.0) -> Segment:
     """A minimal Segment whose path.unlink() is a no-op (non-existent file)."""
     return Segment(
         type=SegmentType.MUSIC,
         path=Path(f"/tmp/test_seg_{title.replace(' ', '_')}.mp3"),
+        duration_sec=duration_sec,
         metadata={"title": title},
     )
 
@@ -1206,9 +1207,11 @@ def test_runtime_status_snapshot_includes_producer_headroom():
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
+    app.state.queue.put_nowait(_queue_segment("A", duration_sec=180.0))
+    app.state.queue.put_nowait(_queue_segment("B", duration_sec=180.0))
     app.state.station_state.queued_segments = [
-        {"type": "music", "duration_sec": 180.0},
-        {"type": "music", "duration_sec": 180.0},
+        {"type": "music"},
+        {"type": "music"},
     ]
 
     req = _fake_request(app)
@@ -1227,13 +1230,13 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
-    for _ in range(4):
-        app.state.queue.put_nowait({"type": "music"})
+    for idx in range(4):
+        app.state.queue.put_nowait(_queue_segment(f"Track {idx}", duration_sec=180.0))
     app.state.station_state.queued_segments = [
-        {"type": "music", "duration_sec": 180.0},
-        {"type": "music", "duration_sec": 180.0},
-        {"type": "music", "duration_sec": 180.0},
-        {"type": "music", "duration_sec": 180.0},
+        {"type": "music"},
+        {"type": "music"},
+        {"type": "music"},
+        {"type": "music"},
     ]
 
     req = _fake_request(app)
@@ -1242,6 +1245,7 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
 
     headroom = rs["producer_headroom"]
     assert headroom["queue_depth"] == 4
+    assert headroom["buffered_audio_sec"] == 720.0
     assert headroom["headroom_ok"] is True
     assert headroom["reason"] == "ready runway"
 
