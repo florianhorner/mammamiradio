@@ -58,6 +58,8 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
+from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_context import (
@@ -106,8 +108,6 @@ RECOVERY_SWEEPER_LINES = (
     "Un attimo in cabina. La musica torna tra pochissimo.",
     "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
 )
-# Directory for pre-bundled continuity and demo clips that ship with the package.
-_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 _RUNWAY_GOVERNED_TYPES = {
     SegmentType.BANTER,
     SegmentType.AD,
@@ -175,17 +175,7 @@ def _probe_segment_duration(path: Path) -> float:
 
 
 def _is_packaged_asset(path: Path) -> bool:
-    """True if path lives under the read-only packaged demo assets tree."""
-    try:
-        resolved = path.resolve()
-    except (AttributeError, OSError, TypeError):
-        return False
-    if not isinstance(resolved, Path):
-        return False
-    try:
-        return resolved.is_relative_to(_DEMO_ASSETS_DIR.resolve())
-    except OSError:
-        return False
+    return is_packaged_asset(path, _DEMO_ASSETS_DIR)
 
 
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
@@ -408,6 +398,7 @@ async def _queue_continuity_bridge(
     bridge_flag: str,
     canned_title: str,
     canned_metadata: dict | None = None,
+    music_runway: bool = False,
 ) -> bool:
     """Queue the best available producer-side continuity bridge."""
     fallback = _pick_recovery_clip(state)
@@ -437,32 +428,28 @@ async def _queue_continuity_bridge(
         )
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
+            if music_runway and not await _queue_norm_cache_bridge_segment(
+                queue_segment,
+                state,
+                config,
+                bridge_type=bridge_type,
+                bridge_flag=bridge_flag,
+            ):
+                logger.info(
+                    "%s bridge: no runway music segment queued behind the canned clip",
+                    bridge_type.capitalize(),
+                )
         return ok
 
-    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-    if norm_path:
-        metadata, log_label = _norm_cache_bridge_payload(
-            norm_path,
-            bridge_flag,
-            config.display_station_name,
-            bitrate_kbps=config.audio.bitrate,
-        )
-        logger.warning(
-            "%s bridge: inserting norm-cache bridge: %s",
-            bridge_type.capitalize(),
-            log_label,
-        )
-        ok = await queue_segment(
-            Segment(
-                type=SegmentType.MUSIC,
-                path=norm_path,
-                duration_sec=_duration_sec_from_metadata(metadata),
-                metadata=metadata,
-                ephemeral=False,
-            )
-        )
-        if ok:
-            _record_bridge_fire(state, bridge_type, "norm_cache")
+    ok = await _queue_norm_cache_bridge_segment(
+        queue_segment,
+        state,
+        config,
+        bridge_type=bridge_type,
+        bridge_flag=bridge_flag,
+    )
+    if ok:
+        _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
     tone_path = config.tmp_dir / f"{bridge_type}_tone_{uuid4().hex[:8]}.mp3"
@@ -493,6 +480,39 @@ async def _queue_continuity_bridge(
     if ok:
         _record_bridge_fire(state, bridge_type, "emergency_tone")
     return ok
+
+
+async def _queue_norm_cache_bridge_segment(
+    queue_segment: Callable[[Segment], Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+) -> bool:
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if not norm_path:
+        return False
+    metadata, log_label = _norm_cache_bridge_payload(
+        norm_path,
+        bridge_flag,
+        config.display_station_name,
+        bitrate_kbps=config.audio.bitrate,
+    )
+    logger.warning(
+        "%s bridge: inserting norm-cache bridge: %s",
+        bridge_type.capitalize(),
+        log_label,
+    )
+    return await queue_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            duration_sec=_duration_sec_from_metadata(metadata),
+            metadata=metadata,
+            ephemeral=False,
+        )
+    )
 
 
 async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
@@ -2278,6 +2298,7 @@ async def run_producer(
                     bridge_type="resume",
                     bridge_flag="resume_bridge",
                     canned_title="Resume bridge",
+                    music_runway=True,
                 )
 
         if state.listeners_active == 0:
@@ -2303,6 +2324,7 @@ async def run_producer(
                     bridge_flag="idle_bridge",
                     canned_title="Station warm-up",
                     canned_metadata={"warmup": True, "rescue": True},
+                    music_runway=True,
                 )
             _was_idle = False
         _producer_idle_logged = False

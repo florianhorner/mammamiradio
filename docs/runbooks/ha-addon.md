@@ -301,9 +301,9 @@ gates" (single source of truth). The short version:
   (CI re-runs on the integrated state), and arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
-- Raw `gh pr merge` is denied by the local hook
-  (`scripts/hooks/require-preship-squad.sh`); `--disable-auto` (disarming) is
-  allowed. The hook is a local guard, not a security boundary.
+- Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
+  hook (`scripts/hooks/require-preship-squad.sh`); `--disable-auto`
+  (disarming) is allowed. The hook is a local guard, not a security boundary.
 - Branch protection on `main` has strict status checks (branch must be up to
   date before merging) since 2026-06-12. Dependabot PRs that fall behind get
   an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because

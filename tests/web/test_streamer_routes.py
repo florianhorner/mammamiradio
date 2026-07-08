@@ -618,11 +618,12 @@ async def test_run_playback_loop_resets_queue_empty_since_after_real_segment(tmp
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_no_error(tmp_path, caplog):
+async def test_run_playback_loop_timeout_fallback_keeps_queue_empty_clock_and_duration(tmp_path, caplog):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.stream_hub.subscribe()
-    app.state.station_state.queue_empty_since = time.monotonic() - 35
+    queue_empty_started = time.monotonic() - 35
+    app.state.station_state.queue_empty_since = queue_empty_started
     caplog.set_level(logging.INFO)
 
     fallback_path = tmp_path / "fallback-canned.mp3"
@@ -636,6 +637,7 @@ async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_n
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=fallback_path),
+        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -648,12 +650,15 @@ async def test_run_playback_loop_timeout_fallback_resets_queue_empty_since_and_n
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert app.state.station_state.queue_empty_since is None
+    now_streaming = app.state.station_state.now_streaming
+    assert app.state.station_state.queue_empty_since == queue_empty_started
+    assert now_streaming["duration_sec"] == 1.7
+    assert now_streaming["metadata"]["duration_ms"] == 1700
     assert not any(record.levelname == "ERROR" for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_prefers_packaged_recovery_before_norm_cache(tmp_path):
+async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cache(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
@@ -661,6 +666,9 @@ async def test_run_playback_loop_timeout_prefers_packaged_recovery_before_norm_c
 
     recovery_path = tmp_path / "continuity_1.mp3"
     recovery_path.write_bytes(b"recovery-audio" * 512)
+    norm_path = tmp_path / "norm_cached_song_192k.mp3"
+    norm_path.write_bytes(b"cached-song" * 4096)
+    (tmp_path / "norm_cached_song_192k.mp3.json").write_text('{"title": "Cached Song", "artist": "Cache Artist"}')
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -674,27 +682,79 @@ async def test_run_playback_loop_timeout_prefers_packaged_recovery_before_norm_c
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
-        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
+        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
             deadline = time.monotonic() + 3.0
-            while app.state.station_state.now_streaming.get("metadata", {}).get("title") != "Station continuity":
+            while (
+                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+            ):
                 if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not stream packaged recovery")
+                    raise AssertionError("playback loop did not escalate to norm-cache music")
                 await asyncio.sleep(0.01)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    now_meta = app.state.station_state.now_streaming["metadata"]
-    assert now_meta.get("fallback") is True
-    assert now_meta.get("rescue") is True
-    assert now_meta.get("canned") is True
+    stream_log = list(app.state.station_state.stream_log)
+    assert len(stream_log) >= 2
+    assert stream_log[0].metadata.get("canned") is True
+    assert stream_log[0].metadata.get("rescue") is True
+    assert stream_log[0].metadata.get("duration_ms") == 1700
+    assert stream_log[1].type == "music"
+    assert stream_log[1].metadata.get("audio_source") == "fallback_norm_cache"
+    assert stream_log[1].metadata.get("title") == "Cache Artist – Cached Song"
+    assert not (stream_log[0].metadata.get("canned") and stream_log[1].metadata.get("canned"))
     assert pick_canned.call_args_list[0].args == ("recovery",)
-    assert all(call.args == ("recovery",) for call in pick_canned.call_args_list)
-    select_norm_cache_rescue.assert_not_called()
     assert app.state.station_state.queue_empty_since is None
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+    empty_assets = tmp_path / "empty_assets"
+    empty_assets.mkdir()
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.scheduling.producer._probe_segment_duration", return_value=1.7),
+        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=[100.0, 101.1, 103.0, 104.0]),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while len(app.state.station_state.stream_log) < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not re-serve clip as last resort")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    stream_log = list(app.state.station_state.stream_log)
+    assert [entry.metadata.get("canned") for entry in stream_log[:2]] == [True, True]
+    assert [entry.metadata.get("duration_ms") for entry in stream_log[:2]] == [1700, 1700]
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.queue_empty_since is not None
 
 
 @pytest.mark.asyncio
