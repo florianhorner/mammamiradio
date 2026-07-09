@@ -1,0 +1,22 @@
+=== Runtime proof: real (unmocked) generate_transition_sting() output ===
+
+Pre-fix behavior (what time_check/sweeper transitions used to get — bare
+generate_sweep(), no motif/bumper layering, per the unsupported-pair fallback):
+  bare_sweep_fallback_OLD_BEHAVIOR.mp3: 1.032s, 24813 bytes
+
+Post-fix behavior (real ffmpeg calls, no mocking):
+  music->time_check : 2.064s, 49581 bytes  (sweep 0.8s + motif 1.2s layered)
+  time_check->music : 1.080s, 25965 bytes  (motif 0.5s + bumper 0.5s layered)
+  music->sweeper    : 2.064s, 49581 bytes  (identical treatment to time_check)
+  sweeper->music    : 1.080s, 25965 bytes  (identical treatment to time_check)
+
+Confirms the fix produces genuinely different (longer, layered) audio than
+the bare 1.032s sweep tone every time_check/sweeper transition got before —
+not just a passing mock assertion.
+
+Reproduction:
+  python3 -c "
+  from pathlib import Path
+  from mammamiradio.audio.normalizer import generate_transition_sting
+  generate_transition_sting(\"music\", \"time_check\", Path(\"/tmp/sting.mp3\"), variant=0)
+  "

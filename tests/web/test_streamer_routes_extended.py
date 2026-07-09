@@ -229,6 +229,44 @@ async def test_purge_with_segments(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Queue remove item
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_item_demotes_carried_moment_receipt(tmp_path):
+    """An operator removing a single not-yet-started queued banter (POST
+    /api/queue/remove) must demote any ritual/gag receipt it was carrying —
+    the segment can never air now, so its row must not keep reading "waiting
+    for its break" in the admin Moments panel."""
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    app = _make_test_app()
+    store = MomentStore()
+    ritual_id = store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    app.state.station_state.moment_store = store
+    fake_file = tmp_path / "seg.mp3"
+    fake_file.write_bytes(b"data")
+    seg = Segment(
+        type=SegmentType.BANTER,
+        path=fake_file,
+        metadata={"title": "test", "queue_id": "q1", "ritual_moment_id": ritual_id},
+    )
+    app.state.queue.put_nowait(seg)
+    app.state.station_state.queued_segments = [{"id": "q1"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"id": "q1"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "operator_queue_remove"
+
+
+# ---------------------------------------------------------------------------
 # Skip
 # ---------------------------------------------------------------------------
 

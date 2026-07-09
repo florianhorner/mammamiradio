@@ -106,6 +106,7 @@ class RitualRecipeMatch:
             gag_cooldown_seconds=(
                 float(self.recipe.cooldown_seconds) if self.recipe.delivery_lane == "running_gag" else 0.0
             ),
+            ritual_family=self.recipe.family,
         )
 
     def to_status_dict(self) -> dict[str, object]:

@@ -40,6 +40,33 @@ fi
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
 
+MERGE_GRAPHQL_FILE="$TMPDIR_T/merge.graphql"
+READ_GRAPHQL_FILE="$TMPDIR_T/read.graphql"
+MERGE_GRAPHQL_JSON="$TMPDIR_T/merge-payload.json"
+READ_GRAPHQL_JSON="$TMPDIR_T/read-payload.json"
+
+cat > "$MERGE_GRAPHQL_FILE" <<'GRAPHQL'
+mutation {
+  mergePullRequest(input: {pullRequestId: "PR_kw"}) {
+    pullRequest { id }
+  }
+}
+GRAPHQL
+
+cat > "$READ_GRAPHQL_FILE" <<'GRAPHQL'
+query {
+  viewer { login }
+}
+GRAPHQL
+
+cat > "$MERGE_GRAPHQL_JSON" <<'JSON'
+{"query":"mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_kw\"}) { pullRequest { id } } }"}
+JSON
+
+cat > "$READ_GRAPHQL_JSON" <<'JSON'
+{"query":"query { viewer { login } }"}
+JSON
+
 # make_reader <skill> <commit> <timestamp> -> path to an executable mock reader
 # that emits a single review-log JSONL line then the ---CONFIG--- sentinel.
 make_reader() {
@@ -68,6 +95,10 @@ verdict() {
   local out
   out="$(printf '%s' "$1" | MMR_PRESHIP_REVIEW_READER="$2" bash "$HOOK" 2>/dev/null || true)"
   if printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; then echo deny; else echo allow; fi
+}
+
+payload() {
+  jq -nc --arg cmd "$1" '{tool_input:{command:$cmd}}'
 }
 
 DUMMY="$(empty_reader)"  # reused where the reader must not be consulted
@@ -141,6 +172,81 @@ pass "--disable-auto past a shell operator still denies"
   || fail "land-pr.sh invocation should pass the hook"
 pass "land-pr.sh invocation allowed"
 
+# Case 8e: read-only gh api calls => ALLOW
+[ "$(verdict '{"tool_input":{"command":"gh api repos/florianhorner/mammamiradio/pulls/5"}}' "$DUMMY")" = allow ] \
+  || fail "read-only gh api calls should be allowed"
+pass "read-only gh api allowed"
+
+# Case 8f: read-only gh api call to the merge-status endpoint => ALLOW
+[ "$(verdict '{"tool_input":{"command":"gh api /repos/florianhorner/mammamiradio/pulls/5/merge"}}' "$DUMMY")" = allow ] \
+  || fail "read-only gh api merge-status endpoint should be allowed"
+pass "read-only gh api merge-status endpoint allowed"
+
+# Case 8g: gh api REST PUT to /pulls/<n>/merge => DENY (raw API landing bypass)
+[ "$(verdict '{"tool_input":{"command":"gh api repos/florianhorner/mammamiradio/pulls/5/merge -X PUT"}}' "$DUMMY")" = deny ] \
+  || fail "gh api REST -X PUT pull merge must deny"
+pass "gh api REST -X PUT pull merge denies"
+
+# Case 8h: compact -XPUT form is the same raw REST merge bypass => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api -XPUT /repos/florianhorner/mammamiradio/pulls/5/merge"}}' "$DUMMY")" = deny ] \
+  || fail "gh api REST compact -XPUT pull merge must deny"
+pass "gh api REST compact -XPUT pull merge denies"
+
+# Case 8i: compact -XGET remains read-only => ALLOW
+[ "$(verdict '{"tool_input":{"command":"gh api -XGET /repos/florianhorner/mammamiradio/pulls/5/merge"}}' "$DUMMY")" = allow ] \
+  || fail "gh api REST compact -XGET merge-status should be allowed"
+pass "gh api REST compact -XGET merge-status allowed"
+
+# Case 8j: --method PUT form is the same raw REST merge bypass => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api --method PUT /repos/florianhorner/mammamiradio/pulls/5/merge"}}' "$DUMMY")" = deny ] \
+  || fail "gh api REST --method PUT pull merge must deny"
+pass "gh api REST --method PUT pull merge denies"
+
+# Case 8k: gh api graphql mergePullRequest mutation => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api graphql -f query=mutation{mergePullRequest(input:{pullRequestId:PR_kw}){pullRequest{id}}}"}}' "$DUMMY")" = deny ] \
+  || fail "gh api graphql mergePullRequest must deny"
+pass "gh api graphql mergePullRequest denies"
+
+# Case 8l: gh api graphql enablePullRequestAutoMerge mutation => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api graphql -f query=mutation{enablePullRequestAutoMerge(input:{pullRequestId:PR_kw}){pullRequest{id}}}"}}' "$DUMMY")" = deny ] \
+  || fail "gh api graphql enablePullRequestAutoMerge must deny"
+pass "gh api graphql enablePullRequestAutoMerge denies"
+
+# Case 8m: gh api graphql query loaded from file with merge mutation => DENY
+[ "$(verdict "$(payload "gh api graphql -F query=@$MERGE_GRAPHQL_FILE")" "$DUMMY")" = deny ] \
+  || fail "gh api graphql -F query=@file merge mutation must deny"
+pass "gh api graphql -F query=@file merge mutation denies"
+
+# Case 8n: gh api graphql JSON body loaded from file with merge mutation => DENY
+[ "$(verdict "$(payload "gh api graphql --input $MERGE_GRAPHQL_JSON")" "$DUMMY")" = deny ] \
+  || fail "gh api graphql --input merge payload must deny"
+pass "gh api graphql --input merge payload denies"
+
+# Case 8o: gh api graphql JSON body loaded from stdin is uninspectable => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api graphql --input -"}}' "$DUMMY")" = deny ] \
+  || fail "gh api graphql --input - should deny because payload is uninspectable"
+pass "gh api graphql --input - denies"
+
+# Case 8p: gh api graphql query loaded from stdin is uninspectable => DENY
+[ "$(verdict '{"tool_input":{"command":"gh api graphql -F query=@-"}}' "$DUMMY")" = deny ] \
+  || fail "gh api graphql -F query=@- should deny because payload is uninspectable"
+pass "gh api graphql -F query=@- denies"
+
+# Case 8q: read-only gh api graphql query => ALLOW
+[ "$(verdict '{"tool_input":{"command":"gh api graphql -f query=query{viewer{login}}"}}' "$DUMMY")" = allow ] \
+  || fail "read-only gh api graphql query should be allowed"
+pass "read-only gh api graphql allowed"
+
+# Case 8r: read-only gh api graphql query loaded from file => ALLOW
+[ "$(verdict "$(payload "gh api graphql -F query=@$READ_GRAPHQL_FILE")" "$DUMMY")" = allow ] \
+  || fail "read-only gh api graphql -F query=@file should be allowed"
+pass "read-only gh api graphql -F query=@file allowed"
+
+# Case 8s: read-only gh api graphql JSON body loaded from file => ALLOW
+[ "$(verdict "$(payload "gh api graphql --input $READ_GRAPHQL_JSON")" "$DUMMY")" = allow ] \
+  || fail "read-only gh api graphql --input should be allowed"
+pass "read-only gh api graphql --input allowed"
+
 # Case 9: gh pr create, no entries => DENY
 [ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(empty_reader)")" = deny ] \
   || fail "gh pr create with no squad entry should deny"
@@ -175,4 +281,4 @@ pass "unparseable timestamp denies"
 pass "far-future timestamp denies"
 
 echo
-echo "All 18 pre-ship squad gate cases passed."
+echo "All 33 pre-ship squad gate cases passed."

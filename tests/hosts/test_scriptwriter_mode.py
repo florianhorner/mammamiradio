@@ -20,6 +20,8 @@ def test_language_mode_rule_unmapped_code_degrades_not_keyerror():
     """
     assert language_mode_rule(True, "it") == "ALL text in Italian."
     assert language_mode_rule(True, "de") == "ALL text in de."
+    assert language_mode_rule(True, "") == "ALL text in Italian."
+    assert language_mode_rule(True, "   ") == "ALL text in Italian."
     # OFF ignores the code entirely — the static 70/30 rule, no map lookup.
     assert "70% English" in language_mode_rule(False, "de")
 

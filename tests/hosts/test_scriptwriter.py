@@ -1552,6 +1552,78 @@ async def test_write_banter_releases_gag_key_on_fallback(config, state):
     assert state.ha_running_gag_key == ""
 
 
+# --- Moment Receipt id threading (directive consume / restore, gag drop) ---
+
+
+@pytest.mark.asyncio
+async def test_write_banter_hands_off_moment_id_on_success(config, state):
+    host_name = config.hosts[0].name
+    state.ha_pending_directive = "The coffee machine just woke up — react."
+    state.ha_pending_directive_moment_id = "moment123abc"
+    response_json = json.dumps({"lines": [{"host": host_name, "text": "Sento odore di espresso!"}], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    # Consumed: the id rides the handoff slot to the producer; live state is
+    # clean so a fresh HA directive cannot inherit the old receipt.
+    assert state.last_banter_ritual_moment_id == "moment123abc"
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_write_banter_restores_moment_id_on_fallback(config, state):
+    state.ha_pending_directive = "Mention the kitchen light."
+    state.ha_pending_directive_moment_id = "moment456def"
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    # The receipt id travels with the directive in BOTH directions — a failed
+    # generation must not orphan the elected row.
+    assert state.ha_pending_directive_moment_id == "moment456def"
+    assert state.last_banter_ritual_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_write_banter_drops_gag_moment_row_on_fallback(config, state):
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    store = MomentStore()
+    gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
+    state.moment_store = store
+    state.ha_running_gag = "Il ventilatore non si ferma."
+    state.ha_running_gag_key = "gag-bucket-1"
+    state.ha_running_gag_moment_id = gag_id
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    assert state.ha_running_gag_moment_id == ""
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "generation_failed"
+
+
 @pytest.mark.asyncio
 async def test_write_banter_falls_back_on_malformed_json(config, state):
     mock_cls = _mock_anthropic_response("this is not valid json {{{")

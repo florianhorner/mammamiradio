@@ -58,6 +58,8 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
+from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_context import (
@@ -106,8 +108,6 @@ RECOVERY_SWEEPER_LINES = (
     "Un attimo in cabina. La musica torna tra pochissimo.",
     "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
 )
-# Directory for pre-bundled continuity and demo clips that ship with the package.
-_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo"
 _RUNWAY_GOVERNED_TYPES = {
     SegmentType.BANTER,
     SegmentType.AD,
@@ -169,23 +169,18 @@ def _arm_accepted_heading_announcement(state: StationState, track: Track) -> Non
     state._arm_heading_announcement_if_needed(track)
 
 
-def _probe_segment_duration(path: Path) -> float:
-    """Run ffprobe on path and return duration in seconds; 0.0 if probe fails."""
-    return probe_duration_sec(path) or 0.0
+def _probe_segment_duration(path: Path, *, rescue: bool = False) -> float:
+    """Run ffprobe on path and return duration in seconds; 0.0 if probe fails.
+
+    ``rescue`` routes the probe through the bounded rescue ffmpeg slot —
+    bridge and error-recovery fills must never queue behind ordinary
+    normalization jobs holding both plain slots (#2 INSTANT AUDIO).
+    """
+    return probe_duration_sec(path, rescue=rescue) or 0.0
 
 
 def _is_packaged_asset(path: Path) -> bool:
-    """True if path lives under the read-only packaged demo assets tree."""
-    try:
-        resolved = path.resolve()
-    except (AttributeError, OSError, TypeError):
-        return False
-    if not isinstance(resolved, Path):
-        return False
-    try:
-        return resolved.is_relative_to(_DEMO_ASSETS_DIR.resolve())
-    except OSError:
-        return False
+    return is_packaged_asset(path, _DEMO_ASSETS_DIR)
 
 
 def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
@@ -408,11 +403,12 @@ async def _queue_continuity_bridge(
     bridge_flag: str,
     canned_title: str,
     canned_metadata: dict | None = None,
+    music_runway: bool = False,
 ) -> bool:
     """Queue the best available producer-side continuity bridge."""
     fallback = _pick_recovery_clip(state)
     if fallback:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         metadata = {
             "type": "banter",
@@ -437,32 +433,28 @@ async def _queue_continuity_bridge(
         )
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
+            if music_runway and not await _queue_norm_cache_bridge_segment(
+                queue_segment,
+                state,
+                config,
+                bridge_type=bridge_type,
+                bridge_flag=bridge_flag,
+            ):
+                logger.info(
+                    "%s bridge: no runway music segment queued behind the canned clip",
+                    bridge_type.capitalize(),
+                )
         return ok
 
-    norm_path = select_norm_cache_rescue(config.cache_dir, state)
-    if norm_path:
-        metadata, log_label = _norm_cache_bridge_payload(
-            norm_path,
-            bridge_flag,
-            config.display_station_name,
-            bitrate_kbps=config.audio.bitrate,
-        )
-        logger.warning(
-            "%s bridge: inserting norm-cache bridge: %s",
-            bridge_type.capitalize(),
-            log_label,
-        )
-        ok = await queue_segment(
-            Segment(
-                type=SegmentType.MUSIC,
-                path=norm_path,
-                duration_sec=_duration_sec_from_metadata(metadata),
-                metadata=metadata,
-                ephemeral=False,
-            )
-        )
-        if ok:
-            _record_bridge_fire(state, bridge_type, "norm_cache")
+    ok = await _queue_norm_cache_bridge_segment(
+        queue_segment,
+        state,
+        config,
+        bridge_type=bridge_type,
+        bridge_flag=bridge_flag,
+    )
+    if ok:
+        _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
     tone_path = config.tmp_dir / f"{bridge_type}_tone_{uuid4().hex[:8]}.mp3"
@@ -495,11 +487,44 @@ async def _queue_continuity_bridge(
     return ok
 
 
+async def _queue_norm_cache_bridge_segment(
+    queue_segment: Callable[[Segment], Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+) -> bool:
+    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    if not norm_path:
+        return False
+    metadata, log_label = _norm_cache_bridge_payload(
+        norm_path,
+        bridge_flag,
+        config.display_station_name,
+        bitrate_kbps=config.audio.bitrate,
+    )
+    logger.warning(
+        "%s bridge: inserting norm-cache bridge: %s",
+        bridge_type.capitalize(),
+        log_label,
+    )
+    return await queue_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=norm_path,
+            duration_sec=_duration_sec_from_metadata(metadata),
+            metadata=metadata,
+            ephemeral=False,
+        )
+    )
+
+
 async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
     """Build the best non-silent segment for broad producer exception recovery."""
     fallback_path = _pick_recovery_clip(state)
     if fallback_path:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback_path)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback_path, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         logger.info("Error recovery: using packaged recovery clip")
         return Segment(
@@ -560,7 +585,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             last_good_title = last_good.name
         last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
     if last_good:
-        duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good)
+        duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good, rescue=True)
         logger.warning(
             "Error recovery: no packaged recovery clips or norm cache — recycling last-known-good music: %s",
             last_good.name,
@@ -726,6 +751,22 @@ _SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 # spec.cooldown so a timer configured with cooldown=300 doesn't suppress a
 # different timer's interrupt for 5 minutes.
 _GLOBAL_INTERRUPT_COOLDOWN_SECONDS = 60
+
+
+def _mark_moment_dropped(state: StationState, moment_id: str, reason: str, context: str) -> None:
+    """Best-effort receipt demotion; never lets receipt bookkeeping affect audio."""
+    if not moment_id or state.moment_store is None:
+        return
+    try:
+        state.moment_store.mark_dropped(moment_id, reason)
+    except Exception:  # pragma: no cover - receipts must never break production
+        logger.debug("Moment receipt %s drop failed", context, exc_info=True)
+
+
+def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason: str, context: str) -> None:
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    for key in ("ritual_moment_id", "gag_moment_id"):
+        _mark_moment_dropped(state, str(metadata.get(key) or ""), reason, f"{context}:{key}")
 
 
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
@@ -1083,6 +1124,7 @@ def _front_insert_queue_and_shadow(
     state.queued_segments.insert(0, shadow_entry)
     for seg in dropped:
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, seg, GenerationWasteReason.AIR_NEXT_OVERFLOW, "air-next-overflow")
         if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
             seg.path.unlink(missing_ok=True)
     if dropped and len(state.queued_segments) > 1:
@@ -1855,7 +1897,20 @@ async def _fire_interrupt(
     # Inject directive + pissed tone, then cut the current segment FIRST so the
     # interrupt feels immediate. Bridge-tone generation (below) can take seconds
     # on a loaded Pi — it must never block the skip.
+    # An interrupt clobbers whatever directive was pending. If that directive
+    # carried an elected Moment Receipt (same-poll directive+interrupt election,
+    # or a timer-poll interrupt landing on a waiting ritual directive), demote
+    # it honestly — its recipe cooldown is already spent and it can never air.
+    _mark_moment_dropped(
+        state,
+        state.ha_pending_directive_moment_id,
+        "interrupt_override",
+        "interrupt-override",
+    )
     state.ha_pending_directive = spec.directive
+    # Reactive-trigger interrupts carry no receipt; the ritual caller overwrites
+    # this with its row id right after a successful fire.
+    state.ha_pending_directive_moment_id = ""
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
     state.chaos_cutover_epoch += 1
@@ -2006,8 +2061,42 @@ def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatc
         if state.ha_pending_directive:
             continue
         state.ha_pending_directive = match.directive
+        # Radio-event directives have no Moment Receipt in v1 — clear any stale
+        # ritual id so it cannot attach to the wrong banter.
+        state.ha_pending_directive_moment_id = ""
         commit_radio_event_directive(match)
     return gag_events
+
+
+def _record_ritual_moment(
+    state: StationState,
+    match: RitualRecipeMatch,
+    *,
+    lane: str,
+    status: str = "elected",
+    drop_reason: str = "",
+) -> str:
+    """Best-effort Moment Receipt row for a ritual match. Never raises.
+
+    Returns the row id ("" when the store is absent or the write failed) so
+    callers can thread it toward the consuming segment's metadata.
+    """
+    store = state.moment_store
+    if store is None:
+        return ""
+    try:
+        return store.record(
+            lane=lane,
+            family=match.recipe.family,
+            public_label=match.recipe.public_family_label,
+            entity_id=match.entity_id,
+            confidence=match.confidence,
+            status=status,
+            drop_reason=drop_reason,
+        )
+    except Exception as exc:  # pragma: no cover - receipts must never break production
+        logger.debug("Moment receipt record failed: %s", exc)
+        return ""
 
 
 def _apply_ritual_recipe_matches(
@@ -2031,6 +2120,9 @@ def _apply_ritual_recipe_matches(
                 or state.operator_force_pending is not None
                 or state.force_next is not None
             ):
+                # Cleared the matcher but lost the slot — visible in the admin
+                # Moments panel so "why did nothing happen" has an answer.
+                _record_ritual_moment(state, match, lane=lane, status="dropped", drop_reason="interrupt_slot_busy")
                 continue
             interrupt = _PendingRitualInterrupt(
                 match=match,
@@ -2044,8 +2136,12 @@ def _apply_ritual_recipe_matches(
         if lane != "directive" or not match.recipe.directive:
             continue
         if state.ha_pending_directive:
+            _record_ritual_moment(state, match, lane=lane, status="dropped", drop_reason="directive_slot_busy")
             continue
         state.ha_pending_directive = match.recipe.directive
+        # The receipt id travels WITH the directive: the scriptwriter hands it
+        # off to the segment build, and confirmed-air flips it to aired.
+        state.ha_pending_directive_moment_id = _record_ritual_moment(state, match, lane=lane)
         commit_ritual_recipe_match(match)
     return gag_events, interrupt
 
@@ -2069,6 +2165,7 @@ def _maybe_arm_first_home_context_moment(
         return
 
     state.ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+    state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
     if seg_type != SegmentType.BANTER:
         state.force_next = SegmentType.BANTER
 
@@ -2278,6 +2375,7 @@ async def run_producer(
                     bridge_type="resume",
                     bridge_flag="resume_bridge",
                     canned_title="Resume bridge",
+                    music_runway=True,
                 )
 
         if state.listeners_active == 0:
@@ -2303,6 +2401,7 @@ async def run_producer(
                     bridge_flag="idle_bridge",
                     canned_title="Station warm-up",
                     canned_metadata={"warmup": True, "rescue": True},
+                    music_runway=True,
                 )
             _was_idle = False
         _producer_idle_logged = False
@@ -2557,6 +2656,7 @@ async def run_producer(
                     )
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
+                    state.ha_pending_directive_moment_id = ""  # not a ritual moment
             radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
             ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
             if ritual_interrupt is not None:
@@ -2570,6 +2670,20 @@ async def run_producer(
                 )
                 if fired:
                     commit_ritual_recipe_match(ritual_interrupt.match)
+                    # _fire_interrupt planted the directive (and blanked the
+                    # receipt id); attach this moment's row so the urgent
+                    # banter that consumes it carries the receipt to air.
+                    state.ha_pending_directive_moment_id = _record_ritual_moment(
+                        state, ritual_interrupt.match, lane="interrupt"
+                    )
+                else:
+                    _record_ritual_moment(
+                        state,
+                        ritual_interrupt.match,
+                        lane="interrupt",
+                        status="dropped",
+                        drop_reason="interrupt_cooldown",
+                    )
             _maybe_arm_first_home_context_moment(
                 state,
                 ha_cache,
@@ -2592,13 +2706,44 @@ async def run_producer(
                     offered = state.evening_ledger.offer_gag(now=_now)
                     if offered is not None:
                         state.ha_running_gag_key, state.ha_running_gag = offered
+                        # Moment Receipt for ritual-sourced gags only: the
+                        # bucket's ritual_family provenance (threaded in via
+                        # HomeEvent) is what makes a receipt legitimate — a
+                        # plain home-event gag has no ritual moment in v1.
+                        state.ha_running_gag_moment_id = ""
+                        if state.moment_store is not None:
+                            try:
+                                _bucket = state.evening_ledger.buckets.get(state.ha_running_gag_key)
+                                if _bucket is not None and _bucket.ritual_family:
+                                    state.ha_running_gag_moment_id = state.moment_store.record(
+                                        lane="running_gag",
+                                        family=_bucket.ritual_family,
+                                        public_label=_bucket.label,
+                                        entity_id=_bucket.entity_id,
+                                        count=_bucket.count,
+                                        now=_now,
+                                    )
+                            except Exception as exc:  # pragma: no cover - never break production
+                                logger.debug("Moment receipt gag record failed: %s", exc)
                     else:
                         state.ha_running_gag = ""
                         state.ha_running_gag_key = ""
+                        state.ha_running_gag_moment_id = ""
                 else:
                     state.ha_running_gag = ""
                     state.ha_running_gag_key = ""
+                    state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
+        # Flush Moment Receipts once per cycle at loop level, NOT inside the HA
+        # block: streamer-side finalizes (airing → true outcome) set the dirty
+        # flag from the playback loop, and must still reach disk when HA context
+        # is disabled or its refresh stalls. Dirty-gated — a clean store is a
+        # no-op, so this costs nothing on quiet cycles.
+        if state.moment_store is not None:
+            try:
+                state.moment_store.save_if_dirty(config.cache_dir)
+            except Exception:
+                logger.debug("Moment receipt store save failed", exc_info=True)
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
@@ -2819,6 +2964,31 @@ async def run_producer(
                 # LLM success path, so a canned/failed banter never leaves a stale
                 # gag for the success callback to commit (B-i).
                 state.pending_verbal_gag = None
+                # Reset the Moment Receipt handoff the same way: a previous cycle
+                # that consumed a directive but then died before the build (TTS
+                # failure, quality-gate reject, chaos discard) must not leave its
+                # id behind for an unrelated banter to wear on air. Its consumed
+                # directive is gone, so the elected row is demoted honestly
+                # instead of reading "waiting for its break" until retention.
+                if (
+                    state.last_banter_ritual_moment_id
+                    and state.last_banter_ritual_moment_id != state.ha_pending_directive_moment_id
+                ):
+                    _mark_moment_dropped(
+                        state,
+                        state.last_banter_ritual_moment_id,
+                        "generation_failed",
+                        "stale-handoff",
+                    )
+                state.last_banter_ritual_moment_id = ""
+
+                def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
+                    ritual_id = state.last_banter_ritual_moment_id
+                    if ritual_id and ritual_id != state.ha_pending_directive_moment_id:
+                        _mark_moment_dropped(state, ritual_id, reason, f"{context}:ritual")
+                    state.last_banter_ritual_moment_id = ""
+                    _mark_moment_dropped(state, state.ha_running_gag_moment_id, reason, f"{context}:gag")
+                    state.ha_running_gag_moment_id = ""
 
                 # Track listening sessions for compounding persona
                 await _maybe_start_session(state)
@@ -3027,6 +3197,14 @@ async def run_producer(
                                 banter_expected_min_duration_sec = None
                                 banter_expected_line_count = None
                                 audio_path = canned
+                                # This canned clip never carries the directive/gag on
+                                # air (attach_moment_ids below will be False) — demote
+                                # both receipts now, not just on a successful queue.
+                                # Otherwise a segment that later hits the stale/chaos-
+                                # cutover discard gate (which reads segment.metadata,
+                                # already stripped of these ids for a canned clip)
+                                # leaves the row "elected" until restart/7-day prune.
+                                _drop_unqueued_banter_receipts("canned_fallback", "chaos-canned-fallback")
                                 state.last_banter_script = [
                                     {
                                         "host": "Radio",
@@ -3049,6 +3227,7 @@ async def run_producer(
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
                             _abandon_release_beat_commit(state, listener_request_commit)
+                            _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             # Commit-free net: on a transition+banter gather failure
                             # the tuple never unpacks, so listener_request_commit is
                             # None and the abandon above is a no-op. Restore any
@@ -3103,6 +3282,12 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
+                                # Same as the chaos-exception fallback above: this canned
+                                # clip carries neither receipt on air, so demote both now
+                                # rather than leaving the gag id to leak into a later
+                                # discard/enqueue-failure that can't recover it from
+                                # segment.metadata (already stripped for a canned clip).
+                                _drop_unqueued_banter_receipts("canned_fallback", "quality-canned-fallback")
                                 fallback_text = "(pre-recorded banter)"
                                 fallback_type = "banter"
                                 if chaos_subtype is not None:
@@ -3136,8 +3321,10 @@ async def run_producer(
                                         )
                                     else:
                                         await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                _drop_unqueued_banter_receipts("generation_failed", "fallback-quality-reject")
                                 continue
                         else:
+                            _drop_unqueued_banter_receipts("generation_failed", "quality-reject")
                             if chaos_subtype is not None:
                                 if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
                                     state.chaos_pending = None
@@ -3193,6 +3380,9 @@ async def run_producer(
                         banter_commit,
                         state.last_banter_script,
                     )
+                ritual_moment_id = state.last_banter_ritual_moment_id or ""
+                gag_moment_id = state.ha_running_gag_moment_id or ""
+                attach_moment_ids = canned is None and not impossible_tts
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -3209,11 +3399,25 @@ async def run_producer(
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
                         "ledger_segment_id": _banter_attempt_id or None,
+                        # Moment Receipt ids (opaque; safe to cross public payload
+                        # boundaries). Generated banter only — canned fallbacks and
+                        # pre-rendered impossible-moment clips never carried the
+                        # directive or the gag on air. ONLY the scriptwriter's
+                        # handoff slot is read (both lanes set it at directive
+                        # inclusion; the stock-copy except path clears it) — never
+                        # live state, which survives a stock-copy fallback and
+                        # would mint a false aired receipt.
+                        "ritual_moment_id": ritual_moment_id if attach_moment_ids and ritual_moment_id else None,
+                        "gag_moment_id": gag_moment_id if attach_moment_ids and gag_moment_id else None,
                         **release_beat_metadata,
                         **memory_extraction_metadata,
                     },
                     ephemeral=canned is None,
                 )
+                # The handoff slot is single-use: consumed into this segment's
+                # metadata (or intentionally not, for canned fallbacks — the
+                # elected row then simply never airs and ages out honestly).
+                state.last_banter_ritual_moment_id = ""
 
                 def _banter_callback(
                     *,
@@ -3223,6 +3427,10 @@ async def run_producer(
                     _used_generated_banter=(canned is None and not impossible_tts),
                     _first_home_context_moment_pending=first_home_context_moment_pending,
                     _gag_key=state.ha_running_gag_key,
+                    _ritual_moment_id=ritual_moment_id,
+                    _ritual_moment_attached=bool(attach_moment_ids and ritual_moment_id),
+                    _gag_moment_id=gag_moment_id,
+                    _gag_moment_attached=bool(attach_moment_ids and gag_moment_id),
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
                     _pending_gag=state.pending_verbal_gag,
@@ -3250,7 +3458,20 @@ async def run_producer(
                     if _used_generated_banter and _ledger is not None and _gag_key:
                         _ledger.mark_spoken(_gag_key, now=time.time())
                         _ledger.save_if_dirty(_cache_dir)
+                    elif _gag_moment_id and not _gag_moment_attached:
+                        # The gag never rode this banter (canned clip or
+                        # pre-rendered moment aired instead) — demote its
+                        # receipt honestly; offer_gag can re-elect it later.
+                        _mark_moment_dropped(state, _gag_moment_id, "canned_fallback", "gag-canned-fallback")
+                    if _ritual_moment_id and not _ritual_moment_attached:
+                        _mark_moment_dropped(
+                            state,
+                            _ritual_moment_id,
+                            "generation_failed",
+                            "ritual-canned-fallback",
+                        )
                     state.ha_running_gag_key = ""
+                    state.ha_running_gag_moment_id = ""
                     # Commit the banter-seeded verbal gag to the cross-domain
                     # ledger ONLY now that the banter actually queued (B-i). A
                     # discarded banter never reaches this callback, so it never
@@ -3842,6 +4063,7 @@ async def run_producer(
                     logger.info("Discarding stale %s segment after same-source playlist edit", seg_type.value)
                     stale_reason = GenerationWasteReason.STALE_PLAYLIST
                 state.record_discard(segment, reason=stale_reason)
+                _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
@@ -3851,6 +4073,7 @@ async def run_producer(
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
+                _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_CHAOS, "chaos-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
@@ -3879,6 +4102,7 @@ async def run_producer(
                 if not await _enqueue_with_egress(
                     queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
                 ):
+                    _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
@@ -3886,6 +4110,7 @@ async def run_producer(
                 prev_seg_type = _adjacency_type_for(segment)
             else:
                 if not await _queue_segment(segment):
+                    _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
@@ -3893,7 +4118,24 @@ async def run_producer(
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
+                # An interrupt banter that fell back to stock copy queued WITHOUT
+                # its receipt id (the scriptwriter's except path cleared the
+                # handoff) — and the directive is consumed right here, so there
+                # is no retry. Demote the elected row honestly instead of leaving
+                # it "waiting for its break" until retention ages it out.
+                if (
+                    state.ha_pending_directive_moment_id
+                    and not segment.metadata.get("ritual_moment_id")
+                    and state.moment_store is not None
+                ):
+                    _mark_moment_dropped(
+                        state,
+                        state.ha_pending_directive_moment_id,
+                        "generation_failed",
+                        "interrupt-stock-copy",
+                    )
                 state.ha_pending_directive = ""
+                state.ha_pending_directive_moment_id = ""
                 # The safety-belt force_next was set when the interrupt fired.
                 # chaos_pending already produced the banter; clearing here
                 # prevents the producer from queueing an extra banter next cycle.

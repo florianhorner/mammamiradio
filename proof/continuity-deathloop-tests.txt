@@ -1,0 +1,28 @@
+Continuity clip deathloop fix validation
+Date: 2026-07-08
+Branch: florianhorner/fix-banter-deathloop
+
+Focused playback/producer coverage:
+- .venv/bin/python -m pytest tests/web/test_streamer_routes.py -k "timeout_fallback_keeps_queue_empty_clock or timeout_serves_one_packaged_clip_then_norm_cache or repeats_clip_only_when_no_music_rescue_exists or timeout_uses_legacy_welcome or timeout_uses_norm_cache_at_first_byte_grace or timeout_uses_demo_assets_after_30s or timeout_fully_empty_container_forces_banter or post_restart_resume_serves_rescue_at_grace"
+  Result: 8 passed, 160 deselected
+- .venv/bin/python -m pytest tests/scheduling/test_producer_unit.py -k "idle_bridge_queues_canned_clip_then_norm_cache_runway_when_available or resume_bridge_queues_canned_clip_then_norm_cache_runway_when_available or drain_bridge_keeps_single_canned_clip_even_with_warm_cache or resume_bridge_falls_back_to_norm_cache_when_no_canned_clips or idle_bridge_falls_back_to_norm_cache_when_no_canned_clips or continuity_bridge_canned_metadata"
+  Result: 6 passed, 145 deselected
+- .venv/bin/python -m pytest tests/web/test_streamer_coverage.py -k "packaged_asset"
+  Result: 3 passed, 26 deselected
+- .venv/bin/python -m pytest tests/web/test_streamer_routes.py tests/web/test_streamer_coverage.py tests/web/test_shadow_queue_sync.py
+  Result: 285 passed
+- .venv/bin/python -m pytest tests/scheduling/test_producer_unit.py tests/scheduling/test_producer_coverage.py
+  Result: 211 passed
+- .venv/bin/python -m pytest tests/scheduling/test_producer_imaging.py::test_idle_bridge_updates_boundary_before_next_music
+  Result: 1 passed
+
+Release invariants:
+- bash scripts/check-release-invariants.sh
+  Result: 10 passed, 0 failed
+
+Repo gate:
+- source .venv/bin/activate && make check
+  Result: passed
+  Details: 4271 passed, 2 skipped, 21 deselected, total coverage 92.87% (floor 92%)
+
+Full-suite coverage is included in the current `make check` gate above.

@@ -1343,6 +1343,57 @@ def test_purge_restores_queued_release_beat_attempt():
     state.release_campaign.save_if_dirty.assert_called_once()
 
 
+def test_purge_demotes_carried_moment_receipt():
+    """A queued banter carrying an elected ritual/gag receipt that gets purged
+    (stop, panic, source-switch, chaos/festival-enable, /api/purge — every
+    caller routes through this one drain) must have its row demoted. Without
+    this, the admin Moments panel keeps showing "waiting for its break" for a
+    segment that no longer exists in the real queue."""
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    q: asyncio.Queue = asyncio.Queue()
+    store = MomentStore()
+    ritual_id = store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    gag_id = store.record(lane="running_gag", family="fridge_freezer_raid", public_label="Kitchen ritual")
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/purge_receipt.mp3"),
+        metadata={"title": "Banter", "ritual_moment_id": ritual_id, "gag_moment_id": gag_id},
+        ephemeral=False,
+    )
+    q.put_nowait(segment)
+    state = StationState()
+    state.moment_store = store
+    state.queued_segments = [{"id": "1"}]
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_STOP)
+
+    assert count == 1
+    ritual_row, gag_row = store.rows
+    assert ritual_row.status == "dropped"
+    assert ritual_row.drop_reason == "operator_stop"
+    assert gag_row.status == "dropped"
+    assert gag_row.drop_reason == "operator_stop"
+
+
+def test_purge_without_moment_store_is_a_noop():
+    """Purging must not raise when no moment_store is attached (standalone/no-HA)."""
+    q: asyncio.Queue = asyncio.Queue()
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/purge_no_store.mp3"),
+        metadata={"title": "Banter", "ritual_moment_id": "some-id"},
+        ephemeral=False,
+    )
+    q.put_nowait(segment)
+    state = StationState()
+    state.queued_segments = [{"id": "1"}]
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_STOP)
+
+    assert count == 1
+
+
 def test_purge_clears_queue_even_when_unlink_raises_non_oserror():
     # The unlink guard is broad (except Exception), so even a NON-OSError — e.g. a
     # malformed segment whose path raises AttributeError on .unlink — must not abort

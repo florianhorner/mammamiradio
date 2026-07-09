@@ -30,6 +30,7 @@ _CACHE_PROTECTED = {
     "session_stopped.flag",
     "evening_ledger.json",
     "release_campaign_ledger.json",
+    "moments.json",
 }
 _TRUTHY = ("true", "1", "yes")
 

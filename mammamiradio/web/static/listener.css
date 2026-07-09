@@ -191,6 +191,8 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-casa .row { display: flex; align-items: center; gap: 8px; color: var(--cream-dk); margin-bottom: 3px; }
 .mmr-casa .row.dim { color: var(--text-secondary); }
 .mmr-casa .row .ico { font-family: var(--font-mono); font-size: 10px; color: var(--ok); width: 10px; display: inline-block; }
+.mmr-casa .casa-moments-eyebrow { margin-top: 10px; }
+#casa-moments-rows .row { font-size: 11px; }
 
 /* Radio illustration */
 .mmr-hero-art { position: relative; aspect-ratio: 1/1; max-height: 520px; width: 100%; display: flex; align-items: center; justify-content: center; }

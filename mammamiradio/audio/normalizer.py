@@ -646,14 +646,16 @@ def normalize(
     return output_path
 
 
-def probe_duration_sec(path: Path) -> float | None:
+def probe_duration_sec(path: Path, *, rescue: bool = False) -> float | None:
     """Best-effort mp3 duration probe; None if ffprobe fails.
 
     Used by concat_files for a duration-invariant sanity check. We don't want
-    a probe failure to crash a concat — just skip the check.
+    a probe failure to crash a concat — just skip the check. ``rescue`` routes
+    the probe through the bounded rescue admission slot so a dead-air fill is
+    never queued indefinitely behind ordinary normalization jobs.
     """
     try:
-        with ffmpeg_slot():
+        with ffmpeg_slot(rescue=rescue):
             result = subprocess.run(
                 [
                     "ffprobe",
@@ -1480,7 +1482,7 @@ def generate_transition_sting(
     """Generate a station-branded transition sting for music/speech boundaries."""
     from_name = from_type_name.strip().lower()
     to_name = to_type_name.strip().lower()
-    speech_types = {"banter", "news_flash", "ad", "station_id"}
+    speech_types = {"banter", "news_flash", "ad", "station_id", "time_check", "sweeper"}
     notes = motif_notes or [523, 659, 784, 1047]
     variant_index = max(0, int(variant)) % 3
     rotated_notes = notes[1:] + notes[:1] if len(notes) > 1 else notes
