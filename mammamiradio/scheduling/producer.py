@@ -1124,6 +1124,7 @@ def _front_insert_queue_and_shadow(
     state.queued_segments.insert(0, shadow_entry)
     for seg in dropped:
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, seg, GenerationWasteReason.AIR_NEXT_OVERFLOW, "air-next-overflow")
         if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
             seg.path.unlink(missing_ok=True)
     if dropped and len(state.queued_segments) > 1:
@@ -3196,6 +3197,14 @@ async def run_producer(
                                 banter_expected_min_duration_sec = None
                                 banter_expected_line_count = None
                                 audio_path = canned
+                                # This canned clip never carries the directive/gag on
+                                # air (attach_moment_ids below will be False) — demote
+                                # both receipts now, not just on a successful queue.
+                                # Otherwise a segment that later hits the stale/chaos-
+                                # cutover discard gate (which reads segment.metadata,
+                                # already stripped of these ids for a canned clip)
+                                # leaves the row "elected" until restart/7-day prune.
+                                _drop_unqueued_banter_receipts("canned_fallback", "chaos-canned-fallback")
                                 state.last_banter_script = [
                                     {
                                         "host": "Radio",
@@ -3273,14 +3282,12 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
-                                if state.last_banter_ritual_moment_id:
-                                    _mark_moment_dropped(
-                                        state,
-                                        state.last_banter_ritual_moment_id,
-                                        "canned_fallback",
-                                        "quality-canned-fallback",
-                                    )
-                                    state.last_banter_ritual_moment_id = ""
+                                # Same as the chaos-exception fallback above: this canned
+                                # clip carries neither receipt on air, so demote both now
+                                # rather than leaving the gag id to leak into a later
+                                # discard/enqueue-failure that can't recover it from
+                                # segment.metadata (already stripped for a canned clip).
+                                _drop_unqueued_banter_receipts("canned_fallback", "quality-canned-fallback")
                                 fallback_text = "(pre-recorded banter)"
                                 fallback_type = "banter"
                                 if chaos_subtype is not None:

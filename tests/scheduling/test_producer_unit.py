@@ -2247,14 +2247,21 @@ async def test_stock_copy_fallback_banter_never_wears_a_receipt(tmp_path):
 
 @pytest.mark.asyncio
 async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(tmp_path):
-    """If generated directive banter is replaced by a canned fallback, the row
-    must not stay "waiting for its break": the directive was consumed and the
-    canned clip cannot carry it to air."""
+    """If generated directive banter is replaced by a canned fallback, neither
+    receipt it was carrying may stay "waiting for its break": the directive
+    (and any running gag riding the same banter) was consumed and the canned
+    clip cannot carry either to air. Regression coverage for a gap where only
+    the ritual id was demoted inline and the gag id was left dangling until a
+    successful queue (never reached if a later stale/enqueue-failure discard
+    hits this same segment first)."""
     from mammamiradio.audio.audio_quality import AudioQualityError
 
     state = _make_state()
     state.moment_store = _moment_store()
     row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    gag_row_id = state.moment_store.record(
+        lane="running_gag", family="fridge_freezer_raid", public_label="Kitchen ritual"
+    )
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
@@ -2265,6 +2272,7 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
 
     async def _write_banter(*_args, **_kwargs):
         state.last_banter_ritual_moment_id = row_id
+        state.ha_running_gag_moment_id = gag_row_id
         return [(host, "La macchina del caffe si e svegliata.")], None
 
     quality_calls = 0
@@ -2294,9 +2302,127 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
     seg = queue.get_nowait()
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("ritual_moment_id") is None
+    assert seg.metadata.get("gag_moment_id") is None
+    rows_by_id = {row.id: row for row in state.moment_store.rows}
+    assert rows_by_id[row_id].status == "dropped"
+    assert rows_by_id[row_id].drop_reason == "canned_fallback"
+    assert rows_by_id[gag_row_id].status == "dropped"
+    assert rows_by_id[gag_row_id].drop_reason == "canned_fallback"
+    assert state.last_banter_ritual_moment_id == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
+    """A generated banter carrying an elected ritual receipt that loses the
+    stale-playlist race in the shared discard epilogue (producer.py's
+    ``_drop_segment_moment_receipts`` call at the stale-gate) must have its
+    row demoted — otherwise the admin Moments panel shows it "waiting for its
+    break" for up to a week for a moment that was actually discarded."""
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    async def _write_banter(*_args, **_kwargs):
+        state.last_banter_ritual_moment_id = row_id
+        return [(host, "La macchina del caffe si e svegliata.")], None
+
+    def _staling_probe(_path):
+        # A same-source playlist edit lands mid-build — the shared epilogue
+        # gate discards this segment before it ever reaches the queue.
+        state.playlist_revision += 1
+        return 1.0
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_staling_probe),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not (state.moment_store.rows and state.moment_store.rows[0].status == "dropped"):
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("moment receipt was never demoted after the stale discard")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()  # discarded, never queued
     (row,) = state.moment_store.rows
     assert row.status == "dropped"
-    assert row.drop_reason == "canned_fallback"
+    assert row.drop_reason == "stale_playlist"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_demotes_carried_moment_receipt(tmp_path):
+    """A generated banter carrying an elected ritual receipt whose enqueue
+    fails (operator stopped the session mid-build) must have its row demoted
+    at the ``_queue_segment`` failure site — the directive was already
+    consumed and no retry will carry this receipt to air."""
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    async def _write_banter(*_args, **_kwargs):
+        state.last_banter_ritual_moment_id = row_id
+        # Operator hit Stop while this banter was mid-build: the top-of-loop
+        # gate already passed for this iteration, so this reaches the
+        # _queue_segment() failure path instead of being caught earlier.
+        state.session_stopped = True
+        return [(host, "La macchina del caffe si e svegliata.")], None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not (state.moment_store.rows and state.moment_store.rows[0].status == "dropped"):
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("moment receipt was never demoted after the enqueue failure")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert queue.empty()  # session stopped — never queued
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "generation_failed"
 
 
 @pytest.mark.asyncio

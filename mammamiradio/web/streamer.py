@@ -324,6 +324,31 @@ def _unlink_ephemeral_best_effort(seg) -> None:
             logger.debug("Ephemeral purge unlink failed for %s", getattr(seg, "path", None), exc_info=True)
 
 
+def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> None:
+    """Demote any Moment Receipt a discarded queued segment was carrying.
+
+    Every path that pulls an already-queued BANTER segment out of the real
+    queue without letting it air (purge, session-stop mid-selection, an
+    operator's /api/queue/remove) must also settle the receipt honestly —
+    otherwise the admin trail keeps showing "waiting for its break" for a
+    segment that no longer exists. Best-effort like every other receipt call:
+    never lets bookkeeping affect the purge/discard it's piggybacking on.
+    """
+    store = getattr(state, "moment_store", None)
+    if store is None:
+        return
+    meta = getattr(segment, "metadata", None)
+    if not isinstance(meta, dict):
+        return
+    try:
+        for key in ("ritual_moment_id", "gag_moment_id"):
+            moment_id = str(meta.get(key) or "")
+            if moment_id:
+                store.mark_dropped(moment_id, reason)
+    except Exception:  # pragma: no cover - receipts must never break a purge
+        logger.debug("Moment receipt discard drop failed", exc_info=True)
+
+
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
@@ -343,6 +368,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     for seg in items:
         if reason is not None:
             state.record_discard(seg, reason=reason, already_counted_in_produced=True)
+            _drop_segment_moment_receipts(state, seg, str(reason))
         _unlink_ephemeral_best_effort(seg)
     state.queued_segments.clear()
     return len(items)
@@ -1855,6 +1881,7 @@ async def run_playback_loop(app) -> None:
                 reason=GenerationWasteReason.SESSION_STOPPED,
                 already_counted_in_produced=pulled_from_queue,
             )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.SESSION_STOPPED)
             # Use the hardened helper (never raises) instead of a raw unlink: a
             # throwing unlink here would escape into the playback coroutine and
             # drop the stream (#1), and skip the task_done() balance below.
@@ -2962,6 +2989,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
             reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
             already_counted_in_produced=True,
         )
+        _drop_segment_moment_receipts(state, removed_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
         _unlink_ephemeral_best_effort(removed_segment)
 
     for item in items:
