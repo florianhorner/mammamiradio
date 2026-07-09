@@ -282,6 +282,16 @@ Organic momentum-based drift with overshoot-and-settle locking. Keep the wobble.
 - Duration: micro(50-100ms) short(150ms) medium(250ms) long(400ms)
 - Track title change: rolls up from below on a real change (`--transition-track`, `.tt-track-roll` / `tt-roll-up`), gated so it never replays on an unchanged re-render (see Decisions Log).
 
+### Teatro del Movimento — additional motion patterns
+Named `tt-*` keyframes added alongside the track-title roll, same pass:
+- **Page entrance** (`tt-wake`, listener bands) — one-shot fade + rise on page load, staggered ~60ms per band. 700ms — an intentional exception to the 400ms "long" ceiling above; see Decisions Log.
+- **Play-button pulse** (`tt-ripple`/`tt-thump`, `.mmr-play-btn.playing`) — expanding ring + icon thump while playing, 1.4s ease-out/ease-in-out loop, matching the existing loop-duration convention (`mmr-speaker-pulse`, `status-pulse`, `live-pulse` are all 1.4s).
+- **Admin recap typewriter** (`tt-typing`/`tt-caret-blink`, admin Diretta "last break") — ~55ms/char with a punctuation pause, diff-guarded against the 3s poll so it only types on genuine new content.
+- **Dedica send** (`tt-stamp-press`/`tt-card-lift`, listener dedica form, success path only) — stamp press (`--transition-slow`, 320ms) then the whole card lifts and fades (1.4s ease-in, 320ms delay — ~1.72s total). Also an intentional exception to the duration scale; see Decisions Log. 429/failure responses skip this and just crossfade.
+- **Producer-desk polish** (`tt-tick-pop`, all three feature-toggle switches; `tt-thumb-glow`/`.tt-settling`, host preset sliders) — checkmark pop-in on toggle-on; a brief glow on preset-applied slider snaps only, never on raw drag.
+
+All of the above collapse under `prefers-reduced-motion` (paired CSS `animation:none` overrides, plus a JS-level `matchMedia` gate for the two patterns whose completion a script waits on — the typewriter and the dedica send sequence).
+
 ## Components
 
 ### Cards
@@ -718,3 +728,4 @@ cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -
 | 2026-04-21 | Listener surface re-scoped from "player widget" to "radio station website" | Perplexity-generated Italian-radio mockups (Sole / Bella Italia / Notturno) made visible that "cohesive, not disjointed" means the full website: nav + persistent now-playing strip + hero with image + palinsesto + dediche. Florian approved `site-v1.html` direction. Role-play schedule ("Stasera in Onda") + magazine pull-quote Dediche pattern are net-new sections. |
 | 2026-04-21 | Accent-word pattern extends Gold-Mi | One italic accent-word per Playfair heading, always in `--sun`, always the emotional anchor. Extends the brand signature from the station name to every major heading. Confirmed by Perplexity Bella Italia variant ("*della vera Italia*" pattern). |
 | 2026-07-09 | Reversed "Track title change: no animation" — now rolls up on a real change | Part of the Teatro del Movimento motion pass. The static-presence rationale (Playfair at 22px) held for a page that otherwise never moved; once the rest of the listener page gained motion (page entrance, play-button pulse, dedica send), a silent title swap read as a missed beat rather than restraint. New `--transition-track` token (600ms, deliberately longer than `--transition-slow`) gives the swap read-time; `renderNowPlayingStrip()` diffs against the last rendered key so an unchanged 3s poll re-render never replays it. |
+| 2026-07-10 | Two Teatro del Movimento durations intentionally exceed the documented long(400ms) ceiling | `tt-wake` (page entrance, 700ms) and the dedica `tt-stamp-press`→`tt-card-lift` sequence (~1.72s total) are both one-shot, non-looping choreography — not hover/focus transitions, which is what the 400ms ceiling is calibrated for. A page waking up or a physical object being stamped and mailed reads as unhurried at this length; compressing either into 400ms would feel clipped, not restrained. Both still collapse instantly under `prefers-reduced-motion`. |

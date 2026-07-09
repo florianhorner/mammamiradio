@@ -3527,12 +3527,13 @@ function _recentContentHash(st){
   return lines+'||'+adSig;
 }
 
-function _typeChars(text,idx,textNode,onDone,gen){
+function _typeChars(chars,idx,textNode,onDone,gen){
   if(gen!==_recentTypeGen)return;
-  if(idx>=text.length){onDone();return;}
-  textNode.nodeValue+=text[idx];
-  const pause=/[.,!?;:…]/.test(text[idx])?55+180:55;
-  setTimeout(()=>_typeChars(text,idx+1,textNode,onDone,gen),pause);
+  if(idx>=chars.length){onDone();return;}
+  const ch=chars[idx];
+  textNode.nodeValue+=ch;
+  const pause=/[.,!?;:…]/.test(ch)?55+180:55;
+  setTimeout(()=>_typeChars(chars,idx+1,textNode,onDone,gen),pause);
 }
 
 function _typeRecentSegments(segments,gen){
@@ -3540,7 +3541,7 @@ function _typeRecentSegments(segments,gen){
   const seg=segments.shift();
   if(!seg)return;
   seg.lineEl.classList.add('tt-typing');
-  _typeChars(seg.text,0,seg.textNode,()=>{
+  _typeChars(Array.from(seg.text),0,seg.textNode,()=>{
     if(gen!==_recentTypeGen)return;
     seg.lineEl.classList.remove('tt-typing');
     _typeRecentSegments(segments,gen);
@@ -4363,6 +4364,7 @@ async function applyHostPreset(n,presetName){
   if(!preset)return;
   const block=document.querySelector(`.host-block[data-h="${CSS.escape(n)}"]`);
   if(!block)return;
+  const settlingSliders=[];
   block.querySelectorAll('input[type="range"]').forEach(sl=>{
     const ax=sl.dataset.a;
     if(ax in preset){
@@ -4372,11 +4374,14 @@ async function applyHostPreset(n,presetName){
       if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
       if(!recordHuntReducedMotion()){
         sl.classList.remove('tt-settling');
-        void sl.offsetWidth;
-        sl.classList.add('tt-settling');
+        settlingSliders.push(sl);
       }
     }
   });
+  if(settlingSliders.length){
+    void block.offsetWidth; // one shared reflow instead of one per slider
+    settlingSliders.forEach(sl=>sl.classList.add('tt-settling'));
+  }
   block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===presetName));
   refreshHostPreview(block);
   await updHost(n,preset);

@@ -289,7 +289,7 @@
     // Act IV — Il Cambio. Only animate on a genuine content change: the 3s
     // poll re-renders this unconditionally, and without this guard the roll
     // would replay on every tick even when nothing changed.
-    const npKey = trackEl.textContent + '|' + artistEl.textContent;
+    const npKey = JSON.stringify([trackEl.textContent, artistEl.textContent]);
     if (state.lastNpKey === null) {
       // First render (page load) — establish the baseline without animating,
       // so there's no spurious roll-up on initial paint.
@@ -794,9 +794,12 @@
 
       if (isSuccess && formEl && !reducedMotion()) {
         formEl.classList.add('is-sending');
-        const onCardLiftEnd = (e) => {
-          if (e.animationName !== 'tt-card-lift') return; // ignore tt-stamp-press bubbling up first
+        let liftDone = false;
+        const finishLift = () => {
+          if (liftDone) return; // animationend + fallback timer can both fire — only run once
+          liftDone = true;
           formEl.removeEventListener('animationend', onCardLiftEnd);
+          clearTimeout(liftFallback);
           formEl.style.display = 'none';
           formEl.classList.remove('is-sending');
           if (sentEl) {
@@ -804,7 +807,17 @@
             requestAnimationFrame(() => sentEl.classList.add('is-visible'));
           }
         };
+        const onCardLiftEnd = (e) => {
+          if (e.animationName !== 'tt-card-lift') return; // ignore tt-stamp-press bubbling up first
+          finishLift();
+        };
         formEl.addEventListener('animationend', onCardLiftEnd);
+        // Backgrounded/inactive tabs can throttle or skip animation frames
+        // entirely, so animationend isn't guaranteed to fire — a bounded
+        // fallback (stamp-press 320ms + card-lift 1.4s + margin) guarantees
+        // the confirmation still reveals instead of leaving the form stuck
+        // hidden with no message until the unrelated 15s revert timer.
+        const liftFallback = setTimeout(finishLift, 2500);
       } else if (isSuccess) {
         // Reduced motion: match the original instant swap exactly — no
         // animation class, no crossfade, so there's nothing to wait on.
