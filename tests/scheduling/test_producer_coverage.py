@@ -828,7 +828,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=fake_audio),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=None),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),

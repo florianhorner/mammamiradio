@@ -41,6 +41,78 @@ def test_pick_stinger_uses_matching_asset_before_synthetic(tmp_path):
     mock_generate.assert_not_called()
 
 
+def test_pick_stinger_uses_generic_pack_asset_when_pair_is_not_overridden(tmp_path):
+    assets = tmp_path / "assets"
+    stingers = assets / "stingers"
+    stingers.mkdir(parents=True)
+    generic = stingers / "music_to_speech.mp3"
+    generic.write_bytes(b"night-drive")
+    out = tmp_path / "out.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    with patch("mammamiradio.audio.imaging.generate_transition_sting") as mock_generate:
+        result = lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out)
+
+    assert result == out
+    assert out.read_bytes() == b"night-drive"
+    mock_generate.assert_not_called()
+
+
+def test_pack_assets_cover_station_sweeper_time_and_ad_bumper_before_fallback(tmp_path):
+    assets = tmp_path / "assets"
+    (assets / "bumpers").mkdir(parents=True)
+    for relative_path, contents in {
+        "station_id.mp3": b"station",
+        "sweeper.mp3": b"sweeper",
+        "time_check.mp3": b"clock",
+        "bumpers/ad_break.mp3": b"bumper",
+    }.items():
+        path = assets / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    with (
+        patch("mammamiradio.audio.imaging.generate_station_id_bed") as station_fallback,
+        patch("mammamiradio.audio.imaging.generate_tone") as time_fallback,
+        patch("mammamiradio.audio.imaging.generate_bumper_jingle") as bumper_fallback,
+    ):
+        station = tmp_path / "station.mp3"
+        sweeper = tmp_path / "sweeper.mp3"
+        time_check = tmp_path / "time.mp3"
+        bumper = tmp_path / "bumper.mp3"
+        assert lib.pick_station_id_bed(station) == station
+        assert lib.pick_sweeper_sting(sweeper) == sweeper
+        assert lib.pick_time_check_sting(time_check) == time_check
+        assert lib.pick_ad_bumper(bumper) == bumper
+
+    assert station.read_bytes() == b"station"
+    assert sweeper.read_bytes() == b"sweeper"
+    assert time_check.read_bytes() == b"clock"
+    assert bumper.read_bytes() == b"bumper"
+    station_fallback.assert_not_called()
+    time_fallback.assert_not_called()
+    bumper_fallback.assert_not_called()
+
+
+def test_ad_sfx_dir_prefers_existing_custom_directory_then_pack(tmp_path):
+    assets = tmp_path / "assets"
+    bundled = assets / "sfx"
+    bundled.mkdir(parents=True)
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    assert lib.ad_sfx_dir(custom) == custom
+    assert lib.ad_sfx_dir(tmp_path / "missing") == bundled
+    assert lib.ad_beds_dir() is None
+
+    beds = assets / "beds"
+    beds.mkdir()
+    (beds / "casa_notte.mp3").write_bytes(b"bed")
+    assert lib.ad_beds_dir() == beds
+
+
 def test_pick_stinger_music_to_speech_falls_back_to_synthetic(tmp_path):
     out = tmp_path / "transition.mp3"
     motif = [523, 659, 784, 1047]

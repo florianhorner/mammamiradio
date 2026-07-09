@@ -132,6 +132,75 @@ PY
     fi
 }
 
+assert_image_imaging_assets() {
+    local image="$1"
+    if docker run --rm -i "$image" python3 - <<'PY'
+from importlib import resources
+import json
+import subprocess
+
+try:
+    imaging_dir = resources.files("mammamiradio").joinpath("assets", "imaging")
+    manifest = json.loads(imaging_dir.joinpath("manifest.json").read_text(encoding="utf-8"))
+except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError, OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"cannot read installed Night Drive imaging pack: {exc}") from exc
+
+assets = manifest.get("assets")
+if not isinstance(assets, list) or not assets:
+    raise SystemExit("installed Night Drive manifest has no assets")
+
+for entry in assets:
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        raise SystemExit(f"invalid Night Drive manifest entry: {entry!r}")
+    asset = imaging_dir.joinpath(*entry["path"].split("/"))
+    try:
+        size = len(asset.read_bytes())
+    except OSError as exc:
+        raise SystemExit(f"cannot read installed imaging asset {entry['path']}: {exc}") from exc
+    if size <= 1024:
+        raise SystemExit(f"installed imaging asset is missing or too small: {entry['path']}")
+    try:
+        with resources.as_file(asset) as path:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_name,sample_rate,channels",
+                    "-of",
+                    "json",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+    except FileNotFoundError as exc:
+        raise SystemExit("ffprobe is not installed in the image") from exc
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"ffprobe timed out for installed imaging asset {entry['path']}")
+    if result.returncode != 0:
+        raise SystemExit(f"ffprobe failed for {entry['path']}: {result.stderr.strip()}")
+    payload = json.loads(result.stdout)
+    streams = payload.get("streams", [])
+    stream = streams[0] if streams else {}
+    if stream.get("codec_name") != "mp3" or stream.get("sample_rate") != "48000" or stream.get("channels") != 2:
+        raise SystemExit(f"installed imaging asset has wrong format {entry['path']}: {stream}")
+
+print(f"Night Drive imaging pack OK: {len(assets)} assets")
+PY
+    then
+        pass "Installed Night Drive imaging pack present and ffprobe-playable"
+        return 0
+    else
+        fail "Installed Night Drive imaging pack missing, incomplete, or unplayable"
+        return 1
+    fi
+}
+
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
 
@@ -602,6 +671,9 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Checking installed recovery assets..."
         assert_image_recovery_assets "mammamiradio-addon-test:local" || true
+
+        echo "  Checking installed Night Drive imaging assets..."
+        assert_image_imaging_assets "mammamiradio-addon-test:local" || true
 
         echo "  Testing container startup..."
         # Create minimal options.json

@@ -1471,6 +1471,40 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     return output_path
 
 
+def loop_audio_bed(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -18.0,
+) -> Path:
+    """Loop a pre-rendered bed to an exact duration at a predictable level.
+
+    This is deliberately a small, reusable primitive: station imaging and ad
+    production can use authored packaged beds without having to regenerate an
+    oscillator texture at runtime.  Callers still own their final voice mix and
+    its loudness reconciliation.
+    """
+    duration = max(float(duration_sec), 0.5)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB,loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "loop packaged audio bed")
+    return output_path
+
+
 def generate_transition_sting(
     from_type_name: str,
     to_type_name: str,

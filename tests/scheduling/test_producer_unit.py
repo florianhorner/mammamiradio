@@ -555,12 +555,14 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
     config.sonic_brand.sweeper_voice = ""
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -583,11 +585,13 @@ async def test_station_id_uses_configured_sweeper_engine():
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -692,12 +696,14 @@ async def test_time_check_uses_host_engine_for_tts():
     config.identity.station_name = "Radio Test"
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_time_check_sting.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -737,6 +743,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         roles_used=["hammer"],
     )
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    packaged_sfx = Path("/tmp/night-drive/sfx")
+    packaged_beds = Path("/tmp/night-drive/beds")
+    imaging.ad_sfx_dir.return_value = packaged_sfx
+    imaging.ad_beds_dir.return_value = packaged_beds
 
     async def _same_intro_path(path, *_args, **_kwargs):
         return path
@@ -751,8 +763,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         ),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -764,6 +780,8 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.args[1] == "elevenlabs-voice-id"
     assert promo_call.kwargs["engine"] == "elevenlabs"
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
+    assert mock_synthesize_ad.call_args.args[3] == packaged_sfx
+    assert mock_synthesize_ad.call_args.kwargs["bed_assets_dir"] == packaged_beds
 
 
 # ---------------------------------------------------------------------------
@@ -3576,7 +3594,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as mock_synth_ad,
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),

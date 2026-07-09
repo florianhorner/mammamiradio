@@ -284,7 +284,7 @@ async def test_ad_callback_lands_retires_gag(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_ad),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_ad_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_ad_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_ad_path),
         patch(f"{MODULE}.validate_segment_audio"),  # mocked audio path has no real file
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -325,7 +325,7 @@ async def test_ad_callback_ignored_does_not_retire(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_ad),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_ad_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_ad_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_ad_path),
         patch(f"{MODULE}.validate_segment_audio"),  # mocked audio path has no real file
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),

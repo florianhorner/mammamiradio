@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **The add-on now has a signature Night Drive sound.** Station IDs, time checks, music handoffs, and ad breaks now draw from one bundled warm Italian imaging pack instead of unrelated generated tones. Fictional ads get distinct cue sounds and one clean bed beneath the voice, and you can create a local before-and-after listening page before updating. The fast recovery audio path stays separate and untouched.
+
 ### Fixed
 
 - **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the add-on now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the add-on's audio workers are busy, and its length is remembered so replays never wait on a re-measure.

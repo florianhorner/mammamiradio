@@ -30,8 +30,6 @@ from mammamiradio.audio.normalizer import (
     broadcast_chain_version,
     concat_files,
     crossfade_voice_over_music,
-    generate_bumper_jingle,
-    generate_station_id_bed,
     generate_tone,
     humanize_norm_filename,
     load_track_metadata,
@@ -3601,7 +3599,8 @@ async def run_producer(
                         edge_fallback_voice=sweeper_fallback,
                         state=state,
                     )
-                    sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
+                    imaging_lib = _make_imaging_lib(config)
+                    sting_task = loop.run_in_executor(None, imaging_lib.pick_station_id_bed, sting_path, 3.0)
                     await asyncio.gather(voice_task, sting_task)
 
                     # Mix voice over sting
@@ -3656,7 +3655,10 @@ async def run_producer(
                     chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
                     host = random.choice(_sw._regular_hosts(config))
                     loop = asyncio.get_running_loop()
-                    # Voice + chime in parallel (independent)
+                    # Voice + packaged station cue in parallel (independent).
+                    # The cue falls back to the historical tone if an operator's
+                    # custom imaging directory is incomplete.
+                    imaging_lib = _make_imaging_lib(config)
                     await asyncio.gather(
                         synthesize(
                             time_text,
@@ -3666,7 +3668,7 @@ async def run_producer(
                             edge_fallback_voice=host.edge_fallback_voice,
                             state=state,
                         ),
-                        loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
+                        loop.run_in_executor(None, imaging_lib.pick_time_check_sting, chime_path),
                     )
                     audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
                     await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
@@ -3698,7 +3700,10 @@ async def run_producer(
                 break_sonic_worlds: list[str] = []
 
                 loop = asyncio.get_running_loop()
-                sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                imaging_lib = _make_imaging_lib(config)
+                configured_sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                sfx_dir = imaging_lib.ad_sfx_dir(configured_sfx_dir)
+                bed_assets_dir = imaging_lib.ad_beds_dir()
 
                 # ── Pre-compute brand selections (pure sync, no I/O) ──
                 used_brands_this_break: list[str] = []
@@ -3776,7 +3781,7 @@ async def run_producer(
                         pass
                     return parts, itext, has_music_tail
 
-                async def _build_bumpers(_num_spots=num_spots, _loop=loop):
+                async def _build_bumpers(_num_spots=num_spots, _loop=loop, _imaging_lib=imaging_lib):
                     """Opening bumper + sparse mid-spot bumpers.
 
                     Mid-bumpers only play ~25% of the time to avoid harsh
@@ -3788,9 +3793,9 @@ async def run_producer(
                         for _ in range(max(0, _num_spots - 1))
                         if random.random() < 0.25
                     ]
-                    tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
+                    tasks = [_loop.run_in_executor(None, _imaging_lib.pick_ad_bumper, bumper_in)]
                     for mb in mid_bumpers:
-                        tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
+                        tasks.append(_loop.run_in_executor(None, _imaging_lib.pick_ad_bumper, mb, 0.8))
                     await asyncio.gather(*tasks)
                     return bumper_in, mid_bumpers
 
@@ -3853,7 +3858,15 @@ async def run_producer(
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 ad_paths = await asyncio.gather(
                     *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state, cache_dir=config.cache_dir)
+                        synthesize_ad(
+                            script,
+                            vm,
+                            config.tmp_dir,
+                            sfx_dir,
+                            state=state,
+                            cache_dir=config.cache_dir,
+                            bed_assets_dir=bed_assets_dir,
+                        )
                         for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                     )
                 )
@@ -3900,7 +3913,7 @@ async def run_producer(
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
                 outro_text = random.choice(_sw.AD_BREAK_OUTROS)
                 await asyncio.gather(
-                    loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
+                    loop.run_in_executor(None, imaging_lib.pick_ad_bumper, bumper_out),
                     synthesize(
                         outro_text,
                         outro_host.voice,

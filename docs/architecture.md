@@ -140,7 +140,7 @@ always remains best-effort and never blocks or delays audio.
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
-  - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
+  - passes generated host speech through the imaging layer so banter and news use a selected-pack talk bed first, then adjacent music when eligible, then a synthetic pad on cold starts
   - preserves running jokes in `StationState`
   - snapshots the generated evidence needed for listener/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
@@ -150,7 +150,7 @@ always remains best-effort and never blocks or delays audio.
   - resolves a sonic world (SFX, music bed mood, environment bed) per brand category
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
   - generates a brand motif jingle for recurring brands from their sonic signature
-  - builds a break from host intro, bumpers, one or more ad spots, and host outro
+  - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
 Every finished segment then passes a final **loudness-reconciliation** step: it is
@@ -242,6 +242,34 @@ loop. Startup's suspect-file purge preserves `synth_` files even when they are s
 normal LRU eviction still treats them as regular cache files, evicting them before
 `norm_`/`fm_` processed audio.
 
+### Italian Night Drive imaging pack
+
+`mammamiradio/assets/imaging/` is the default selected imaging root for both
+the standalone app and the HA add-on: both shipped `radio.toml` files retain
+`[imaging].assets_dir = ""`, so neither needs an add-on-specific asset copy.
+It supplies the station-ID/sweeper/time-check cues, generic music-to-speech and
+speech-to-music stingers, an ad-break bumper, the Casa Notte loopable bed, and
+the ad-SFX bank. `manifest.json` records the complete filename, purpose,
+duration, format, Apache-2.0 license, and deterministic-FFmpeg provenance for
+the pack; see [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
+for the full inventory and local audition command.
+
+An operator can set `[imaging].assets_dir` to select a custom root. That is a
+complete replacement, not an overlay: a missing custom asset takes the existing
+procedural/cached fallback rather than falling through to the package. Within a
+root, a transition tries an exact `stingers/{from}_{to}.mp3` before its generic
+directional stinger; talk beds take a bundled bed before eligible adjacent music
+and then a synthetic drone. For ads, a real configured `[ads].sfx_dir` has
+priority over the selected root's `sfx/` directory; ad beds use a mood-matching
+file, then `casa_notte.mp3`, before the synthetic bed path.
+
+The pack affects normal segment production only. It does not replace the
+`mammamiradio/assets/demo/` recovery material or alter the explicit `rescue`
+flag: bridge and rescue fills still skip the egress pipeline for instant audio.
+It also does not enable the optional FM broadcast chain; if that independent
+`[audio].broadcast_chain` setting is enabled, it colours the finished normal
+segment after pack material has been mixed in.
+
 ### Queue commit (the per-path gate matrix)
 
 Every produced segment reaches the playback queue through a small set of commit
@@ -316,7 +344,7 @@ task (caller)  ──routing──▶  role  ──active profile──▶  cata
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used, with synthetic fallback renders reused through the `synth_` cache when their inputs match.
+Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. The packaged Italian Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient fallback and reuse `synth_` cache renders when their inputs match.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 

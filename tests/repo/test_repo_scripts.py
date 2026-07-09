@@ -985,6 +985,14 @@ def test_validate_addon_build_passes_home_assistant_label_args() -> None:
     assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
 
 
+def test_validate_addon_build_checks_installed_night_drive_pack() -> None:
+    validator = VALIDATE_ADDON.read_text()
+
+    assert "assert_image_imaging_assets" in validator
+    assert "Installed Night Drive imaging pack" in validator
+    assert 'joinpath("assets", "imaging")' in validator
+
+
 def test_validate_addon_rejects_dockerfile_missing_hass_labels(tmp_path: Path) -> None:
     """validate-addon.sh must exit non-zero when the Dockerfile lacks io.hass.* labels.
 

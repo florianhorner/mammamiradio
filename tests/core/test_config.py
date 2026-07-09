@@ -25,6 +25,12 @@ from mammamiradio.core.config import (
     resolve_model,
     runtime_json,
 )
+from mammamiradio.core.models import StationState
+from mammamiradio.hosts.ad_creative import (
+    OFFICIAL_CATEGORY_SONIC_RECIPES,
+    OFFICIAL_SONIC_RECIPE_IDS,
+    _select_ad_creative,
+)
 
 
 def test_load_config_from_radio_toml(monkeypatch):
@@ -50,33 +56,20 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
-def test_radio_toml_brand_sonic_signatures_use_real_sfx_types():
-    """Every campaign sonic_signature component must be a real AVAILABLE_SFX_TYPES entry.
-
-    generate_brand_motif() (mammamiradio/audio/normalizer.py) splits sonic_signature
-    on "+" and renders each component via generate_sfx(). A component that isn't a
-    real SFX type (or a music-bed/environment name mistakenly reused here) silently
-    falls back to a generic chime for every airing of that brand's jingle — this is
-    exactly how "dust_hit", "espresso_hiss", "cheap_synth_romance" etc. shipped
-    unnoticed in radio.toml and produced repeated "Unknown SFX type" warnings on a
-    live station. Guards both the root radio.toml and its byte-for-byte HA addon
-    copy (they're synced; see test_addon_radio_sync.py).
-    """
-    from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-
+def test_shipped_ad_brands_select_recipes_without_legacy_synthetic_motifs():
+    """Every shipped brand maps to a packaged recipe, never a procedural motif."""
     for rel_path in ("radio.toml", "ha-addon/mammamiradio/radio.toml"):
         toml_path = Path(__file__).resolve().parents[2] / rel_path
         config = load_config(str(toml_path))
+        assert {brand.category for brand in config.ads.brands} == set(OFFICIAL_CATEGORY_SONIC_RECIPES)
         for brand in config.ads.brands:
-            if not brand.campaign or not brand.campaign.sonic_signature:
-                continue
-            for component in brand.campaign.sonic_signature.split("+"):
-                component = component.strip()
-                assert component in AVAILABLE_SFX_TYPES, (
-                    f"{rel_path}: brand '{brand.name}' sonic_signature component "
-                    f"'{component}' is not in AVAILABLE_SFX_TYPES — it will silently "
-                    f"fall back to a generic chime"
-                )
+            assert brand.sonic_recipe == OFFICIAL_CATEGORY_SONIC_RECIPES[brand.category]
+            assert brand.sonic_recipe in OFFICIAL_SONIC_RECIPE_IDS
+            _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
+            assert sonic.recipe_id == brand.sonic_recipe
+            assert sonic.is_recipe_driven
+            assert sonic.sonic_signature == ""
+            assert sonic.transition_motif == ""
 
 
 def test_load_config_parses_per_host_voice_settings():
@@ -1120,9 +1113,29 @@ def test_load_config_parses_campaign_spines():
     recurring = next(b for b in config.ads.brands if b.recurring and b.campaign is not None)
     assert recurring.campaign is not None
     assert recurring.campaign.premise  # non-empty
-    assert recurring.campaign.sonic_signature
+    assert recurring.sonic_recipe
+    assert recurring.campaign.sonic_signature == ""
     assert "classic_pitch" in recurring.campaign.format_pool
     assert recurring.campaign.spokesperson
+
+
+def test_load_config_parses_campaign_sonic_recipe_override(tmp_path):
+    """A campaign may override its brand recipe without touching legacy fields."""
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = source.read_text().replace(
+        'premise = "Prezzoforte\'s legendary weekly offers: discounts so aggressive the staff look personally offended by them"',
+        'premise = "Prezzoforte\'s legendary weekly offers: discounts so aggressive the staff look personally offended by them"\n'
+        'sonic_recipe = "cafe_testimonial"',
+        1,
+    )
+    custom_path = tmp_path / "radio.toml"
+    custom_path.write_text(custom)
+
+    prezzoforte = next(brand for brand in load_config(str(custom_path)).ads.brands if brand.name == "Prezzoforte")
+
+    assert prezzoforte.sonic_recipe == "supermarket_dash"
+    assert prezzoforte.campaign is not None
+    assert prezzoforte.campaign.sonic_recipe == "cafe_testimonial"
 
 
 def test_load_config_brands_without_campaign():

@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "pack": "Mamma Mi Radio — Italian Night Drive",
+  "format": {
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192
+  },
+  "license": "Apache-2.0",
+  "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples.",
+  "assets": [
+    {
+      "path": "station_id.mp3",
+      "purpose": "Three-second master sonic logo for full station ident voice tags.",
+      "duration_target_sec": 3.0,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sweeper.mp3",
+      "purpose": "Short house sting beneath between-song station sweepers.",
+      "duration_target_sec": 2.0,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "time_check.mp3",
+      "purpose": "Half-second warm clock punctuation before time checks.",
+      "duration_target_sec": 0.5,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "bumpers/ad_break.mp3",
+      "purpose": "Compact break opener for fictional-ad handoffs.",
+      "duration_target_sec": 1.2,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "stingers/music_to_speech.mp3",
+      "purpose": "Night-drive transition from music into speech.",
+      "duration_target_sec": 1.5,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "stingers/speech_to_music.mp3",
+      "purpose": "Night-drive release from speech back into music.",
+      "duration_target_sec": 1.0,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "beds/casa_notte.mp3",
+      "purpose": "Loopable non-drone Rhodes-and-mandolin bed for Casa-notte speech.",
+      "duration_target_sec": 16.0,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/chime.mp3",
+      "purpose": "Warm two-note glass-and-Rhodes confirmation chime.",
+      "duration_target_sec": 0.62,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/ding.mp3",
+      "purpose": "Small rounded brass bell punctuation.",
+      "duration_target_sec": 0.38,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/cash_register.mp3",
+      "purpose": "Bright analogue till bell with a short mechanical tick.",
+      "duration_target_sec": 0.52,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/register_hit.mp3",
+      "purpose": "Low wooden-metal till impact, distinct from the register bell.",
+      "duration_target_sec": 0.28,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/sweep.mp3",
+      "purpose": "Clean ascending radio dial sweep.",
+      "duration_target_sec": 0.72,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/whoosh.mp3",
+      "purpose": "Soft filtered air whoosh for motion and handoff.",
+      "duration_target_sec": 0.8,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/tape_stop.mp3",
+      "purpose": "Short descending analogue tape-stop release.",
+      "duration_target_sec": 0.62,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/hotline_beep.mp3",
+      "purpose": "Italian late-night hotline dual-tone beep.",
+      "duration_target_sec": 0.28,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/mandolin_sting.mp3",
+      "purpose": "Plucked four-note Mediterranean mandolin-style sting.",
+      "duration_target_sec": 0.72,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/ice_clink.mp3",
+      "purpose": "Small inharmonic aperitivo ice-glass clink.",
+      "duration_target_sec": 0.46,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    },
+    {
+      "path": "sfx/startup_synth.mp3",
+      "purpose": "Ascending analogue synth bloom for faux-tech ads.",
+      "duration_target_sec": 0.85,
+      "license": "Apache-2.0",
+      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+    }
+  ]
+}

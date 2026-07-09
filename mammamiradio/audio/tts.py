@@ -27,6 +27,7 @@ from mammamiradio.audio.normalizer import (
     generate_music_bed,
     generate_sfx,
     generate_silence,
+    loop_audio_bed,
     mix_with_bed,
     normalize,
     normalize_ad,
@@ -563,6 +564,7 @@ async def synthesize_ad(
     sfx_dir: Path | None = None,
     state: StationState | None = None,
     cache_dir: Path | None = None,
+    bed_assets_dir: Path | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
@@ -619,7 +621,47 @@ async def synthesize_ad(
             lambda out: generate_brand_motif(out, sonic_sig, sfx_dir),
         )
 
-    def _render_music_bed(path: Path, bed_mood: str, duration_sec: float) -> Path:
+    def _asset_fingerprint(asset: Path | None) -> dict[str, object] | None:
+        if asset is None:
+            return None
+        try:
+            stat = asset.stat()
+        except OSError:
+            return {"path": str(asset)}
+        return {"path": str(asset), "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+
+    def _pick_packaged_bed(bed_mood: str) -> Path | None:
+        if bed_assets_dir is None or not bed_assets_dir.is_dir():
+            return None
+        slug = re.sub(r"[^a-z0-9]+", "_", bed_mood.strip().lower()).strip("_")
+        for name in (f"{slug}.mp3" if slug else "", "casa_notte.mp3"):
+            candidate = bed_assets_dir / name
+            if name and candidate.is_file():
+                return candidate
+        candidates = sorted(path for path in bed_assets_dir.glob("*.mp3") if path.is_file())
+        return candidates[0] if candidates else None
+
+    def _render_music_bed(
+        path: Path,
+        bed_mood: str,
+        duration_sec: float,
+        *,
+        asset: Path | None = None,
+    ) -> Path:
+        if asset is not None:
+            if cache_dir is None:
+                return loop_audio_bed(asset, path, duration_sec)
+            bucket = duration_bucket_sec(duration_sec)
+            return materialize_synth_mp3(
+                cache_dir,
+                "packaged_ad_bed",
+                path,
+                {
+                    "asset": _asset_fingerprint(asset),
+                    "duration_sec": bucket,
+                },
+                lambda out: loop_audio_bed(asset, out, float(bucket)),
+            )
         if cache_dir is None:
             return generate_music_bed(path, bed_mood, duration_sec)
         bucket = duration_bucket_sec(duration_sec)
@@ -666,11 +708,16 @@ async def synthesize_ad(
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
             return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False, state=state)
         if part.type == "sfx" and part.sfx:
-            sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
+            if part.sfx not in AVAILABLE_SFX_TYPES:
+                # An invented LLM token must not silently become the same generic
+                # chime heard in unrelated ads.  Skipping one decorative cue is
+                # safer and more honest than flattening the station's identity.
+                logger.warning("Skipping unsupported ad SFX '%s'", part.sfx)
+                return None
             try:
-                return await loop.run_in_executor(None, generate_sfx, part_path, sfx_name, sfx_dir)
+                return await loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir)
             except Exception as e:
-                logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", sfx_name, e)
+                logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", part.sfx, e)
                 return await loop.run_in_executor(None, generate_silence, part_path, 0.18)
         if part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
@@ -736,26 +783,55 @@ async def synthesize_ad(
     mood = script.mood or (script.sonic.music_bed if script.sonic else "lounge")
     voice_duration = _estimate_duration(voice_path)
     output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
+    packaged_bed = _pick_packaged_bed(mood)
 
-    foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3" if env_name else None
-    env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3" if env_name else None
+    # A curated bed is a complete ad world on its own.  Do not layer the legacy
+    # tonal environment and foley loops on top of it: their cumulative hum was
+    # the audible "drone" in the default ad break.  Custom/missing packs retain
+    # the legacy synthesis path as a resilience fallback.
+    use_packaged_bed = packaged_bed is not None
+    foley_path: Path | None = None
+    env_bed_path: Path | None = None
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
 
-    # Generate all three beds concurrently
+    # Generate the single curated bed, or the legacy three-layer sound world.
     _dur = voice_duration + 1.0
-    bed_tasks: list = [
-        loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
-    ]
-    if env_name:
-        _env = env_name
-        _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
-        _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
-        bed_tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
-        bed_tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
+
+    def _legacy_bed_tasks() -> list:
+        """Build the historical synthesized layers when no usable pack bed exists."""
+        nonlocal env_bed_path, foley_path
+        tasks: list = [loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur))]
+        if env_name:
+            env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3"
+            foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3"
+            _env = env_name
+            _env_bed_path = env_bed_path
+            _foley_path = foley_path
+            tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
+            tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
+        return tasks
+
+    bed_tasks: list = (
+        [loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur, asset=packaged_bed))]
+        if use_packaged_bed
+        else _legacy_bed_tasks()
+    )
     try:
         await asyncio.gather(*bed_tasks)
     except Exception as e:
-        logger.warning("Bed generation failed: %s", e)
+        if use_packaged_bed:
+            # A present-but-corrupt package must degrade exactly like an absent
+            # one: preserve audible bed production rather than producing a dry
+            # ad merely because the selected file existed.
+            logger.warning("Packaged ad bed failed (%s); retrying synthetic fallback", e)
+            use_packaged_bed = False
+            bed_path.unlink(missing_ok=True)
+            try:
+                await asyncio.gather(*_legacy_bed_tasks())
+            except Exception as fallback_error:
+                logger.warning("Synthetic ad-bed fallback failed: %s", fallback_error)
+        else:
+            logger.warning("Bed generation failed: %s", e)
 
     # Mix foley first (quietest layer — ambient texture under everything else)
     if foley_path and foley_path.exists():
@@ -781,10 +857,12 @@ async def synthesize_ad(
         except Exception as e:
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
-    # Mix music bed (loudest bed layer — harmonic colour)
+    # Mix the authored bed more quietly than the legacy synthetic pad.  The
+    # final ad master remains responsible for the on-air target level.
     if bed_path.exists() and bed_path.stat().st_size > 0:
         try:
-            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+            bed_scale = 0.14 if use_packaged_bed else 0.24
+            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, bed_scale)
             if output_path.exists() and output_path.stat().st_size > 0:
                 bed_path.unlink(missing_ok=True)
                 voice_path.unlink(missing_ok=True)

@@ -81,6 +81,10 @@ def _mock_all(monkeypatch):
         patch("mammamiradio.audio.tts.generate_sfx", side_effect=_single_path_side_effect) as mock_sfx,
         patch("mammamiradio.audio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
         patch("mammamiradio.audio.tts.generate_foley_loop", side_effect=_single_path_side_effect) as mock_foley,
+        patch(
+            "mammamiradio.audio.tts.loop_audio_bed",
+            side_effect=lambda _src, out, _duration: _touch(out),
+        ) as mock_loop,
         patch("mammamiradio.audio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
         patch("mammamiradio.audio.tts.generate_brand_motif", side_effect=_single_path_side_effect) as mock_motif,
         patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0) as mock_duration,
@@ -94,6 +98,7 @@ def _mock_all(monkeypatch):
             "generate_sfx": mock_sfx,
             "generate_silence": mock_silence,
             "generate_foley_loop": mock_foley,
+            "loop_audio_bed": mock_loop,
             "mix_with_bed": mock_mix,
             "generate_brand_motif": mock_motif,
             "ffprobe_duration": mock_duration,
@@ -949,6 +954,27 @@ async def test_synthesize_ad_sfx_failure_falls_back_to_short_silence(_mock_all, 
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_skips_unknown_sfx_instead_of_reusing_generic_chime(_mock_all, tmp_path, caplog):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="EspressoPlus",
+        parts=[
+            AdPart(type="voice", text="Vuoi un caffè?"),
+            AdPart(type="sfx", sfx="unapproved_laser"),
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    assert "Skipping unsupported ad SFX 'unapproved_laser'" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     from mammamiradio.audio.tts import synthesize_ad
 
@@ -1080,6 +1106,60 @@ async def test_synthesize_ad_environment_bed(_mock_all, tmp_path):
     assert len(env_mix) >= 1 or any(
         c.kwargs.get("volume_scale") == 0.14 or (len(c.args) >= 4 and c.args[3] == 0.14) for c in mix_calls
     )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_packaged_bed_replaces_layered_drone(_mock_all, tmp_path):
+    """The default pack is one authored bed, not three tonal layers under voice."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"night-drive-bed")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == beds_dir / "casa_notte.mp3"
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    assert _mock_all["mix_with_bed"].call_args.args[3] == 0.14
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_corrupt_packaged_bed_retries_synthetic_layers(_mock_all, tmp_path, caplog):
+    """A corrupt selected pack behaves like a missing pack, never a dry ad."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"corrupt-night-drive-bed")
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("invalid mp3")
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_called()
+    _mock_all["generate_foley_loop"].assert_called_once()
+    assert _mock_all["mix_with_bed"].call_count >= 2
+    assert "retrying synthetic fallback" in caplog.text
 
 
 @pytest.mark.asyncio

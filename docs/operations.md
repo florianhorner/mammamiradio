@@ -43,6 +43,28 @@ Static config:
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
 
+## Audition the Night Drive imaging pack
+
+From the repository root, run:
+
+```bash
+.venv/bin/python scripts/audition_sonic_brand.py
+```
+
+It writes a timestamped local review directory under
+`tmp/sonic-brand-auditions/` with an `index.html` listening page and a manifest.
+The page compares the current procedural baseline with the packaged Night Drive
+asset for the station ID, sweeper, time check, both transition directions, ad
+bumper, and Casa Notte talk bed. Open that generated HTML file in a browser; the
+script does not open a browser itself.
+
+Use `--output-dir PATH` to choose the parent directory and `--timestamp
+YYYYMMDDTHHMMSSZ` for a deterministic review location. The script validates the
+complete pack before it writes a listening directory and is local-only: it does
+not call TTS providers, start the app, or touch the playback queue. Pack layout,
+provenance, selection precedence, and recovery/broadcast-chain boundaries are in
+[`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md).
+
 ## Startup model
 
 The intended local startup path is:

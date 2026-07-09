@@ -1636,6 +1636,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
                 campaign = CampaignSpine(
                     premise=campaign_raw.get("premise", ""),
                     sonic_signature=campaign_raw.get("sonic_signature", ""),
+                    sonic_recipe=campaign_raw.get("sonic_recipe", ""),
                     format_pool=campaign_raw.get("format_pool", []),
                     spokesperson=campaign_raw.get("spokesperson", ""),
                     escalation_rule=campaign_raw.get("escalation_rule", ""),
@@ -1646,6 +1647,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
                     tagline=b.get("tagline", ""),
                     category=b.get("category", "general"),
                     recurring=b.get("recurring", True),
+                    sonic_recipe=b.get("sonic_recipe", ""),
                     campaign=campaign,
                 )
             )
