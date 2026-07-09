@@ -683,7 +683,7 @@ async def _generate_json_response(
                             _anthropic_in = resp.usage.input_tokens
                             _anthropic_out = resp.usage.output_tokens
                             state.record_llm_usage(cost_category, model, _anthropic_in, _anthropic_out)
-                        raw = resp.content[0].text.strip()  # type: ignore[union-attr]
+                        raw = _anthropic_text(resp.content).strip()
                         # Receipt of a response proves provider HEALTH (auth, quota,
                         # availability) — clear the circuit here, before parse. A
                         # truncated-but-received response is a budget problem, not a
@@ -1272,6 +1272,29 @@ def _strip_fences(raw: str) -> str:
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     return raw
+
+
+def _anthropic_text(content: object) -> str:
+    """Join the text blocks of an Anthropic response into one string.
+
+    Thinking-capable models (e.g. Fable 5) prepend thinking blocks to
+    ``resp.content``; blind ``content[0].text`` raised AttributeError on them
+    and sent every creative call to the OpenAI fallback even though Anthropic
+    answered fine. Mirrors ``_response_text`` in ``home/catalog.py`` but raises
+    IndexError when no text block exists (e.g. an empty content list from a
+    max_tokens cut) so the truncation classification in the caller keeps
+    working exactly as before.
+    """
+    chunks: list[str] = []
+    for block in content or ():  # type: ignore[attr-defined]
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            chunks.append(text)
+        elif isinstance(block, dict) and isinstance(block.get("text"), str):
+            chunks.append(block["text"])
+    if not chunks:
+        raise IndexError("no text block in Anthropic response content")
+    return "\n".join(chunks)
 
 
 _LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")

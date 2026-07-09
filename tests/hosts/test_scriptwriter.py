@@ -416,6 +416,65 @@ async def test_write_banter_parses_valid_json(config, state):
     assert result[1][1] == "Che bella giornata!"
 
 
+@pytest.mark.asyncio
+async def test_write_banter_skips_thinking_blocks(config, state):
+    """Thinking-capable models (Fable 5) prepend thinking blocks to resp.content.
+
+    The old ``content[0].text`` raised AttributeError on them and silently sent
+    every creative call to the OpenAI fallback (fallback_reason
+    anthropic_AttributeError) even though Anthropic answered fine.
+    """
+    host_name = config.hosts[0].name
+    response_json = json.dumps(
+        {
+            "lines": [{"host": host_name, "text": "Ciao a tutti!"}],
+            "new_joke": None,
+        }
+    )
+    thinking_block = MagicMock(spec=["thinking", "type"])  # no .text attr, like ThinkingBlock
+    text_block = MagicMock()
+    text_block.text = response_json
+    mock_response = MagicMock()
+    mock_response.content = [thinking_block, text_block]
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "Ciao a tutti!"
+
+
+def test_anthropic_text_raises_index_error_on_no_text_blocks():
+    """An empty content list (max_tokens cut) must keep raising IndexError so the
+    truncation classification in the retry loop stays intact."""
+    with pytest.raises(IndexError):
+        scriptwriter_module._anthropic_text([])
+    thinking_only = MagicMock(spec=["thinking", "type"])
+    with pytest.raises(IndexError):
+        scriptwriter_module._anthropic_text([thinking_only])
+    with pytest.raises(IndexError):
+        scriptwriter_module._anthropic_text(None)
+
+
+def test_anthropic_text_joins_blocks_and_tolerates_shapes():
+    """Mirror of _response_text in home/catalog.py (tests/home/test_catalog.py) so
+    the two implementations can't silently drift: attribute-shaped and dict-shaped
+    text blocks are joined with a newline; non-str .text blocks are skipped."""
+    thinking = MagicMock(spec=["thinking", "type"])
+    text_a = MagicMock()
+    text_a.text = "ciao"
+    text_none = MagicMock()
+    text_none.text = None
+    assert scriptwriter_module._anthropic_text([thinking, text_a, {"text": "mondo"}, text_none]) == "ciao\nmondo"
+
+
 def test_banter_exchange_count_short_by_default_long_when_warranted():
     short = _banter_exchange_count(warranted=False)
     long = _banter_exchange_count(warranted=True)
@@ -1984,10 +2043,12 @@ async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, stat
 
 
 @pytest.mark.asyncio
-async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, state, caplog):
-    """A max_tokens cut that returns an *empty* content list (IndexError on
-    resp.content[0], not a JSONDecodeError) is still recognized as truncation —
-    stop_reason is read before content is indexed."""
+@pytest.mark.parametrize("content_shape", ["empty", "thinking_only"])
+async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, state, caplog, content_shape):
+    """A max_tokens cut that returns NO text blocks — an empty content list, or a
+    thinking-capable model cut mid-thinking (content holds only a thinking block) —
+    raises IndexError in _anthropic_text and is still recognized as truncation:
+    stop_reason is read before text extraction."""
     import logging
 
     config.anthropic_api_key = "anthropic-key"
@@ -1999,7 +2060,10 @@ async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, s
     mock_usage.input_tokens = 50
     mock_usage.output_tokens = 300
     mock_response = MagicMock()
-    mock_response.content = []  # empty: resp.content[0] raises IndexError
+    if content_shape == "empty":
+        mock_response.content = []  # no blocks at all: _anthropic_text raises IndexError
+    else:
+        mock_response.content = [MagicMock(spec=["thinking", "type"])]  # thinking-only, no text block
     mock_response.usage = mock_usage
     mock_response.stop_reason = "max_tokens"
     mock_client = MagicMock()
