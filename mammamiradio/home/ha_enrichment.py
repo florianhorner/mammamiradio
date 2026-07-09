@@ -29,6 +29,11 @@ class HomeEvent:
     raw_new_state: str = ""
     force_gag_candidate: bool = False
     gag_cooldown_seconds: float = 0.0
+    # Ritual-recipe provenance: the recipe family that produced this event
+    # (empty for plain home events). Carried into the evening ledger's gag
+    # buckets so a Moment Receipt built at offer time knows which ritual family
+    # it belongs to — the recipe match object itself is gone by then.
+    ritual_family: str = ""
 
     def age_seconds(self, *, now: float | None = None) -> float:
         ref_now = time.time() if now is None else now

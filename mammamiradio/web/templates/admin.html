@@ -1998,6 +1998,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="card-label">HA context</div>
             <div id="haDetails" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px"></div>
           </div>
+
+          <div id="momentsCard" style="display:none">
+            <div class="card-label">Home moments</div>
+            <div id="momentsBody" style="font-size:12px;line-height:1.7;color:var(--cream-dk);margin-bottom:14px"><div class="empty">No home moments yet — when the hosts react to the house, the full trail shows up here.</div></div>
+          </div>
         </div>
 
         <!-- Group 2: Costi (token cost counter lives here — protected element) -->
@@ -3020,6 +3025,63 @@ function runtimeProviderRow(title,item){
     item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
   ].filter(Boolean).join(' · ');
   return statusRow(title,state,label,detail);
+}
+/* ── Home moments trail (Moment Receipts) ─────────────────────────────
+   Answers "why did the host say that" and "why did nothing happen" for
+   every ritual-recipe moment. Machine states are mapped to plain words —
+   status/reason codes never reach the screen. */
+const MOMENT_LANE_LABEL={interrupt:'cut in live',directive:'next-break reaction',running_gag:'running gag'};
+function momentStatusLabel(row){
+  const s=row?.status||'';
+  if(s==='elected')return{text:'waiting for its break',color:'var(--muted)'};
+  if(s==='airing')return{text:'on air right now',color:'var(--ok)'};
+  if(s==='aired')return{text:'made it to air',color:'var(--ok)'};
+  if(s==='skipped')return{text:'cut short by a skip',color:'var(--warning)'};
+  if(s==='no_listeners')return{text:'played to an empty room',color:'var(--muted)'};
+  if(s==='not_streamed')return{text:'never left the studio',color:'var(--warning)'};
+  if(s==='fallback_rescue')return{text:'aired during backup audio',color:'var(--warning)'};
+  if(s==='dropped'){
+    const r=row?.drop_reason||'';
+    if(r==='interrupt_cooldown')return{text:'held back — too soon after the last cut-in',color:'var(--muted)'};
+    if(r==='generation_failed')return{text:"the hosts couldn't work it in — it can come around again",color:'var(--muted)'};
+    if(r==='canned_fallback')return{text:'a stand-in clip aired instead — it can come around again',color:'var(--muted)'};
+    if(r==='directive_slot_busy'||r==='interrupt_slot_busy')return{text:'stepped aside — another moment was already lined up',color:'var(--muted)'};
+    if(r==='interrupt_override')return{text:'bumped by a live cut-in',color:'var(--muted)'};
+    if(r==='muted')return{text:'set aside — you muted this device',color:'var(--muted)'};
+    if(r==='restart')return{text:'cut off by a restart',color:'var(--muted)'};
+    return{text:"didn't make it to air",color:'var(--muted)'};
+  }
+  return{text:s||'—',color:'var(--muted)'};
+}
+function updateMoments(st){
+  const card=document.getElementById('momentsCard');
+  const body=document.getElementById('momentsBody');
+  if(!card||!body)return;
+  try{
+    const rows=st?.moments_admin;
+    const haOn=!!(st?.capabilities?.ha);
+    if(!Array.isArray(rows)||(!rows.length&&!haOn)){card.style.display='none';return}
+    card.style.display='';
+    if(!rows.length){
+      body.innerHTML='<div class="empty">No home moments yet — when the hosts react to the house, the full trail shows up here.</div>';
+      return;
+    }
+    body.innerHTML=rows.map(r=>{
+      const t=r.ts?new Date(Number(r.ts)*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'—';
+      const status=momentStatusLabel(r);
+      const lane=MOMENT_LANE_LABEL[r.lane]||esc(r.lane||'');
+      const count=Number(r.count||0)>1?' ×'+Number(r.count):'';
+      return '<div style="margin-bottom:7px">'
+        +'<span style="font-family:var(--font-mono);color:var(--muted)">'+esc(t)+'</span> '
+        +'<strong>'+esc(r.public_label||r.family||'Moment')+'</strong>'+count
+        +' — <span style="color:'+status.color+'">'+esc(status.text)+'</span>'
+        +'<div style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">'+esc(r.entity_id||'')+(r.entity_id?' · ':'')+lane+'</div>'
+        +'</div>';
+    }).join('');
+  }catch(e){
+    console.error('updateMoments',e);
+    body.innerHTML='<div class="empty">The moments trail hiccupped — it will refresh on its own in a few seconds.</div>';
+  }
 }
 function updateRuntimeStatus(st){
   const card=document.getElementById('runtimeStatusCard');
@@ -4644,6 +4706,7 @@ async function refreshFast(){
     updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
+    updateMoments(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);

@@ -324,6 +324,31 @@ def _unlink_ephemeral_best_effort(seg) -> None:
             logger.debug("Ephemeral purge unlink failed for %s", getattr(seg, "path", None), exc_info=True)
 
 
+def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> None:
+    """Demote any Moment Receipt a discarded queued segment was carrying.
+
+    Every path that pulls an already-queued BANTER segment out of the real
+    queue without letting it air (purge, session-stop mid-selection, an
+    operator's /api/queue/remove) must also settle the receipt honestly —
+    otherwise the admin trail keeps showing "waiting for its break" for a
+    segment that no longer exists. Best-effort like every other receipt call:
+    never lets bookkeeping affect the purge/discard it's piggybacking on.
+    """
+    store = getattr(state, "moment_store", None)
+    if store is None:
+        return
+    meta = getattr(segment, "metadata", None)
+    if not isinstance(meta, dict):
+        return
+    try:
+        for key in ("ritual_moment_id", "gag_moment_id"):
+            moment_id = str(meta.get(key) or "")
+            if moment_id:
+                store.mark_dropped(moment_id, reason)
+    except Exception:  # pragma: no cover - receipts must never break a purge
+        logger.debug("Moment receipt discard drop failed", exc_info=True)
+
+
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
@@ -343,6 +368,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     for seg in items:
         if reason is not None:
             state.record_discard(seg, reason=reason, already_counted_in_produced=True)
+            _drop_segment_moment_receipts(state, seg, str(reason))
         _unlink_ephemeral_best_effort(seg)
     state.queued_segments.clear()
     return len(items)
@@ -1327,9 +1353,30 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
         _blank_home_context_state(state)
     # These transient strings have no durable entity id in StationState, so a live
     # mute clears them even when the rest of the filtered context can be preserved.
+    # Their elected Moment Receipt rows are demoted honestly at the same time —
+    # otherwise the admin trail would show "waiting for its break" for up to a
+    # week about a moment the operator just muted.
+    _moment_store = getattr(state, "moment_store", None)
+    if _moment_store is not None:
+        try:
+            for _moment_id in (
+                state.ha_pending_directive_moment_id,
+                state.ha_running_gag_moment_id,
+                # A directive already consumed into an in-flight generation
+                # parks its id in the handoff slot — the mute kills that
+                # receipt too, or the muted moment would still earn "aired".
+                state.last_banter_ritual_moment_id,
+            ):
+                if _moment_id:
+                    _moment_store.mark_dropped(_moment_id, "muted")
+        except Exception:  # pragma: no cover - receipts must never break a mute
+            logger.debug("Moment receipt mute drop failed", exc_info=True)
     state.ha_pending_directive = ""
+    state.ha_pending_directive_moment_id = ""
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
+    state.ha_running_gag_moment_id = ""
+    state.last_banter_ritual_moment_id = ""
     if entity_id and state.evening_ledger is not None:
         return _set_live_gag_entity_denied(state, config, entity_id, True)
     return False
@@ -1834,6 +1881,7 @@ async def run_playback_loop(app) -> None:
                 reason=GenerationWasteReason.SESSION_STOPPED,
                 already_counted_in_produced=pulled_from_queue,
             )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.SESSION_STOPPED)
             # Use the hardened helper (never raises) instead of a raw unlink: a
             # throwing unlink here would escape into the playback coroutine and
             # drop the stream (#1), and skip the task_done() balance below.
@@ -2007,6 +2055,37 @@ def _schedule_banter_memory_extraction_after_send(
         logger.warning("memory_extract: scheduling failed", exc_info=True)
 
 
+def _finalize_moment_receipts(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+    """Record the TRUE outcome on any Moment Receipt this segment carried.
+
+    Independent of the provenance ledger (runs even when Show Memory is off).
+    Uses classify_stream_outcome verbatim, so a skipped, unheard, or rescue
+    send can never mint a false "aired" receipt. In-memory only — the dirty
+    store is flushed at the producer's save site, never from the playback loop.
+    """
+    store = getattr(state, "moment_store", None)
+    if store is None:
+        return
+    try:
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+        moment_ids = [str(meta.get(key) or "") for key in ("ritual_moment_id", "gag_moment_id")]
+        moment_ids = [moment_id for moment_id in moment_ids if moment_id]
+        if not moment_ids:
+            return
+        status = classify_stream_outcome(
+            was_skipped=was_skipped,
+            bytes_sent=bytes_sent,
+            listeners=listeners,
+            fallback_active=is_fallback_active(meta),
+        )
+        for moment_id in moment_ids:
+            store.finalize(moment_id, status)
+    except Exception as exc:  # pragma: no cover - receipts must never break audio
+        logger.debug("Moment receipt finalize failed: %s", exc)
+
+
 def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
 
@@ -2014,6 +2093,7 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
     failed sends too. Never raises into the stream.
     """
     _emit_release_campaign_result(state, segment, bytes_sent, was_skipped, listeners)
+    _finalize_moment_receipts(state, segment, bytes_sent, was_skipped, listeners)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -2206,6 +2286,7 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
             f"L'ascoltatore ha saltato '{track_name}' troppe volte — "
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
         )
+        state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
         state.pending_actions.append(
             {
                 "type": "ha_directive",
@@ -2908,6 +2989,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
             reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
             already_counted_in_produced=True,
         )
+        _drop_segment_moment_receipts(state, removed_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
         _unlink_ephemeral_best_effort(removed_segment)
 
     for item in items:
@@ -5268,7 +5350,22 @@ def _public_status_payload(request: Request) -> dict:
     upcoming_mode = "queued" if upcoming else "building"
     # HA moments for the Casa card (public-safe, no person entity details)
     ha_moments: dict | None = None
-    if state.ha_context or state.ha_ritual_public_families:
+    # Moment Receipts strip: aired moments as generic family labels + coarse
+    # age only — the same exposure ritual_families already accepts on this
+    # unauthenticated endpoint. An "airing" row shows only while it belongs to
+    # the segment now_streaming is playing (send-start is provisional).
+    recent_moments: list[dict] = []
+    ha_capable = bool(config.ha_token and config.homeassistant.enabled)
+    moment_store = getattr(state, "moment_store", None)
+    if ha_capable and moment_store is not None:
+        try:
+            _ns_meta = (state.now_streaming or {}).get("metadata") or {}
+            _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
+            recent_moments = moment_store.to_public_rows(now=now_ts, active_ids=_active_ids, limit=3)
+        except Exception:  # pragma: no cover - receipts must never break status
+            logger.debug("Moment receipt public rows failed", exc_info=True)
+            recent_moments = []
+    if state.ha_context or state.ha_ritual_public_families or recent_moments:
         ha_moments = {
             "connected": True,
             "mood": state.ha_home_mood or None,
@@ -5282,12 +5379,15 @@ def _public_status_payload(request: Request) -> dict:
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
+        if recent_moments:
+            ha_moments["recent"] = recent_moments
         # Hide card if nothing interesting to show
         if (
             not ha_moments.get("mood")
             and not ha_moments.get("weather")
             and not ha_moments.get("last_event_label")
             and not ha_moments.get("ritual_families")
+            and not ha_moments.get("recent")
         ):
             ha_moments = None
 
@@ -5326,7 +5426,7 @@ def _public_status_payload(request: Request) -> dict:
             "llm": bool(config.anthropic_api_key or config.openai_api_key),
             "anthropic_key": bool(config.anthropic_api_key),
             "openai": bool(config.openai_api_key),
-            "ha": bool(config.ha_token and config.homeassistant.enabled),
+            "ha": ha_capable,
             "anthropic_degraded": _provider_health_snapshot(config, state)["anthropic"]["degraded"],
         },
         # Cross-page invariant facts (must match admin /status exactly).
@@ -5644,6 +5744,11 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
+    try:
+        moments_admin = state.moment_store.to_admin_rows(limit=25) if state.moment_store is not None else None
+    except Exception:  # pragma: no cover - receipts must never break admin polling
+        logger.debug("Moment receipt admin rows failed", exc_info=True)
+        moments_admin = []
     playlist_page = _paginated_tracks(
         state.playlist,
         playlist_offset,
@@ -5684,6 +5789,10 @@ async def status(
             "last_ad_script": state.last_ad_script,
             "ha_context": state.ha_context if state.ha_context else None,
             "ha_details": _ha_details_payload(state),
+            # Moment Receipts full trail (admin-only): entity, lane, confidence,
+            # and status trail stay behind admin auth — the public payload gets
+            # only generic labels via ha_moments.recent.
+            "moments_admin": moments_admin,
             "pending_actions": list(state.pending_actions)[-10:] or None,
             # Background queue-from-search outcomes the admin couldn't see
             # synchronously; the UI toasts new entries by ts. Return the whole

@@ -2091,6 +2091,7 @@ CHAOS DIRECTION:
     # prompt. Restoring the sanitized copy would mutate the stored directive
     # (stripped quotes/role markers, truncated past 300 chars) on every fallback.
     raw_pending_directive = state.ha_pending_directive
+    raw_pending_directive_moment_id = state.ha_pending_directive_moment_id
     pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
     consumed_pending_directive = False
     if pending_directive:
@@ -2099,12 +2100,20 @@ HIGH PRIORITY — HOME EVENT DIRECTIVE:
 {pending_directive}
 Make this the focus of this banter break. It happened just now — react naturally.
 """
+        # Hand the Moment Receipt id to the producer WITH this banter's result
+        # (same lifetime as last_banter_script), for BOTH lanes. The producer
+        # reads ONLY this slot at metadata-build time — never live state — so a
+        # stock-copy fallback return (the except path below clears the slot)
+        # or a fresh HA poll mid-generation can never attach a receipt to a
+        # banter that doesn't actually carry the directive.
+        state.last_banter_ritual_moment_id = raw_pending_directive_moment_id
         # Normal reactive directives fire once. Interrupt directives stay pending
         # until the urgent segment is actually queued, so a stale in-flight render
         # cannot consume the only copy before producer epoch guards discard it.
         is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
         if not is_interrupt:
             state.ha_pending_directive = ""
+            state.ha_pending_directive_moment_id = ""
             consumed_pending_directive = True
 
     # Record Hunt narration has its own one-shot slot. It is planned after the
@@ -2422,8 +2431,17 @@ Return JSON:
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
         if release_beat_commit is not None:
             release_beat_commit.abandon(state)
+        # The stock-copy fallback below does NOT carry the home directive, so
+        # the receipt handoff is cleared for BOTH lanes — otherwise the stock
+        # lines would air wearing the moment's id and mint a false "aired"
+        # receipt (pre-ship coverage audit, P0).
+        state.last_banter_ritual_moment_id = ""
         if consumed_pending_directive and not state.ha_pending_directive:
             state.ha_pending_directive = raw_pending_directive
+            # The receipt id travels with the directive in both directions: a
+            # failed generation restores both, so the elected row is never
+            # orphaned — it airs with the retry instead.
+            state.ha_pending_directive_moment_id = raw_pending_directive_moment_id
         if heading_announcement_commit is not None and raw_heading is not None:
             current_heading = state.heading
             if current_heading is not None and current_heading.id == raw_heading.id:
@@ -2435,6 +2453,14 @@ Return JSON:
         # generation from burning a gag the listener never heard — offer_gag can
         # surface it again at the next break.
         state.ha_running_gag_key = ""
+        # Its Moment Receipt row is honestly demoted (the gag can be re-offered
+        # later as a fresh row) — best-effort, never raises into the fallback.
+        if state.ha_running_gag_moment_id and state.moment_store is not None:
+            try:
+                state.moment_store.mark_dropped(state.ha_running_gag_moment_id, "generation_failed")
+            except Exception:  # pragma: no cover - receipts must never break fallback copy
+                logger.debug("Moment receipt gag drop failed", exc_info=True)
+        state.ha_running_gag_moment_id = ""
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"

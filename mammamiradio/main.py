@@ -20,6 +20,7 @@ from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.moment_receipts import MomentStore
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
@@ -319,6 +320,11 @@ async def startup():
         evening_ledger.purge_entity(_muted_entity_id)
     evening_ledger.save_if_dirty(config.cache_dir)
 
+    # Moment Receipts — the durable trail behind ritual-recipe moments.
+    # Restart-durable so the listener strip and admin Moments panel don't blank
+    # on every addon update; corrupt-tolerant load (never aborts the boot).
+    moment_store = MomentStore.load(config.cache_dir)
+
     # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
     # correctly forgets verbal gags), so unlike the evening ledger it is not
     # loaded from disk.
@@ -453,6 +459,7 @@ async def startup():
         song_preferences=song_preferences,
         persona_store=persona_store,
         evening_ledger=evening_ledger,
+        moment_store=moment_store,
         verbal_gag_ledger=verbal_gag_ledger,
         release_campaign=release_campaign,
         session_stopped=_session_stopped,

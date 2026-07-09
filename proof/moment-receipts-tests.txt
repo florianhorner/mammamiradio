@@ -1,0 +1,9 @@
+# Moment Receipts — full local gate after review fixes
+# Command: make check  (ruff lint + format-check + mypy + vulture + pytest with coverage ratchet)
+# Date: 2026-07-09T18:21:34Z
+
+4366 passed, 2 skipped, 21 deselected, 1 warning in 122.85s (0:02:02)
+
+# make check (full suite):
+All coverage floors held. Total: 93.01% (floor: 92%)
+All checks passed

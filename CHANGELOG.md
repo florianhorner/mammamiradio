@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Your house can now interrupt the station — and now you can see it.** When something happens at home — the coffee machine waking up, the fridge raided one time too many, a leak sensor crying for help — the AI hosts already react on air. Now those moments leave a visible trace. The listener page shows a small "Live from your home" strip on the Casa card: the last few home moments the hosts actually reacted to, as plain labels like "Morning launch · 2 min ago" — never device names or details. The admin panel gets a full "Home moments" trail that answers both "why did the host just say that?" and "why did nothing happen?": each moment shows whether it made it to air, is on air right now, was cut short by a skip, played to an empty room, or stepped aside because another moment was already lined up. A moment only counts as "made it to air" once it truly streamed to a listener — backup clips and rescue audio never claim credit for the house. The trail survives restarts and updates, keeps only the recent past, and can never interrupt the music: if its bookkeeping ever hiccups, the show plays on and the trail catches up on its own.
+
 ### Fixed
 
 - **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the station now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the station's audio workers are busy, and its length is remembered so replays never wait on a re-measure.
