@@ -1,0 +1,40 @@
+NOTE: pytest below shows 8 failures in tests/core/test_config.py and
+tests/web/test_chaos_api.py. These are pre-existing and unrelated to this
+PR's diff (which touches only .css/.js/.html/.md files, none of which
+these tests or their source depend on) — confirmed stable across every
+run this session, tracked in https://github.com/florianhorner/mammamiradio/issues/804.
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+274 files already formatted
+
+=== mypy mammamiradio/ tests/ ===
+mammamiradio/main.py:468: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+mammamiradio/main.py:483: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_public_status_contract.py:462: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:776: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 247 source files
+
+=== pytest tests/ -q ===
+
+tests/core/test_config.py:518: Failed
+------------------------------ Captured log call -------------------------------
+WARNING  mammamiradio.core.config:config.py:1318 No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text
+=============================== warnings summary ===============================
+.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /Users/florianhorner/conductor/workspaces/mammamiradio/casablanca-v2/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/web/test_chaos_api.py::test_boot_read_back_does_not_arm_first_strike
+FAILED tests/core/test_config.py::test_load_config_rejects_every_song_banter_cadence
+FAILED tests/core/test_config.py::test_load_config_rejects_pacing_out_of_range[songs_between_ads = 4-songs_between_ads = 999-songs_between_ads must be <= 60]
+FAILED tests/core/test_config.py::test_load_config_rejects_pacing_above_safe_ceiling
+FAILED tests/core/test_config.py::test_load_config_rejects_nonpositive_pacing_values
+FAILED tests/core/test_config.py::test_pacing_env_override_ignores_non_int - ...
+FAILED tests/core/test_config.py::test_load_config_from_radio_toml - Assertio...
+FAILED tests/core/test_config.py::test_load_config_does_not_leak_arc_thresholds_on_validation_failure
+8 failed, 4358 passed, 2 skipped, 21 deselected, 1 warning in 103.38s (0:01:43)
