@@ -63,6 +63,7 @@
     currentProgressMs: 0,
     segmentDurationMs: 0,
     progressTimer: null,
+    lastNpKey: null,
   };
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
@@ -70,6 +71,13 @@
 
   /* ── Helpers ── */
   function $(id) { return document.getElementById(id); }
+  /* Shared by Act IV (track title roll) and Act VI (dedica stamp + send) —
+     JS-sequenced animations must check this BEFORE adding an animation
+     class. A CSS-only `animation: none !important` override is not enough
+     on its own: a chain waiting on `animationend` would stall forever. */
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
   function escHtml(v) {
     return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -171,7 +179,9 @@
     state.isPlaying = isPlaying;
     if (playBtnSmall) {
       playBtnSmall.classList.toggle('playing', isPlaying);
-      playBtnSmall.innerHTML = isPlaying ? '&#9208;' : '&#9654;';
+      playBtnSmall.innerHTML = isPlaying
+        ? '<span class="mmr-play-icon">&#9208;</span>'
+        : '<span class="mmr-play-icon">&#9654;</span>';
       playBtnSmall.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
       playBtnSmall.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
     }
@@ -275,6 +285,26 @@
     const fullText = [trackEl.textContent, artistEl.textContent].filter(Boolean).join(' — ');
     trackEl.title = fullText;
     trackEl.setAttribute('aria-label', fullText);
+
+    // Act IV — Il Cambio. Only animate on a genuine content change: the 3s
+    // poll re-renders this unconditionally, and without this guard the roll
+    // would replay on every tick even when nothing changed.
+    const npKey = JSON.stringify([trackEl.textContent, artistEl.textContent]);
+    if (state.lastNpKey === null) {
+      // First render (page load) — establish the baseline without animating,
+      // so there's no spurious roll-up on initial paint.
+      state.lastNpKey = npKey;
+    } else if (npKey !== state.lastNpKey) {
+      state.lastNpKey = npKey;
+      if (!reducedMotion()) {
+        [trackEl, artistEl].forEach((el) => {
+          el.classList.remove('tt-track-roll');
+          void el.offsetWidth; // force reflow so the animation restarts
+          el.classList.add('tt-track-roll');
+        });
+      }
+    }
+
     updateMediaSession(np);
   }
 
@@ -691,7 +721,35 @@
     }
   }
 
-  /* ── Request form ── */
+  /* ── Request form ──
+   * Act VI — Il Francobollo. Genuine success (d.ok === true) gets the
+   * animated stamp-press + card-lift sequence; 429/decline/network-failure
+   * branches keep the plain instant swap, just crossfaded via
+   * .form-sent.is-visible (a CSS transition — already collapsed to 0.01ms
+   * under prefers-reduced-motion by base.css's blanket rule, so it needs no
+   * separate JS gate). */
+  function _revealSentCrossfade(formEl, sentEl) {
+    if (formEl) formEl.style.display = 'none';
+    if (sentEl) {
+      sentEl.style.display = '';
+      requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+    }
+  }
+
+  function _resetRequestForm(formEl, sentEl) {
+    if (formEl) {
+      formEl.style.display = '';
+      formEl.classList.remove('is-sending');
+      delete formEl.dataset.submitting;
+      const submitBtn = formEl.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = false;
+    }
+    if (sentEl) {
+      sentEl.style.display = 'none';
+      sentEl.classList.remove('is-visible');
+    }
+  }
+
   async function submitRequest(ev) {
     ev.preventDefault();
     const name = ($('req-name')?.value || '').trim();
@@ -699,43 +757,109 @@
     if (!msg) return;
     const formEl = $('request-form');
     const sentEl = $('request-sent');
+    // Act VI now leaves the form visibly on-screen for up to ~1.7s of
+    // stamp-press + card-lift before it hides (previously an instant swap) —
+    // that widened window makes a double-click/double-tap resubmission easy
+    // to trigger for real, not just a theoretical race. A second submit
+    // while one is in flight would otherwise interrupt the first one's
+    // animation (a hard display:none from the second call can kill the
+    // first's CSS animation before animationend fires, leaving .is-sending
+    // stuck and the wrong confirmation text on screen).
+    if (formEl?.dataset.submitting === '1') return;
+    if (formEl) formEl.dataset.submitting = '1';
+    const submitBtn = formEl?.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+    // Fetch has no built-in timeout — a stalled connection (flaky wifi,
+    // captive portal, hung server) would otherwise leave dataset.submitting
+    // set and the button disabled forever, with no error shown and no
+    // recovery short of a page reload (adversarial review finding). Bound
+    // it so a hang always falls through to the existing catch/reset path.
+    const fetchController = new AbortController();
+    const fetchTimeout = setTimeout(() => fetchController.abort(), 8000);
     try {
       const r = await fetch(_base + '/api/listener-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name || 'Un ascoltatore', message: msg }),
+        signal: fetchController.signal,
       });
+      // Keep the timeout armed through the body read, not just the headers —
+      // a response that stalls mid-body would otherwise hang r.json() with
+      // no abort path once cleared here (Codex re-review finding). The same
+      // AbortSignal cancels an in-flight body read, so this is sufficient.
       const d = await r.json();
-      if (formEl) formEl.style.display = 'none';
-      if (sentEl) {
-        sentEl.style.display = '';
-        if (d.ok) {
-          sentEl.textContent = d.type === 'song_request'
-            ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
-            : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
-        } else if (r.status === 429) {
-          sentEl.textContent = d.retry_after
-            ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
-            : 'Coda piena, riprova tra poco.';
-        } else {
-          sentEl.textContent = 'Il saluto non è partito — aspetta un attimo e riprova.';
-        }
+      clearTimeout(fetchTimeout);
+      let isSuccess = false;
+      let text;
+      if (d.ok) {
+        isSuccess = true;
+        text = d.type === 'song_request'
+          ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
+          : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
+      } else if (r.status === 429) {
+        text = d.retry_after
+          ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
+          : 'Coda piena, riprova tra poco.';
+      } else {
+        text = 'Il saluto non è partito — aspetta un attimo e riprova.';
       }
+      if (sentEl) sentEl.textContent = text;
+
+      if (isSuccess && formEl && !reducedMotion()) {
+        formEl.classList.add('is-sending');
+        let liftDone = false;
+        const finishLift = () => {
+          if (liftDone) return; // animationend + fallback timer can both fire — only run once
+          liftDone = true;
+          formEl.removeEventListener('animationend', onCardLiftEnd);
+          clearTimeout(liftFallback);
+          formEl.style.display = 'none';
+          formEl.classList.remove('is-sending');
+          if (sentEl) {
+            // #request-sent is aria-live="polite" — its text was set while
+            // still display:none (below), which most screen readers won't
+            // announce; re-assigning at reveal time makes the mutation and
+            // the visibility change coincident (adversarial review finding).
+            sentEl.textContent = text;
+            sentEl.style.display = '';
+            requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+          }
+        };
+        const onCardLiftEnd = (e) => {
+          if (e.animationName !== 'tt-card-lift') return; // ignore tt-stamp-press bubbling up first
+          finishLift();
+        };
+        formEl.addEventListener('animationend', onCardLiftEnd);
+        // Backgrounded/inactive tabs can throttle or skip animation frames
+        // entirely, so animationend isn't guaranteed to fire — a bounded
+        // fallback (stamp-press 320ms + card-lift 1.4s + margin) guarantees
+        // the confirmation still reveals instead of leaving the form stuck
+        // hidden with no message until the unrelated 15s revert timer.
+        const liftFallback = setTimeout(finishLift, 2500);
+      } else if (isSuccess) {
+        // Reduced motion: instant swap, no animation delay — but .form-sent
+        // now defaults to opacity:0 (needs .is-visible to show), so this
+        // must add the class directly or the confirmation renders invisible.
+        if (formEl) formEl.style.display = 'none';
+        if (sentEl) {
+          sentEl.style.display = '';
+          sentEl.classList.add('is-visible');
+        }
+      } else {
+        _revealSentCrossfade(formEl, sentEl);
+      }
+
       setTimeout(() => {
-        if (formEl) formEl.style.display = '';
-        if (sentEl) sentEl.style.display = 'none';
+        _resetRequestForm(formEl, sentEl);
         const msgInput = $('req-msg');
         if (msgInput) msgInput.value = '';
       }, 15000);
     } catch (e) {
-      if (formEl) formEl.style.display = 'none';
-      if (sentEl) {
-        sentEl.style.display = '';
-        sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
-      }
+      clearTimeout(fetchTimeout);
+      if (sentEl) sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
+      _revealSentCrossfade(formEl, sentEl);
       setTimeout(() => {
-        if (formEl) formEl.style.display = '';
-        if (sentEl) sentEl.style.display = 'none';
+        _resetRequestForm(formEl, sentEl);
       }, 6000);
     }
   }

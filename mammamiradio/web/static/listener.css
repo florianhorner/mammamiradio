@@ -29,6 +29,36 @@ html, body {
   line-height: 1.55;
 }
 
+/* Act I — L'Alba (page entrance). One-shot fade + rise on page load, not
+   gated on body[data-state="live"] (that only flips after the first
+   /public-status fetch resolves — gating on it could leave the whole page
+   invisible during a slow cold boot). */
+@keyframes tt-wake {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* .mmr-nav gets a fade-only variant (no transform) — it has its own static
+   transform: translateZ(0) for compositor-layer promotion (avoids sticky +
+   backdrop-filter scroll repaint flicker), and tt-wake's animation-fill-mode:
+   both would otherwise permanently clobber that with translateY(0) once the
+   entrance finishes (adversarial review finding). */
+@keyframes tt-wake-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.tricolor-band, .mmr-stage, #palinsesto, #dediche, .mmr-ticker, .mmr-footer {
+  animation: tt-wake 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.mmr-nav { animation: tt-wake-fade 700ms cubic-bezier(0.16, 1, 0.3, 1) 60ms both; }
+/* .mmr-stage's animation-delay is set on its own declaration below (merged
+   in, not duplicated here) — a second bare `.mmr-stage { ... }` rule would
+   shadow the real one for tests/tools that grab the first CSS block match
+   by selector name (test_design_tokens.py::_css_block). */
+#palinsesto { animation-delay: 180ms; }
+#dediche    { animation-delay: 240ms; }
+.mmr-ticker { animation-delay: 300ms; }
+.mmr-footer { animation-delay: 300ms; }
+
 /* Tricolor */
 .tricolor-band { position: relative; z-index: 1; }
 .mmr-tricolor { display: flex; width: 140px; height: 3px; border-radius: 1.5px; overflow: hidden; margin: 10px 0 18px; }
@@ -98,9 +128,17 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 @keyframes wave { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
 
 /* Play button */
-.mmr-play-btn { width: 48px; height: 48px; border: none; border-radius: 50%; background: var(--brand-primary, var(--sun2)); color: var(--ink); font-family: var(--font-body); font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(236,204,48,0.45), 0 0 0 5px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2); transition: transform 120ms, background 180ms, box-shadow 180ms; padding-left: 3px; flex-shrink: 0; }
+.mmr-play-btn { position: relative; width: 48px; height: 48px; border: none; border-radius: 50%; background: var(--brand-primary, var(--sun2)); color: var(--ink); font-family: var(--font-body); font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(236,204,48,0.45), 0 0 0 5px rgba(236,204,48,0.1), 0 0 28px rgba(236,204,48,0.2); transition: transform var(--transition-fast), background var(--transition), box-shadow var(--transition); padding-left: 3px; flex-shrink: 0; }
 .mmr-play-btn:active { transform: scale(0.94); }
 .mmr-play-btn.playing { background: var(--ok); color: var(--cream); padding-left: 0; box-shadow: 0 4px 20px rgba(37,99,235,0.45), 0 0 0 5px rgba(37,99,235,0.08), 0 0 28px rgba(37,99,235,0.2); }
+
+/* Act III — Il Battito. tt-ripple/tt-thump keyframes live in base.css (shared,
+   global). Ring anchors on .mmr-play-btn (now position: relative above). */
+.mmr-play-btn.playing::after {
+  content: ''; position: absolute; inset: -5px; border-radius: 50%;
+  border: 2px solid var(--ok); animation: tt-ripple 1.4s ease-out infinite;
+}
+.mmr-play-btn.playing .mmr-play-icon { animation: tt-thump 1.4s ease-in-out infinite; }
 
 /* Stage */
 /* The card surfaces below use the dedicated --card / --card-strong / --card-line
@@ -121,6 +159,7 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: auto auto 1fr;
+  animation-delay: 120ms; /* Act I — L'Alba stagger (animation itself set by the combined tt-wake rule) */
   column-gap: 40px;
 }
 
@@ -156,7 +195,17 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   overflow-wrap: anywhere;
   line-height: 1.15;
 }
-.mmr-stage-header .mmr-np-meta .artist { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.mmr-stage-header .mmr-np-meta .artist { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); margin-top: 2px; overflow: hidden; }
+
+/* Act IV — Il Cambio. Rolls the title/artist up on a real track change
+   (gated in listener.js so a same-track re-render on the next poll never
+   replays it). --transition-track (tokens.css) is deliberately longer than
+   --transition-slow — a content swap needs read-time, not just enter-time. */
+@keyframes tt-roll-up {
+  from { transform: translateY(60%); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+.tt-track-roll { animation: var(--transition-track) tt-roll-up both; }
 .mmr-np-progress { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0; }
 .mmr-np-progress-inner { display: flex; align-items: center; gap: 6px; }
 .mmr-np-bar { width: 80px; height: 2px; background: var(--card-strong); border-radius: 1px; overflow: hidden; }
@@ -330,7 +379,34 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-dedica-form button { width: 100%; background: #1A1410; color: var(--cream); border: none; padding: 13px 14px; min-height: 44px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; position: relative; z-index: 2; }
 .mmr-dedica-form .hint { font-size: 11px; color: #5A4A3D; margin-top: 10px; line-height: 1.4; font-style: italic; position: relative; z-index: 2; }
 .mmr-dedica-form .hint em { color: var(--lancia); font-style: italic; }
-.form-sent { margin-top: 10px; font-size: 12px; color: var(--ok); font-weight: 600; position: relative; z-index: 2; }
+
+/* Act VI — Il Francobollo. Success path: stamp-press then the whole card
+   lifts away (driven by listener.js listening for the tt-card-lift
+   animationend, gated behind reducedMotion() up front — the reduced-motion
+   CSS override below would otherwise leave that listener waiting forever).
+   429/network-failure branches skip the stamp/lift and just crossfade via
+   .form-sent.is-visible (a plain CSS transition, already collapsed to
+   0.01ms under prefers-reduced-motion by the blanket rule in base.css). */
+@keyframes tt-stamp-press {
+  0%   { transform: rotate(6deg) scale(1); }
+  40%  { transform: rotate(6deg) scale(0.88); }
+  100% { transform: rotate(6deg) scale(1); }
+}
+@keyframes tt-card-lift {
+  0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(-36px) rotate(-2deg); opacity: 0; }
+}
+.mmr-dedica-form.is-sending .mmr-dedica-stamp {
+  animation: tt-stamp-press var(--transition-slow) both;
+}
+.mmr-dedica-form.is-sending {
+  animation: tt-card-lift 1.4s ease-in 320ms forwards;
+}
+.form-sent {
+  margin-top: 10px; font-size: 12px; color: var(--ok); font-weight: 600; position: relative; z-index: 2;
+  opacity: 0; transform: translateY(8px); transition: opacity var(--transition-slow), transform var(--transition-slow);
+}
+.form-sent.is-visible { opacity: 1; transform: translateY(0); }
 
 /* About */
 .mmr-about-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -390,12 +466,36 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   .mmr-stage-header { gap: 10px; padding: 14px 16px; }
   .mmr-stage-header .mmr-np-meta { flex: 1 1 150px; }
   .mmr-stage-header .mmr-np-meta .title { display: block; font-size: 20px; line-height: 1.2; overflow: visible; -webkit-line-clamp: unset; }
+  /* This breakpoint removes line-clamp/overflow clipping so long titles wrap
+     instead of truncating — but tt-track-roll's "from" state starts 60% below
+     final position, so without clipping the incoming title could visibly
+     bleed under the meta block for the ~600ms roll. Re-clip only while the
+     animation class is present; static (non-animating) mobile display is
+     unaffected. */
+  .mmr-stage-header .mmr-np-meta .title.tt-track-roll { overflow: hidden; }
   .mmr-wave { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mmr-live-pill .dot, .mmr-live .dot { animation: none; }
   .mmr-wave span { animation: none; }
   .mmr-ticker .track { animation: none; transform: none; }
+  /* Act I — L'Alba */
+  .tricolor-band, .mmr-nav, .mmr-stage, #palinsesto, #dediche, .mmr-ticker, .mmr-footer {
+    animation: none !important;
+  }
+  /* Act III — Il Battito */
+  .mmr-play-btn.playing::after,
+  .mmr-play-btn.playing .mmr-play-icon {
+    animation: none !important;
+  }
+  /* Act VI — Il Francobollo. Defense-in-depth only — the JS reducedMotion()
+     check in submitRequest() is what actually prevents the animationend
+     listener from stalling; this override is just consistent with the rest
+     of this file's pattern. */
+  .mmr-dedica-form.is-sending,
+  .mmr-dedica-form.is-sending .mmr-dedica-stamp {
+    animation: none !important;
+  }
 }
 
 /* Clip sharing — share button in mmr-stage-header. */

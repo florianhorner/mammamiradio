@@ -128,4 +128,8 @@
   --transition-fast: 120ms cubic-bezier(0.16, 1, 0.3, 1);
   --transition:      180ms cubic-bezier(0.16, 1, 0.3, 1);
   --transition-slow: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* Deliberately NOT --transition-slow (320ms) — a track-title content swap
+   * needs read-time, and 320ms reads clipped for that. Used by the Act IV
+   * now-playing title/artist roll (listener.css .tt-track-roll). */
+  --transition-track: 600ms cubic-bezier(0.16, 1, 0.3, 1);
 }
