@@ -783,8 +783,12 @@
         body: JSON.stringify({ name: name || 'Un ascoltatore', message: msg }),
         signal: fetchController.signal,
       });
-      clearTimeout(fetchTimeout);
+      // Keep the timeout armed through the body read, not just the headers —
+      // a response that stalls mid-body would otherwise hang r.json() with
+      // no abort path once cleared here (Codex re-review finding). The same
+      // AbortSignal cancels an in-flight body read, so this is sufficient.
       const d = await r.json();
+      clearTimeout(fetchTimeout);
       let isSuccess = false;
       let text;
       if (d.ok) {
