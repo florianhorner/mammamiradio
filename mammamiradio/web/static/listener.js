@@ -740,6 +740,9 @@
     if (formEl) {
       formEl.style.display = '';
       formEl.classList.remove('is-sending');
+      delete formEl.dataset.submitting;
+      const submitBtn = formEl.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = false;
     }
     if (sentEl) {
       sentEl.style.display = 'none';
@@ -754,6 +757,18 @@
     if (!msg) return;
     const formEl = $('request-form');
     const sentEl = $('request-sent');
+    // Act VI now leaves the form visibly on-screen for up to ~1.7s of
+    // stamp-press + card-lift before it hides (previously an instant swap) —
+    // that widened window makes a double-click/double-tap resubmission easy
+    // to trigger for real, not just a theoretical race. A second submit
+    // while one is in flight would otherwise interrupt the first one's
+    // animation (a hard display:none from the second call can kill the
+    // first's CSS animation before animationend fires, leaving .is-sending
+    // stuck and the wrong confirmation text on screen).
+    if (formEl?.dataset.submitting === '1') return;
+    if (formEl) formEl.dataset.submitting = '1';
+    const submitBtn = formEl?.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     try {
       const r = await fetch(_base + '/api/listener-request', {
         method: 'POST',
