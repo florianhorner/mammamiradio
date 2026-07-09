@@ -1586,6 +1586,26 @@ def test_radio_event_directive_uses_next_break_path():
     commit.assert_called_once_with(match)
 
 
+def test_radio_event_directive_clears_stale_ritual_receipt_id():
+    state = _make_state()
+    state.ha_pending_directive_moment_id = "stale-ritual-id"
+    event = HomeEvent("script.kitchen_tts", "Kitchen TTS", "off", "on", time.time())
+    match = RadioEventMatch(
+        rule_id="tts_script_started",
+        mode="directive",
+        directive="One of the house voices just spoke.",
+        event=event,
+        cooldown_seconds=60,
+        matched_at=time.time(),
+    )
+
+    with patch(f"{PRODUCER_MODULE}.commit_radio_event_directive"):
+        _apply_radio_event_matches(state, [match])
+
+    assert state.ha_pending_directive == "One of the house voices just spoke."
+    assert state.ha_pending_directive_moment_id == ""
+
+
 def test_radio_event_directive_does_not_override_existing_directive():
     state = _make_state()
     state.ha_pending_directive = "legacy directive"
@@ -1692,6 +1712,7 @@ def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_coold
     assert len(gag_events) == 1
     assert gag_events[0].label == "Kitchen ritual"
     assert gag_events[0].force_gag_candidate is True
+    assert gag_events[0].ritual_family == matches[0].recipe.family
     commit.assert_not_called()
 
 
@@ -1914,6 +1935,27 @@ def test_ritual_lanes_work_without_a_store():
 
 
 @pytest.mark.asyncio
+async def test_producer_queues_audio_when_moment_store_save_raises():
+    state = _make_state()
+    state.moment_store = MagicMock()
+    state.moment_store.save_if_dirty.side_effect = RuntimeError("disk full")
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.qsize() == 1
+    assert queue.get_nowait().type == SegmentType.BANTER
+    state.moment_store.save_if_dirty.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_producer_records_interrupt_moment_elected_on_fire():
     clear_ritual_recipe_cooldowns()
     state = _make_state()
@@ -2068,6 +2110,64 @@ async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
 
 
 @pytest.mark.asyncio
+async def test_generated_running_gag_carries_receipt_until_stream_marks_airing(tmp_path):
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    ledger = EveningLedger()
+    key = "binary_sensor.fridge_door|off->on"
+    ledger.buckets[key] = GagBucket(
+        entity_id="binary_sensor.fridge_door",
+        label="Kitchen ritual",
+        old_state="chiuso",
+        new_state="aperto",
+        count=3,
+        first_ts=100.0,
+        last_ts=200.0,
+        ritual_family="fridge_freezer_raid",
+    )
+    state.evening_ledger = ledger
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    ha_context = _ha_ctx_mock()
+    host = config.hosts[0]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch.object(ledger, "offer_gag", return_value=(key, "Il frigo, di nuovo stasera.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Il frigo.")], None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    (row,) = state.moment_store.rows
+    assert seg.metadata["gag_moment_id"] == row.id
+    assert seg.metadata["ritual_moment_id"] is None
+    assert row.status == "elected"
+    assert row.lane == "running_gag"
+    assert row.family == "fridge_freezer_raid"
+    assert row.public_label == "Kitchen ritual"
+    assert ledger.buckets[key].last_spoken_ts > 0
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
 async def test_producer_records_no_gag_moment_for_plain_bucket():
     from mammamiradio.home.evening_memory import EveningLedger, GagBucket
 
@@ -2143,6 +2243,60 @@ async def test_stock_copy_fallback_banter_never_wears_a_receipt(tmp_path):
     # The row never airs on stock copy; it stays live for the real retry.
     (row,) = state.moment_store.rows
     assert row.status == "elected"
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(tmp_path):
+    """If generated directive banter is replaced by a canned fallback, the row
+    must not stay "waiting for its break": the directive was consumed and the
+    canned clip cannot carry it to air."""
+    from mammamiradio.audio.audio_quality import AudioQualityError
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    fallback = tmp_path / "canned.mp3"
+    fallback.write_bytes(b"fake")
+
+    async def _write_banter(*_args, **_kwargs):
+        state.last_banter_ritual_moment_id = row_id
+        return [(host, "La macchina del caffe si e svegliata.")], None
+
+    quality_calls = 0
+
+    def _quality_gate(*_args, **_kwargs):
+        nonlocal quality_calls
+        quality_calls += 1
+        if quality_calls == 1:
+            raise AudioQualityError("generated break is not airable")
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_quality_gate),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=fallback),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.metadata.get("canned") is True
+    assert seg.metadata.get("ritual_moment_id") is None
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "canned_fallback"
 
 
 @pytest.mark.asyncio
@@ -2223,6 +2377,53 @@ async def test_interrupt_stock_copy_demotes_receipt_at_queue_commit(tmp_path):
     assert row.status == "dropped"
     assert row.drop_reason == "generation_failed"
     assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_urgent_interrupt_retry_preserves_receipt_for_generated_banter(tmp_path):
+    """A retry may enter the next loop with the same id in the stale handoff
+    slot and the live urgent directive. Cleanup must not demote that receipt
+    before the successful generated retry can attach it to the segment."""
+    from mammamiradio.core.models import ChaosSubtype
+
+    state = _make_state()
+    state.moment_store = _moment_store()
+    row_id = state.moment_store.record(lane="interrupt", family="safety_saves", public_label="Safety moment")
+    state.ha_pending_directive = "Safety moment. React NOW."
+    state.ha_pending_directive_moment_id = row_id
+    state.last_banter_ritual_moment_id = row_id
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.force_next = SegmentType.BANTER
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    observed_statuses: list[str] = []
+
+    async def _write_banter(*_args, **_kwargs):
+        (row,) = state.moment_store.rows
+        observed_statuses.append(row.status)
+        state.last_banter_ritual_moment_id = state.ha_pending_directive_moment_id
+        return [(host, "Momento, amici...")], None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    (row,) = state.moment_store.rows
+    assert observed_statuses == ["elected"]
+    assert seg.metadata["ritual_moment_id"] == row_id
+    assert row.status == "elected"
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.force_next is None
 
 
 @pytest.mark.asyncio

@@ -5327,8 +5327,9 @@ def _public_status_payload(request: Request) -> dict:
     # unauthenticated endpoint. An "airing" row shows only while it belongs to
     # the segment now_streaming is playing (send-start is provisional).
     recent_moments: list[dict] = []
+    ha_capable = bool(config.ha_token and config.homeassistant.enabled)
     moment_store = getattr(state, "moment_store", None)
-    if moment_store is not None:
+    if ha_capable and moment_store is not None:
         try:
             _ns_meta = (state.now_streaming or {}).get("metadata") or {}
             _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
@@ -5397,7 +5398,7 @@ def _public_status_payload(request: Request) -> dict:
             "llm": bool(config.anthropic_api_key or config.openai_api_key),
             "anthropic_key": bool(config.anthropic_api_key),
             "openai": bool(config.openai_api_key),
-            "ha": bool(config.ha_token and config.homeassistant.enabled),
+            "ha": ha_capable,
             "anthropic_degraded": _provider_health_snapshot(config, state)["anthropic"]["degraded"],
         },
         # Cross-page invariant facts (must match admin /status exactly).
@@ -5715,6 +5716,11 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
+    try:
+        moments_admin = state.moment_store.to_admin_rows(limit=25) if state.moment_store is not None else None
+    except Exception:  # pragma: no cover - receipts must never break admin polling
+        logger.debug("Moment receipt admin rows failed", exc_info=True)
+        moments_admin = []
     playlist_page = _paginated_tracks(
         state.playlist,
         playlist_offset,
@@ -5758,7 +5764,7 @@ async def status(
             # Moment Receipts full trail (admin-only): entity, lane, confidence,
             # and status trail stay behind admin auth — the public payload gets
             # only generic labels via ha_moments.recent.
-            "moments_admin": (state.moment_store.to_admin_rows(limit=25) if state.moment_store is not None else None),
+            "moments_admin": moments_admin,
             "pending_actions": list(state.pending_actions)[-10:] or None,
             # Background queue-from-search outcomes the admin couldn't see
             # synchronously; the UI toasts new entries by ts. Return the whole

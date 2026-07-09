@@ -1,11 +1,8 @@
-# Moment Receipts — full local gate on merged state (origin/main merged at a07499fb)
-# Command: make check  (ruff lint + format-check + mypy + pytest with coverage ratchet)
-# Date: 2026-07-08T23:29:02Z
+# Moment Receipts — full local gate after review fixes
+# Command: make check  (ruff lint + format-check + mypy + vulture + pytest with coverage ratchet)
+# Date: 2026-07-09T09:54:16Z
 
-........................................................................ [ 78%]
-........................................................................ [ 91%]
-..............................................                           [100%]
-550 passed in 28.19s
+4359 passed, 2 skipped, 21 deselected, 1 warning in 129.80s (0:02:09)
 
 # make check (full suite):
 All coverage floors held. Total: 93% (floor: 92%)

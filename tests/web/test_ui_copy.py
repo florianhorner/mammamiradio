@@ -57,6 +57,16 @@ def test_clip_copy_keys_present():
     assert "{s}" in COPY["it"]["clip_rate_limited"]
 
 
+def test_listener_moment_receipt_copy_is_localized():
+    for lang in ("en", "it"):
+        assert COPY[lang].get("casa_moment_airing"), f"missing casa_moment_airing in {lang}"
+        assert "{m}" in COPY[lang].get("casa_moment_minutes_ago", "")
+    text = _LISTENER_JS.read_text(encoding="utf-8")
+    assert "_t('casa_moment_airing'" in text
+    assert "_t('casa_moment_minutes_ago'" in text
+    assert "in onda ora" not in text
+
+
 def test_no_tech_lingo_reaches_the_listener():
     """Leadership principle #5: no machine words in listener-facing copy.
 

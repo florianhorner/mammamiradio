@@ -340,6 +340,8 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_recipe_matches",
         "ritual_recipe_audit",
         "ritual_directive",
+        "ritual_moment_id",
+        "gag_moment_id",
     }
 )
 

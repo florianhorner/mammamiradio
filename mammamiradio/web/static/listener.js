@@ -429,6 +429,10 @@
   function updateCasa(ha) {
     const el = $('casa-card');
     if (!el) return;
+    if (window.mmrLastCaps && window.mmrLastCaps.ha === false) {
+      el.setAttribute('hidden', '');
+      return;
+    }
     const recent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
     if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label && !recent.length)) {
       el.setAttribute('hidden', '');
@@ -467,9 +471,10 @@
           ico.className = 'ico';
           ico.textContent = m.status === 'airing' ? '●' : '·';
           const text = document.createElement('span');
+          const minutes = m.ago_min || 1;
           text.textContent = m.status === 'airing'
-            ? (m.label || '') + ' · in onda ora'
-            : (m.label || '') + ' · ' + (m.ago_min || 1) + ' min fa';
+            ? (m.label || '') + ' · ' + _t('casa_moment_airing', 'on air now')
+            : (m.label || '') + ' · ' + _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
           row.appendChild(ico);
           row.appendChild(text);
           momentsRows.appendChild(row);

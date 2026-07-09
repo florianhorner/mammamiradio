@@ -112,6 +112,24 @@ def test_retention_prunes_stale_rows():
     assert old not in ids and fresh in ids
 
 
+def test_read_projections_prune_stale_rows_without_new_records():
+    from unittest.mock import patch
+
+    store = MomentStore()
+    old = _elected(store, now=NOW)
+    store.mark_airing(old, now=NOW + 1)
+    store.finalize(old, "aired", now=NOW + 2)
+
+    assert store.to_public_rows(now=NOW + RETENTION_SECONDS + 1) == []
+    assert store.rows == []
+    assert store._dirty is True
+
+    fresh = _elected(store, now=NOW + RETENTION_SECONDS + 2)
+    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + (2 * RETENTION_SECONDS) + 3):
+        assert store.to_admin_rows() == []
+    assert fresh not in {row.id for row in store.rows}
+
+
 # --- public / admin projections --------------------------------------------------
 
 

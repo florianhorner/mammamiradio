@@ -753,6 +753,22 @@ _SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
 _GLOBAL_INTERRUPT_COOLDOWN_SECONDS = 60
 
 
+def _mark_moment_dropped(state: StationState, moment_id: str, reason: str, context: str) -> None:
+    """Best-effort receipt demotion; never lets receipt bookkeeping affect audio."""
+    if not moment_id or state.moment_store is None:
+        return
+    try:
+        state.moment_store.mark_dropped(moment_id, reason)
+    except Exception:  # pragma: no cover - receipts must never break production
+        logger.debug("Moment receipt %s drop failed", context, exc_info=True)
+
+
+def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason: str, context: str) -> None:
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    for key in ("ritual_moment_id", "gag_moment_id"):
+        _mark_moment_dropped(state, str(metadata.get(key) or ""), reason, f"{context}:{key}")
+
+
 # Tracks the most recent music file to avoid repeated glob scans on every banter.
 _last_music_file: Path | None = None
 
@@ -1884,11 +1900,12 @@ async def _fire_interrupt(
     # carried an elected Moment Receipt (same-poll directive+interrupt election,
     # or a timer-poll interrupt landing on a waiting ritual directive), demote
     # it honestly — its recipe cooldown is already spent and it can never air.
-    if state.ha_pending_directive_moment_id and state.moment_store is not None:
-        try:
-            state.moment_store.mark_dropped(state.ha_pending_directive_moment_id, "interrupt_override")
-        except Exception:  # pragma: no cover - receipts never break an interrupt
-            logger.debug("Moment receipt interrupt-override drop failed", exc_info=True)
+    _mark_moment_dropped(
+        state,
+        state.ha_pending_directive_moment_id,
+        "interrupt_override",
+        "interrupt-override",
+    )
     state.ha_pending_directive = spec.directive
     # Reactive-trigger interrupts carry no receipt; the ritual caller overwrites
     # this with its row id right after a successful fire.
@@ -2722,7 +2739,10 @@ async def run_producer(
         # is disabled or its refresh stalls. Dirty-gated — a clean store is a
         # no-op, so this costs nothing on quiet cycles.
         if state.moment_store is not None:
-            state.moment_store.save_if_dirty(config.cache_dir)
+            try:
+                state.moment_store.save_if_dirty(config.cache_dir)
+            except Exception:
+                logger.debug("Moment receipt store save failed", exc_info=True)
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
@@ -2949,12 +2969,25 @@ async def run_producer(
                 # id behind for an unrelated banter to wear on air. Its consumed
                 # directive is gone, so the elected row is demoted honestly
                 # instead of reading "waiting for its break" until retention.
-                if state.last_banter_ritual_moment_id and state.moment_store is not None:
-                    try:
-                        state.moment_store.mark_dropped(state.last_banter_ritual_moment_id, "generation_failed")
-                    except Exception:  # pragma: no cover - receipts never break production
-                        logger.debug("Moment receipt stale-handoff drop failed", exc_info=True)
+                if (
+                    state.last_banter_ritual_moment_id
+                    and state.last_banter_ritual_moment_id != state.ha_pending_directive_moment_id
+                ):
+                    _mark_moment_dropped(
+                        state,
+                        state.last_banter_ritual_moment_id,
+                        "generation_failed",
+                        "stale-handoff",
+                    )
                 state.last_banter_ritual_moment_id = ""
+
+                def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
+                    ritual_id = state.last_banter_ritual_moment_id
+                    if ritual_id and ritual_id != state.ha_pending_directive_moment_id:
+                        _mark_moment_dropped(state, ritual_id, reason, f"{context}:ritual")
+                    state.last_banter_ritual_moment_id = ""
+                    _mark_moment_dropped(state, state.ha_running_gag_moment_id, reason, f"{context}:gag")
+                    state.ha_running_gag_moment_id = ""
 
                 # Track listening sessions for compounding persona
                 await _maybe_start_session(state)
@@ -3185,6 +3218,7 @@ async def run_producer(
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
                             _abandon_release_beat_commit(state, listener_request_commit)
+                            _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             # Commit-free net: on a transition+banter gather failure
                             # the tuple never unpacks, so listener_request_commit is
                             # None and the abandon above is a no-op. Restore any
@@ -3239,6 +3273,14 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
+                                if state.last_banter_ritual_moment_id:
+                                    _mark_moment_dropped(
+                                        state,
+                                        state.last_banter_ritual_moment_id,
+                                        "canned_fallback",
+                                        "quality-canned-fallback",
+                                    )
+                                    state.last_banter_ritual_moment_id = ""
                                 fallback_text = "(pre-recorded banter)"
                                 fallback_type = "banter"
                                 if chaos_subtype is not None:
@@ -3272,8 +3314,10 @@ async def run_producer(
                                         )
                                     else:
                                         await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                _drop_unqueued_banter_receipts("generation_failed", "fallback-quality-reject")
                                 continue
                         else:
+                            _drop_unqueued_banter_receipts("generation_failed", "quality-reject")
                             if chaos_subtype is not None:
                                 if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
                                     state.chaos_pending = None
@@ -3329,6 +3373,9 @@ async def run_producer(
                         banter_commit,
                         state.last_banter_script,
                     )
+                ritual_moment_id = state.last_banter_ritual_moment_id or ""
+                gag_moment_id = state.ha_running_gag_moment_id or ""
+                attach_moment_ids = canned is None and not impossible_tts
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -3353,14 +3400,8 @@ async def run_producer(
                         # inclusion; the stock-copy except path clears it) — never
                         # live state, which survives a stock-copy fallback and
                         # would mint a false aired receipt.
-                        "ritual_moment_id": (
-                            (state.last_banter_ritual_moment_id or None)
-                            if canned is None and not impossible_tts
-                            else None
-                        ),
-                        "gag_moment_id": (
-                            (state.ha_running_gag_moment_id or None) if canned is None and not impossible_tts else None
-                        ),
+                        "ritual_moment_id": ritual_moment_id if attach_moment_ids and ritual_moment_id else None,
+                        "gag_moment_id": gag_moment_id if attach_moment_ids and gag_moment_id else None,
                         **release_beat_metadata,
                         **memory_extraction_metadata,
                     },
@@ -3379,7 +3420,10 @@ async def run_producer(
                     _used_generated_banter=(canned is None and not impossible_tts),
                     _first_home_context_moment_pending=first_home_context_moment_pending,
                     _gag_key=state.ha_running_gag_key,
-                    _gag_moment_id=state.ha_running_gag_moment_id,
+                    _ritual_moment_id=ritual_moment_id,
+                    _ritual_moment_attached=bool(attach_moment_ids and ritual_moment_id),
+                    _gag_moment_id=gag_moment_id,
+                    _gag_moment_attached=bool(attach_moment_ids and gag_moment_id),
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
                     _pending_gag=state.pending_verbal_gag,
@@ -3407,14 +3451,18 @@ async def run_producer(
                     if _used_generated_banter and _ledger is not None and _gag_key:
                         _ledger.mark_spoken(_gag_key, now=time.time())
                         _ledger.save_if_dirty(_cache_dir)
-                    elif _gag_moment_id and state.moment_store is not None:
+                    elif _gag_moment_id and not _gag_moment_attached:
                         # The gag never rode this banter (canned clip or
                         # pre-rendered moment aired instead) — demote its
                         # receipt honestly; offer_gag can re-elect it later.
-                        try:
-                            state.moment_store.mark_dropped(_gag_moment_id, "canned_fallback")
-                        except Exception:  # pragma: no cover - receipts never break the callback
-                            logger.debug("Moment receipt gag drop failed", exc_info=True)
+                        _mark_moment_dropped(state, _gag_moment_id, "canned_fallback", "gag-canned-fallback")
+                    if _ritual_moment_id and not _ritual_moment_attached:
+                        _mark_moment_dropped(
+                            state,
+                            _ritual_moment_id,
+                            "generation_failed",
+                            "ritual-canned-fallback",
+                        )
                     state.ha_running_gag_key = ""
                     state.ha_running_gag_moment_id = ""
                     # Commit the banter-seeded verbal gag to the cross-domain
@@ -4008,6 +4056,7 @@ async def run_producer(
                     logger.info("Discarding stale %s segment after same-source playlist edit", seg_type.value)
                     stale_reason = GenerationWasteReason.STALE_PLAYLIST
                 state.record_discard(segment, reason=stale_reason)
+                _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
@@ -4017,6 +4066,7 @@ async def run_producer(
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
+                _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_CHAOS, "chaos-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 if is_operator_forced:
@@ -4045,6 +4095,7 @@ async def run_producer(
                 if not await _enqueue_with_egress(
                     queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
                 ):
+                    _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
@@ -4052,6 +4103,7 @@ async def run_producer(
                 prev_seg_type = _adjacency_type_for(segment)
             else:
                 if not await _queue_segment(segment):
+                    _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
@@ -4069,10 +4121,12 @@ async def run_producer(
                     and not segment.metadata.get("ritual_moment_id")
                     and state.moment_store is not None
                 ):
-                    try:
-                        state.moment_store.mark_dropped(state.ha_pending_directive_moment_id, "generation_failed")
-                    except Exception:  # pragma: no cover - receipts never break queue commit
-                        logger.debug("Moment receipt interrupt drop failed", exc_info=True)
+                    _mark_moment_dropped(
+                        state,
+                        state.ha_pending_directive_moment_id,
+                        "generation_failed",
+                        "interrupt-stock-copy",
+                    )
                 state.ha_pending_directive = ""
                 state.ha_pending_directive_moment_id = ""
                 # The safety-belt force_next was set when the interrupt fired.

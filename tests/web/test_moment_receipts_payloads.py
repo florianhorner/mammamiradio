@@ -46,12 +46,18 @@ def _banter_segment(**metadata: object) -> Segment:
     )
 
 
+def _enable_ha(app) -> None:
+    app.state.config.homeassistant.enabled = True
+    app.state.config.ha_token = "ha-token"
+
+
 # --- payload surfaces -------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_public_status_recent_moments_generic_labels_only():
     app = _make_test_app()
+    _enable_ha(app)
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -70,6 +76,7 @@ async def test_public_status_recent_moments_generic_labels_only():
 @pytest.mark.asyncio
 async def test_public_status_hides_elected_and_dropped_moments():
     app = _make_test_app()
+    _enable_ha(app)
     store = MomentStore()
     store.record(lane="directive", family="f", public_label="Elected only", now=NOW)
     dropped = store.record(lane="interrupt", family="f", public_label="Dropped", now=NOW)
@@ -86,6 +93,7 @@ async def test_public_status_hides_elected_and_dropped_moments():
 @pytest.mark.asyncio
 async def test_admin_status_moments_trail_and_cross_page_consistency():
     app = _make_test_app()
+    _enable_ha(app)
     store, moment_id = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -120,6 +128,7 @@ async def test_admin_status_moments_requires_admin_auth():
 @pytest.mark.asyncio
 async def test_public_status_survives_store_failure():
     app = _make_test_app()
+    _enable_ha(app)
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -128,6 +137,34 @@ async def test_public_status_survives_store_failure():
             resp = await client.get("/public-status")
     assert resp.status_code == 200
     assert not (resp.json().get("ha_moments") or {}).get("recent")
+
+
+@pytest.mark.asyncio
+async def test_public_status_hides_persisted_receipts_when_ha_is_disabled():
+    app = _make_test_app()
+    store, _ = _store_with_aired_row()
+    app.state.station_state.moment_store = store
+    assert app.state.config.homeassistant.enabled is False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["capabilities"]["ha"] is False
+    assert not (body.get("ha_moments") or {}).get("recent")
+
+
+@pytest.mark.asyncio
+async def test_admin_status_survives_moment_projection_failure():
+    app = _make_test_app()
+    store, _ = _store_with_aired_row()
+    app.state.station_state.moment_store = store
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch.object(MomentStore, "to_admin_rows", side_effect=RuntimeError("boom")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["moments_admin"] == []
 
 
 # --- stream hooks: mark_airing (send-start) --------------------------------------
@@ -281,6 +318,7 @@ async def test_aired_moments_survive_restart(tmp_path):
     store.save_if_dirty(tmp_path)
 
     app = _make_test_app()
+    _enable_ha(app)
     with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 300):
         app.state.station_state.moment_store = MomentStore.load(tmp_path)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -355,11 +393,7 @@ def test_mute_demotes_all_pending_receipts_and_clears_ids():
 
 @pytest.mark.asyncio
 async def test_moment_metadata_adds_no_new_public_keys_beyond_opaque_ids():
-    """now_streaming metadata reaches public payloads; moment keys must stay opaque.
-
-    The two allowed keys carry uuid fragments only — assert nothing else about
-    the moment (entity, family, confidence, spoken line) rides segment metadata.
-    """
+    """now_streaming metadata reaches public payloads; receipt ids stay internal."""
     app = _make_test_app()
     state = app.state.station_state
     store, moment_id = _store_with_aired_row()
@@ -371,7 +405,4 @@ async def test_moment_metadata_adds_no_new_public_keys_beyond_opaque_ids():
 
     ns_meta = (body.get("now_streaming") or {}).get("metadata") or {}
     moment_keys = {key for key in ns_meta if "moment" in key or "gag" in key or "ritual" in key}
-    assert moment_keys <= {"ritual_moment_id", "gag_moment_id"}
-    for key in moment_keys:
-        value = ns_meta[key]
-        assert value is None or (isinstance(value, str) and len(value) <= 16)
+    assert moment_keys == set()
