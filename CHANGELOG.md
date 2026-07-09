@@ -17,6 +17,7 @@ The current version source of truth is `pyproject.toml`.
 - **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the Home Assistant ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
 - **Packaged recovery audio is harder to lose during cleanup.** The station now treats bundled continuity clips as durable package assets, even if a cleanup path sees a bad ephemeral flag, so producer and playback purges cannot remove the recovery audio needed to cover a thin queue.
 - **Optional speech now waits for enough real music runway.** Natural banter, ads, news flashes, station IDs, and time checks yield to music while the ready-audio buffer is below the runway floor and the queue can still build, keeping Home Assistant Green-class installs from spending a scarce buffer on optional speech.
+- **Time checks and sweepers now get the same branded transition as every other host segment — both when the music hands off to them and when they hand back.** They previously used a bare synthesized whoosh with no musical motif in either direction — they were the moments on air that sounded noticeably different from the rest of the station's imaging. Already-cached synthesized stings are invalidated automatically, so the fix applies without an operator needing to clear anything.
 
 ### Refactored
 

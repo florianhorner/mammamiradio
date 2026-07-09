@@ -18,7 +18,7 @@ from mammamiradio.audio.normalizer import _MP3_OUTPUT_ARGS
 
 logger = logging.getLogger(__name__)
 
-SYNTH_CACHE_VERSION = "1"
+SYNTH_CACHE_VERSION = "2"
 SYNTH_CACHE_PREFIX = "synth_"
 SYNTH_VARIANT_POOL_SIZE = 3
 
