@@ -11,11 +11,21 @@ HEAD (air-next). Firing them in REVERSE (news, ad, banter) during a long lead tr
 they end up queued as [banter, ad, news]; when the lead track ends they air gaplessly.
 The lead track must be long enough to cover all three generations (~2-3 min).
 
+The arc is configurable (--arc, comma list in AIR order; default banter,ad,news_flash).
+A staged home event (--home-event entity:state, with --mock-ha pointing at mock_ha.py)
+is flipped via the mock's /__set right after the lead track is caught, so the reactive
+directive (e.g. the door-unlock "bentornato") rides into the banter generated next.
+
 Prereq: mock_ha.py running + the station started against it (see README.md).
 
 Usage:
     python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
         --lead-track "Night in Venice" --final scripts/showreel_out/ma-pr-3836.mp3
+
+    python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
+        --lead-track "Night in Venice" --arc banter \
+        --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \
+        --final scripts/showreel_out/door-bentornato.mp3
 """
 
 from __future__ import annotations
@@ -127,7 +137,48 @@ def main() -> int:
     ap.add_argument("--lead-tail", type=float, default=8.0, help="seconds of music tail to keep before banter")
     ap.add_argument("--settle", type=float, default=18.0)
     ap.add_argument("--max", type=float, default=420.0)
+    ap.add_argument(
+        "--arc",
+        default="banter,ad,news_flash",
+        help="segment types in AIR order, comma-separated (triggers fire in reverse)",
+    )
+    ap.add_argument(
+        "--home-event",
+        default="",
+        metavar="ENTITY:STATE",
+        help="flip a mock-HA entity right after the lead track is caught (e.g. lock.lock_ultra_8d3c:unlocked)",
+    )
+    ap.add_argument("--mock-ha", default="http://127.0.0.1:8123", help="mock_ha.py base URL for --home-event")
+    ap.add_argument(
+        "--event-settle",
+        type=float,
+        default=8.0,
+        help="seconds between the home-event flip and firing the arc triggers",
+    )
+    ap.add_argument(
+        "--first-wait",
+        type=float,
+        default=300.0,
+        help="max seconds to wait for the first arc segment to air — must cover the "
+        "REMAINDER of the lead track after the triggers fire (a lead caught at its "
+        "start airs the arc a full track-length later)",
+    )
     args = ap.parse_args()
+
+    arc = [s.strip() for s in args.arc.split(",") if s.strip()]
+    if not arc:
+        print("!! --arc must name at least one segment type")
+        return 1
+    if len(set(arc)) != len(arc):
+        print("!! --arc segment types must be unique (offsets are keyed by type)")
+        return 1
+    home_event: tuple[str, str] | None = None
+    if args.home_event:
+        entity, sep, state = args.home_event.partition(":")
+        if not sep or not entity or not state:
+            print("!! --home-event must be ENTITY:STATE")
+            return 1
+        home_event = (entity, state)
 
     raw = REPO_ROOT / args.raw if not Path(args.raw).is_absolute() else Path(args.raw)
     final = REPO_ROOT / args.final if not Path(args.final).is_absolute() else Path(args.final)
@@ -148,16 +199,28 @@ def main() -> int:
     offsets: dict[str, float] = {}
     try:
         # Wait for the long lead track near its start, then fire in REVERSE so the
-        # queue ends up [banter, ad, news].
+        # queue ends up in air order (front-inserts stack).
         _wait_lead(args.base, args.lead_track, t0)
-        for seg in ("news_flash", "ad", "banter"):
+        if home_event:
+            entity, state = home_event
+            print(f"    [home-event] {entity} -> {state}")
+            try:
+                _post(args.mock_ha, "/__set", {"entity_id": entity, "state": state})
+            except Exception as e:  # capture the arc eventless rather than abort a staged multi-minute run
+                print(f"      !! home-event flip failed ({e}); continuing without the staged event")
+            else:
+                # Give the flip time to land before the banter generation's context
+                # refresh polls the mock (the diff is what produces the event).
+                time.sleep(args.event_settle)
+        for seg in reversed(arc):
             _trigger_queued(args.base, seg)
-        # Lead track still playing; banter airs when it ends.
-        offsets["banter"] = _wait_type(args.base, "banter", t0) or 0.0
-        offsets["ad"] = _wait_type(args.base, "ad", t0) or 0.0
-        offsets["news"] = _wait_type(args.base, "news_flash", t0) or 0.0
-        news_end = _wait_until_not(args.base, "news_flash", t0)
-        offsets["news_end"] = news_end
+        # Lead track still playing; the arc airs when it ends. The FIRST segment's
+        # wait must survive the whole remaining lead (up to a full track length);
+        # the rest follow gaplessly and keep the tighter default.
+        offsets[arc[0]] = _wait_type(args.base, arc[0], t0, timeout=args.first_wait) or 0.0
+        for seg in arc[1:]:
+            offsets[seg] = _wait_type(args.base, seg, t0) or 0.0
+        offsets["arc_end"] = _wait_until_not(args.base, arc[-1], t0)
         time.sleep(2)
     finally:
         for p in (rec, warm):
@@ -171,11 +234,11 @@ def main() -> int:
     for k, v in offsets.items():
         print(f"    {v:6.1f}s  {k}")
 
-    # Auto-trim the contiguous arc: from (banter - lead_tail) to (news_end + 1).
-    b = offsets.get("banter", 0)
-    end = offsets.get("news_end", 0)
-    if b > 0 and end > b:
-        start = max(0, b - args.lead_tail)
+    # Auto-trim the contiguous arc: from (first segment - lead_tail) to (arc_end + 1).
+    first = offsets.get(arc[0], 0)
+    end = offsets.get("arc_end", 0)
+    if first > 0 and end > first:
+        start = max(0, first - args.lead_tail)
         dur = (end - start) + 1.0
         r = subprocess.run(
             [
@@ -200,11 +263,10 @@ def main() -> int:
             print(f"\n[error] ffmpeg trim failed; raw capture kept at {raw}\n{r.stderr[-600:]}")
             return 1
         print(f"\n[done] final continuous clip -> {final}  (~{dur:.0f}s, no stitching)")
-        print(
-            f"       internal: 0-{args.lead_tail:.0f}s music tail | "
-            f"banter {args.lead_tail:.0f}s | ad {args.lead_tail + (offsets['ad'] - b):.0f}s | "
-            f"news {args.lead_tail + (offsets['news'] - b):.0f}s"
+        internal = " | ".join(
+            f"{seg} {args.lead_tail + (offsets[seg] - first):.0f}s" for seg in arc if offsets.get(seg)
         )
+        print(f"       internal: 0-{args.lead_tail:.0f}s music tail | {internal}")
     else:
         print("\n[warn] could not detect a clean arc; inspect the raw capture")
     return 0

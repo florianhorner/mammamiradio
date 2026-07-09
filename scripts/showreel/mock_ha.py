@@ -15,6 +15,12 @@ Scenarios are plain dicts (entity_id -> {state, attributes}) chosen so the real
 classify_home_mood() returns the intended mood. The default scenario "coffee"
 yields "Caffè in preparazione" (sensor.kuche_kaffeemaschine_steckdose_power > 50).
 
+States are mutable at runtime via a local control endpoint, so a capture can
+stage a *transition* (the station derives events by diffing consecutive polls —
+a reactive trigger like the door unlock only fires on a state change):
+
+    POST /__set  {"entity_id": "lock.lock_ultra_8d3c", "state": "unlocked"}
+
 Usage:
     python scripts/showreel/mock_ha.py --port 8123 --scenario coffee
 """
@@ -31,7 +37,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SCENARIOS: dict[str, dict[str, dict]] = {
     # Coffee brewing — the "the house knew before we did" impossible moment.
     # sensor.kuche_kaffeemaschine_steckdose_power > 50 -> "Caffè in preparazione".
+    # The switch starts OFF so a capture can stage the reactive "coffee just
+    # switched on" event via POST /__set (same flow as the homecoming door).
     "coffee": {
+        "switch.bar_kaffeemaschine_steckdose": {
+            "state": "off",
+            "attributes": {"friendly_name": "Presa macchina del caffè"},
+        },
         "sensor.kuche_kaffeemaschine_steckdose_power": {
             "state": "118",
             "attributes": {"friendly_name": "Macchina del caffè", "unit_of_measurement": "W"},
@@ -66,6 +78,46 @@ SCENARIOS: dict[str, dict[str, dict]] = {
             },
         },
     },
+    # Homecoming — the "the radio heard the front door" impossible moment.
+    # The lock starts LOCKED; flip it to "unlocked" mid-capture via POST /__set
+    # so diff_states produces the unlock event and the REACTIVE_TRIGGERS
+    # directive ("bentornato") rides into the next banter. person.florian_horner
+    # is staged not_home for an optional follow-up flip (the named-welcome take).
+    "homecoming": {
+        "lock.lock_ultra_8d3c": {
+            "state": "locked",
+            "attributes": {"friendly_name": "Porta d'ingresso"},
+        },
+        "person.florian_horner": {
+            "state": "not_home",
+            "attributes": {"friendly_name": "Florian"},
+        },
+        "light.magic_areas_light_groups_wohnzimmer_all_lights": {
+            "state": "on",
+            "attributes": {"friendly_name": "Luci del soggiorno", "brightness": 90},
+        },
+        "light.magic_areas_light_groups_kuche_all_lights": {
+            "state": "off",
+            "attributes": {"friendly_name": "Luci della cucina"},
+        },
+        "media_player.wohnzimmer_sonos_arc_lautsprecher": {
+            "state": "playing",
+            "attributes": {"friendly_name": "Sonos del soggiorno", "media_title": "Mamma Mi Radio"},
+        },
+        "sensor.soggiorno_temperatura": {
+            "state": "21.8",
+            "attributes": {"friendly_name": "Temperatura soggiorno", "unit_of_measurement": "°C"},
+        },
+        "weather.forecast_home": {
+            "state": "clear-night",
+            "attributes": {
+                "friendly_name": "Meteo",
+                "temperature": 16,
+                "temperature_unit": "°C",
+                "humidity": 62,
+            },
+        },
+    },
 }
 
 # Hourly forecast returned by the weather.get_forecasts service call. Read-only
@@ -77,13 +129,22 @@ FORECASTS: dict[str, list[dict]] = {
         {"datetime": "2026-06-23T16:00:00+00:00", "condition": "rainy", "temperature": 22, "precipitation": 3.4},
         {"datetime": "2026-06-23T19:00:00+00:00", "condition": "cloudy", "temperature": 20, "precipitation": 0.5},
     ],
+    "homecoming": [
+        {"datetime": "2026-06-23T19:00:00+00:00", "condition": "clear-night", "temperature": 16, "precipitation": 0},
+        {"datetime": "2026-06-23T22:00:00+00:00", "condition": "clear-night", "temperature": 13, "precipitation": 0},
+        {"datetime": "2026-06-24T01:00:00+00:00", "condition": "cloudy", "temperature": 11, "precipitation": 0},
+        {"datetime": "2026-06-24T07:00:00+00:00", "condition": "sunny", "temperature": 14, "precipitation": 0},
+    ],
 }
 
 
 def make_handler(scenario: str):
-    states = SCENARIOS[scenario]
+    # Deep-ish copy so /__set mutations never leak back into SCENARIOS.
+    states = {
+        eid: {"state": data["state"], "attributes": dict(data["attributes"])}
+        for eid, data in SCENARIOS[scenario].items()
+    }
     forecast = FORECASTS.get(scenario, [])
-    states_list = [{"entity_id": eid, **data} for eid, data in states.items()]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet
@@ -100,7 +161,8 @@ def make_handler(scenario: str):
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/api/states":
-                self._send(states_list)
+                # Rebuilt per request: /__set mutations must show up on the next poll.
+                self._send([{"entity_id": eid, **data} for eid, data in states.items()])
             elif path in ("/api/", "/api"):
                 self._send({"message": "API running."})
             else:
@@ -109,10 +171,24 @@ def make_handler(scenario: str):
         def do_POST(self):
             path = self.path.split("?", 1)[0]
             length = int(self.headers.get("Content-Length", 0))
-            if length:
-                self.rfile.read(length)  # drain body
+            body_raw = self.rfile.read(length) if length else b""
             if path == "/api/services/weather/get_forecasts":
                 self._send({"response": {"weather.forecast_home": {"forecast": forecast}}})
+            elif path == "/__set":
+                # Capture-harness control: stage a state transition mid-run.
+                try:
+                    body = json.loads(body_raw)
+                    entity_id, new_state = body["entity_id"], str(body["state"])
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    self._send({"error": "expected {entity_id, state}"}, 400)
+                    return
+                if entity_id not in states:
+                    self._send({"error": f"unknown entity {entity_id!r} in scenario"}, 404)
+                    return
+                old = states[entity_id]["state"]
+                states[entity_id]["state"] = new_state
+                print(f"mock-ha: __set {entity_id}: {old!r} -> {new_state!r}")
+                self._send({"ok": True, "entity_id": entity_id, "old": old, "new": new_state})
             else:
                 self._send({"result": "ok"})
 
