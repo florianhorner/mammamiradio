@@ -195,6 +195,12 @@ body[data-stopped="true"] .btn-util {
 .script-host { font-weight: 700; margin-right: 4px; }
 .script-host[data-h="Marco"] { color: var(--ok); }
 .script-host[data-h="Giulia"] { color: var(--sun); }
+.tt-typing::after {
+  content: ''; display: inline-block; width: 2px; height: 0.9em;
+  background: var(--sun); margin-left: 1px; vertical-align: -0.1em;
+  animation: tt-caret-blink 0.9s step-end infinite;
+}
+@keyframes tt-caret-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 /* ── PACING ── */
 .pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
@@ -274,6 +280,15 @@ body[data-stopped="true"] .btn-util {
   width: 24px; height: 24px; border-radius: 50%;
   background: var(--cream-dk); border: 2px solid var(--surface); cursor: pointer;
   box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+/* Preset-applied settle pulse — only ever added by applyHostPreset(); raw drag
+   (onSliderInput) never touches this class, so manual dragging stays instant. */
+.ha input[type="range"].tt-settling::-webkit-slider-thumb { animation: tt-thumb-glow 400ms ease-out; }
+.ha input[type="range"].tt-settling::-moz-range-thumb      { animation: tt-thumb-glow 400ms ease-out; }
+@keyframes tt-thumb-glow {
+  0%   { box-shadow: 0 1px 4px rgba(0,0,0,0.5), 0 0 0 0 rgba(244,208,72,0.6); }
+  40%  { box-shadow: 0 1px 4px rgba(0,0,0,0.5), 0 0 0 6px rgba(244,208,72,0.35); }
+  100% { box-shadow: 0 1px 4px rgba(0,0,0,0.5), 0 0 0 0 rgba(244,208,72,0); }
 }
 .ha-labels { display: flex; justify-content: space-between; font-size: 9px; color: var(--muted); margin-top: 2px; padding: 0 2px; }
 .host-preview {
@@ -986,6 +1001,33 @@ input[type="range"]:focus-visible {
   width: 16px; height: 16px;
   cursor: pointer; flex: 0 0 auto;
 }
+/* Scoped to the combined .super-italian-toggle.super-italian-switch selector only —
+   the bare .super-italian-toggle/.super-italian-checkbox classes are shared with the
+   unrelated Broadcast Chain (On-Air Sound) toggle, which never gets .super-italian-switch. */
+.super-italian-switch { gap: 10px; }
+.super-italian-switch input.super-italian-checkbox {
+  opacity: 0; width: 0; height: 0; position: absolute;
+}
+.super-italian-slider {
+  position: relative; display: inline-block; width: 40px; height: 22px;
+  border-radius: 999px; background: color-mix(in srgb, var(--cream) 12%, transparent);
+  border: 1px solid var(--line); transition: background 150ms, border-color 150ms;
+  flex-shrink: 0;
+}
+.super-italian-slider::before {
+  content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px;
+  border-radius: 50%; background: var(--cream-dk); transition: transform 150ms, background 150ms;
+}
+.super-italian-switch input:checked + .super-italian-slider { background: color-mix(in srgb, var(--sun2) 24%, transparent); border-color: color-mix(in srgb, var(--sun2) 65%, var(--line)); }
+.super-italian-switch input:checked + .super-italian-slider::before { transform: translateX(18px); background: var(--sun2); }
+.super-italian-switch input:focus-visible + .super-italian-slider { box-shadow: 0 0 0 2px color-mix(in srgb, var(--sun2) 70%, transparent); }
+@keyframes tt-tick-pop { 0% { transform: translateY(-50%) scale(0); opacity: 0; } 60% { transform: translateY(-50%) scale(1.3); opacity: 1; } 100% { transform: translateY(-50%) scale(1); opacity: 1; } }
+.chaos-switch input:checked + .chaos-slider::after,
+.festival-switch input:checked + .festival-slider::after,
+.super-italian-switch input:checked + .super-italian-slider::after {
+  content: '\2713'; position: absolute; left: 4px; top: 50%; font-size: 10px; font-weight: 700;
+  color: var(--sun2); animation: tt-tick-pop 320ms cubic-bezier(0.16,1,0.3,1) both;
+}
 
 /* Sliders */
 .a-sliders { display: flex; flex-direction: column; gap: 16px; }
@@ -1119,6 +1161,12 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-panel header .sub.live .dot,
   .a-host .live-tag .dot,
   .a-eq span { animation: none; }
+  .tt-typing::after { animation: none !important; content: none; }
+  .chaos-switch input:checked + .chaos-slider::after,
+  .festival-switch input:checked + .festival-slider::after,
+  .super-italian-switch input:checked + .super-italian-slider::after { animation: none !important; }
+  .ha input[type="range"].tt-settling::-webkit-slider-thumb,
+  .ha input[type="range"].tt-settling::-moz-range-thumb { animation: none !important; }
 }
 
 @media (max-width: 768px) {
@@ -1878,8 +1926,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         </div>
         <div class="card-label" style="margin-top:12px">Super Italian Mode</div>
         <div style="margin-bottom:14px">
-          <label class="super-italian-toggle">
+          <label class="super-italian-toggle super-italian-switch" for="superItalianToggle">
             <input type="checkbox" id="superItalianToggle" class="super-italian-checkbox" aria-label="Toggle Super Italian Mode" onchange="toggleSuperItalian(this)">
+            <span class="super-italian-slider"></span>
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
@@ -3468,20 +3517,98 @@ function updateSystems(caps,st){
   ].join('');
 }
 
+let _lastRecentHash=null;
+let _recentTypeGen=0;
+
+function _recentContentHash(st){
+  const lines=(st.last_banter_script||[]).map(l=>(l.host||'')+':'+(l.text||'')).join('␟');
+  const ad=st.last_ad_script||{};
+  const adSig=(ad.brands||[]).map((b,i)=>b+':'+((ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'')).join('␟');
+  return lines+'||'+adSig;
+}
+
+function _typeChars(text,idx,textNode,onDone,gen){
+  if(gen!==_recentTypeGen)return;
+  if(idx>=text.length){onDone();return;}
+  textNode.nodeValue+=text[idx];
+  const pause=/[.,!?;:…]/.test(text[idx])?55+180:55;
+  setTimeout(()=>_typeChars(text,idx+1,textNode,onDone,gen),pause);
+}
+
+function _typeRecentSegments(segments,gen){
+  if(gen!==_recentTypeGen)return;
+  const seg=segments.shift();
+  if(!seg)return;
+  seg.lineEl.classList.add('tt-typing');
+  _typeChars(seg.text,0,seg.textNode,()=>{
+    if(gen!==_recentTypeGen)return;
+    seg.lineEl.classList.remove('tt-typing');
+    _typeRecentSegments(segments,gen);
+  },gen);
+}
+
+function _recentLineEl(host,text,reduced,segments,tagHost){
+  const lineEl=document.createElement('div');
+  const hostSpan=document.createElement('span');
+  hostSpan.className='script-host';
+  if(tagHost)hostSpan.dataset.h=host;
+  hostSpan.textContent=host+':';
+  lineEl.appendChild(hostSpan);
+  lineEl.appendChild(document.createTextNode(' '));
+  const textNode=document.createTextNode(reduced?text:'');
+  lineEl.appendChild(textNode);
+  if(!reduced)segments.push({lineEl,textNode,text});
+  return lineEl;
+}
+
 function updateRecent(st){
   const body=document.getElementById('recentBody');
-  const parts=[];
+  const hash=_recentContentHash(st);
+  if(hash===_lastRecentHash)return;
+  _lastRecentHash=hash;
+  _recentTypeGen++;
+  const gen=_recentTypeGen;
+
   const lines=st.last_banter_script||[];
-  if(lines.length){
-    parts.push('<div class="card-label">Last banter</div>'+
-      lines.map(l=>`<div><span class="script-host" data-h="${esc(l.host)}">${esc(l.host)}:</span> ${esc(l.text)}</div>`).join(''));
-  }
   const ad=st.last_ad_script||{};
-  if(ad.brands?.length){
-    parts.push('<div class="card-label" style="margin-top:10px">Last ad block</div>'+
-      ad.brands.map((brand,i)=>`<div><span class="script-host">${esc(brand)}:</span> ${esc((ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'Aired')}</div>`).join(''));
+  const hasAd=!!(ad.brands&&ad.brands.length);
+  if(!lines.length&&!hasAd){
+    const empty=document.createElement('div');
+    empty.className='empty';
+    empty.textContent='Nothing aired yet';
+    body.replaceChildren(empty);
+    return;
   }
-  body.innerHTML=parts.length?parts.join(''):'<div class="empty">Nothing aired yet</div>';
+
+  const reduced=recordHuntReducedMotion();
+  const segments=[];
+  const frag=document.createDocumentFragment();
+
+  if(lines.length){
+    const label=document.createElement('div');
+    label.className='card-label';
+    label.textContent='Last banter';
+    frag.appendChild(label);
+    lines.forEach(l=>{
+      frag.appendChild(_recentLineEl(l.host||'',l.text||'',reduced,segments,true));
+    });
+  }
+
+  if(hasAd){
+    const label=document.createElement('div');
+    label.className='card-label';
+    label.style.marginTop='10px';
+    label.textContent='Last ad block';
+    frag.appendChild(label);
+    ad.brands.forEach((brand,i)=>{
+      const text=(ad.summaries&&ad.summaries[i])||(ad.formats&&ad.formats[i])||'Aired';
+      frag.appendChild(_recentLineEl(brand,text,reduced,segments,false));
+    });
+  }
+
+  body.replaceChildren(frag);
+
+  if(!reduced&&segments.length)_typeRecentSegments(segments,gen);
 }
 
 // ── Playlist ──
@@ -4243,6 +4370,11 @@ async function applyHostPreset(n,presetName){
       sl.style.backgroundImage=sliderBg(preset[ax]);
       const wordEl=document.getElementById(`hw-${n}-${ax}`);
       if(wordEl)wordEl.textContent=axWord(ax,preset[ax]);
+      if(!recordHuntReducedMotion()){
+        sl.classList.remove('tt-settling');
+        void sl.offsetWidth;
+        sl.classList.add('tt-settling');
+      }
     }
   });
   block.querySelectorAll('.host-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===presetName));

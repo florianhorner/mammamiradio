@@ -222,6 +222,7 @@ body[data-stopped="true"] .waveform {
 
 /* ── Play button canonical (golden default, blue playing) ── */
 .play-btn {
+  position: relative;
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -255,6 +256,18 @@ body[data-stopped="true"] .waveform {
     0 0 0 6px rgba(37, 99, 235, 0.08),
     0 0 28px rgba(37, 99, 235, 0.15);
 }
+
+/* Act III — Il Battito (play button pulse). Keyframes are global here so
+   listener.css's .mmr-play-btn variant can reference them too. .play-btn
+   itself has no live template consumer today (see docs/design/system.md) —
+   shipped anyway since the keyframes are shared/cheap and zero-risk. */
+@keyframes tt-ripple { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(1.7); opacity: 0; } }
+@keyframes tt-thump  { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+.play-btn.playing::after {
+  content: ''; position: absolute; inset: -6px; border-radius: 50%;
+  border: 2px solid var(--ok); animation: tt-ripple 1.4s ease-out infinite;
+}
+.play-btn.playing .play-btn-icon { animation: tt-thump 1.4s ease-in-out infinite; }
 
 /* ── Accessibility utilities ── */
 .sr-only {
@@ -309,6 +322,11 @@ body[data-stopped="true"] .waveform {
   .waveform-bar {
     animation: none !important;
     height: 12px !important;
+  }
+  /* Act III — Il Battito */
+  .play-btn.playing::after,
+  .play-btn.playing .play-btn-icon {
+    animation: none !important;
   }
 }
 

@@ -63,6 +63,7 @@
     currentProgressMs: 0,
     segmentDurationMs: 0,
     progressTimer: null,
+    lastNpKey: null,
   };
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
@@ -70,6 +71,13 @@
 
   /* ── Helpers ── */
   function $(id) { return document.getElementById(id); }
+  /* Shared by Act IV (track title roll) and Act VI (dedica stamp + send) —
+     JS-sequenced animations must check this BEFORE adding an animation
+     class. A CSS-only `animation: none !important` override is not enough
+     on its own: a chain waiting on `animationend` would stall forever. */
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
   function escHtml(v) {
     return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -171,7 +179,9 @@
     state.isPlaying = isPlaying;
     if (playBtnSmall) {
       playBtnSmall.classList.toggle('playing', isPlaying);
-      playBtnSmall.innerHTML = isPlaying ? '&#9208;' : '&#9654;';
+      playBtnSmall.innerHTML = isPlaying
+        ? '<span class="mmr-play-icon">&#9208;</span>'
+        : '<span class="mmr-play-icon">&#9654;</span>';
       playBtnSmall.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
       playBtnSmall.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
     }
@@ -275,6 +285,26 @@
     const fullText = [trackEl.textContent, artistEl.textContent].filter(Boolean).join(' — ');
     trackEl.title = fullText;
     trackEl.setAttribute('aria-label', fullText);
+
+    // Act IV — Il Cambio. Only animate on a genuine content change: the 3s
+    // poll re-renders this unconditionally, and without this guard the roll
+    // would replay on every tick even when nothing changed.
+    const npKey = trackEl.textContent + '|' + artistEl.textContent;
+    if (state.lastNpKey === null) {
+      // First render (page load) — establish the baseline without animating,
+      // so there's no spurious roll-up on initial paint.
+      state.lastNpKey = npKey;
+    } else if (npKey !== state.lastNpKey) {
+      state.lastNpKey = npKey;
+      if (!reducedMotion()) {
+        [trackEl, artistEl].forEach((el) => {
+          el.classList.remove('tt-track-roll');
+          void el.offsetWidth; // force reflow so the animation restarts
+          el.classList.add('tt-track-roll');
+        });
+      }
+    }
+
     updateMediaSession(np);
   }
 
@@ -691,7 +721,32 @@
     }
   }
 
-  /* ── Request form ── */
+  /* ── Request form ──
+   * Act VI — Il Francobollo. Genuine success (d.ok === true) gets the
+   * animated stamp-press + card-lift sequence; 429/decline/network-failure
+   * branches keep the plain instant swap, just crossfaded via
+   * .form-sent.is-visible (a CSS transition — already collapsed to 0.01ms
+   * under prefers-reduced-motion by base.css's blanket rule, so it needs no
+   * separate JS gate). */
+  function _revealSentCrossfade(formEl, sentEl) {
+    if (formEl) formEl.style.display = 'none';
+    if (sentEl) {
+      sentEl.style.display = '';
+      requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+    }
+  }
+
+  function _resetRequestForm(formEl, sentEl) {
+    if (formEl) {
+      formEl.style.display = '';
+      formEl.classList.remove('is-sending');
+    }
+    if (sentEl) {
+      sentEl.style.display = 'none';
+      sentEl.classList.remove('is-visible');
+    }
+  }
+
   async function submitRequest(ev) {
     ev.preventDefault();
     const name = ($('req-name')?.value || '').trim();
@@ -706,36 +761,54 @@
         body: JSON.stringify({ name: name || 'Un ascoltatore', message: msg }),
       });
       const d = await r.json();
-      if (formEl) formEl.style.display = 'none';
-      if (sentEl) {
-        sentEl.style.display = '';
-        if (d.ok) {
-          sentEl.textContent = d.type === 'song_request'
-            ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
-            : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
-        } else if (r.status === 429) {
-          sentEl.textContent = d.retry_after
-            ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
-            : 'Coda piena, riprova tra poco.';
-        } else {
-          sentEl.textContent = 'Il saluto non è partito — aspetta un attimo e riprova.';
-        }
+      let isSuccess = false;
+      let text;
+      if (d.ok) {
+        isSuccess = true;
+        text = d.type === 'song_request'
+          ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
+          : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
+      } else if (r.status === 429) {
+        text = d.retry_after
+          ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
+          : 'Coda piena, riprova tra poco.';
+      } else {
+        text = 'Il saluto non è partito — aspetta un attimo e riprova.';
       }
+      if (sentEl) sentEl.textContent = text;
+
+      if (isSuccess && formEl && !reducedMotion()) {
+        formEl.classList.add('is-sending');
+        const onCardLiftEnd = (e) => {
+          if (e.animationName !== 'tt-card-lift') return; // ignore tt-stamp-press bubbling up first
+          formEl.removeEventListener('animationend', onCardLiftEnd);
+          formEl.style.display = 'none';
+          formEl.classList.remove('is-sending');
+          if (sentEl) {
+            sentEl.style.display = '';
+            requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+          }
+        };
+        formEl.addEventListener('animationend', onCardLiftEnd);
+      } else if (isSuccess) {
+        // Reduced motion: match the original instant swap exactly — no
+        // animation class, no crossfade, so there's nothing to wait on.
+        if (formEl) formEl.style.display = 'none';
+        if (sentEl) sentEl.style.display = '';
+      } else {
+        _revealSentCrossfade(formEl, sentEl);
+      }
+
       setTimeout(() => {
-        if (formEl) formEl.style.display = '';
-        if (sentEl) sentEl.style.display = 'none';
+        _resetRequestForm(formEl, sentEl);
         const msgInput = $('req-msg');
         if (msgInput) msgInput.value = '';
       }, 15000);
     } catch (e) {
-      if (formEl) formEl.style.display = 'none';
-      if (sentEl) {
-        sentEl.style.display = '';
-        sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
-      }
+      if (sentEl) sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
+      _revealSentCrossfade(formEl, sentEl);
       setTimeout(() => {
-        if (formEl) formEl.style.display = '';
-        if (sentEl) sentEl.style.display = 'none';
+        _resetRequestForm(formEl, sentEl);
       }, 6000);
     }
   }
