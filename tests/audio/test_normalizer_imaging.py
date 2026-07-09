@@ -15,6 +15,33 @@ from mammamiradio.audio.normalizer import (
     mix_ad_with_bed,
     mix_voice_with_bed,
 )
+from mammamiradio.core.models import SegmentType
+
+
+def test_transition_sting_speech_types_cover_every_non_music_segment_type(tmp_path, mock_run, caplog):
+    """Guards against a future SegmentType addition silently missing the
+    layered-sting treatment, the way time_check and sweeper both did."""
+    caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+    non_music_types = {t.value for t in SegmentType} - {"music"}
+
+    for segment_value in non_music_types:
+        out = tmp_path / f"sting_{segment_value}.mp3"
+        with (
+            patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep,
+            patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+            patch("mammamiradio.audio.normalizer.generate_bumper_jingle") as mock_bumper,
+            patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+        ):
+            mock_sweep.side_effect = lambda p, **_: p.write_bytes(b"sweep") or p
+            mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+            mock_bumper.side_effect = lambda p, *_, **__: p.write_bytes(b"bump") or p
+            mock_concat.return_value = out
+            generate_transition_sting("music", segment_value, out)
+
+        assert not any("unsupported pair" in r.message for r in caplog.records), (
+            f"music->{segment_value} fell back to the bare sweep — add it to speech_types in generate_transition_sting"
+        )
+        caplog.clear()
 
 
 @pytest.fixture()
@@ -202,6 +229,46 @@ def test_transition_sting_time_check_to_music_uses_bumper(tmp_path, mock_run, ca
         mock_bumper.side_effect = lambda p, *_, **__: p.write_bytes(b"bump") or p
         mock_concat.return_value = out
         result = generate_transition_sting("time_check", "music", out)
+
+    assert result == out
+    mock_bed.assert_called_once()
+    mock_bumper.assert_called_once()
+    assert not any("unsupported pair" in record.message for record in caplog.records)
+
+
+def test_transition_sting_music_to_sweeper_uses_branded_motif(tmp_path, mock_run, caplog):
+    out = tmp_path / "sting.mp3"
+    caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+
+    with (
+        patch("mammamiradio.audio.normalizer.generate_sweep") as mock_sweep,
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_sweep.side_effect = lambda p, **_: p.write_bytes(b"sweep") or p
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("music", "sweeper", out)
+
+    assert result == out
+    mock_sweep.assert_called_once()
+    mock_bed.assert_called_once()
+    assert not any("unsupported pair" in record.message for record in caplog.records)
+
+
+def test_transition_sting_sweeper_to_music_uses_bumper(tmp_path, mock_run, caplog):
+    out = tmp_path / "sting.mp3"
+    caplog.set_level("WARNING", logger="mammamiradio.audio.normalizer")
+
+    with (
+        patch("mammamiradio.audio.normalizer.generate_station_id_bed") as mock_bed,
+        patch("mammamiradio.audio.normalizer.generate_bumper_jingle") as mock_bumper,
+        patch("mammamiradio.audio.normalizer.concat_files") as mock_concat,
+    ):
+        mock_bed.side_effect = lambda p, *_, **__: p.write_bytes(b"motif") or p
+        mock_bumper.side_effect = lambda p, *_, **__: p.write_bytes(b"bump") or p
+        mock_concat.return_value = out
+        result = generate_transition_sting("sweeper", "music", out)
 
     assert result == out
     mock_bed.assert_called_once()
