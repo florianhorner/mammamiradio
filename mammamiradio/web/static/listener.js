@@ -769,12 +769,21 @@
     if (formEl) formEl.dataset.submitting = '1';
     const submitBtn = formEl?.querySelector('button[type="submit"]');
     if (submitBtn) submitBtn.disabled = true;
+    // Fetch has no built-in timeout — a stalled connection (flaky wifi,
+    // captive portal, hung server) would otherwise leave dataset.submitting
+    // set and the button disabled forever, with no error shown and no
+    // recovery short of a page reload (adversarial review finding). Bound
+    // it so a hang always falls through to the existing catch/reset path.
+    const fetchController = new AbortController();
+    const fetchTimeout = setTimeout(() => fetchController.abort(), 8000);
     try {
       const r = await fetch(_base + '/api/listener-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name || 'Un ascoltatore', message: msg }),
+        signal: fetchController.signal,
       });
+      clearTimeout(fetchTimeout);
       const d = await r.json();
       let isSuccess = false;
       let text;
@@ -803,6 +812,11 @@
           formEl.style.display = 'none';
           formEl.classList.remove('is-sending');
           if (sentEl) {
+            // #request-sent is aria-live="polite" — its text was set while
+            // still display:none (below), which most screen readers won't
+            // announce; re-assigning at reveal time makes the mutation and
+            // the visibility change coincident (adversarial review finding).
+            sentEl.textContent = text;
             sentEl.style.display = '';
             requestAnimationFrame(() => sentEl.classList.add('is-visible'));
           }
@@ -819,10 +833,14 @@
         // hidden with no message until the unrelated 15s revert timer.
         const liftFallback = setTimeout(finishLift, 2500);
       } else if (isSuccess) {
-        // Reduced motion: match the original instant swap exactly — no
-        // animation class, no crossfade, so there's nothing to wait on.
+        // Reduced motion: instant swap, no animation delay — but .form-sent
+        // now defaults to opacity:0 (needs .is-visible to show), so this
+        // must add the class directly or the confirmation renders invisible.
         if (formEl) formEl.style.display = 'none';
-        if (sentEl) sentEl.style.display = '';
+        if (sentEl) {
+          sentEl.style.display = '';
+          sentEl.classList.add('is-visible');
+        }
       } else {
         _revealSentCrossfade(formEl, sentEl);
       }
@@ -833,6 +851,7 @@
         if (msgInput) msgInput.value = '';
       }, 15000);
     } catch (e) {
+      clearTimeout(fetchTimeout);
       if (sentEl) sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
       _revealSentCrossfade(formEl, sentEl);
       setTimeout(() => {

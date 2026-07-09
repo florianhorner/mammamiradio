@@ -3548,7 +3548,14 @@ function _typeRecentSegments(segments,gen){
   },gen);
 }
 
+// Cap the typewriter to lines an operator would actually wait out — a long
+// ad-block recap typed at ~55ms/char could otherwise leave this diagnostic
+// panel blank for many seconds during exactly the moment an operator wants
+// to read it (adversarial review finding). Longer lines render instantly,
+// same as the reduced-motion path.
+const TT_TYPE_MAX_CHARS=200;
 function _recentLineEl(host,text,reduced,segments,tagHost){
+  const instant=reduced||text.length>TT_TYPE_MAX_CHARS;
   const lineEl=document.createElement('div');
   const hostSpan=document.createElement('span');
   hostSpan.className='script-host';
@@ -3556,9 +3563,9 @@ function _recentLineEl(host,text,reduced,segments,tagHost){
   hostSpan.textContent=host+':';
   lineEl.appendChild(hostSpan);
   lineEl.appendChild(document.createTextNode(' '));
-  const textNode=document.createTextNode(reduced?text:'');
+  const textNode=document.createTextNode(instant?text:'');
   lineEl.appendChild(textNode);
-  if(!reduced)segments.push({lineEl,textNode,text});
+  if(!instant)segments.push({lineEl,textNode,text});
   return lineEl;
 }
 

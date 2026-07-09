@@ -37,10 +37,19 @@ html, body {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.tricolor-band, .mmr-nav, .mmr-stage, #palinsesto, #dediche, .mmr-ticker, .mmr-footer {
+/* .mmr-nav gets a fade-only variant (no transform) — it has its own static
+   transform: translateZ(0) for compositor-layer promotion (avoids sticky +
+   backdrop-filter scroll repaint flicker), and tt-wake's animation-fill-mode:
+   both would otherwise permanently clobber that with translateY(0) once the
+   entrance finishes (adversarial review finding). */
+@keyframes tt-wake-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.tricolor-band, .mmr-stage, #palinsesto, #dediche, .mmr-ticker, .mmr-footer {
   animation: tt-wake 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.mmr-nav    { animation-delay: 60ms; }
+.mmr-nav { animation: tt-wake-fade 700ms cubic-bezier(0.16, 1, 0.3, 1) 60ms both; }
 /* .mmr-stage's animation-delay is set on its own declaration below (merged
    in, not duplicated here) — a second bare `.mmr-stage { ... }` rule would
    shadow the real one for tests/tools that grab the first CSS block match
@@ -457,6 +466,13 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   .mmr-stage-header { gap: 10px; padding: 14px 16px; }
   .mmr-stage-header .mmr-np-meta { flex: 1 1 150px; }
   .mmr-stage-header .mmr-np-meta .title { display: block; font-size: 20px; line-height: 1.2; overflow: visible; -webkit-line-clamp: unset; }
+  /* This breakpoint removes line-clamp/overflow clipping so long titles wrap
+     instead of truncating — but tt-track-roll's "from" state starts 60% below
+     final position, so without clipping the incoming title could visibly
+     bleed under the meta block for the ~600ms roll. Re-clip only while the
+     animation class is present; static (non-animating) mobile display is
+     unaffected. */
+  .mmr-stage-header .mmr-np-meta .title.tt-track-roll { overflow: hidden; }
   .mmr-wave { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
