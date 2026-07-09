@@ -93,7 +93,12 @@ class MomentRow:
 
     @classmethod
     def from_dict(cls, data: dict) -> MomentRow:
-        confidence = data.get("confidence")
+        confidence_raw = data.get("confidence")
+        confidence_value = (
+            float(confidence_raw)
+            if isinstance(confidence_raw, int | float) and not isinstance(confidence_raw, bool)
+            else None
+        )
         return cls(
             id=str(data.get("id", "")),
             ts=float(data.get("ts", 0.0) or 0.0),
@@ -101,7 +106,7 @@ class MomentRow:
             family=str(data.get("family", "")),
             public_label=str(data.get("public_label", "")),
             entity_id=str(data.get("entity_id", "")),
-            confidence=float(confidence) if isinstance(confidence, int | float) else None,
+            confidence=confidence_value,
             count=int(data.get("count", 0) or 0),
             status=str(data.get("status", STATUS_ELECTED)),
             drop_reason=str(data.get("drop_reason", "")),
@@ -237,9 +242,10 @@ class MomentStore:
                 break
         return out
 
-    def to_admin_rows(self, *, limit: int = 25) -> list[dict]:
+    def to_admin_rows(self, *, now: float | None = None, limit: int = 25) -> list[dict]:
         """Full trail for the authenticated admin Moments panel."""
-        self._prune(time.time())
+        ref_now = time.time() if now is None else now
+        self._prune(ref_now)
         return [row.to_dict() for row in reversed(self.rows[-limit:])] if self.rows else []
 
     # --- bounds ---------------------------------------------------------------

@@ -10,6 +10,7 @@ from mammamiradio.home.moment_receipts import (
     MAX_ROWS,
     RETENTION_SECONDS,
     STORE_FILENAME,
+    MomentRow,
     MomentStore,
 )
 
@@ -113,8 +114,6 @@ def test_retention_prunes_stale_rows():
 
 
 def test_read_projections_prune_stale_rows_without_new_records():
-    from unittest.mock import patch
-
     store = MomentStore()
     old = _elected(store, now=NOW)
     store.mark_airing(old, now=NOW + 1)
@@ -125,8 +124,7 @@ def test_read_projections_prune_stale_rows_without_new_records():
     assert store._dirty is True
 
     fresh = _elected(store, now=NOW + RETENTION_SECONDS + 2)
-    with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + (2 * RETENTION_SECONDS) + 3):
-        assert store.to_admin_rows() == []
+    assert store.to_admin_rows(now=NOW + (2 * RETENTION_SECONDS) + 3) == []
     assert fresh not in {row.id for row in store.rows}
 
 
@@ -166,11 +164,12 @@ def test_public_rows_exclude_non_aired_outcomes():
 def test_public_rows_capped_and_newest_first():
     store = MomentStore()
     for i in range(5):
-        mid = _elected(store, now=NOW + i)
+        mid = store.record(lane="directive", family="f", public_label=f"Moment {i}", now=NOW + i)
         store.mark_airing(mid, now=NOW + i)
         store.finalize(mid, "aired", now=NOW + i)
     rows = store.to_public_rows(now=NOW + 600)
     assert len(rows) == 3
+    assert [r["label"] for r in rows] == ["Moment 4", "Moment 3", "Moment 2"]
 
 
 def test_admin_rows_full_detail_capped():
@@ -199,6 +198,13 @@ def test_save_and_load_round_trip(tmp_path):
     with patch("mammamiradio.home.moment_receipts.time.time", return_value=NOW + 60):
         loaded = MomentStore.load(tmp_path)
     assert [r.to_dict() for r in loaded.rows] == [r.to_dict() for r in store.rows]
+
+
+def test_from_dict_ignores_boolean_confidence():
+    numeric = MomentRow.from_dict({"id": "a", "confidence": 0.8})
+    boolean = MomentRow.from_dict({"id": "b", "confidence": True})
+    assert numeric.confidence == 0.8
+    assert boolean.confidence is None
 
 
 def test_save_is_atomic_and_dirty_gated(tmp_path):

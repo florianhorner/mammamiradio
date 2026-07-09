@@ -114,6 +114,17 @@ async def test_admin_status_moments_trail_and_cross_page_consistency():
 
 
 @pytest.mark.asyncio
+async def test_admin_status_moments_admin_is_none_without_store():
+    app = _make_test_app()
+    assert app.state.station_state.moment_store is None
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin = (await client.get("/status")).json()
+
+    assert admin["moments_admin"] is None
+
+
+@pytest.mark.asyncio
 async def test_admin_status_moments_requires_admin_auth():
     app = _make_test_app(admin_password="segreto")
     store, _ = _store_with_aired_row()
