@@ -1,0 +1,17 @@
+Runtime verification, local dev station, 2026-07-09 session:
+Provenance ledger llm_call rows (cache/ledger) for caller=banter on claude-fable-5:
+ts=1783550769.024895 caller=banter model=claude-fable-5 ok=False fallback_reason=anthropic_AttributeError openai_fallback=True
+ts=1783550983.488342 caller=ad model=claude-fable-5 ok=False fallback_reason=anthropic_AttributeError openai_fallback=True
+ts=1783550996.2130702 caller=ad model=claude-fable-5 ok=False fallback_reason=anthropic_AttributeError openai_fallback=True
+ts=1783551063.076183 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783551095.9327471 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783551366.359169 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783551917.725645 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783552301.687896 caller=ad model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783552314.841147 caller=ad model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783552352.591038 caller=news_flash model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783552583.5732448 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783552920.2194781 caller=news_flash model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+ts=1783553116.7223191 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
+
+Pre-fix rows show anthropic_AttributeError -> silent OpenAI fallback; post-fix rows (after POST /api/hot-reload of the patched scriptwriter) show ok=True with no fallback. Three ~80-130s continuous stream captures were produced with the fixed code (door-unlock, coffee, insomnia takes; local artifacts, not committed).

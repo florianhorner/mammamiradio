@@ -1,0 +1,5 @@
+make check + full pytest on merged state (75029d07), 2026-07-09T22:56:03Z
+
+4376 passed, 2 skipped, 21 deselected, 1 warning in 105.60s (0:01:45)
+coverage: 93% total, all per-module floors held (floor 92%)
+ruff check: clean | ruff format: clean | mypy: clean | changelog lint: clean
