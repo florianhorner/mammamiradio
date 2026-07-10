@@ -20,6 +20,7 @@ from urllib.request import HTTPRedirectHandler, build_opener
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.audio.normalizer import _run_ffmpeg
 from mammamiradio.core.models import Track
+from mammamiradio.core.path_safety import safe_path_within
 
 logger = logging.getLogger(__name__)
 
@@ -262,10 +263,21 @@ def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
     """
     if not tmp_dir.is_dir():
         return 0
+    if tmp_dir.is_symlink():
+        # reject_symlinks=True below only rejects a symlinked *leaf* (f); it
+        # can't catch tmp_dir itself being a symlink, since a leaf under a
+        # symlinked root still resolves "contained" relative to that same
+        # root. Unlike a symlinked leaf (unlink() never dereferences), a
+        # symlinked root means every glob/stat/unlink here targets real files
+        # in the redirected directory — a genuine delete-outside-tmp_dir path.
+        logger.warning("Skipping tmp scratch cleanup: tmp_dir is a symlink: %s", tmp_dir)
+        return 0
     cutoff = time.time() - max_age_hours * 3600
     pruned = 0
     for f in tmp_dir.glob("*.mp3"):
         try:
+            if safe_path_within(f, tmp_dir, reject_symlinks=True) is None:
+                continue
             if f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
                 pruned += 1

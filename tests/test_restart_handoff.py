@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import mammamiradio.restart_handoff as restart_handoff
 from mammamiradio.core.models import Segment, SegmentType
 from mammamiradio.restart_handoff import (
     RestartHandoffCandidate,
@@ -86,6 +87,45 @@ def test_manifest_load_is_tolerant_for_missing_corrupt_and_wrong_schema(tmp_path
 
     manifest_path.write_text(json.dumps({"schema_version": 999, "entries": [{"not": "ours"}]}), encoding="utf-8")
     assert load_restart_handoff_manifest(tmp_path).entries == ()
+
+
+def test_load_and_admit_reject_symlinked_restart_handoff_root(tmp_path):
+    # A symlinked cache_dir/restart_handoff root is a different attack than a
+    # symlinked leaf: reject_symlinks=True on the leaf-only check can't catch
+    # it, because root and path both resolve through the same redirect and
+    # stay "contained" relative to each other. An attacker (or corrupted
+    # restore) who can make the handoff root a symlink to their own writable
+    # directory fully controls both the manifest AND the audio it names, so
+    # the sha256 admission check offers no protection either — this must be
+    # rejected at the root, before any manifest content is trusted.
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    evil_dir = tmp_path / "evil-writable-dir"
+    (evil_dir / "segments").mkdir(parents=True)
+    evil_file = evil_dir / "segments" / "evil.mp3"
+    evil_file.write_bytes(b"arbitrary audio outside cache")
+    evil_manifest = RestartHandoffManifest(
+        entries=(
+            RestartHandoffEntry(
+                relative_path="segments/evil.mp3",
+                sha256=_sha(evil_file),
+                size_bytes=evil_file.stat().st_size,
+                duration_sec=180.0,
+                artist="Attacker",
+                title="Evil",
+                created_at=100.0,
+            ),
+        ),
+        created_at=100.0,
+    )
+    (evil_dir / "manifest.json").write_text(json.dumps(evil_manifest.to_dict()), encoding="utf-8")
+    restart_handoff_dir(cache_dir).symlink_to(evil_dir, target_is_directory=True)
+
+    assert load_restart_handoff_manifest(cache_dir).entries == ()
+
+    admission = admit_restart_handoff_entries(cache_dir, now=120.0, duration_probe=_duration)
+    assert admission.accepted == ()
+    assert evil_file.exists()  # never touched, just never trusted
 
 
 def test_write_spool_copies_hashes_publishes_manifest_and_admits(tmp_path):
@@ -379,11 +419,32 @@ def test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_handoff_dir(tmp_pa
     assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
 
 
+def test_prune_stale_handoff_tmp_files_rejects_handoff_dir_symlinked_inside_cache(tmp_path, caplog):
+    # handoff_dir resolves fine and stays inside cache_root (no ValueError,
+    # no RuntimeError) but is itself a symlink to another in-cache directory.
+    # Without reject_symlinks=True this redirected location would be scanned
+    # and pruned as if it were the real restart-handoff scratch dir.
+    cache_dir = tmp_path / "cache"
+    redirect_target = cache_dir / "elsewhere-in-cache"
+    redirect_target.mkdir(parents=True)
+    stray = redirect_target / ".manifest-stray.tmp"
+    stray.write_bytes(b"data")
+    old_mtime = time.time() - 7 * 3600
+    os.utime(stray, (old_mtime, old_mtime))
+    restart_handoff_dir(cache_dir).symlink_to(redirect_target, target_is_directory=True)
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert stray.exists()
+    assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
+    assert "outside cache dir" in caplog.text
+
+
 def test_prune_stale_handoff_tmp_files_warns_on_dangling_handoff_dir_symlink(tmp_path, caplog):
-    # A dangling symlink survives resolve(strict=False) on every supported
-    # interpreter, so it reaches the not-a-dir branch in _prune_stale_tmp_glob
-    # (unlike the loop case, which 3.11 already rejects one call earlier).
-    # It must warn and degrade to a no-op, never crash.
+    # A dangling symlink is rejected by reject_symlinks=True at the very
+    # first containment check in _prune_stale_tmp_glob (is_symlink() is True
+    # regardless of whether the target exists), same short-circuit as a
+    # non-dangling symlink. It must warn and degrade to a no-op, never crash.
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     restart_handoff_dir(cache_dir).symlink_to(cache_dir / "missing-target")
@@ -391,6 +452,63 @@ def test_prune_stale_handoff_tmp_files_warns_on_dangling_handoff_dir_symlink(tmp
     assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
 
     assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
+
+
+def test_write_spool_tolerates_cache_dir_resolve_failure(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    real_resolve = Path.resolve
+
+    def flaky_resolve(self, strict=False):
+        if self == Path(cache_dir):
+            raise RuntimeError("symlink loop")
+        return real_resolve(self, strict=strict)
+
+    with patch.object(Path, "resolve", flaky_resolve):
+        manifest = write_restart_handoff_spool(
+            cache_dir,
+            [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+            now=100.0,
+            duration_probe=_duration,
+        )
+
+    assert manifest == RestartHandoffManifest.empty()
+    assert "Failed to resolve restart handoff cache dir" in caplog.text
+
+
+def test_prune_unreferenced_segments_ignores_entry_outside_segments_dir(tmp_path):
+    # A manifest entry whose relative_path resolves inside handoff_dir but
+    # outside segments_root (e.g. a malformed/tampered relative_path sitting
+    # directly under the handoff dir rather than under segments/) must not
+    # protect a same-named file actually under segments/ from pruning.
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    segments_dir = handoff_dir / "segments"
+    segments_dir.mkdir(parents=True)
+    rogue = handoff_dir / "rogue.mp3"
+    rogue.write_bytes(b"rogue")
+    victim = segments_dir / "rogue.mp3"
+    victim.write_bytes(b"victim")
+
+    manifest = RestartHandoffManifest(
+        entries=(
+            RestartHandoffEntry(
+                relative_path="rogue.mp3",
+                sha256="0" * 64,
+                size_bytes=5,
+                duration_sec=180.0,
+                artist="Artist",
+                title="Rogue",
+                created_at=50.0,
+            ),
+        ),
+        created_at=50.0,
+    )
+
+    restart_handoff._prune_unreferenced_segments(cache_dir, manifest)
+
+    assert not victim.exists()
+    assert rogue.exists()
 
 
 def test_write_spool_preserves_existing_manifest_when_no_candidates_are_accepted(tmp_path):
@@ -537,6 +655,180 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
     )
 
     assert [entry.title for entry in manifest.entries] == ["Good"]
+
+
+def test_write_spool_rejects_symlinked_cache_candidate(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    linked_source = cache_dir / "norm_linked_192k.mp3"
+    linked_source.symlink_to(source)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(linked_source, 180.0, "Artist", "Linked")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert source.exists()
+    assert linked_source.is_symlink()
+
+
+def test_write_spool_skips_handoff_dir_symlink_outside_cache(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    restart_handoff_dir(cache_dir).symlink_to(outside_dir, target_is_directory=True)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert not (outside_dir / "manifest.json").exists()
+    assert not list(outside_dir.rglob("*.mp3"))
+
+
+def test_write_spool_skips_segments_dir_symlink_outside_handoff(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    handoff_dir = restart_handoff_dir(cache_dir)
+    outside_dir = tmp_path / "outside-segments"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert not (outside_dir / "manifest.json").exists()
+    assert not list(outside_dir.rglob("*.mp3"))
+
+
+def test_write_spool_rejects_symlinked_segments_before_publish_or_prune(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    handoff_dir = restart_handoff_dir(cache_dir)
+    symlink_target = cache_dir / "inside-symlink-target"
+    handoff_dir.mkdir(parents=True)
+    symlink_target.mkdir()
+    stale = symlink_target / "stale.mp3"
+    stale.write_bytes(b"stale")
+    (handoff_dir / "segments").symlink_to(symlink_target, target_is_directory=True)
+    existing_manifest = RestartHandoffManifest(
+        entries=(
+            RestartHandoffEntry(
+                relative_path="segments/existing.mp3",
+                sha256="0" * 64,
+                size_bytes=1,
+                duration_sec=180.0,
+                artist="Existing",
+                title="Song",
+                created_at=50.0,
+            ),
+        ),
+        created_at=50.0,
+    )
+    _write_manifest(cache_dir, existing_manifest)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+        clear_when_empty=True,
+    )
+
+    assert manifest == RestartHandoffManifest.empty()
+    assert load_restart_handoff_manifest(cache_dir) == existing_manifest
+    assert stale.exists()
+
+
+def test_prune_unreferenced_segments_skips_segments_symlink_outside_cache(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    outside_dir = tmp_path / "outside-segments"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    victim = outside_dir / "victim.mp3"
+    victim.write_bytes(b"outside")
+    (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert victim.exists()
+    assert "Skipping restart handoff segment pruning outside cache dir" in caplog.text
+
+
+def test_prune_unreferenced_segments_rejects_segments_symlink_inside_cache(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    symlink_target = cache_dir / "inside-segments"
+    handoff_dir.mkdir(parents=True)
+    symlink_target.mkdir()
+    victim = symlink_target / "victim.mp3"
+    victim.write_bytes(b"inside")
+    (handoff_dir / "segments").symlink_to(symlink_target, target_is_directory=True)
+
+    restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert victim.exists()
+    assert "Skipping restart handoff segment pruning outside cache dir" in caplog.text
+
+
+def test_prune_unreferenced_segments_tolerates_cache_resolve_failure(tmp_path, caplog):
+    with patch.object(Path, "resolve", side_effect=RuntimeError("symlink loop")):
+        restart_handoff._prune_unreferenced_segments(tmp_path, RestartHandoffManifest.empty())
+
+    assert "Failed to resolve restart handoff cache dir for segment pruning" in caplog.text
+
+
+def test_prune_unreferenced_segments_tolerates_resolve_runtime_error_on_a_segment(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    stray = _write_spooled_file(cache_dir, name="stray.mp3")
+    real_resolve = Path.resolve
+
+    def flaky_resolve(self, strict=False):
+        if self.name == "stray.mp3":
+            raise RuntimeError("symlink loop")
+        return real_resolve(self, strict=strict)
+
+    with patch.object(Path, "resolve", flaky_resolve):
+        restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert stray.exists()
+    assert "Failed to prune unreferenced restart handoff segment" in caplog.text
+
+
+def test_resolve_relative_to_handoff_rejects_symlinked_segment(tmp_path):
+    cache_dir = tmp_path / "cache"
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(b"audio")
+    segments_dir = restart_handoff_dir(cache_dir) / "segments"
+    segments_dir.mkdir(parents=True)
+    linked = segments_dir / "linked.mp3"
+    linked.symlink_to(outside)
+
+    entry = RestartHandoffEntry(
+        relative_path="segments/linked.mp3",
+        sha256=_sha(outside),
+        size_bytes=outside.stat().st_size,
+        duration_sec=181.0,
+        artist="Artist",
+        title="Linked",
+    )
+
+    assert entry.path(cache_dir) is None
 
 
 def test_try_write_spool_logs_and_swallows_failures(tmp_path, caplog):

@@ -1707,10 +1707,47 @@ def test_prune_stale_tmp_files_ignores_non_mp3(tmp_path):
     assert other.exists()  # only *.mp3 is touched
 
 
+def test_prune_stale_tmp_files_skips_symlinked_mp3(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    victim = outside_dir / "victim.mp3"
+    victim.write_bytes(b"x" * 2048)
+    _age_file(victim, hours=12)
+    scratch_link = tmp_path / "banter_link.mp3"
+    scratch_link.symlink_to(victim)
+
+    assert prune_stale_tmp_files(tmp_path) == 0
+    assert scratch_link.is_symlink()
+    assert victim.exists()
+
+
 def test_prune_stale_tmp_files_missing_dir_returns_zero(tmp_path):
     from mammamiradio.playlist.downloader import prune_stale_tmp_files
 
     assert prune_stale_tmp_files(tmp_path / "does_not_exist") == 0
+
+
+def test_prune_stale_tmp_files_rejects_symlinked_tmp_dir_root(tmp_path):
+    # Unlike a symlinked *leaf* (unlink() never dereferences a symlink), a
+    # symlinked tmp_dir *root* means every glob/stat/unlink targets real
+    # files in the redirected directory through normal path resolution —
+    # reject_symlinks=True on the per-file check can't catch this because
+    # both tmp_dir and the file resolve "contained" relative to each other.
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    sensitive_dir = tmp_path / "sensitive"
+    sensitive_dir.mkdir()
+    important = sensitive_dir / "important.mp3"
+    important.write_bytes(b"do not delete me")
+    _age_file(important, hours=12)
+
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.symlink_to(sensitive_dir, target_is_directory=True)
+
+    assert prune_stale_tmp_files(tmp_dir) == 0
+    assert important.exists()
 
 
 def test_prune_stale_tmp_files_swallows_unlink_error(tmp_path):
