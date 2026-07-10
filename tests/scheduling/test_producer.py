@@ -316,7 +316,9 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter",
             new_callable=AsyncMock,

@@ -175,7 +175,9 @@ async def test_release_beat_attempt_restored_when_banter_tts_fails(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter",
             new_callable=AsyncMock,

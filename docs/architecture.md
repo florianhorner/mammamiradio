@@ -254,7 +254,7 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
 | Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
-| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
+| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail, and unconditionally drops a stale-claim head†) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **no** |
@@ -281,6 +281,12 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- † A front-insert also drops the **queue head** outright (not just the
+  furthest-future tail) when it carries a `transition_track_ref` — its "just
+  finished playing" claim (baked into audio, crossfaded over the prior song's
+  fade) is unconditionally broken the moment anything gets wedged ahead of it.
+  Recorded as `GenerationWasteReason.STALE_PLAYED_TRACK_REF`; a fresh, accurate
+  banter/ad-intro is produced on the next normal cycle.
 - BANTER memory extraction is deliberately **not** a queue-time commit. The
   scriptwriter snapshots context, the producer rewrites that snapshot with the
   final aired lines including the transition, and the streamer schedules
