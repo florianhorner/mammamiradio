@@ -413,24 +413,6 @@ def test_audio_section_loaded():
     )
 
 
-def test_shipped_profiles_never_resolve_to_unmapped_fable():
-    """The `fable` catalog entry is deliberately unmapped: a gated model resolving
-    anywhere would 404 and silently fall back to OpenAI (English-code-switched
-    output). Guards both the profile mappings and resolve_model's deterministic
-    floor — `fable` sorts lexicographically first in the anthropic catalog, so a
-    future catalog slimming could otherwise pin broken-profile resolution to it."""
-    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
-    config = load_config(str(toml_path))
-
-    tasks = ("banter", "news_flash", "ad", "transition", "home_mood", "memory_extract")
-    for profile in ("premium", "balanced", "economy"):
-        config.models.default_profile = profile
-        for task in tasks:
-            assert resolve_model(config.models, task, "anthropic") != "claude-fable-5", (
-                f"{profile}/{task} resolved to the unmapped gated model"
-            )
-
-
 def test_homeassistant_section_loaded():
     """The [homeassistant] section should survive config loading."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"

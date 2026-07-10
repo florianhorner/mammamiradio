@@ -23,9 +23,10 @@ a new section, a new mode.
 - **`capture.py`** — drives the local station: connects a warmup listener, waits for a long
   lead track, forces the segment order, records `/stream`, and auto-trims the contiguous
   arc into a final clip. The arc is configurable (`--arc banter` for a single-segment
-  moment; default `banter,ad,news_flash`), and `--home-event ENTITY:STATE` +
-  `--mock-ha URL` flips a staged entity right after the lead track is caught so the
-  reactive directive rides into the banter generated next (`--event-settle` seconds later).
+  moment; default `banter,ad,news_flash`). Home-event mode is self-priming: it captures
+  the baseline, consumes the listener moment, stages a real state transition, waits for
+  the configured HA context TTL, then records the final arc. A failed precondition exits
+  without creating or replacing a final clip.
 
 ## How the back-to-back ordering works
 
@@ -70,42 +71,38 @@ serving the end state from boot produces no event. Flow:
 
 ```bash
 python scripts/showreel/mock_ha.py --port 8123 --scenario homecoming &
-# start the station as above, plus a fast poll so the flip lands quickly:
+# Start the station as above, with a short context TTL for the local capture.
 #   MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=15
 python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
   --lead-track "Night in Venice" --arc banter \
   --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \
+  --ha-poll-interval 15 \
   --final scripts/showreel_out/door-bentornato.mp3
 ```
 
-The reactive event window is 2 minutes — the flip fires after the lead track is caught,
-so the banter generated moments later refreshes home context, diffs the transition, and
-carries the directive. The wait for the first arc segment is bounded by `--first-wait`
-(default 300s) — it must cover the REMAINDER of the lead track after the triggers fire,
-so raise it if your lead track runs longer than ~4.5 minutes.
+The tool catches the lead before it starts recording, then queues an unrecorded
+`news_flash` baseline and an unrecorded `banter` to consume the warmup listener moment. It
+waits for each requested operator render to clear before advancing, so an older automatic
+banter cannot be mistaken for the preflight take. Each recorded segment is then tracked by
+its queue ID, so a same-type preflight take immediately after the requested arc cannot
+extend the final trim. It flips the mock state, waits
+`--ha-poll-interval + 1s`, starts recording, and queues the requested arc. `--home-event`
+requires an arc that starts with `banter`; this guarantees the fresh directive belongs to
+the first captured host break. The first arc wait is bounded by `--first-wait` (default
+300s), which must cover the remainder of the lead track.
 
-Two constraints, learned the hard way:
-
-- **The station snapshots home state lazily.** There is no background poll:
-  `poll_interval` is a TTL and a fetch only happens when a banter/ad/news generation
-  refreshes context. Events come from diffing the new fetch against the LAST snapshot —
-  so the entity's *baseline* state must have been seen by a refresh before the capture
-  flips it. If the last snapshot already shows the trigger state (e.g. from a previous
-  run), the flip diffs as no-change and no event fires. Reset the entity to its baseline,
-  then trigger one throwaway segment (news works) so a refresh snapshots the baseline,
-  THEN run the capture.
-- **One pending directive at a time.** `state.ha_pending_directive` is a single slot and
-  reactive triggers are only computed when it's empty. A fresh warmup listener can arm
-  the new-listener moment first and the door directive never gets computed. Burn off any
-  pending moment (one banter with a listener connected) before the recorded arc.
+`--ha-poll-interval` must match `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`. It defaults to
+`15`, matching this recipe. Use a larger value for a station started with a larger TTL.
 
 ## Running the creative role on a specific model
 
-`CLAUDE_CREATIVE_MODEL=claude-fable-5` (env > catalog, documented in the root CLAUDE.md)
+`CLAUDE_CREATIVE_MODEL=claude-fable-5` (env override, documented in the root `CLAUDE.md`)
 swaps the creative model for the run without touching profiles. **Probe first**: force one
 banter and confirm the ledger row (`cache/ledger/`) names that model as the generator — a
 gated model silently falls back to OpenAI (English-code-switched output), which is how the
-first showreel ended up on Opus 4.8.
+first showreel ended up on Opus 4.8. Run that probe in a short, separate local station
+session. A probe deliberately leaves a forced banter queued; stop the probe pair after the
+ledger check, then start a fresh mock/station pair for the lead-track capture.
 
 ## Notes / gotchas (learned the hard way)
 
@@ -121,6 +118,10 @@ first showreel ended up on Opus 4.8.
   `MAMMAMIRADIO_LEDGER_ENABLED=true`) are genuine, not scripted.
 - **Copyright:** ship only CC/CC0 music in a public sample. Ad brands must be fictional.
 - Mock HA is a flaky background process; re-check `curl :8123/api/states` before a run.
+- **Local only:** the mock and station bind to `127.0.0.1`. This harness must never target
+  Home Assistant Green or a live station.
+- **Cleanup:** save the mock and station PIDs, then stop both after the capture. Commit only
+  clips that pass the ledger check and a continuity listen, with notes beside the MP3.
 
 ## Output of the first run
 

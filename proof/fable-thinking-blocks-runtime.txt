@@ -14,4 +14,11 @@ ts=1783552583.5732448 caller=banter model=claude-fable-5 ok=True fallback_reason
 ts=1783552920.2194781 caller=news_flash model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
 ts=1783553116.7223191 caller=banter model=claude-fable-5 ok=True fallback_reason=None openai_fallback=False
 
-Pre-fix rows show anthropic_AttributeError -> silent OpenAI fallback; post-fix rows (after POST /api/hot-reload of the patched scriptwriter) show ok=True with no fallback. Three ~80-130s continuous stream captures were produced with the fixed code (door-unlock, coffee, insomnia takes; local artifacts, not committed).
+Pre-fix rows show anthropic_AttributeError -> silent OpenAI fallback; post-fix rows (after POST /api/hot-reload of the patched scriptwriter) show ok=True with no fallback.
+
+Deterministic local homecoming capture, 2026-07-10:
+caller=banter provider=anthropic model=claude-fable-5 ok=True openai_fallback=False
+The final ledger output contained the door-unlock "bentornato" moment. capture.py reported
+banter at 86.4s and arc_end at 169.0s, then wrote a 91.6s continuous MP3. This used only
+the loopback mock HA and local station; no HA Green, add-on, profile, or deployment target
+was used.

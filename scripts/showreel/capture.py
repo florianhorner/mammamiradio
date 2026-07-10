@@ -12,9 +12,9 @@ they end up queued as [banter, ad, news]; when the lead track ends they air gapl
 The lead track must be long enough to cover all three generations (~2-3 min).
 
 The arc is configurable (--arc, comma list in AIR order; default banter,ad,news_flash).
-A staged home event (--home-event entity:state, with --mock-ha pointing at mock_ha.py)
-is flipped via the mock's /__set right after the lead track is caught, so the reactive
-directive (e.g. the door-unlock "bentornato") rides into the banter generated next.
+Home-event mode primes the HA baseline, consumes the warmup listener moment, stages a
+real mock transition, then waits through the HA cache TTL before recording the final
+banter. This makes the reactive directive (e.g. door-unlock "bentornato") deterministic.
 
 Prereq: mock_ha.py running + the station started against it (see README.md).
 
@@ -25,6 +25,7 @@ Usage:
     python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
         --lead-track "Night in Venice" --arc banter \
         --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \
+        --ha-poll-interval 15 \
         --final scripts/showreel_out/door-bentornato.mp3
 """
 
@@ -38,6 +39,8 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_SETTLE_SECONDS = 18.0
+LEAD_START_WINDOW_SECONDS = 24.0
 
 
 def _get(base: str, path: str) -> dict:
@@ -70,7 +73,33 @@ def _queued(base: str, seg: str) -> bool:
     return any(u.get("type") == seg for u in up)
 
 
-def _wait_lead(base: str, lead: str, t0: float, max_start: float = 16.0, timeout: float = 240) -> bool:
+def _queued_segment_id(base: str, seg: str) -> str | None:
+    """Return the first queued instance of ``seg`` (operator inserts are at the head)."""
+    for upcoming in _status(base).get("upcoming") or []:
+        if upcoming.get("type") == seg and upcoming.get("id"):
+            return str(upcoming["id"])
+    return None
+
+
+def _now_queue_id(base: str) -> str | None:
+    now = (_status(base).get("now_streaming") or {}).get("metadata") or {}
+    queue_id = now.get("queue_id")
+    return str(queue_id) if queue_id else None
+
+
+def _operator_force_pending(base: str) -> str | None:
+    """Return the local admin surface's in-flight operator trigger, if any."""
+    pending = _get(base, "/status").get("operator_force_pending")
+    return str(pending) if pending else None
+
+
+def _wait_lead(
+    base: str,
+    lead: str,
+    t0: float,
+    max_start: float = LEAD_START_WINDOW_SECONDS,
+    timeout: float = 240,
+) -> bool:
     """Wait until the long lead track is airing near its start."""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -84,7 +113,7 @@ def _wait_lead(base: str, lead: str, t0: float, max_start: float = 16.0, timeout
 
 
 def _trigger_queued(base: str, seg: str, timeout: float = 150) -> bool:
-    """Trigger seg and wait until it's queued (appears in upcoming)."""
+    """Trigger seg and wait for its render to clear the operator guard into the queue."""
     print(f"    [trigger] {seg}")
     try:
         resp = _post(base, "/api/trigger", {"type": seg})
@@ -100,18 +129,32 @@ def _trigger_queued(base: str, seg: str, timeout: float = 150) -> bool:
         return False
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _queued(base, seg) or _now(base)[0] == seg:
+        # ``upcoming`` alone is insufficient: an automatic banter can already be
+        # present while the forced banter is still rendering. The server clears this
+        # guard only when the operator-requested segment front-inserts successfully.
+        try:
+            pending = _operator_force_pending(base)
+        except Exception as exc:
+            print(f"      !! could not verify operator queue state: {exc}")
+            return False
+        if pending is None and (_queued(base, seg) or _now(base)[0] == seg):
             print(f"      queued: {seg}")
             return True
         time.sleep(2)
-    print(f"      !! {seg} never queued")
+    print(f"      !! {seg} never completed its operator queue")
     return False
 
 
-def _wait_type(base: str, seg: str, t0: float, timeout: float = 200) -> float | None:
+def _wait_type(
+    base: str,
+    seg: str,
+    t0: float,
+    timeout: float = 200,
+    queue_id: str | None = None,
+) -> float | None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _now(base)[0] == seg:
+        if _now(base)[0] == seg and (queue_id is None or _now_queue_id(base) == queue_id):
             off = time.time() - t0
             print(f"    [{off:6.1f}s] ON AIR: {seg}")
             return off
@@ -119,23 +162,76 @@ def _wait_type(base: str, seg: str, t0: float, timeout: float = 200) -> float | 
     return None
 
 
-def _wait_until_not(base: str, seg: str, t0: float, timeout: float = 120) -> float:
+def _wait_until_not(
+    base: str,
+    seg: str,
+    t0: float,
+    timeout: float = 120,
+    queue_id: str | None = None,
+) -> float | None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _now(base)[0] != seg:
+        if _now(base)[0] != seg or (queue_id is not None and _now_queue_id(base) != queue_id):
             return time.time() - t0
         time.sleep(1.0)
-    return time.time() - t0
+    return None
 
 
-def main() -> int:
+def _parse_arc(raw: str) -> list[str]:
+    return [segment.strip() for segment in raw.split(",") if segment.strip()]
+
+
+def _parse_home_event(raw: str) -> tuple[str, str] | None:
+    if not raw:
+        return None
+    entity, sep, state = raw.partition(":")
+    if not sep or not entity or not state:
+        raise ValueError("--home-event must be ENTITY:STATE")
+    return entity, state
+
+
+def _prepare_home_event(base: str, mock_ha: str, entity: str, state: str, poll_interval: float) -> bool:
+    """Prime the real HA diff and listener state before recording a reactive moment."""
+    print("[home-event] priming baseline with news_flash")
+    if not _trigger_queued(base, "news_flash"):
+        print("      !! baseline refresh did not queue")
+        return False
+    print("[home-event] draining warmup listener moment with banter")
+    if not _trigger_queued(base, "banter"):
+        print("      !! warmup banter did not queue")
+        return False
+
+    print(f"[home-event] {entity} -> {state}")
+    try:
+        response = _post(mock_ha, "/__set", {"entity_id": entity, "state": state})
+    except Exception as exc:
+        print(f"      !! home-event flip failed: {exc}")
+        return False
+    if (
+        not response.get("ok")
+        or response.get("entity_id") != entity
+        or response.get("new") != state
+        or response.get("old") == state
+    ):
+        print(f"      !! home-event flip was not a real transition: {response}")
+        return False
+
+    # fetch_home_context is TTL-gated. Waiting longer than the configured interval
+    # guarantees the final banter reads the changed state instead of the baseline cache.
+    wait_seconds = poll_interval + 1.0
+    print(f"[home-event] waiting {wait_seconds:.0f}s for the HA context cache to expire")
+    time.sleep(wait_seconds)
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Capture a consecutive showreel arc (no stitching).")
     ap.add_argument("--base", default="http://127.0.0.1:8077")
     ap.add_argument("--raw", default="scripts/showreel_out/capture_raw.mp3")
     ap.add_argument("--final", default="scripts/showreel_out/ma-pr-3836.mp3")
     ap.add_argument("--lead-track", default="Night in Venice")
     ap.add_argument("--lead-tail", type=float, default=8.0, help="seconds of music tail to keep before banter")
-    ap.add_argument("--settle", type=float, default=18.0)
+    ap.add_argument("--settle", type=float, default=DEFAULT_SETTLE_SECONDS)
     ap.add_argument("--max", type=float, default=420.0)
     ap.add_argument(
         "--arc",
@@ -150,10 +246,10 @@ def main() -> int:
     )
     ap.add_argument("--mock-ha", default="http://127.0.0.1:8123", help="mock_ha.py base URL for --home-event")
     ap.add_argument(
-        "--event-settle",
+        "--ha-poll-interval",
         type=float,
-        default=8.0,
-        help="seconds between the home-event flip and firing the arc triggers",
+        default=15.0,
+        help="station HA context poll interval in seconds for --home-event (default: 15)",
     )
     ap.add_argument(
         "--first-wait",
@@ -163,22 +259,26 @@ def main() -> int:
         "REMAINDER of the lead track after the triggers fire (a lead caught at its "
         "start airs the arc a full track-length later)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    arc = [s.strip() for s in args.arc.split(",") if s.strip()]
+    arc = _parse_arc(args.arc)
     if not arc:
         print("!! --arc must name at least one segment type")
         return 1
     if len(set(arc)) != len(arc):
         print("!! --arc segment types must be unique (offsets are keyed by type)")
         return 1
-    home_event: tuple[str, str] | None = None
-    if args.home_event:
-        entity, sep, state = args.home_event.partition(":")
-        if not sep or not entity or not state:
-            print("!! --home-event must be ENTITY:STATE")
-            return 1
-        home_event = (entity, state)
+    try:
+        home_event = _parse_home_event(args.home_event)
+    except ValueError as exc:
+        print(f"!! {exc}")
+        return 1
+    if home_event and arc[0] != "banter":
+        print("!! --home-event requires an arc that begins with banter")
+        return 1
+    if args.ha_poll_interval <= 0:
+        print("!! --ha-poll-interval must be positive")
+        return 1
 
     raw = REPO_ROOT / args.raw if not Path(args.raw).is_absolute() else Path(args.raw)
     final = REPO_ROOT / args.final if not Path(args.final).is_absolute() else Path(args.final)
@@ -193,37 +293,55 @@ def main() -> int:
     print("[warmup] listener connected; settling")
     time.sleep(args.settle)
 
-    print(f"[rec] recording -> {raw}")
-    rec = subprocess.Popen(["curl", "-s", f"{args.base}/stream", "-o", str(raw), "--max-time", str(int(args.max))])
+    rec: subprocess.Popen | None = None
     t0 = time.time()
     offsets: dict[str, float] = {}
+    arc_queue_ids: dict[str, str] = {}
     try:
-        # Wait for the long lead track near its start, then fire in REVERSE so the
-        # queue ends up in air order (front-inserts stack).
-        _wait_lead(args.base, args.lead_track, t0)
+        # In home-event mode, stage every precondition before recording so the raw
+        # file contains only the final lead tail and requested on-air arc.
+        if not _wait_lead(args.base, args.lead_track, t0):
+            return 1
         if home_event:
             entity, state = home_event
-            print(f"    [home-event] {entity} -> {state}")
-            try:
-                _post(args.mock_ha, "/__set", {"entity_id": entity, "state": state})
-            except Exception as e:  # capture the arc eventless rather than abort a staged multi-minute run
-                print(f"      !! home-event flip failed ({e}); continuing without the staged event")
-            else:
-                # Give the flip time to land before the banter generation's context
-                # refresh polls the mock (the diff is what produces the event).
-                time.sleep(args.event_settle)
+            if not _prepare_home_event(args.base, args.mock_ha, entity, state, args.ha_poll_interval):
+                return 1
+
+        print(f"[rec] recording -> {raw}")
+        rec = subprocess.Popen(["curl", "-s", f"{args.base}/stream", "-o", str(raw), "--max-time", str(int(args.max))])
+        t0 = time.time()
         for seg in reversed(arc):
-            _trigger_queued(args.base, seg)
+            if not _trigger_queued(args.base, seg):
+                return 1
+            queue_id = _queued_segment_id(args.base, seg)
+            if queue_id is None:
+                print(f"      !! {seg} queued without a trackable segment id")
+                return 1
+            arc_queue_ids[seg] = queue_id
         # Lead track still playing; the arc airs when it ends. The FIRST segment's
         # wait must survive the whole remaining lead (up to a full track length);
         # the rest follow gaplessly and keep the tighter default.
-        offsets[arc[0]] = _wait_type(args.base, arc[0], t0, timeout=args.first_wait) or 0.0
+        first_offset = _wait_type(args.base, arc[0], t0, timeout=args.first_wait, queue_id=arc_queue_ids[arc[0]])
+        if first_offset is None:
+            print(f"      !! first arc segment {arc[0]!r} never aired")
+            return 1
+        offsets[arc[0]] = first_offset
         for seg in arc[1:]:
-            offsets[seg] = _wait_type(args.base, seg, t0) or 0.0
-        offsets["arc_end"] = _wait_until_not(args.base, arc[-1], t0)
+            offset = _wait_type(args.base, seg, t0, queue_id=arc_queue_ids[seg])
+            if offset is None:
+                print(f"      !! arc segment {seg!r} never aired")
+                return 1
+            offsets[seg] = offset
+        arc_end = _wait_until_not(args.base, arc[-1], t0, queue_id=arc_queue_ids[arc[-1]])
+        if arc_end is None:
+            print(f"      !! final arc segment {arc[-1]!r} did not finish")
+            return 1
+        offsets["arc_end"] = arc_end
         time.sleep(2)
     finally:
         for p in (rec, warm):
+            if p is None:
+                continue
             p.terminate()
             try:
                 p.wait(timeout=5)

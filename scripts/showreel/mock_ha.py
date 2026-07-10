@@ -178,14 +178,23 @@ def make_handler(scenario: str):
                 # Capture-harness control: stage a state transition mid-run.
                 try:
                     body = json.loads(body_raw)
-                    entity_id, new_state = body["entity_id"], str(body["state"])
+                    entity_id, new_state = body["entity_id"], body["state"]
                 except (json.JSONDecodeError, KeyError, TypeError):
                     self._send({"error": "expected {entity_id, state}"}, 400)
+                    return
+                if not isinstance(entity_id, str) or not entity_id or not isinstance(new_state, str) or not new_state:
+                    self._send({"error": "entity_id and state must be non-empty strings"}, 400)
                     return
                 if entity_id not in states:
                     self._send({"error": f"unknown entity {entity_id!r} in scenario"}, 404)
                     return
                 old = states[entity_id]["state"]
+                if old == new_state:
+                    self._send(
+                        {"error": "state is already set", "entity_id": entity_id, "old": old, "new": new_state},
+                        409,
+                    )
+                    return
                 states[entity_id]["state"] = new_state
                 print(f"mock-ha: __set {entity_id}: {old!r} -> {new_state!r}")
                 self._send({"ok": True, "entity_id": entity_id, "old": old, "new": new_state})
