@@ -1,0 +1,14 @@
+=== Proof: model_registry.toml refactor — test + gate evidence ===
+commit: a0138a5ca927394cf0f3e2c157916d861ef76fef
+generated locally (fresh PR, no CI run yet)
+
+--- new degrade-path tests (pre-ship squad coverage gaps) ---
+$ pytest tests/hosts/test_scriptwriter.py tests/audio/test_tts.py -k 'registry_unavailable or has_script_llm or tts_model_unavailable'
+......                                                                   [100%]
+6 passed, 304 deselected in 0.73s
+
+--- full suite (merged with origin/main) ---
+$ pytest tests/ -q
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4384 passed, 2 skipped, 21 deselected, 1 warning in 104.18s (0:01:44)
