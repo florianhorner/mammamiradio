@@ -385,6 +385,7 @@ def write_restart_handoff_spool(
         segments_dir = _safe_segments_dir(handoff_dir)
         if segments_dir is None:
             logger.warning("Skipping restart handoff spool write: segments dir is unsafe: %s", _segments_dir(cache_dir))
+            return RestartHandoffManifest.empty()
 
         entries: list[RestartHandoffEntry] = []
         for candidate in candidates:
@@ -686,7 +687,7 @@ def _prune_unreferenced_segments(
     except (OSError, RuntimeError) as exc:
         logger.warning("Failed to resolve restart handoff cache dir for segment pruning: %s", exc)
         return
-    segments_root = safe_path_within(segments_dir, cache_root)
+    segments_root = safe_path_within(segments_dir, cache_root, reject_symlinks=True)
     if segments_root is None:
         logger.warning("Skipping restart handoff segment pruning outside cache dir: %s", segments_dir)
         return

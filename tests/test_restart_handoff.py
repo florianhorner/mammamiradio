@@ -598,6 +598,45 @@ def test_write_spool_skips_segments_dir_symlink_outside_handoff(tmp_path):
     assert not list(outside_dir.rglob("*.mp3"))
 
 
+def test_write_spool_rejects_symlinked_segments_before_publish_or_prune(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    handoff_dir = restart_handoff_dir(cache_dir)
+    symlink_target = cache_dir / "inside-symlink-target"
+    handoff_dir.mkdir(parents=True)
+    symlink_target.mkdir()
+    stale = symlink_target / "stale.mp3"
+    stale.write_bytes(b"stale")
+    (handoff_dir / "segments").symlink_to(symlink_target, target_is_directory=True)
+    existing_manifest = RestartHandoffManifest(
+        entries=(
+            RestartHandoffEntry(
+                relative_path="segments/existing.mp3",
+                sha256="0" * 64,
+                size_bytes=1,
+                duration_sec=180.0,
+                artist="Existing",
+                title="Song",
+                created_at=50.0,
+            ),
+        ),
+        created_at=50.0,
+    )
+    _write_manifest(cache_dir, existing_manifest)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+        clear_when_empty=True,
+    )
+
+    assert manifest == RestartHandoffManifest.empty()
+    assert load_restart_handoff_manifest(cache_dir) == existing_manifest
+    assert stale.exists()
+
+
 def test_prune_unreferenced_segments_skips_segments_symlink_outside_cache(tmp_path, caplog):
     cache_dir = tmp_path / "cache"
     handoff_dir = restart_handoff_dir(cache_dir)
@@ -607,6 +646,22 @@ def test_prune_unreferenced_segments_skips_segments_symlink_outside_cache(tmp_pa
     victim = outside_dir / "victim.mp3"
     victim.write_bytes(b"outside")
     (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert victim.exists()
+    assert "Skipping restart handoff segment pruning outside cache dir" in caplog.text
+
+
+def test_prune_unreferenced_segments_rejects_segments_symlink_inside_cache(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    symlink_target = cache_dir / "inside-segments"
+    handoff_dir.mkdir(parents=True)
+    symlink_target.mkdir()
+    victim = symlink_target / "victim.mp3"
+    victim.write_bytes(b"inside")
+    (handoff_dir / "segments").symlink_to(symlink_target, target_is_directory=True)
 
     restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
 
