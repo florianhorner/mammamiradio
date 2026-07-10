@@ -165,6 +165,7 @@ broadcast_chain = false
 default_profile = "balanced"
 
 [models.catalog.anthropic]   # the ONLY place Anthropic model IDs live
+fable  = "claude-fable-5"    # not mapped by any profile yet; gated keys silently fall back to OpenAI
 opus   = "claude-opus-4-8"
 sonnet = "claude-sonnet-4-6"
 haiku  = "claude-haiku-4-5-20251001"
