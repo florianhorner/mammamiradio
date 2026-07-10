@@ -354,6 +354,26 @@ def _preflight_error(message: str) -> int:
     return 2
 
 
+def _mkdir_private(path: Path) -> None:
+    """Create missing output directories with private permissions."""
+    if path.exists():
+        if not path.is_dir():
+            raise FileExistsError(f"{path} exists and is not a directory")
+        return
+
+    parent = path.parent
+    if parent != path:
+        _mkdir_private(parent)
+
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+    else:
+        path.chmod(0o700)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -397,13 +417,19 @@ def main(argv: list[str] | None = None) -> int:
     # bad --output-dir fails fast instead of after billing N calls and then losing
     # every receipt to a post-payment mkdir/open error.
     try:
-        args.output_dir.mkdir(parents=True, exist_ok=True)
+        _mkdir_private(args.output_dir)
     except OSError as exc:
         return _preflight_error(f"cannot create output dir {args.output_dir}: {exc}")
 
-    records = asyncio.run(run_all(models, fixtures, config=config, api_key=os.environ["OPENAI_API_KEY"], run_id=run_id))
+    try:
+        receipt_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as exc:
+        return _preflight_error(f"cannot create receipt file {out_path}: {exc}")
 
-    with out_path.open("w", encoding="utf-8") as output_file:
+    with os.fdopen(receipt_fd, "w", encoding="utf-8") as output_file:
+        records = asyncio.run(
+            run_all(models, fixtures, config=config, api_key=os.environ["OPENAI_API_KEY"], run_id=run_id)
+        )
         for record in records:
             output_file.write(json.dumps(record, ensure_ascii=False) + "\n")
 

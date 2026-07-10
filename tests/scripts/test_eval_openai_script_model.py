@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +125,59 @@ def test_unwritable_output_dir_fails_before_the_paid_run(monkeypatch, tmp_path, 
 
     assert eval_script.main(["--fixtures", str(_fixture_file(tmp_path)), "--output-dir", str(output_dir)]) == 2
     assert "cannot create output dir" in capsys.readouterr().err
+
+
+def test_receipt_open_failure_after_mkdir_fails_before_paid_run(monkeypatch, tmp_path, capsys) -> None:
+    output_dir = tmp_path / "evals"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(eval_script, "load_config", lambda path: _config(models=["only"]))
+
+    def fail_open(*args, **kwargs):
+        raise PermissionError("receipt blocked")
+
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("run_all must not be called when the receipt file cannot be reserved")
+
+    monkeypatch.setattr(eval_script.os, "open", fail_open)
+    monkeypatch.setattr(eval_script, "run_all", should_not_run)
+
+    assert eval_script.main(["--fixtures", str(_fixture_file(tmp_path)), "--output-dir", str(output_dir)]) == 2
+    assert output_dir.is_dir()
+    assert "cannot create receipt file" in capsys.readouterr().err
+
+
+def test_successful_run_creates_private_output_dir_and_receipt_file(monkeypatch, tmp_path) -> None:
+    output_dir = tmp_path / "evals"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(eval_script, "load_config", lambda path: _config(models=["only"]))
+
+    async def fake_run_all(models, _fixtures, **kwargs):
+        return [
+            {
+                "schema_version": eval_script.RECEIPT_SCHEMA_VERSION,
+                "run_id": kwargs["run_id"],
+                "model": models[0],
+                "fixture_id": "one",
+                "json_ok": True,
+                "floor": {"status": "PASS", "gates": {}},
+                "latency_ms": 1,
+                "output_chars": 2,
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "cost_usd": 0.01,
+                "error": None,
+            }
+        ]
+
+    monkeypatch.setattr(eval_script, "run_all", fake_run_all)
+
+    assert eval_script.main(["--fixtures", str(_fixture_file(tmp_path)), "--output-dir", str(output_dir)]) == 0
+
+    receipt_files = list(output_dir.glob("eval-openai-script-model-*.jsonl"))
+    assert len(receipt_files) == 1
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(receipt_files[0].stat().st_mode) == 0o600
+    assert json.loads(receipt_files[0].read_text(encoding="utf-8"))["fixture_id"] == "one"
 
 
 def test_dry_run_reports_cost_bounds_without_key_run_or_output(monkeypatch, tmp_path, capsys) -> None:
