@@ -69,7 +69,7 @@ def _manifest(pack_dir: Path, **overrides: object) -> dict[str, object]:
                 "bed": {"asset_id": "night_bed", "gain_db": -19.0},
                 "cues": [
                     {
-                        "anchor": "open",
+                        "anchor": "intro",
                         "asset_id": "applause_short",
                         "gain_db": -4.0,
                         "max_duration_sec": 0.75,
@@ -202,6 +202,54 @@ def test_recipes_resolve_asset_references_and_cue_duration_bounds(tmp_path: Path
     cue["asset_id"] = "applause_short"
     _write_manifest(pack_dir, payload)
     with pytest.raises(validator.AudioAssetPackValidationError, match="exceeds asset 'applause_short' duration bound"):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+@pytest.mark.parametrize(
+    ("recipe", "message"),
+    [
+        (
+            {
+                "id": "too-many-cues",
+                "cues": [
+                    {"anchor": "intro", "asset_id": "applause_short", "gain_db": -8, "max_duration_sec": 0.2},
+                    {"anchor": "mid", "asset_id": "applause_short", "gain_db": -8, "max_duration_sec": 0.2},
+                    {"anchor": "outro", "asset_id": "applause_short", "gain_db": -8, "max_duration_sec": 0.2},
+                ],
+            },
+            "must contain at most 2 entries",
+        ),
+        (
+            {
+                "id": "unknown-anchor",
+                "cues": [
+                    {"anchor": "after_hook", "asset_id": "applause_short", "gain_db": -8, "max_duration_sec": 0.2}
+                ],
+            },
+            "anchor must be one of",
+        ),
+        (
+            {
+                "id": "legacy-bed-candidates",
+                "bed_candidates": ["night_bed"],
+                "cues": [{"anchor": "mid", "asset_id": "applause_short", "gain_db": -8, "max_duration_sec": 0.2}],
+            },
+            "contains unsupported field",
+        ),
+    ],
+)
+def test_recipe_schema_rejects_runtime_unsupported_shapes(
+    tmp_path: Path,
+    fake_probe: None,
+    recipe: dict[str, object],
+    message: str,
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir, recipes=[recipe])
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match=message):
         validator.validate_audio_asset_pack(pack_dir)
 
 

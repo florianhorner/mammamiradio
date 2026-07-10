@@ -22,7 +22,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |
 | FFmpeg normalize / mix / concat / SFX              | `mammamiradio/audio/normalizer.py`           |
 | Generated ad/imaging layer cache                   | `mammamiradio/audio/synth_cache.py`          |
-| Station imaging stingers and talk beds             | `mammamiradio/audio/imaging.py`              |
+| Station imaging stingers, beds, and recipe resolver | `mammamiradio/audio/imaging.py`             |
+| Recorded ad-recipe schema contract                 | `mammamiradio/audio/imaging_schema.py`       |
 | Edge / OpenAI / Azure / ElevenLabs TTS synthesis   | `mammamiradio/audio/tts.py`                  |
 | Audio quality gate (duration, silence checks)      | `mammamiradio/audio/audio_quality.py`        |
 | Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |

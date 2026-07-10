@@ -19,6 +19,7 @@ from mammamiradio.audio.admission import ffmpeg_slot
 
 logger = logging.getLogger(__name__)
 _NORM_CACHE_BITRATE_RE = re.compile(r"_(?P<bitrate>[1-9]\d*)k\.mp3$")
+DEFAULT_CONCAT_SILENCE_MS = 300
 
 
 class ConcatDurationError(RuntimeError):
@@ -689,7 +690,7 @@ def probe_duration_sec(path: Path, *, rescue: bool = False) -> float | None:
 def concat_files(
     paths: list[Path],
     output_path: Path,
-    silence_ms: int = 300,
+    silence_ms: int = DEFAULT_CONCAT_SILENCE_MS,
     loudnorm: bool = True,
     *,
     strict_duration: bool = False,
@@ -1521,7 +1522,10 @@ def mix_oneshot_layers(
             f"volume={_fmt_num(gain_db)}dB,adelay={delay_ms}:all=1[{cue_label}]"
         )
         mix_inputs.append(f"[{cue_label}]")
-    filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[out]")
+    # Keep the rendered voice/bed base at unity throughout. FFmpeg's default
+    # amix normalization re-scales it as delayed cue streams begin/end, which
+    # creates an audible level jump that final mastering cannot undo.
+    filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:normalize=0[out]")
     command.extend(
         [
             "-filter_complex",
@@ -1543,6 +1547,7 @@ def loop_audio_bed(
     duration_sec: float,
     *,
     target_lufs: float = -18.0,
+    fade_out_sec: float = 0.0,
 ) -> Path:
     """Loop a pre-rendered bed to an exact duration at a predictable level.
 
@@ -1552,6 +1557,8 @@ def loop_audio_bed(
     its loudness reconciliation.
     """
     duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
     cmd = [
         "ffmpeg",
         "-y",
@@ -1561,7 +1568,10 @@ def loop_audio_bed(
         str(input_path),
         "-vn",
         "-af",
-        (f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB,loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"),
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
         *_MP3_OUTPUT_ARGS,
         "-t",
         _fmt_num(duration),

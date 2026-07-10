@@ -17,7 +17,11 @@ def test_pick_sweeper_sting_delegates_to_station_id_bed(tmp_path):
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "assets")
 
-    with patch("mammamiradio.audio.imaging.generate_station_id_bed", return_value=out) as mock_bed:
+    def _write_bed(path, *_args):
+        path.write_bytes(b"bed")
+        return path
+
+    with patch("mammamiradio.audio.imaging.generate_station_id_bed", side_effect=_write_bed) as mock_bed:
         result = lib.pick_sweeper_sting(out)
 
     assert result == out
@@ -95,6 +99,52 @@ def test_pack_assets_cover_station_sweeper_time_and_ad_bumper_before_fallback(tm
     bumper_fallback.assert_not_called()
 
 
+def test_pack_copy_failure_falls_back_to_the_existing_generator(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "station_id.mp3").write_bytes(b"recorded-station-id")
+    output = tmp_path / "station.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    def _fallback(path, *_args):
+        path.write_bytes(b"fallback")
+        return path
+
+    with (
+        patch("mammamiradio.audio.imaging.shutil.copy2", side_effect=OSError("destination unavailable")),
+        patch("mammamiradio.audio.imaging.generate_station_id_bed", side_effect=_fallback) as fallback,
+    ):
+        assert lib.pick_station_id_bed(output) == output
+
+    assert output.read_bytes() == b"fallback"
+    fallback.assert_called_once()
+
+
+def test_short_ad_bumper_is_a_faded_cut_of_the_recorded_master(tmp_path):
+    assets = tmp_path / "assets"
+    bumper = assets / "bumpers" / "ad_break.mp3"
+    bumper.parent.mkdir(parents=True)
+    bumper.write_bytes(b"recorded-bumper")
+    output = tmp_path / "mid.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    def _render(source, path, duration, **_kwargs):
+        assert source == bumper
+        assert duration == 0.8
+        path.write_bytes(b"short-recorded-bumper")
+        return path
+
+    with (
+        patch("mammamiradio.audio.imaging.loop_audio_bed", side_effect=_render) as render,
+        patch("mammamiradio.audio.imaging.generate_bumper_jingle") as synthetic,
+    ):
+        assert lib.pick_ad_bumper(output, 0.8) == output
+
+    assert output.read_bytes() == b"short-recorded-bumper"
+    assert render.call_args.kwargs["fade_out_sec"] == pytest.approx(0.08)
+    synthetic.assert_not_called()
+
+
 def test_ad_sfx_dir_prefers_existing_custom_directory_then_pack(tmp_path):
     assets = tmp_path / "assets"
     bundled = assets / "sfx"
@@ -118,9 +168,13 @@ def test_pick_stinger_music_to_speech_falls_back_to_synthetic(tmp_path):
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing")
 
+    def _write_sting(_from, _to, path, _notes, *, variant=0):
+        path.write_bytes(f"sting-{variant}".encode())
+        return path
+
     with (
         patch("mammamiradio.audio.imaging.next_synth_variant", return_value=2),
-        patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate,
+        patch("mammamiradio.audio.imaging.generate_transition_sting", side_effect=_write_sting) as mock_generate,
     ):
         result = lib.pick_stinger(SegmentType.MUSIC, SegmentType.NEWS_FLASH, out)
 
@@ -133,9 +187,13 @@ def test_pick_stinger_speech_to_music_falls_back_to_synthetic(tmp_path):
     motif = [523, 659, 784, 1047]
     lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing")
 
+    def _write_sting(_from, _to, path, _notes, *, variant=0):
+        path.write_bytes(f"sting-{variant}".encode())
+        return path
+
     with (
         patch("mammamiradio.audio.imaging.next_synth_variant", return_value=1),
-        patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate,
+        patch("mammamiradio.audio.imaging.generate_transition_sting", side_effect=_write_sting) as mock_generate,
     ):
         result = lib.pick_stinger(SegmentType.BANTER, SegmentType.MUSIC, out)
 
@@ -174,7 +232,7 @@ def test_pick_stinger_cache_rotates_bounded_synthetic_variant_pool(tmp_path):
     assert [call.kwargs["variant"] for call in mock_generate.call_args_list] == [0, 1, 2]
 
 
-def test_pick_talk_bed_uses_prerecorded_bed_before_source_track(tmp_path):
+def test_pick_talk_bed_uses_source_track_before_packaged_bed(tmp_path):
     assets = tmp_path / "assets"
     beds = assets / "beds"
     beds.mkdir(parents=True)
@@ -190,11 +248,26 @@ def test_pick_talk_bed_uses_prerecorded_bed_before_source_track(tmp_path):
 
     assert result == out
     cmd = mock_run.call_args.args[0]
-    assert str(asset_bed) in cmd
-    assert str(source) not in cmd
+    assert str(asset_bed) not in cmd
+    assert str(source) in cmd
     assert "-stream_loop" in cmd
     assert cmd[cmd.index("-stream_loop") + 1] == "-1"
     assert any("loudnorm=I=-18" in arg for arg in cmd)
+
+
+def test_pick_talk_bed_uses_packaged_bed_without_an_adjacent_track(tmp_path):
+    assets = tmp_path / "assets"
+    beds = assets / "beds"
+    beds.mkdir(parents=True)
+    asset_bed = beds / "soft.mp3"
+    asset_bed.write_bytes(b"bed")
+    output = tmp_path / "bed.mp3"
+    lib = ImagingLibrary([523], tmp_path, bed_volume_db=-18.0, assets_dir=assets)
+
+    with patch("mammamiradio.audio.imaging._run_ffmpeg") as mock_run:
+        assert lib.pick_talk_bed(4.25, output) == output
+
+    assert str(asset_bed) in mock_run.call_args.args[0]
 
 
 def test_pick_talk_bed_ducks_existing_source_track(tmp_path):

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import math
 import random
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from mammamiradio.audio.imaging_schema import (
+    RECIPE_MANIFEST_SCHEMA_VERSION,
+    RecipeSpec,
+    parse_recipe_specs,
+)
 from mammamiradio.audio.normalizer import (
     _MP3_OUTPUT_ARGS,
     _fmt_num,
@@ -20,15 +23,13 @@ from mammamiradio.audio.normalizer import (
     generate_station_id_bed,
     generate_tone,
     generate_transition_sting,
+    loop_audio_bed,
 )
 from mammamiradio.audio.synth_cache import duration_bucket_sec, materialize_synth_mp3, next_synth_variant
 from mammamiradio.core.models import SegmentType
 
 logger = logging.getLogger(__name__)
 
-_RECIPE_MANIFEST_SCHEMA_VERSION = 2
-_MAX_RECIPE_ONESHOTS = 2
-_MAX_RECIPE_SIMULTANEOUS_LAYERS = 3
 _CACHE_UNSET = object()
 
 
@@ -36,9 +37,9 @@ _CACHE_UNSET = object()
 class ResolvedRecipeCue:
     """One dry cue selected from a validated imaging recipe.
 
-    ``anchor`` deliberately stays as the manifest's symbolic string.  The ad
+    ``anchor`` deliberately stays as the canonical manifest symbol. The ad
     renderer owns dialogue timing, so the imaging layer must not turn a stable
-    editorial anchor (for example ``"after_hook"``) into an invented offset.
+    editorial anchor into an invented offset.
     """
 
     anchor: str
@@ -76,7 +77,7 @@ class _RecipeAsset:
 @dataclass(frozen=True)
 class _RecipeCueDefinition:
     anchor: str
-    asset_candidates: tuple[str, ...]
+    asset_id: str
     gain_db: float
     max_duration_sec: float
 
@@ -84,7 +85,7 @@ class _RecipeCueDefinition:
 @dataclass(frozen=True)
 class _RecipeDefinition:
     id: str
-    bed_candidates: tuple[str, ...]
+    bed_asset_id: str | None
     bed_gain_db: float
     cues: tuple[_RecipeCueDefinition, ...]
 
@@ -113,7 +114,7 @@ class ImagingLibrary:
         self.cache_dir = cache_dir
         self._recipe_manifest_signature: object = _CACHE_UNSET
         self._recipe_manifest: _RecipeManifest | None = None
-        self._resolved_ad_recipe_cache: dict[tuple[str, str], ResolvedAdRecipe | None] = {}
+        self._resolved_ad_recipe_cache: dict[tuple[str, str], ResolvedAdRecipe] = {}
 
     def resolve_ad_recipe(self, recipe_id: str, variant_key: str = "") -> ResolvedAdRecipe | None:
         """Resolve one schema-v2 ad recipe without ever trusting pack input.
@@ -131,40 +132,24 @@ class ImagingLibrary:
             return None
 
         cache_key = (recipe_id, safe_variant_key)
-        if cache_key in self._resolved_ad_recipe_cache:
-            cached = self._resolved_ad_recipe_cache[cache_key]
-            if cached is None:
-                return None
+        cached = self._resolved_ad_recipe_cache.get(cache_key)
+        if cached is not None:
             if self._resolved_recipe_assets_exist(cached):
                 return cached
+            self._resolved_ad_recipe_cache.pop(cache_key, None)
 
         definition = manifest.recipes.get(recipe_id)
         if definition is None:
-            self._resolved_ad_recipe_cache[cache_key] = None
             return None
 
-        bed = self._select_recipe_asset(
-            manifest.assets,
-            definition.bed_candidates,
-            recipe_id=definition.id,
-            slot="bed",
-            variant_key=safe_variant_key,
-        )
-        if definition.bed_candidates and bed is None:
-            self._resolved_ad_recipe_cache[cache_key] = None
+        bed = manifest.assets.get(definition.bed_asset_id) if definition.bed_asset_id else None
+        if definition.bed_asset_id and (bed is None or not bed.path.is_file()):
             return None
 
         cues: list[ResolvedRecipeCue] = []
-        for cue_index, cue in enumerate(definition.cues):
-            asset = self._select_recipe_asset(
-                manifest.assets,
-                cue.asset_candidates,
-                recipe_id=definition.id,
-                slot=f"cue:{cue_index}",
-                variant_key=safe_variant_key,
-            )
-            if asset is None:
-                self._resolved_ad_recipe_cache[cache_key] = None
+        for cue in definition.cues:
+            asset = manifest.assets.get(cue.asset_id)
+            if asset is None or not asset.path.is_file():
                 return None
             cues.append(
                 ResolvedRecipeCue(
@@ -218,7 +203,7 @@ class ImagingLibrary:
     def _parse_recipe_manifest(self, raw_manifest: object) -> _RecipeManifest | None:
         if not isinstance(raw_manifest, Mapping):
             return None
-        if raw_manifest.get("schema_version") != _RECIPE_MANIFEST_SCHEMA_VERSION:
+        if raw_manifest.get("schema_version") != RECIPE_MANIFEST_SCHEMA_VERSION:
             return None
         raw_assets = raw_manifest.get("assets")
         raw_recipes = raw_manifest.get("recipes")
@@ -232,13 +217,28 @@ class ImagingLibrary:
                 return None
             assets[asset.id] = asset
 
-        recipes: dict[str, _RecipeDefinition] = {}
-        for raw_recipe in raw_recipes:
-            recipe = self._parse_recipe_definition(raw_recipe)
-            if recipe is None or recipe.id in recipes:
-                return None
-            recipes[recipe.id] = recipe
+        recipe_specs, errors = parse_recipe_specs(raw_recipes, assets.keys())
+        for error in errors:
+            logger.warning("Ignoring malformed imaging recipe: %s", error)
+        recipes = {spec.id: self._recipe_definition_from_spec(spec) for spec in recipe_specs}
         return _RecipeManifest(assets=assets, recipes=recipes)
+
+    @staticmethod
+    def _recipe_definition_from_spec(spec: RecipeSpec) -> _RecipeDefinition:
+        return _RecipeDefinition(
+            id=spec.id,
+            bed_asset_id=spec.bed_asset_id,
+            bed_gain_db=spec.bed_gain_db if spec.bed_gain_db is not None else 0.0,
+            cues=tuple(
+                _RecipeCueDefinition(
+                    anchor=cue.anchor,
+                    asset_id=cue.asset_id,
+                    gain_db=cue.gain_db,
+                    max_duration_sec=cue.max_duration_sec,
+                )
+                for cue in spec.cues
+            ),
+        )
 
     def _parse_recipe_asset(self, raw_asset: object) -> _RecipeAsset | None:
         if not isinstance(raw_asset, Mapping):
@@ -263,71 +263,6 @@ class ImagingLibrary:
             source_ids=source_ids,
         )
 
-    def _parse_recipe_definition(self, raw_recipe: object) -> _RecipeDefinition | None:
-        if not isinstance(raw_recipe, Mapping):
-            return None
-        recipe_id = self._nonempty_string(raw_recipe.get("id"))
-        if recipe_id is None:
-            return None
-
-        bed_candidates: tuple[str, ...] = ()
-        bed_gain_db = 0.0
-        if "bed" in raw_recipe:
-            raw_bed = raw_recipe.get("bed")
-            if raw_bed is not None:
-                if not isinstance(raw_bed, Mapping):
-                    return None
-                parsed_bed_candidates = self._asset_candidates(raw_bed)
-                bed_gain = self._finite_number(raw_bed.get("gain_db"))
-                if parsed_bed_candidates is None or bed_gain is None:
-                    return None
-                bed_candidates = parsed_bed_candidates
-                bed_gain_db = bed_gain
-        elif "bed_candidates" in raw_recipe:
-            parsed_bed_candidates = self._string_list(raw_recipe.get("bed_candidates"))
-            if not parsed_bed_candidates:
-                return None
-            bed_candidates = parsed_bed_candidates
-
-        if "cues" in raw_recipe and "oneshots" in raw_recipe:
-            return None
-        raw_cues = raw_recipe.get("cues", raw_recipe.get("oneshots"))
-        if raw_cues is None and bed_candidates:
-            raw_cues = []
-        if not isinstance(raw_cues, list) or len(raw_cues) > _MAX_RECIPE_ONESHOTS:
-            return None
-
-        cues: list[_RecipeCueDefinition] = []
-        for raw_cue in raw_cues:
-            cue = self._parse_recipe_cue(raw_cue)
-            if cue is None:
-                return None
-            cues.append(cue)
-        if 1 + len(cues) > _MAX_RECIPE_SIMULTANEOUS_LAYERS:
-            return None
-        return _RecipeDefinition(
-            id=recipe_id,
-            bed_candidates=bed_candidates,
-            bed_gain_db=bed_gain_db,
-            cues=tuple(cues),
-        )
-
-    def _parse_recipe_cue(self, raw_cue: object) -> _RecipeCueDefinition | None:
-        if not isinstance(raw_cue, Mapping):
-            return None
-        anchor = self._nonempty_string(raw_cue.get("anchor"))
-        candidates = self._asset_candidates(raw_cue)
-        gain_db = self._finite_number(raw_cue.get("gain_db"))
-        max_duration_sec = self._finite_number(raw_cue.get("max_duration_sec"))
-        if anchor is None or candidates is None or gain_db is None or max_duration_sec is None or max_duration_sec <= 0:
-            return None
-        return _RecipeCueDefinition(
-            anchor=anchor,
-            asset_candidates=candidates,
-            gain_db=gain_db,
-            max_duration_sec=max_duration_sec,
-        )
-
     @staticmethod
     def _nonempty_string(value: object) -> str | None:
         return value if isinstance(value, str) and value.strip() else None
@@ -341,27 +276,8 @@ class ImagingLibrary:
             return None
         return tuple(item for item in values if item is not None)
 
-    @staticmethod
-    def _finite_number(value: object) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            return None
-        numeric = float(value)
-        return numeric if math.isfinite(numeric) else None
-
-    @classmethod
-    def _asset_candidates(cls, raw: Mapping[str, object]) -> tuple[str, ...] | None:
-        has_asset_id = "asset_id" in raw
-        has_candidates = "asset_candidates" in raw
-        if has_asset_id == has_candidates:
-            return None
-        if has_asset_id:
-            asset_id = cls._nonempty_string(raw.get("asset_id"))
-            return (asset_id,) if asset_id is not None else None
-        candidates = cls._string_list(raw.get("asset_candidates"))
-        return candidates if candidates else None
-
     def _safe_pack_asset_path(self, relative_path: str) -> Path | None:
-        """Return a real asset only when it resolves inside the configured pack."""
+        """Return a safe in-pack asset path, whether or not its file exists yet."""
         candidate = Path(relative_path)
         if candidate.is_absolute():
             return None
@@ -371,25 +287,10 @@ class ImagingLibrary:
             resolved.relative_to(pack_root)
         except (OSError, RuntimeError, ValueError):
             return None
-        return resolved if resolved.is_file() else None
-
-    def _select_recipe_asset(
-        self,
-        assets: Mapping[str, _RecipeAsset],
-        candidates: tuple[str, ...],
-        *,
-        recipe_id: str,
-        slot: str,
-        variant_key: str,
-    ) -> _RecipeAsset | None:
-        available = [asset for asset_id in candidates if (asset := assets.get(asset_id)) and asset.path.is_file()]
-        if not available:
-            return None
-        if len(available) == 1:
-            return available[0]
-        selector = f"{recipe_id}\x00{slot}\x00{variant_key}".encode()
-        index = int.from_bytes(hashlib.sha256(selector).digest()[:8], "big") % len(available)
-        return available[index]
+        # A missing in-pack file is not an unsafe path. Keep it in the manifest
+        # so only recipes that depend on it fall back; unrelated scenes remain
+        # usable and a restored operator file can recover without rewriting JSON.
+        return resolved
 
     @staticmethod
     def _resolved_recipe_assets_exist(recipe: ResolvedAdRecipe) -> bool:
@@ -408,8 +309,16 @@ class ImagingLibrary:
         for relative_path in relative_paths:
             asset = self.assets_dir / relative_path
             if asset.is_file():
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(asset, output_path)
+                try:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(asset, output_path)
+                except OSError as exc:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    logger.warning("Could not copy packaged imaging asset %s: %s", asset.name, exc)
+                    continue
                 logger.info("Using packaged imaging asset: %s", asset.name)
                 return True
         return False
@@ -487,10 +396,31 @@ class ImagingLibrary:
         return generate_tone(output_path, freq_hz=1047, duration_sec=0.3)
 
     def pick_ad_bumper(self, output_path: Path, duration_sec: float = 1.5) -> Path:
-        """Pick the master ad-break bumper, retaining the procedural fallback."""
+        """Pick the recorded ad bumper, making an intentional short cut when asked."""
+        duration = max(float(duration_sec), 0.5)
+        packaged_bumper = self.assets_dir / "bumpers" / "ad_break.mp3"
+        # Mid-break punctuation is deliberately shorter than the entry/exit
+        # bumper. Trim and fade the same reviewed recording rather than
+        # silently inserting the 1.488s master or generating a synthetic sound.
+        if duration < 1.2 and packaged_bumper.is_file():
+            try:
+                loop_audio_bed(
+                    packaged_bumper,
+                    output_path,
+                    duration,
+                    target_lufs=-16.0,
+                    fade_out_sec=min(0.08, duration / 4),
+                )
+                return output_path
+            except Exception as exc:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                logger.warning("Could not render short recorded ad bumper: %s", exc)
         if self._copy_pack_asset(output_path, "bumpers/ad_break.mp3"):
             return output_path
-        return generate_bumper_jingle(output_path, duration_sec)
+        return generate_bumper_jingle(output_path, duration)
 
     def pick_talk_bed(
         self,
@@ -500,16 +430,16 @@ class ImagingLibrary:
     ) -> Path:
         """Pick or synthesize a quiet bed for spoken segments."""
         duration = max(float(duration_sec), 0.5)
+        if source_track is not None:
+            if source_track.exists():
+                return self._loop_bed(source_track, duration, output_path)
+            logger.warning("pick_talk_bed: source_track %s not found, using packaged/synthetic bed", source_track.name)
+
         beds_dir = self.assets_dir / "beds"
         if beds_dir.is_dir():
             candidates = sorted(p for p in beds_dir.glob("*.mp3") if p.is_file())
             if candidates:
                 return self._loop_bed(random.choice(candidates), duration, output_path)
-
-        if source_track is not None:
-            if source_track.exists():
-                return self._loop_bed(source_track, duration, output_path)
-            logger.warning("pick_talk_bed: source_track %s not found, using synthetic drone", source_track.name)
 
         if self.cache_dir is None:
             return self._generate_synthetic_drone(duration, output_path)

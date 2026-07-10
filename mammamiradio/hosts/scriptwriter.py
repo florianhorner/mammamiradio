@@ -2880,14 +2880,17 @@ async def write_ad(
     ``callback_gag`` is an optional single verbal gag (chosen by the producer via
     the verbal-gag ledger) to land cross-domain; None means no callback.
     """
+    sonic = sonic or SonicWorld()
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config))],
+            parts=_ensure_attention_grabbing_ad_parts(
+                [AdPart(type="voice", text=_ad_fallback_text(brand, config))], sonic
+            ),
             summary=brand.tagline,
             format=ad_format,
+            sonic=sonic,
         )
-    sonic = sonic or SonicWorld()
 
     # Build context for cross-referencing
     recent_ads = (
@@ -3096,7 +3099,7 @@ Return JSON:
         text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=text)],
+            parts=_ensure_attention_grabbing_ad_parts([AdPart(type="voice", text=text)], sonic),
             summary=f"Fallback ad for {brand.name}",
             format=ad_format,
             sonic=sonic,

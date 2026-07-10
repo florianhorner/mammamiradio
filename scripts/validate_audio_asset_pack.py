@@ -39,11 +39,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
+from mammamiradio.audio.imaging_schema import RECIPE_MANIFEST_SCHEMA_VERSION, parse_recipe_specs
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACK_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 MANIFEST_NAME = "manifest.json"
 ATTRIBUTION_NAME = "ATTRIBUTION.md"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = RECIPE_MANIFEST_SCHEMA_VERSION
 ALLOWED_LICENSES = frozenset({"CC0-1.0", "CC-BY-4.0"})
 LICENSE_LABELS = {
     "CC0-1.0": "CC0 1.0 Universal",
@@ -55,8 +57,6 @@ LICENSE_URLS = {
 }
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-MAX_GAIN_DB = 12.0
-MIN_GAIN_DB = -60.0
 
 
 class AudioAssetPackValidationError(ValueError):
@@ -529,25 +529,6 @@ def _validate_assets(
     return durations
 
 
-def _validate_gain(value: Any, label: str, errors: list[str]) -> None:
-    gain = _finite_number(value, label, errors)
-    if gain is not None and not MIN_GAIN_DB <= gain <= MAX_GAIN_DB:
-        errors.append(f"{label} must be between {MIN_GAIN_DB:g} and {MAX_GAIN_DB:g} dB")
-
-
-def _validate_recipe_asset_ref(
-    value: Any,
-    label: str,
-    asset_ids: set[str],
-    errors: list[str],
-) -> str | None:
-    identifier = _identifier(value, label, errors)
-    if identifier is not None and identifier not in asset_ids:
-        errors.append(f"{label} references undeclared asset {identifier!r}")
-        return None
-    return identifier
-
-
 def _validate_recipe_duration_bound(
     value: Any,
     label: str,
@@ -576,76 +557,20 @@ def _validate_recipes(
     measured_durations: dict[str, float],
     errors: list[str],
 ) -> int:
-    if not isinstance(value, list) or not value:
-        errors.append("recipes must be a non-empty list")
-        return 0
-
     asset_map = {asset.id: asset for asset in assets}
-    asset_ids = set(asset_map)
-    seen_ids: set[str] = set()
-    valid_count = 0
-    for index, raw in enumerate(value):
-        label = f"recipes[{index}]"
-        if not isinstance(raw, dict):
-            errors.append(f"{label} must be an object")
-            continue
-        identifier = _identifier(raw.get("id"), f"{label}.id", errors)
-        if identifier is not None:
-            if identifier in seen_ids:
-                errors.append(f"{label}.id duplicates recipe {identifier!r}")
-                identifier = None
-            else:
-                seen_ids.add(identifier)
-
-        bed = raw.get("bed")
-        cues = raw.get("cues")
-        if bed is None and cues is None:
-            errors.append(f"{label} must declare a bed, cues, or both")
-        if bed is not None:
-            if not isinstance(bed, dict):
-                errors.append(f"{label}.bed must be an object")
-            else:
-                bed_asset_id = _validate_recipe_asset_ref(
-                    bed.get("asset_id"), f"{label}.bed.asset_id", asset_ids, errors
-                )
-                _validate_gain(bed.get("gain_db"), f"{label}.bed.gain_db", errors)
-                if "max_duration_sec" in bed:
-                    _validate_recipe_duration_bound(
-                        bed.get("max_duration_sec"),
-                        f"{label}.bed.max_duration_sec",
-                        bed_asset_id,
-                        asset_map,
-                        measured_durations,
-                        errors,
-                    )
-
-        if cues is not None:
-            if not isinstance(cues, list):
-                errors.append(f"{label}.cues must be a list")
-            elif not cues and bed is None:
-                errors.append(f"{label}.cues cannot be empty when no bed is declared")
-            else:
-                for cue_index, cue in enumerate(cues):
-                    cue_label = f"{label}.cues[{cue_index}]"
-                    if not isinstance(cue, dict):
-                        errors.append(f"{cue_label} must be an object")
-                        continue
-                    _nonempty_text(cue.get("anchor"), f"{cue_label}.anchor", errors)
-                    cue_asset_id = _validate_recipe_asset_ref(
-                        cue.get("asset_id"), f"{cue_label}.asset_id", asset_ids, errors
-                    )
-                    _validate_gain(cue.get("gain_db"), f"{cue_label}.gain_db", errors)
-                    _validate_recipe_duration_bound(
-                        cue.get("max_duration_sec"),
-                        f"{cue_label}.max_duration_sec",
-                        cue_asset_id,
-                        asset_map,
-                        measured_durations,
-                        errors,
-                    )
-        if identifier is not None:
-            valid_count += 1
-    return valid_count
+    recipes, recipe_errors = parse_recipe_specs(value, asset_map.keys())
+    errors.extend(recipe_errors)
+    for recipe in recipes:
+        for cue_index, cue in enumerate(recipe.cues):
+            _validate_recipe_duration_bound(
+                cue.max_duration_sec,
+                f"recipes[{recipe.index}].cues[{cue_index}].max_duration_sec",
+                cue.asset_id,
+                asset_map,
+                measured_durations,
+                errors,
+            )
+    return len(recipes)
 
 
 def render_attribution(report: ValidationReport) -> str:

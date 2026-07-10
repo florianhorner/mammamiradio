@@ -32,9 +32,18 @@ The nine named ad scenes live in `manifest.json`: `cafe_testimonial`,
 Each scene has a strict production cap: **one quiet bed plus at most two dry
 foreground cues**. The renderer maps `intro`, `after_first_voice`, `mid`, and
 `outro` to the rendered dialogue, then makes one bounded cue mix before the
-normal broadcast master. It never downloads, synthesizes, or renders source
-audio on the live station path. A missing/corrupt recipe degrades safely to the
-existing compatibility path; it never interrupts playback.
+normal broadcast master. `after_first_voice` includes any leading pause and the
+short joins inserted between rendered ad parts. The runtime and offline
+validator share this canonical schema: every recipe uses explicit `asset_id`
+and `gain_db` fields; aliases such as `oneshots` and `bed_candidates` are not
+accepted.
+
+It never downloads, synthesizes, or renders source audio on the live station
+path. A configured recipe suppresses legacy accents only after it resolves. If
+it cannot resolve, the script is written through the complete legacy sonic
+path instead. A missing safe file disables only the recipe that needs it; the
+offline public-pack validator still rejects any missing declared delivery asset
+before release.
 
 ## Runtime selection
 
@@ -43,7 +52,9 @@ With the standard configuration (`[imaging].assets_dir = ""`),
 Home Assistant add-on's `radio.toml` map every shipped fictional brand to one
 of the reviewed scenes. Recipe-driven spots suppress legacy generated
 brand-motifs and LLM-requested generic SFX, so the scene remains authored and
-bounded.
+bounded. When `use_music_queue_for_beds` is enabled, an eligible adjacent song
+supplies the spoken bed; Casa Notte is the recorded fallback when no adjacent
+song is safe to reuse.
 
 An operator-provided `assets_dir` still replaces the whole pack. Custom legacy
 campaigns with no `sonic_recipe` keep their existing fallback behaviour; an

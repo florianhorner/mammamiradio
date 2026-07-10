@@ -338,26 +338,21 @@ def _select_ad_creative(
     if brand.campaign and brand.campaign.sonic_recipe:
         recipe_id = brand.campaign.sonic_recipe
 
-    if recipe_id:
-        # A recipe owns its accents and bed.  Leaving transition_motif and
-        # sonic_signature empty prevents the legacy procedural chime/whoosh and
-        # generated brand motif from being layered underneath it.
-        sonic = SonicWorld(
-            environment=cat_sonic.environment,
-            music_bed=cat_sonic.music_bed,
-            transition_motif="",
-            sonic_signature="",
-            recipe_id=recipe_id,
-        )
-    elif brand.campaign and brand.campaign.sonic_signature:
-        sonic = SonicWorld(
+    if brand.campaign and brand.campaign.sonic_signature:
+        legacy_sonic = SonicWorld(
             environment=cat_sonic.environment,
             music_bed=cat_sonic.music_bed,
             transition_motif=brand.campaign.sonic_signature.split("+")[0],
             sonic_signature=brand.campaign.sonic_signature,
         )
     else:
-        sonic = cat_sonic
+        legacy_sonic = cat_sonic
+
+    # Keep the proven palette attached until the producer knows a recipe has
+    # actually resolved. A successful recipe remains sole owner of accents in
+    # the writer/TTS path; an unavailable recipe can then restore the complete
+    # legacy opener and motif instead of airing a generic bed-only spot.
+    sonic = replace(legacy_sonic, recipe_id=recipe_id) if recipe_id else legacy_sonic
 
     # Determine needed roles — validate spokesperson against known roles
     if brand.campaign and brand.campaign.spokesperson and brand.campaign.spokesperson in SPEAKER_ROLES:

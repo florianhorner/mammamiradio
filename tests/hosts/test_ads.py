@@ -255,8 +255,8 @@ def test_ad_brand_with_campaign():
     assert len(brand.campaign.format_pool) == 2
 
 
-def test_campaign_recipe_overrides_brand_recipe_and_legacy_signature():
-    """Recipe-driven spots leave all procedural motif fields empty."""
+def test_campaign_recipe_overrides_brand_recipe_and_retains_legacy_recovery_palette():
+    """Recipe failure can restore a campaign's original motif without reselection."""
     brand = AdBrand(
         name="Test",
         tagline="Tag",
@@ -272,8 +272,8 @@ def test_campaign_recipe_overrides_brand_recipe_and_legacy_signature():
 
     assert sonic.recipe_id == "cafe_testimonial"
     assert sonic.is_recipe_driven is True
-    assert sonic.sonic_signature == ""
-    assert sonic.transition_motif == ""
+    assert sonic.sonic_signature == "chime+whoosh"
+    assert sonic.transition_motif == "chime"
 
 
 def test_recipe_driven_ad_strips_llm_sfx_before_audio_rendering():

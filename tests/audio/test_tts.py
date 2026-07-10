@@ -119,6 +119,27 @@ def _mock_all(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_after_first_voice_anchor_uses_the_rendered_pause_and_join_timeline():
+    from mammamiradio.audio.tts import _first_voice_end_in_rendered_timeline, _recipe_cue_offset
+
+    first_voice_end = _first_voice_end_in_rendered_timeline([("pause", 0.5), ("voice", 1.0), ("voice", 1.0)])
+
+    assert first_voice_end == pytest.approx(1.8)
+    assert _recipe_cue_offset(
+        "after_first_voice",
+        voice_duration_sec=3.1,
+        first_voice_end_sec=first_voice_end,
+        max_duration_sec=0.5,
+    ) == pytest.approx(1.8)
+    with pytest.raises(ValueError, match="Unsupported recipe cue anchor"):
+        _recipe_cue_offset(
+            "after_hook",
+            voice_duration_sec=3.1,
+            first_voice_end_sec=first_voice_end,
+            max_duration_sec=0.5,
+        )
+
+
 @pytest.mark.asyncio
 async def test_synthesize_happy_path(_mock_all, tmp_path):
     from mammamiradio.audio.tts import synthesize

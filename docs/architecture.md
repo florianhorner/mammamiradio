@@ -140,7 +140,7 @@ always remains best-effort and never blocks or delays audio.
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
-  - passes generated host speech through the imaging layer so banter and news use a selected-pack talk bed first, then adjacent music when eligible, then a synthetic pad on cold starts
+  - passes generated host speech through the imaging layer so banter and news use eligible adjacent music first, then a selected-pack talk bed, then a synthetic pad on cold starts
   - preserves running jokes in `StationState`
   - snapshots the generated evidence needed for listener/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
@@ -150,7 +150,7 @@ always remains best-effort and never blocks or delays audio.
   - resolves a sonic world and, for every shipped brand, a named public recorded scene recipe
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
   - lets a recipe own one quiet bed plus at most two timed dry cues; recipe-driven LLM output cannot add generic SFX or a legacy motif on top
-  - preserves generated brand motifs only for legacy/custom campaigns that intentionally have no recipe
+  - preserves generated brand motifs for legacy/custom campaigns with no recipe and for configured recipes that cannot resolve
   - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
@@ -262,7 +262,7 @@ An operator can set `[imaging].assets_dir` to select a custom root. That is a
 complete replacement, not an overlay: a missing custom asset takes the existing
 procedural/cached fallback rather than falling through to the package. Within a
 root, a transition tries an exact `stingers/{from}_{to}.mp3` before its generic
-directional stinger; talk beds take a bundled bed before eligible adjacent music
+directional stinger; talk beds take eligible adjacent music before a bundled bed
 and then a synthetic drone. For ads, a real configured `[ads].sfx_dir` has
 priority over the selected root's `sfx/` directory. A resolved recipe uses its
 declared bed and no more than two cue files; a missing/corrupt recipe falls back

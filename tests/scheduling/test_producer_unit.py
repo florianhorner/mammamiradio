@@ -834,6 +834,58 @@ async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
     assert mock_synthesize_ad.call_args.kwargs["recipe"] is recipe
 
 
+@pytest.mark.asyncio
+async def test_unresolved_ad_recipe_restores_legacy_sonic_mode_before_writing():
+    """Configured recipe IDs suppress accents only after they actually resolve."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    configured_sonic = SonicWorld(
+        recipe_id="stadium_win",
+        transition_motif="whoosh",
+        sonic_signature="ice_clink+startup_synth",
+    )
+    fallback_script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = None
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fallback_script) as write_ad,
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", configured_sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    rendered_sonic = write_ad.call_args.kwargs["sonic"]
+    assert rendered_sonic.recipe_id == ""
+    assert rendered_sonic.transition_motif == "whoosh"
+    assert rendered_sonic.sonic_signature == "ice_clink+startup_synth"
+    assert synthesize_ad.call_args.kwargs["recipe"] is None
+
+
 # ---------------------------------------------------------------------------
 # Error recovery — recovery sweeper fallback
 # ---------------------------------------------------------------------------

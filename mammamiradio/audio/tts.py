@@ -20,7 +20,9 @@ import edge_tts
 import httpx
 
 from mammamiradio.audio.audio_quality import AudioQualityError
+from mammamiradio.audio.imaging_schema import MAX_RECIPE_GAIN_DB, MIN_RECIPE_GAIN_DB
 from mammamiradio.audio.normalizer import (
+    DEFAULT_CONCAT_SILENCE_MS,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
@@ -199,6 +201,38 @@ def _openai_instructions_for_ad_voice(voice: AdVoice) -> str:
 def _estimate_duration(path: Path) -> float:
     """Rough duration estimate from file size at 192kbps."""
     return max(5.0, path.stat().st_size / (192 * 128))
+
+
+def _first_voice_end_in_rendered_timeline(parts: list[tuple[str, float]]) -> float | None:
+    """Return the first voice end on the same timeline ``concat_files`` creates."""
+    elapsed = 0.0
+    join_seconds = DEFAULT_CONCAT_SILENCE_MS / 1_000
+    for index, (part_type, duration_sec) in enumerate(parts):
+        elapsed += max(0.0, duration_sec)
+        if part_type == "voice":
+            return elapsed + index * join_seconds
+    return None
+
+
+def _recipe_cue_offset(
+    anchor: str,
+    *,
+    voice_duration_sec: float,
+    first_voice_end_sec: float | None,
+    max_duration_sec: float,
+) -> float:
+    """Map a canonical recipe anchor to a bounded point in rendered dialogue."""
+    latest_start = max(0.0, voice_duration_sec - max_duration_sec)
+    if anchor == "intro":
+        return 0.0
+    if anchor == "after_first_voice":
+        boundary = first_voice_end_sec if first_voice_end_sec is not None else voice_duration_sec
+        return min(max(0.0, boundary), latest_start)
+    if anchor == "mid":
+        return max(0.0, (voice_duration_sec - max_duration_sec) / 2.0)
+    if anchor == "outro":
+        return latest_start
+    raise ValueError(f"Unsupported recipe cue anchor: {anchor}")
 
 
 def _get_openai_client(api_key: str):
@@ -760,16 +794,10 @@ async def synthesize_ad(
     else:
         results = await asyncio.gather(*part_tasks)
 
-    voice_sfx_parts = [r for r in results if r is not None]
-
-    first_voice_path = next(
-        (
-            result
-            for (part, _), result in zip(renderable, results, strict=False)
-            if part.type == "voice" and result is not None
-        ),
-        None,
-    )
+    rendered_parts = [
+        (part, result) for (part, _), result in zip(renderable, results, strict=False) if result is not None
+    ]
+    voice_sfx_parts = [result for _, result in rendered_parts]
 
     if not voice_sfx_parts:
         # Fallback: synthesize brand name with the configured engine so cloud
@@ -786,10 +814,32 @@ async def synthesize_ad(
         )
         return fallback_path
 
-    # Capture this before concat_files removes the individual part renders.
-    first_voice_duration_hint = (
-        await loop.run_in_executor(None, probe_duration_sec, first_voice_path) if first_voice_path is not None else None
+    # ``after_first_voice`` is defined on the assembled ad timeline, not the
+    # isolated first voice file. Account for leading pauses and every 300ms
+    # join that concat_files inserts before that voice.
+    first_voice_end_sec: float | None = None
+    first_voice_index = next(
+        (index for index, (part, _) in enumerate(rendered_parts) if part.type == "voice"),
+        None,
     )
+    if recipe is not None and first_voice_index is not None:
+        timeline_parts = rendered_parts[: first_voice_index + 1]
+        measured_durations = await asyncio.gather(
+            *(loop.run_in_executor(None, probe_duration_sec, path) for _, path in timeline_parts)
+        )
+        timeline: list[tuple[str, float]] = []
+        for (part, path), measured_duration in zip(timeline_parts, measured_durations, strict=True):
+            if measured_duration is not None and measured_duration > 0:
+                duration_sec = measured_duration
+            elif part.type == "pause":
+                duration_sec = part.duration if part.duration > 0 else 0.5
+            else:
+                try:
+                    duration_sec = _estimate_duration(path)
+                except OSError:
+                    duration_sec = 0.0
+            timeline.append((part.type, duration_sec))
+        first_voice_end_sec = _first_voice_end_in_rendered_timeline(timeline)
 
     # Concatenate voice+sfx parts
     if len(voice_sfx_parts) == 1:
@@ -797,7 +847,7 @@ async def synthesize_ad(
     else:
         voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
         # Skip loudnorm — each part already normalized by synthesize()
-        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
+        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, DEFAULT_CONCAT_SILENCE_MS, False)
         for p in voice_sfx_parts:
             p.unlink(missing_ok=True)
 
@@ -815,22 +865,6 @@ async def synthesize_ad(
         voice_duration = (
             measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
         )
-        first_voice_duration = first_voice_duration_hint
-        if not first_voice_duration or first_voice_duration <= 0:
-            first_voice_duration = voice_duration
-
-        def _cue_offset(anchor: str, max_duration_sec: float) -> float:
-            latest_start = max(0.0, voice_duration - max_duration_sec)
-            if anchor == "intro":
-                return 0.0
-            if anchor == "after_first_voice":
-                return min(max(0.0, first_voice_duration), latest_start)
-            if anchor == "outro":
-                return latest_start
-            # ``mid`` is the documented default.  Treat an unknown editorial
-            # label like mid-copy rather than emitting a cue beyond the ad.
-            return max(0.0, (voice_duration - max_duration_sec) / 2.0)
-
         created: list[Path] = []
         current = voice_path
         succeeded = False
@@ -842,12 +876,22 @@ async def synthesize_ad(
                 bed_mix_path = tmp_dir / f"recipe_bed_mix_{uuid4().hex[:8]}.mp3"
                 created.extend((bed_path, bed_mix_path))
                 await loop.run_in_executor(None, loop_audio_bed, recipe.bed_path, bed_path, voice_duration)
-                bed_scale = 10 ** (max(-60.0, min(12.0, recipe.bed_gain_db)) / 20.0)
+                bed_scale = 10 ** (max(MIN_RECIPE_GAIN_DB, min(MAX_RECIPE_GAIN_DB, recipe.bed_gain_db)) / 20.0)
                 await loop.run_in_executor(None, mix_with_bed, current, bed_path, bed_mix_path, bed_scale)
                 current = bed_mix_path
 
             layers = [
-                (cue.asset_path, _cue_offset(cue.anchor, cue.max_duration_sec), cue.gain_db, cue.max_duration_sec)
+                (
+                    cue.asset_path,
+                    _recipe_cue_offset(
+                        cue.anchor,
+                        voice_duration_sec=voice_duration,
+                        first_voice_end_sec=first_voice_end_sec,
+                        max_duration_sec=cue.max_duration_sec,
+                    ),
+                    cue.gain_db,
+                    cue.max_duration_sec,
+                )
                 for cue in recipe.cues
                 if cue.asset_path.is_file()
             ]
@@ -1128,7 +1172,7 @@ async def synthesize_dialogue(
     try:
         await loop.run_in_executor(
             None,
-            partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+            partial(concat_files, parts, raw_path, DEFAULT_CONCAT_SILENCE_MS, False, strict_duration=True),
         )
     except Exception:
         _unlink_many([*parts, raw_path])

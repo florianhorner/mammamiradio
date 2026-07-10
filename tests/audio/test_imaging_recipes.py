@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -53,8 +54,8 @@ def test_resolve_ad_recipe_returns_safe_cached_concrete_paths(tmp_path: Path) ->
                 "id": "late-night-win",
                 "bed": {"asset_id": "caffe-bed", "gain_db": -17.5},
                 "cues": [
-                    {"anchor": "after_hook", "asset_id": "applause", "gain_db": -8.0, "max_duration_sec": 0.8},
-                    {"anchor": "before_tag", "asset_id": "trumpet", "gain_db": -10.0, "max_duration_sec": 0.6},
+                    {"anchor": "after_first_voice", "asset_id": "applause", "gain_db": -8.0, "max_duration_sec": 0.8},
+                    {"anchor": "outro", "asset_id": "trumpet", "gain_db": -10.0, "max_duration_sec": 0.6},
                 ],
             }
         ],
@@ -66,8 +67,8 @@ def test_resolve_ad_recipe_returns_safe_cached_concrete_paths(tmp_path: Path) ->
     assert resolved.bed_path == assets_dir / "beds/caffe.mp3"
     assert resolved.bed_gain_db == -17.5
     assert [(cue.anchor, cue.asset_path.name, cue.gain_db, cue.max_duration_sec) for cue in resolved.cues] == [
-        ("after_hook", "applause.mp3", -8.0, 0.8),
-        ("before_tag", "trumpet.mp3", -10.0, 0.6),
+        ("after_first_voice", "applause.mp3", -8.0, 0.8),
+        ("outro", "trumpet.mp3", -10.0, 0.6),
     ]
     assert resolved.oneshots == resolved.cues
 
@@ -84,7 +85,7 @@ def test_resolver_allows_a_cue_only_recipe_but_rejects_missing_or_escaped_assets
         [
             {
                 "id": "cue-only",
-                "cues": [{"anchor": "after_hook", "asset_id": "laugh", "gain_db": -9, "max_duration_sec": 0.7}],
+                "cues": [{"anchor": "after_first_voice", "asset_id": "laugh", "gain_db": -9, "max_duration_sec": 0.7}],
             }
         ],
     )
@@ -119,20 +120,59 @@ def test_resolver_allows_a_bed_only_recipe(tmp_path: Path) -> None:
     assert resolved.cues == ()
 
 
+def test_missing_asset_only_disables_its_dependent_recipe_and_can_recover(tmp_path: Path) -> None:
+    """A damaged optional operator file must not take healthy recipes down with it."""
+    assets_dir = tmp_path / "imaging"
+    _touch_assets(assets_dir, "sfx/healthy.mp3")
+    _write_manifest(
+        assets_dir,
+        [
+            _asset("healthy", "sfx/healthy.mp3"),
+            _asset("missing", "sfx/missing.mp3"),
+        ],
+        [
+            {
+                "id": "healthy-recipe",
+                "cues": [{"anchor": "mid", "asset_id": "healthy", "gain_db": -8, "max_duration_sec": 0.2}],
+            },
+            {
+                "id": "missing-recipe",
+                "cues": [{"anchor": "mid", "asset_id": "missing", "gain_db": -8, "max_duration_sec": 0.2}],
+            },
+        ],
+    )
+    library = ImagingLibrary([523], tmp_path, assets_dir=assets_dir)
+
+    assert library.resolve_ad_recipe("healthy-recipe") is not None
+    assert library.resolve_ad_recipe("missing-recipe") is None
+
+    _touch_assets(assets_dir, "sfx/missing.mp3")
+    assert library.resolve_ad_recipe("missing-recipe") is not None
+
+
 @pytest.mark.parametrize(
     "recipe",
     [
         {
             "id": "too-many-cues",
             "cues": [
-                {"anchor": "a", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
-                {"anchor": "b", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
-                {"anchor": "c", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
+                {"anchor": "intro", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
+                {"anchor": "mid", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
+                {"anchor": "outro", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2},
             ],
         },
         {
             "id": "invalid-reference",
-            "cues": [{"anchor": "a", "asset_id": "missing", "gain_db": -8, "max_duration_sec": 0.2}],
+            "cues": [{"anchor": "mid", "asset_id": "missing", "gain_db": -8, "max_duration_sec": 0.2}],
+        },
+        {
+            "id": "unknown-anchor",
+            "cues": [{"anchor": "after_hook", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2}],
+        },
+        {
+            "id": "legacy-bed-candidates",
+            "bed_candidates": ["cue"],
+            "cues": [{"anchor": "mid", "asset_id": "cue", "gain_db": -8, "max_duration_sec": 0.2}],
         },
     ],
 )
@@ -166,7 +206,7 @@ def test_mix_oneshot_layers_uses_one_unmastered_ffmpeg_pass(tmp_path: Path) -> N
     filter_complex = command[command.index("-filter_complex") + 1]
     assert "adelay=250:all=1" in filter_complex
     assert "adelay=1500:all=1" in filter_complex
-    assert "amix=inputs=3:duration=first" in filter_complex
+    assert "amix=inputs=3:duration=first:normalize=0" in filter_complex
     assert "loudnorm" not in filter_complex
 
 
@@ -209,3 +249,43 @@ def test_mix_oneshot_layers_outputs_a_single_bed_length_render(tmp_path: Path) -
         text=True,
     )
     assert float(duration.stdout) == pytest.approx(1.2, abs=0.08)
+
+
+@pytest.mark.requires_ffmpeg
+def test_mix_oneshot_layers_keeps_the_base_level_stable_across_delayed_cues(tmp_path: Path) -> None:
+    """Delayed dry cues may add energy, but must never re-scale the base render."""
+    base = tmp_path / "base.mp3"
+    cue = tmp_path / "cue.mp3"
+    output = tmp_path / "mixed.mp3"
+    generate_tone(base, freq_hz=220, duration_sec=4.0)
+    generate_tone(cue, freq_hz=880, duration_sec=0.4)
+    mix_oneshot_layers(base, [(cue, 1.2, -24.0, 0.2)], output)
+
+    def base_level(start_sec: float) -> float:
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-ss",
+                str(start_sec),
+                "-t",
+                "0.35",
+                "-i",
+                str(output),
+                "-af",
+                "lowpass=f=400,volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        match = re.findall(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", completed.stderr)
+        assert match, completed.stderr
+        return float(match[-1])
+
+    before = base_level(0.4)
+    after = base_level(2.0)
+    assert after == pytest.approx(before, abs=0.75)

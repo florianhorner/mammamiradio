@@ -58,13 +58,12 @@ def materialize_synth_mp3(
 ) -> Path:
     """Materialize a generated synthetic MP3 via cache when possible.
 
-    Cache infrastructure errors fall back to direct generation at ``output_path``.
-    Generator errors still propagate so existing caller fallback behavior remains
-    unchanged.
+    This function either returns a non-empty output at ``output_path`` or
+    raises. Cache infrastructure errors fall back to direct generation, so a
+    silent staging render can never masquerade as a successful audio file.
     """
     if cache_dir is None:
-        generator(output_path)
-        return output_path
+        return _generate_direct(generator, output_path, kind)
 
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -73,13 +72,14 @@ def materialize_synth_mp3(
         lock = _lock_for(key)
     except Exception as exc:
         logger.warning("Synthetic cache unavailable for %s, generating directly: %s", kind, exc)
-        generator(output_path)
-        return output_path
+        return _generate_direct(generator, output_path, kind)
 
     with lock:
         try:
             if _valid_mp3(cache_path):
                 shutil.copy2(cache_path, output_path)
+                if not _valid_mp3(output_path):
+                    raise RuntimeError(f"cache copy for {kind} produced no audio")
                 _touch_atime(cache_path)
                 return output_path
 
@@ -87,19 +87,29 @@ def materialize_synth_mp3(
             try:
                 generator(staging)
                 if not _valid_mp3(staging):
-                    staging.unlink(missing_ok=True)
-                    return output_path
+                    raise RuntimeError(f"cached render for {kind} produced no audio")
                 os.replace(staging, cache_path)
             finally:
                 staging.unlink(missing_ok=True)
 
             shutil.copy2(cache_path, output_path)
+            if not _valid_mp3(output_path):
+                raise RuntimeError(f"cache copy for {kind} produced no audio")
             _touch_atime(cache_path)
             return output_path
         except Exception as exc:
             logger.warning("Synthetic cache failed for %s, generating directly: %s", kind, exc)
-            generator(output_path)
-            return output_path
+            return _generate_direct(generator, output_path, kind)
+
+
+def _generate_direct(generator: Callable[[Path], Path | None], output_path: Path, kind: str) -> Path:
+    """Generate directly and prove the promised output was actually created."""
+    output_path.unlink(missing_ok=True)
+    generator(output_path)
+    if _valid_mp3(output_path):
+        return output_path
+    output_path.unlink(missing_ok=True)
+    raise RuntimeError(f"Synthetic generator for {kind} produced no audio")
 
 
 def _lock_for(key: str) -> threading.Lock:

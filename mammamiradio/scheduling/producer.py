@@ -3728,12 +3728,17 @@ async def run_producer(
                         if sonic.recipe_id
                         else None
                     )
+                    render_sonic = sonic
                     if sonic.recipe_id and recipe is None:
                         logger.warning(
-                            "Ad recipe %s for %s is unavailable; using the recorded compatibility bed path",
+                            "Ad recipe %s for %s is unavailable; restoring the legacy sonic path",
                             sonic.recipe_id,
                             brand.name,
                         )
+                        # Recipe mode suppresses generated accents. Only the
+                        # producer knows whether the configured recipe actually
+                        # resolved, so turn it off before the script is written.
+                        render_sonic = replace(sonic, recipe_id="")
                     logger.info(
                         "  Spot %d/%d: %s (format=%s, recipe=%s, roles=%s)",
                         spot_idx + 1,
@@ -3743,7 +3748,7 @@ async def run_producer(
                         recipe.id if recipe is not None else "compatibility",
                         list(voice_map.keys()),
                     )
-                    spot_params.append((brand, ad_format, sonic, voice_map, recipe))
+                    spot_params.append((brand, ad_format, render_sonic, voice_map, recipe))
 
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers

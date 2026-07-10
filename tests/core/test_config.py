@@ -56,8 +56,8 @@ def test_load_config_from_radio_toml(monkeypatch):
     assert len(config.ads.voices) > 0
 
 
-def test_shipped_ad_brands_select_recipes_without_legacy_synthetic_motifs():
-    """Every shipped brand maps to a packaged recipe, never a procedural motif."""
+def test_shipped_ad_brands_keep_a_legacy_recovery_palette_behind_their_recipe():
+    """A configured recipe keeps its pre-recipe palette for failed resolution only."""
     for rel_path in ("radio.toml", "ha-addon/mammamiradio/radio.toml"):
         toml_path = Path(__file__).resolve().parents[2] / rel_path
         config = load_config(str(toml_path))
@@ -68,8 +68,7 @@ def test_shipped_ad_brands_select_recipes_without_legacy_synthetic_motifs():
             _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
             assert sonic.recipe_id == brand.sonic_recipe
             assert sonic.is_recipe_driven
-            assert sonic.sonic_signature == ""
-            assert sonic.transition_motif == ""
+            assert sonic.transition_motif
 
 
 def test_load_config_parses_per_host_voice_settings():

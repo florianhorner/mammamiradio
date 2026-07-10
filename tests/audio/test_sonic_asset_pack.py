@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.imaging_schema import RECIPE_CUE_ANCHORS
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES, loop_audio_bed
 from mammamiradio.hosts.ad_creative import OFFICIAL_SONIC_RECIPE_IDS
 from scripts import validate_audio_asset_pack
@@ -54,6 +55,7 @@ def test_recorded_manifest_covers_default_runtime_and_official_scene_recipes() -
         assert recipe["bed"]["asset_id"] in asset_ids
         assert len(recipe["cues"]) <= 2
         assert all(cue["asset_id"] in asset_ids for cue in recipe["cues"])
+        assert all(cue["anchor"] in RECIPE_CUE_ANCHORS for cue in recipe["cues"])
 
 
 def test_public_pack_provenance_and_attribution_ledger_are_valid() -> None:
@@ -138,6 +140,16 @@ def test_casa_notte_has_no_level_drop_across_a_runtime_loop_boundary(tmp_path: P
     before_boundary = _mean_volume_db(looped, boundary - 0.22, 0.16)
     after_boundary = _mean_volume_db(looped, boundary + 0.03, 0.16)
     assert after_boundary >= before_boundary - 6.0
+
+
+@pytest.mark.requires_ffmpeg
+def test_mid_break_bumper_honors_the_requested_short_duration(tmp_path: Path) -> None:
+    library = ImagingLibrary([523, 659, 784, 1047], tmp_path)
+    mid_bumper = tmp_path / "mid_bumper.mp3"
+
+    library.pick_ad_bumper(mid_bumper, 0.8)
+
+    assert _duration_sec(mid_bumper) == pytest.approx(0.8, abs=0.08)
 
 
 @pytest.mark.requires_ffmpeg
