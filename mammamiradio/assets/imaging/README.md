@@ -1,85 +1,90 @@
-# Italian Night Drive imaging pack
+# Recorded Night Drive imaging pack
 
-This is Mamma Mi Radio's bundled default imaging pack: the sonic material for
-ordinary station IDs, sweepers, time checks, transitions, ad breaks, spoken
-beds, and ad SFX. With the standard configuration (`[imaging].assets_dir = ""`),
-`ImagingLibrary` selects this directory at runtime.
+This is Mamma Mi Radio's bundled, public radio-imaging library: the material
+for station IDs, sweepers, time checks, handoffs, ad breaks, spoken beds, and
+fictional-ad scenes. It is intentionally made from real recorded details —
+crowd laughter and applause, trumpet, mandolin, café and espresso work, cash
+register, telephone, cassette, cocktail ice, and a passing car — rather than
+an interchangeable pack of synthesized sweeps and drones.
 
-Both the root `radio.toml` and the Home Assistant add-on's `radio.toml` leave
-`assets_dir` empty, and both package this Python tree. They therefore use the
-same Night Drive pack without an add-on-specific copy or setting.
+Every source recording in the public package is **CC0 1.0**. The committed
+`manifest.json` and generated `ATTRIBUTION.md` name the creator and source page,
+record the exact source SHA-256 and every delivered MP3 checksum, and describe
+the edit made for the station. The source masters are deliberately not checked
+in: they are larger curator inputs, while the rendered clips and their audit
+ledger are the shipped public work.
 
-## Pack contents
+## What ships
 
-| Surface | Assets |
+| Surface | Material |
 | --- | --- |
-| Station identity | `station_id.mp3`, `sweeper.mp3`, `time_check.mp3` |
-| Music/speech transitions | `stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3` |
-| Ad handoff | `bumpers/ad_break.mp3` |
-| Spoken and ad bed | `beds/casa_notte.mp3` |
-| Ad SFX bank | `sfx/cash_register.mp3`, `chime.mp3`, `ding.mp3`, `hotline_beep.mp3`, `ice_clink.mp3`, `mandolin_sting.mp3`, `register_hit.mp3`, `startup_synth.mp3`, `sweep.mp3`, `tape_stop.mp3`, `whoosh.mp3` |
+| Station identity | `station_id.mp3`, `sweeper.mp3`, `time_check.mp3` — real brass, mandolin, glass and cassette texture |
+| Handoffs | `stingers/` and `bumpers/` — recorded transitions, not synthesized whooshes |
+| Ordinary spoken bed | `beds/casa_notte.mp3` — low café room tone |
+| Legacy SFX names | `sfx/` retains existing operator-facing names, but each file is now a recorded compatibility cue |
+| Ad scene library | `ads/beds/` and `ads/cues/` — 60 total delivered clips, including distinct applause, laughter, trumpet, till, phone, tape, espresso, ice, and road variants |
 
-`manifest.json` is the complete inventory and provenance record. It declares
-the package format (48 kHz stereo MP3 at 192 kbps), the intended duration and
-purpose of every asset, and the license/provenance for each file. It is an audit
-manifest; runtime asset lookup uses the filenames above directly.
+The nine named ad scenes live in `manifest.json`: `cafe_testimonial`,
+`stadium_win`, `showroom_reveal`, `bureaucracy_stamp`, `motorway_pass`,
+`late_night_hotline`, `supermarket_dash`, `pharmacy_whisper`, and
+`home_reveal`.
 
-Every asset is Apache-2.0 and was created by deterministic FFmpeg procedural
-synthesis in `scripts/generate_sonic_brand_assets.py`; the pack contains no
-downloaded or external samples.
+Each scene has a strict production cap: **one quiet bed plus at most two dry
+foreground cues**. The renderer maps `intro`, `after_first_voice`, `mid`, and
+`outro` to the rendered dialogue, then makes one bounded cue mix before the
+normal broadcast master. It never downloads, synthesizes, or renders source
+audio on the live station path. A missing/corrupt recipe degrades safely to the
+existing compatibility path; it never interrupts playback.
 
-## Runtime selection and fallback
+## Runtime selection
 
-`[imaging].assets_dir` chooses one imaging root:
+With the standard configuration (`[imaging].assets_dir = ""`),
+`ImagingLibrary` selects this packaged directory. Root `radio.toml` and the
+Home Assistant add-on's `radio.toml` map every shipped fictional brand to one
+of the reviewed scenes. Recipe-driven spots suppress legacy generated
+brand-motifs and LLM-requested generic SFX, so the scene remains authored and
+bounded.
 
-- Empty (the default) selects this packaged directory.
-- A non-empty custom path replaces the packaged root; it is not an overlay. If
-  an operator supplies an incomplete custom pack, a missing asset falls back to
-  the existing procedural renderer rather than silently taking the packaged
-  counterpart.
+An operator-provided `assets_dir` still replaces the whole pack. Custom legacy
+campaigns with no `sonic_recipe` keep their existing fallback behaviour; an
+incomplete custom pack cannot block a spot from airing.
 
-Within the selected root, station-ID, sweeper, time-check, and ad-bumper calls
-copy their matching file first, then use their existing procedural generator.
-Transition stingers first try an exact
-`stingers/{from}_{to}.mp3`, then the direction-level `music_to_speech.mp3` or
-`speech_to_music.mp3`, then a cached synthetic stinger. Talk beds prefer any
-`beds/*.mp3` in the selected root, then an adjacent music source when
-`use_music_queue_for_beds` allows one, then the cached synthetic drone.
+## Validate, rebuild, and audition
 
-Ad selection has two intentional special cases:
+Normal CI and review validate the public ledger offline:
 
-- A configured `[ads].sfx_dir` wins only when it is a real directory; otherwise
-  the selected imaging root's `sfx/` bank is used before procedural SFX.
-- Ad music beds use a mood-matching filename when present, then
-  `beds/casa_notte.mp3`, then another bundled bed. With no usable selected-root
-  bed, the existing synthetic ad-bed path remains in service.
+```bash
+.venv/bin/python scripts/validate_audio_asset_pack.py
+```
 
-## Local A/B audition
+To rebuild from the separately archived reviewed masters, first verify their
+checksums and then render the pack. The builder never fetches a file:
 
-From the repository root, create a local listening comparison with:
+```bash
+.venv/bin/python scripts/build_public_imaging_pack.py \
+  --source-dir /path/to/reviewed-cc0-masters
+.venv/bin/python scripts/validate_audio_asset_pack.py --write-attribution
+```
+
+The retired `scripts/generate_sonic_brand_assets.py` command is now a safe
+compatibility wrapper: `--validate-only` checks the recorded pack; a rebuild
+requires `--source-dir` and cannot silently recreate procedural audio.
+
+For a local listening review, no TTS provider or live station is needed:
 
 ```bash
 .venv/bin/python scripts/audition_sonic_brand.py
 ```
 
-The command writes a timestamped directory under
-`tmp/sonic-brand-auditions/`, including an `index.html` listening page,
-`manifest.json`, and procedural-baseline versus Night Drive files for the
-station ID, sweeper, time check, both transition directions, ad bumper, and
-Casa Notte talk bed. Open the generated `index.html` in a browser to review it.
-
-Use `--output-dir` to choose a different parent directory and `--timestamp
-YYYYMMDDTHHMMSSZ` for a reproducible review path. The command validates the full
-pack before writing a run and never calls a TTS provider, starts the station, or
-touches its playback queue.
+It writes a timestamped `index.html` under `tmp/sonic-brand-auditions/`. The
+top half compares each legacy procedural identity surface to the recorded
+replacement. The lower **Ad scene recipes** board plays all nine real-bed plus
+real-cue timelines, with each cue's editorial anchor shown next to the player.
+Use `--no-recipe-previews` only for a quick identity A/B.
 
 ## Deliberate boundaries
 
-This pack is normal-programme source material. It does not replace the packaged
-recovery assets in `mammamiradio/assets/demo/`: bridge and rescue segments keep
-their instant-audio behavior and explicitly skip the egress FX pipeline.
-
-The pack also does not enable or configure the FM broadcast chain. That remains
-the independent `[audio].broadcast_chain` choice (off by default); when enabled,
-the chain colours an already-produced normal segment after its Night Drive
-material has been mixed in.
+This pack is normal-programme material. It does not replace the packaged
+recovery assets under `mammamiradio/assets/demo/`, and it does not change the
+independent `[audio].broadcast_chain` setting. Those continuity and transmitter
+choices stay separate from this sound-library refresh.

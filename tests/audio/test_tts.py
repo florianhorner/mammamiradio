@@ -44,6 +44,12 @@ def _mix_side_effect(voice_path, bed_path, output_path, volume_scale=0.12):
     return output_path
 
 
+def _recipe_mix_side_effect(base_path, layers, output_path):
+    """Side-effect for the bounded real-cue mix primitive."""
+    _touch(output_path)
+    return output_path
+
+
 def _music_bed_side_effect(output_path, mood, duration):
     """Side-effect for generate_music_bed(output, mood, duration)."""
     _touch(output_path)
@@ -86,6 +92,7 @@ def _mock_all(monkeypatch):
             side_effect=lambda _src, out, _duration: _touch(out),
         ) as mock_loop,
         patch("mammamiradio.audio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
+        patch("mammamiradio.audio.tts.mix_oneshot_layers", side_effect=_recipe_mix_side_effect) as mock_recipe_mix,
         patch("mammamiradio.audio.tts.generate_brand_motif", side_effect=_single_path_side_effect) as mock_motif,
         patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0) as mock_duration,
     ):
@@ -100,6 +107,7 @@ def _mock_all(monkeypatch):
             "generate_foley_loop": mock_foley,
             "loop_audio_bed": mock_loop,
             "mix_with_bed": mock_mix,
+            "mix_oneshot_layers": mock_recipe_mix,
             "generate_brand_motif": mock_motif,
             "ffprobe_duration": mock_duration,
         }
@@ -1132,6 +1140,51 @@ async def test_synthesize_ad_packaged_bed_replaces_layered_drone(_mock_all, tmp_
     _mock_all["generate_music_bed"].assert_not_called()
     _mock_all["generate_foley_loop"].assert_not_called()
     assert _mock_all["mix_with_bed"].call_args.args[3] == 0.14
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_owns_bed_and_two_real_cues(_mock_all, tmp_path):
+    """A resolved recipe bypasses legacy motifs, LLM SFX, and tonal layers."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    applause = _touch(tmp_path / "applause.mp3")
+    trumpet = _touch(tmp_path / "trumpet.mp3")
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=bed,
+        bed_gain_db=-25.0,
+        cues=(
+            ResolvedRecipeCue("intro", applause, -11.0, 0.7),
+            ResolvedRecipeCue("outro", trumpet, -13.0, 0.5),
+        ),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="sfx", sfx="whoosh"),
+            AdPart(type="voice", text="Una vittoria molto seria."),
+            AdPart(type="sfx", sfx="chime"),
+        ],
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    _mock_all["generate_brand_motif"].assert_not_called()
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == bed
+    assert _mock_all["mix_with_bed"].call_args.args[3] == pytest.approx(10 ** (-25.0 / 20.0))
+    _mock_all["mix_oneshot_layers"].assert_called_once()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert len(layers) == 2
+    assert [layer[0] for layer in layers] == [applause, trumpet]
 
 
 @pytest.mark.asyncio

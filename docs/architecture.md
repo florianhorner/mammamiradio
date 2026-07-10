@@ -147,9 +147,10 @@ always remains best-effort and never blocks or delays audio.
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
   - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
-  - resolves a sonic world (SFX, music bed mood, environment bed) per brand category
+  - resolves a sonic world and, for every shipped brand, a named public recorded scene recipe
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
-  - generates a brand motif jingle for recurring brands from their sonic signature
+  - lets a recipe own one quiet bed plus at most two timed dry cues; recipe-driven LLM output cannot add generic SFX or a legacy motif on top
+  - preserves generated brand motifs only for legacy/custom campaigns that intentionally have no recipe
   - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
@@ -242,17 +243,20 @@ loop. Startup's suspect-file purge preserves `synth_` files even when they are s
 normal LRU eviction still treats them as regular cache files, evicting them before
 `norm_`/`fm_` processed audio.
 
-### Italian Night Drive imaging pack
+### Recorded Night Drive imaging pack
 
 `mammamiradio/assets/imaging/` is the default selected imaging root for both
 the standalone app and the HA add-on: both shipped `radio.toml` files retain
 `[imaging].assets_dir = ""`, so neither needs an add-on-specific asset copy.
-It supplies the station-ID/sweeper/time-check cues, generic music-to-speech and
-speech-to-music stingers, an ad-break bumper, the Casa Notte loopable bed, and
-the ad-SFX bank. `manifest.json` records the complete filename, purpose,
-duration, format, Apache-2.0 license, and deterministic-FFmpeg provenance for
-the pack; see [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
-for the full inventory and local audition command.
+It supplies recorded station-ID/sweeper/time-check cues, generic music-to-speech
+and speech-to-music stingers, an ad-break bumper, the Casa Notte loopable room
+bed, and an ad library of real crowd reactions, trumpet, mandolin, café/espresso,
+till, telephone, cassette, ice, and road details. `manifest.json` is schema-v2:
+it links each rendered asset to CC0 source records, creator/source URL, source
+and output checksums, plus nine named ad recipes. `ATTRIBUTION.md` is generated
+from that ledger and checked in CI; see
+[`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
+for the full inventory, rebuild boundary, and local audition command.
 
 An operator can set `[imaging].assets_dir` to select a custom root. That is a
 complete replacement, not an overlay: a missing custom asset takes the existing
@@ -260,8 +264,9 @@ procedural/cached fallback rather than falling through to the package. Within a
 root, a transition tries an exact `stingers/{from}_{to}.mp3` before its generic
 directional stinger; talk beds take a bundled bed before eligible adjacent music
 and then a synthetic drone. For ads, a real configured `[ads].sfx_dir` has
-priority over the selected root's `sfx/` directory; ad beds use a mood-matching
-file, then `casa_notte.mp3`, before the synthetic bed path.
+priority over the selected root's `sfx/` directory. A resolved recipe uses its
+declared bed and no more than two cue files; a missing/corrupt recipe falls back
+safely without a network download or live source render.
 
 The pack affects normal segment production only. It does not replace the
 `mammamiradio/assets/demo/` recovery material or alter the explicit `rescue`
@@ -344,7 +349,7 @@ task (caller)  ──routing──▶  role  ──active profile──▶  cata
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. The packaged Italian Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient fallback and reuse `synth_` cache renders when their inputs match.
+Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries, mix recorded scene recipes around ad dialogue, and mix identity stings under sweepers. The packaged Recorded Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient legacy fallback and reuse `synth_` cache renders when their inputs match.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -699,7 +704,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |
-| `mammamiradio/audio/imaging.py` | station imaging selector for transition stings, sweeper stings, and talk beds |
+| `mammamiradio/audio/imaging.py` | station imaging selector and safe schema-v2 ad-recipe resolver |
 | `mammamiradio/audio/synth_cache.py` | reusable `synth_*.mp3` cache for generated ad/imaging layers |
 | `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |

@@ -1,4 +1,4 @@
-"""Contract tests for the bundled Italian Night Drive station-imaging pack."""
+"""Contract tests for Mamma Mi Radio's public recorded imaging pack."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import pytest
 
 from mammamiradio.audio.imaging import ImagingLibrary
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES, loop_audio_bed
+from mammamiradio.hosts.ad_creative import OFFICIAL_SONIC_RECIPE_IDS
+from scripts import validate_audio_asset_pack
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ASSETS_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
@@ -19,9 +21,12 @@ MANIFEST_PATH = ASSETS_DIR / "manifest.json"
 GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_sonic_brand_assets.py"
 
 
-def test_night_drive_manifest_covers_every_runtime_asset() -> None:
+def test_recorded_manifest_covers_default_runtime_and_official_scene_recipes() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    asset_paths = {entry["path"] for entry in manifest["assets"]}
+    assets = manifest["assets"]
+    assert isinstance(assets, list)
+    asset_paths = {entry["path"] for entry in assets}
+    asset_ids = {entry["id"] for entry in assets}
     required_core = {
         "station_id.mp3",
         "sweeper.mp3",
@@ -33,16 +38,28 @@ def test_night_drive_manifest_covers_every_runtime_asset() -> None:
     }
     required_sfx = {f"sfx/{name}.mp3" for name in AVAILABLE_SFX_TYPES}
 
-    assert manifest["schema_version"] == 1
-    assert manifest["format"] == {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps": 192}
-    assert manifest["license"] == "Apache-2.0"
-    assert required_core | required_sfx == asset_paths
-    for entry in manifest["assets"]:
+    assert manifest["schema_version"] == 2
+    assert required_core | required_sfx <= asset_paths
+    assert len(manifest["sources"]) >= 10
+    assert all(source["license"] == "CC0-1.0" for source in manifest["sources"])
+    assert all(entry["kind"] and entry["tags"] and entry["source_ids"] for entry in assets)
+    for entry in assets:
         path = ASSETS_DIR / entry["path"]
         assert path.is_file(), f"manifest asset missing from the package: {entry['path']}"
         assert path.stat().st_size > 1_024, f"manifest asset is unexpectedly small: {entry['path']}"
-        assert entry["license"] == "Apache-2.0"
-        assert "no downloaded or external samples" in entry["provenance"]
+
+    recipes = manifest["recipes"]
+    assert {recipe["id"] for recipe in recipes} == OFFICIAL_SONIC_RECIPE_IDS
+    for recipe in recipes:
+        assert recipe["bed"]["asset_id"] in asset_ids
+        assert len(recipe["cues"]) <= 2
+        assert all(cue["asset_id"] in asset_ids for cue in recipe["cues"])
+
+
+def test_public_pack_provenance_and_attribution_ledger_are_valid() -> None:
+    report = validate_audio_asset_pack.validate_audio_asset_pack(ASSETS_DIR)
+    validate_audio_asset_pack.check_attribution(report)
+    assert report.recipes == len(OFFICIAL_SONIC_RECIPE_IDS)
 
 
 def test_default_imaging_library_uses_the_pack_for_all_audible_default_surfaces(tmp_path: Path) -> None:
@@ -112,7 +129,7 @@ def _mean_volume_db(path: Path, start_sec: float, duration_sec: float) -> float:
 
 @pytest.mark.requires_ffmpeg
 def test_casa_notte_has_no_level_drop_across_a_runtime_loop_boundary(tmp_path: Path) -> None:
-    """A long ad must not breathe at every repeated Casa Notte boundary."""
+    """A long spoken segment must not fade down every time its room bed repeats."""
     source = ASSETS_DIR / "beds" / "casa_notte.mp3"
     looped = tmp_path / "looped_casa_notte.mp3"
     loop_audio_bed(source, looped, 33.0)
@@ -120,15 +137,23 @@ def test_casa_notte_has_no_level_drop_across_a_runtime_loop_boundary(tmp_path: P
     boundary = _duration_sec(source)
     before_boundary = _mean_volume_db(looped, boundary - 0.22, 0.16)
     after_boundary = _mean_volume_db(looped, boundary + 0.03, 0.16)
-
-    # The pre-refresh terminal fade made the tail more than 20 dB quieter. A
-    # normal musical phrase can move slightly, but this protects against a
-    # repeated, obvious fade-to-near-silence in the runtime loop.
     assert after_boundary >= before_boundary - 6.0
 
 
 @pytest.mark.requires_ffmpeg
-def test_night_drive_generator_validates_the_checked_in_pack() -> None:
+def test_every_recorded_asset_has_audible_programme_signal() -> None:
+    """A broken trim must not silently ship as an almost-empty public MP3."""
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    quiet: list[str] = []
+    for entry in manifest["assets"]:
+        mean = _mean_volume_db(ASSETS_DIR / entry["path"], 0.0, min(1.0, entry["duration_target_sec"]))
+        if mean < -48.0:
+            quiet.append(f"{entry['path']} ({mean:.1f} dB)")
+    assert not quiet, "public imaging assets are effectively silent: " + ", ".join(quiet)
+
+
+@pytest.mark.requires_ffmpeg
+def test_legacy_generator_entrypoint_validates_but_cannot_recreate_synthetic_audio() -> None:
     completed = subprocess.run(
         [sys.executable, str(GENERATOR_PATH), "--validate-only"],
         cwd=REPO_ROOT,
@@ -138,4 +163,4 @@ def test_night_drive_generator_validates_the_checked_in_pack() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.count("OK ") == len(AVAILABLE_SFX_TYPES) + 7
+    assert "Audio asset pack OK: 11 sources, 60 assets, 9 recipes" in completed.stdout

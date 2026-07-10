@@ -43,7 +43,7 @@ Static config:
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
 
-## Audition the Night Drive imaging pack
+## Audition the recorded Night Drive imaging pack
 
 From the repository root, run:
 
@@ -53,10 +53,12 @@ From the repository root, run:
 
 It writes a timestamped local review directory under
 `tmp/sonic-brand-auditions/` with an `index.html` listening page and a manifest.
-The page compares the current procedural baseline with the packaged Night Drive
-asset for the station ID, sweeper, time check, both transition directions, ad
-bumper, and Casa Notte talk bed. Open that generated HTML file in a browser; the
-script does not open a browser itself.
+The top half compares the procedural baseline with the recorded packaged asset
+for the station ID, sweeper, time check, both transition directions, ad bumper,
+and Casa Notte room bed. The lower scene board plays all nine fictional-ad
+recipes as a real bed plus at most two real cues (for example applause, trumpet,
+espresso, till, telephone, or cassette). Open that generated HTML file in a
+browser; the script does not open a browser itself.
 
 Use `--output-dir PATH` to choose the parent directory and `--timestamp
 YYYYMMDDTHHMMSSZ` for a deterministic review location. The script validates the

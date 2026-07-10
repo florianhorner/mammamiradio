@@ -26,7 +26,7 @@ from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
-from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.hosts.ad_creative import AdBrand, AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
 from mammamiradio.scheduling.producer import (
@@ -782,6 +782,56 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
     assert mock_synthesize_ad.call_args.args[3] == packaged_sfx
     assert mock_synthesize_ad.call_args.kwargs["bed_assets_dir"] == packaged_beds
+
+
+@pytest.mark.asyncio
+async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
+    """Official brand recipes cross the producer boundary without LLM SFX state."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    sonic = SonicWorld(recipe_id="stadium_win", transition_motif="", sonic_signature="")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=None, bed_gain_db=0.0, cues=())
+    script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=sonic,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = recipe
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    imaging.resolve_ad_recipe.assert_called_once()
+    assert mock_synthesize_ad.call_args.kwargs["recipe"] is recipe
 
 
 # ---------------------------------------------------------------------------

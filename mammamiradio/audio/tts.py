@@ -28,6 +28,7 @@ from mammamiradio.audio.normalizer import (
     generate_sfx,
     generate_silence,
     loop_audio_bed,
+    mix_oneshot_layers,
     mix_with_bed,
     normalize,
     normalize_ad,
@@ -44,6 +45,7 @@ from mammamiradio.core.models import HostPersonality
 from mammamiradio.hosts.ad_creative import AdScript, AdVoice
 
 if TYPE_CHECKING:
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
     from mammamiradio.core.models import StationState
 
 logger = logging.getLogger(__name__)
@@ -565,6 +567,7 @@ async def synthesize_ad(
     state: StationState | None = None,
     cache_dir: Path | None = None,
     bed_assets_dir: Path | None = None,
+    recipe: ResolvedAdRecipe | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
@@ -580,7 +583,9 @@ async def synthesize_ad(
     # 1+2. Brand motif AND voice/SFX parts in parallel (motif is just prepended)
     from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 
-    sonic_sig = script.sonic.sonic_signature if script.sonic else ""
+    # A resolved recipe has its own reviewed accents.  Never prepend a legacy
+    # synthetic motif merely because an API caller supplied both inputs.
+    sonic_sig = "" if recipe is not None else (script.sonic.sonic_signature if script.sonic else "")
     motif_path = tmp_dir / f"motif_{uuid4().hex[:8]}.mp3" if sonic_sig else None
 
     def _sfx_asset_fingerprint(signature: str) -> list[dict[str, object]]:
@@ -727,7 +732,12 @@ async def synthesize_ad(
     renderable = [
         (part, tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3")
         for part in script.parts
-        if part.type in ("voice", "sfx", "pause") and (part.type != "voice" or part.text)
+        if part.type in ("voice", "sfx", "pause")
+        and (part.type != "voice" or part.text)
+        # The scriptwriter strips these for recipe-driven spots, but enforce
+        # the boundary here too: direct callers cannot sneak a third or fourth
+        # decorative effect into a three-layer recipe mix.
+        and not (recipe is not None and part.type == "sfx")
     ]
 
     # Launch motif generation + all parts concurrently
@@ -752,6 +762,15 @@ async def synthesize_ad(
 
     voice_sfx_parts = [r for r in results if r is not None]
 
+    first_voice_path = next(
+        (
+            result
+            for (part, _), result in zip(renderable, results, strict=False)
+            if part.type == "voice" and result is not None
+        ),
+        None,
+    )
+
     if not voice_sfx_parts:
         # Fallback: synthesize brand name with the configured engine so cloud
         # voices aren't silently downgraded to edge-tts on this path.
@@ -767,6 +786,11 @@ async def synthesize_ad(
         )
         return fallback_path
 
+    # Capture this before concat_files removes the individual part renders.
+    first_voice_duration_hint = (
+        await loop.run_in_executor(None, probe_duration_sec, first_voice_path) if first_voice_path is not None else None
+    )
+
     # Concatenate voice+sfx parts
     if len(voice_sfx_parts) == 1:
         voice_path = voice_sfx_parts[0]
@@ -776,6 +800,94 @@ async def synthesize_ad(
         await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
         for p in voice_sfx_parts:
             p.unlink(missing_ok=True)
+
+    async def _apply_recipe_world() -> Path | None:
+        """Mix one optional bed and no more than two authored dry details.
+
+        The voice render stays intact until every recipe stage succeeds, so a
+        corrupt or disappearing public asset simply falls through to the
+        established fallback path below instead of turning into a silent spot.
+        """
+        if recipe is None:
+            return None
+
+        measured_duration = await loop.run_in_executor(None, probe_duration_sec, voice_path)
+        voice_duration = (
+            measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
+        )
+        first_voice_duration = first_voice_duration_hint
+        if not first_voice_duration or first_voice_duration <= 0:
+            first_voice_duration = voice_duration
+
+        def _cue_offset(anchor: str, max_duration_sec: float) -> float:
+            latest_start = max(0.0, voice_duration - max_duration_sec)
+            if anchor == "intro":
+                return 0.0
+            if anchor == "after_first_voice":
+                return min(max(0.0, first_voice_duration), latest_start)
+            if anchor == "outro":
+                return latest_start
+            # ``mid`` is the documented default.  Treat an unknown editorial
+            # label like mid-copy rather than emitting a cue beyond the ad.
+            return max(0.0, (voice_duration - max_duration_sec) / 2.0)
+
+        created: list[Path] = []
+        current = voice_path
+        succeeded = False
+        try:
+            if recipe.bed_path is not None:
+                if not recipe.bed_path.is_file():
+                    return None
+                bed_path = tmp_dir / f"recipe_bed_{uuid4().hex[:8]}.mp3"
+                bed_mix_path = tmp_dir / f"recipe_bed_mix_{uuid4().hex[:8]}.mp3"
+                created.extend((bed_path, bed_mix_path))
+                await loop.run_in_executor(None, loop_audio_bed, recipe.bed_path, bed_path, voice_duration)
+                bed_scale = 10 ** (max(-60.0, min(12.0, recipe.bed_gain_db)) / 20.0)
+                await loop.run_in_executor(None, mix_with_bed, current, bed_path, bed_mix_path, bed_scale)
+                current = bed_mix_path
+
+            layers = [
+                (cue.asset_path, _cue_offset(cue.anchor, cue.max_duration_sec), cue.gain_db, cue.max_duration_sec)
+                for cue in recipe.cues
+                if cue.asset_path.is_file()
+            ]
+            if len(layers) != len(recipe.cues):
+                return None
+            if layers:
+                recipe_mix_path = tmp_dir / f"recipe_mix_{uuid4().hex[:8]}.mp3"
+                created.append(recipe_mix_path)
+                await loop.run_in_executor(None, mix_oneshot_layers, current, layers, recipe_mix_path)
+                current = recipe_mix_path
+            succeeded = True
+        except Exception as exc:
+            logger.warning("Recipe %s failed; using compatibility ad audio: %s", recipe.id, exc)
+            return None
+        finally:
+            if not succeeded:
+                for path in created:
+                    path.unlink(missing_ok=True)
+
+        # From this point, the authored render is sound.  Now discard temporary
+        # intermediates, keeping the result for the one final broadcast master.
+        for path in created:
+            if path != current:
+                path.unlink(missing_ok=True)
+        if current != voice_path:
+            voice_path.unlink(missing_ok=True)
+        return current
+
+    recipe_output = await _apply_recipe_world()
+    if recipe_output is not None:
+        broadcast_path = tmp_dir / f"ad_broadcast_{uuid4().hex[:8]}.mp3"
+        try:
+            await loop.run_in_executor(None, normalize_ad, recipe_output, broadcast_path)
+            if broadcast_path.exists() and broadcast_path.stat().st_size > 0:
+                recipe_output.unlink(missing_ok=True)
+                return broadcast_path
+            broadcast_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("Recipe ad broadcast processing failed, using unprocessed audio: %s", exc)
+        return recipe_output
 
     # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
     # Layer order (quietest → loudest): foley → env bed → music bed → voice.

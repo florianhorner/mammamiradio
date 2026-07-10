@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from mammamiradio.audio.admission import ffmpeg_slot
@@ -1468,6 +1469,71 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     ]
     _run_ffmpeg(cmd, "mix voice+bed")
     logger.info("Mixed voice + bed -> %s", output_path.name)
+    return output_path
+
+
+def mix_oneshot_layers(
+    base_path: Path,
+    layers: Sequence[tuple[Path, float, float, float]],
+    output_path: Path,
+) -> Path:
+    """Overlay at most two dry cues onto a base render in one FFmpeg pass.
+
+    Each layer is ``(path, offset_sec, gain_db, max_duration_sec)``.  The base
+    remains the first amix input, so it defines the output duration.  This
+    deliberately does not run ``loudnorm``: callers can place the recipe mix
+    before their one final mastering/reconciliation stage instead of remastering
+    once for every small crowd, laugh, or brass accent.
+    """
+    if len(layers) > 2:
+        raise ValueError("at most two one-shot layers may be mixed with one base")
+    if base_path == output_path and layers:
+        raise ValueError("mix_oneshot_layers requires a distinct output path")
+    validated_layers: list[tuple[Path, float, float, float]] = []
+    for cue_path, raw_offset_sec, raw_gain_db, raw_max_duration_sec in layers:
+        try:
+            offset_sec = float(raw_offset_sec)
+            gain_db = float(raw_gain_db)
+            max_duration_sec = float(raw_max_duration_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("one-shot layer values must be numeric") from exc
+        if not all(math.isfinite(value) for value in (offset_sec, gain_db, max_duration_sec)):
+            raise ValueError("one-shot layer values must be finite")
+        if offset_sec < 0 or max_duration_sec <= 0:
+            raise ValueError("one-shot offsets must be non-negative and durations positive")
+        validated_layers.append((cue_path, offset_sec, gain_db, max_duration_sec))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not layers:
+        if base_path != output_path:
+            shutil.copy2(base_path, output_path)
+        return output_path
+
+    command = ["ffmpeg", "-y", "-i", str(base_path)]
+    filter_parts = ["[0:a]asetpts=PTS-STARTPTS[base]"]
+    mix_inputs = ["[base]"]
+    for input_index, (cue_path, offset_sec, gain_db, max_duration_sec) in enumerate(validated_layers, start=1):
+        command.extend(["-i", str(cue_path)])
+        cue_label = f"cue{input_index}"
+        delay_ms = round(offset_sec * 1000)
+        filter_parts.append(
+            f"[{input_index}:a]atrim=0:{_fmt_num(max_duration_sec)},asetpts=PTS-STARTPTS,"
+            f"volume={_fmt_num(gain_db)}dB,adelay={delay_ms}:all=1[{cue_label}]"
+        )
+        mix_inputs.append(f"[{cue_label}]")
+    filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0[out]")
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[out]",
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+    )
+    _run_ffmpeg(command, "mix imaging one-shot layers")
+    logger.info("Mixed base + %d one-shot imaging layers -> %s", len(layers), output_path.name)
     return output_path
 
 

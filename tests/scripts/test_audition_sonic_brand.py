@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import audition_sonic_brand as audition
 
 
@@ -39,7 +41,7 @@ def test_main_uses_deterministic_timestamp_and_writes_manifest_and_html(tmp_path
 
     output_dir = tmp_path / "auditions"
     timestamp = "20260710T120000Z"
-    assert audition.main(["--output-dir", str(output_dir), "--timestamp", timestamp]) == 0
+    assert audition.main(["--output-dir", str(output_dir), "--timestamp", timestamp, "--no-recipe-previews"]) == 0
 
     run_dir = output_dir / f"audition-{timestamp}"
     manifest = json.loads((run_dir / "manifest.json").read_text())
@@ -47,7 +49,8 @@ def test_main_uses_deterministic_timestamp_and_writes_manifest_and_html(tmp_path
 
     assert manifest["generated_at"] == timestamp
     assert manifest["mode"] == "local-only"
-    assert manifest["pack"] == "Night Drive"
+    assert manifest["pack"] == "Recorded Night Drive"
+    assert manifest["scene_recipes"] == []
     assert len(manifest["samples"]) == len(audition.SAMPLES)
     assert page.count("<audio controls") == len(audition.SAMPLES) * 2
     assert "Night Drive packaged asset" in page
@@ -66,7 +69,9 @@ def test_main_reports_invalid_timestamp_without_creating_output(tmp_path, monkey
     monkeypatch.setattr(audition, "PACKAGED_ASSETS_DIR", assets_dir)
 
     output_dir = tmp_path / "auditions"
-    assert audition.main(["--output-dir", str(output_dir), "--timestamp", "not-a-timestamp"]) == 2
+    assert (
+        audition.main(["--output-dir", str(output_dir), "--timestamp", "not-a-timestamp", "--no-recipe-previews"]) == 2
+    )
 
     assert "timestamp must use YYYYMMDDTHHMMSSZ format" in capsys.readouterr().err
     assert not output_dir.exists()
@@ -102,3 +107,22 @@ def test_render_audition_refuses_to_overwrite_a_prior_deterministic_run(tmp_path
         assert "Refusing to overwrite" in str(exc)
     else:
         raise AssertionError("expected deterministic run collision to be rejected")
+
+
+@pytest.mark.requires_ffmpeg
+def test_scene_recipe_previews_cover_the_shipped_recorded_recipe_inventory(tmp_path) -> None:
+    results = audition.render_recipe_previews(tmp_path, assets_dir=audition.PACKAGED_ASSETS_DIR)
+
+    assert {result.id for result in results} == {
+        "bureaucracy_stamp",
+        "cafe_testimonial",
+        "home_reveal",
+        "late_night_hotline",
+        "motorway_pass",
+        "pharmacy_whisper",
+        "showroom_reveal",
+        "stadium_win",
+        "supermarket_dash",
+    }
+    assert all((tmp_path / result.audio).is_file() for result in results)
+    assert all(len(result.cues) <= 2 for result in results)

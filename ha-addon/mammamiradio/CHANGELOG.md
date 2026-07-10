@@ -4,7 +4,7 @@
 
 ### Added
 
-- **The add-on now has a signature Night Drive sound.** Station IDs, time checks, music handoffs, and ad breaks now draw from one bundled warm Italian imaging pack instead of unrelated generated tones. Fictional ads get distinct cue sounds and one clean bed beneath the voice, and you can create a local before-and-after listening page before updating. The fast recovery audio path stays separate and untouched.
+- **The add-on now has a recorded, public Night Drive sound.** Station IDs, time checks, music handoffs, and ad breaks now draw from a bundled CC0 library of real crowd laughter and applause, trumpet, mandolin, café/espresso, till, telephone, cassette, cocktail ice, and road recordings — not unrelated generated tones. Every fictional brand selects one reviewed scene with one quiet bed and at most two timed details around its dialogue, so ads stay vivid without the old layered drone. The pack carries its own source URLs, creator credits, source/output checksums, and a local listening board for all nine scenes; the fast recovery audio path stays separate and untouched.
 
 ### Fixed
 

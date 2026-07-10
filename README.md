@@ -89,6 +89,10 @@ Issues and PRs welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). First-tim
 
 ## License
 
-The code is [Apache-2.0](LICENSE). That does not grant rights to the music the station plays or the AI-generated banter and ads. You are responsible for whatever your station plays and says.
+The code is [Apache-2.0](LICENSE). The bundled station-imaging library is built
+from CC0 recordings and is publicly reusable; its complete source and creator
+ledger is [in the imaging attribution file](mammamiradio/assets/imaging/ATTRIBUTION.md).
+Neither grant covers the music a configured station plays or its generated
+banter and ads. You are responsible for whatever your station plays and says.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=florianhorner/mammamiradio&type=Date)](https://star-history.com/#florianhorner/mammamiradio&Date)

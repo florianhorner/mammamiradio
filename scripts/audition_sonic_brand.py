@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a local A/B listening pack for Mamma Mi Radio's Night Drive imaging.
+"""Build a local A/B and scene-recipe listening pack for recorded Mamma Mi Radio imaging.
 
 The script never calls TTS providers, starts the station, or touches its queue. It
 renders the current procedural baseline into a timestamped directory, copies the
@@ -14,6 +14,7 @@ import html
 import json
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,8 @@ from mammamiradio.audio.normalizer import (
     generate_station_id_bed,
     generate_tone,
     generate_transition_sting,
+    loop_audio_bed,
+    mix_oneshot_layers,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +37,7 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions"
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 MOTIF_NOTES = [523, 659, 784, 1047]
 TALK_BED_DURATION_SEC = 8.0
+RECIPE_PREVIEW_DURATION_SEC = 8.0
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,17 @@ class SonicAuditionResult:
     source_asset: str
     baseline: str
     night_drive: str
+
+
+@dataclass(frozen=True)
+class RecipeAuditionResult:
+    """One local preview of a reviewed ad scene recipe, without a TTS call."""
+
+    id: str
+    label: str
+    audio: str
+    bed: str
+    cues: tuple[str, ...]
 
 
 SAMPLES: tuple[SonicSample, ...] = (
@@ -144,7 +159,7 @@ def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
 
 
 def render_audition(run_dir: Path, *, assets_dir: Path | None = None) -> list[SonicAuditionResult]:
-    """Render procedural baselines and copy the packaged Night Drive counterparts."""
+    """Render procedural baselines and copy the packaged recorded counterparts."""
     assets_dir = assets_dir or PACKAGED_ASSETS_DIR
     require_pack_assets(assets_dir)
     if run_dir.exists():
@@ -171,20 +186,102 @@ def render_audition(run_dir: Path, *, assets_dir: Path | None = None) -> list[So
     return results
 
 
-def write_manifest(results: list[SonicAuditionResult], run_dir: Path, *, timestamp: str) -> Path:
+def _recipe_preview_offset(anchor: str, cue_duration_sec: float) -> float:
+    """Place a dry cue on a neutral review timeline without inventing speech."""
+    latest = max(0.0, RECIPE_PREVIEW_DURATION_SEC - cue_duration_sec)
+    if anchor == "intro":
+        return 0.0
+    if anchor == "after_first_voice":
+        return min(2.2, latest)
+    if anchor == "outro":
+        return latest
+    return min(4.1, latest)  # documented ``mid`` and safe unknown-label fallback
+
+
+def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> list[RecipeAuditionResult]:
+    """Render every declared recipe over its own bed for a zero-provider audition.
+
+    This intentionally contains no fake voice: the result isolates the thing
+    a listener needs to approve here — level, texture, and the placement of the
+    real crowd/brass/foley details — without asking a network TTS engine to
+    manufacture review material.
+    """
+    assets_dir = assets_dir or PACKAGED_ASSETS_DIR
+    manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
+    raw_recipes = manifest.get("recipes")
+    if not isinstance(raw_recipes, list):
+        raise ValueError("Night Drive pack manifest has no recipe inventory")
+
+    library = ImagingLibrary(MOTIF_NOTES, run_dir / ".recipe-tmp", assets_dir=assets_dir)
+    previews_dir = run_dir / "scene-recipes"
+    previews_dir.mkdir(parents=True, exist_ok=True)
+    results: list[RecipeAuditionResult] = []
+    for raw_recipe in raw_recipes:
+        if not isinstance(raw_recipe, dict) or not isinstance(raw_recipe.get("id"), str):
+            raise ValueError("Night Drive pack contains an invalid recipe id")
+        recipe_id = raw_recipe["id"]
+        recipe = library.resolve_ad_recipe(recipe_id, variant_key="audition")
+        if recipe is None or recipe.bed_path is None:
+            raise ValueError(f"Night Drive pack recipe is not auditionable: {recipe_id}")
+
+        bed_render = previews_dir / f".{recipe_id}.bed.mp3"
+        output_path = previews_dir / f"{recipe_id}.mp3"
+        loop_audio_bed(recipe.bed_path, bed_render, RECIPE_PREVIEW_DURATION_SEC)
+        layers = [
+            (
+                cue.asset_path,
+                _recipe_preview_offset(cue.anchor, cue.max_duration_sec),
+                cue.gain_db,
+                cue.max_duration_sec,
+            )
+            for cue in recipe.cues
+        ]
+        if layers:
+            mix_oneshot_layers(bed_render, layers, output_path)
+            bed_render.unlink(missing_ok=True)
+        else:
+            shutil.move(str(bed_render), str(output_path))
+        results.append(
+            RecipeAuditionResult(
+                id=recipe.id,
+                label=recipe.id.replace("_", " ").title(),
+                audio=output_path.relative_to(run_dir).as_posix(),
+                bed=recipe.bed_path.relative_to(assets_dir).as_posix(),
+                cues=tuple(
+                    f"{cue.anchor} → {cue.asset_path.relative_to(assets_dir).as_posix()}" for cue in recipe.cues
+                ),
+            )
+        )
+    return results
+
+
+def write_manifest(
+    results: list[SonicAuditionResult],
+    run_dir: Path,
+    *,
+    timestamp: str,
+    recipe_results: list[RecipeAuditionResult] | None = None,
+) -> Path:
     """Write the local, relative-path manifest consumed by a listening review."""
     manifest_path = run_dir / "manifest.json"
     payload = {
         "generated_at": timestamp,
         "mode": "local-only",
-        "pack": "Night Drive",
+        "pack": "Recorded Night Drive",
         "samples": [asdict(result) for result in results],
+        "scene_recipes": [asdict(result) for result in recipe_results or []],
     }
     manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return manifest_path
 
 
-def write_index_html(results: list[SonicAuditionResult], run_dir: Path, *, timestamp: str) -> Path:
+def write_index_html(
+    results: list[SonicAuditionResult],
+    run_dir: Path,
+    *,
+    timestamp: str,
+    recipe_results: list[RecipeAuditionResult] | None = None,
+) -> Path:
     """Write a dependency-free A/B listening page beside the generated audio."""
     rows = "\n".join(
         f"""        <section class=\"sample\">
@@ -209,6 +306,18 @@ def write_index_html(results: list[SonicAuditionResult], run_dir: Path, *, times
         </section>"""
         for result in results
     )
+    recipe_rows = "\n".join(
+        f"""        <section class=\"sample recipe\">
+          <h2>{html.escape(result.label)}</h2>
+          <p><code>{html.escape(result.bed)}</code></p>
+          <p class=\"lede\">{" · ".join(html.escape(cue) for cue in result.cues) or "Bed only"}</p>
+          <audio controls preload=\"metadata\">
+            <source src=\"{html.escape(result.audio, quote=True)}\" type=\"audio/mpeg\">
+            Your browser cannot play this file.
+          </audio>
+        </section>"""
+        for result in recipe_results or []
+    )
     document = f"""<!doctype html>
 <html lang=\"en\">
   <head>
@@ -222,6 +331,7 @@ def write_index_html(results: list[SonicAuditionResult], run_dir: Path, *, times
       h1 {{ margin-bottom: .25rem; }}
       .lede, code {{ color: #d8c9af; }}
       .sample {{ border-top: 1px solid #59463a; padding: 1.25rem 0; }}
+      .recipe {{ background: #1b211d; padding-inline: 1rem; border-radius: .75rem; }}
       .sample h2 {{ margin: 0; }}
       .sample p {{ margin: .35rem 0 1rem; }}
       .pair {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }}
@@ -231,10 +341,13 @@ def write_index_html(results: list[SonicAuditionResult], run_dir: Path, *, times
     </style>
   </head>
   <body>
-    <h1>Night Drive A/B audition</h1>
+    <h1>Recorded Night Drive audition</h1>
     <p class=\"lede\">Generated locally at {html.escape(timestamp)}. Left is the current procedural render;
-      right is the packaged Night Drive asset. No station queue or network provider was used.</p>
+      right is the packaged recorded asset. Scene recipes below isolate their real bed and cues.
+      No station queue or network provider was used.</p>
 {rows}
+    <h1>Ad scene recipes</h1>
+{recipe_rows}
   </body>
 </html>
 """
@@ -250,6 +363,11 @@ def main(argv: list[str] | None = None) -> int:
         "--timestamp",
         help="Override run timestamp in YYYYMMDDTHHMMSSZ format, useful for deterministic reviews",
     )
+    parser.add_argument(
+        "--no-recipe-previews",
+        action="store_true",
+        help="Skip the local scene-recipe board (useful for a fast core-identity comparison)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -259,9 +377,10 @@ def main(argv: list[str] | None = None) -> int:
         require_pack_assets(PACKAGED_ASSETS_DIR)
         run_dir = args.output_dir / f"audition-{timestamp}"
         results = render_audition(run_dir)
-        manifest_path = write_manifest(results, run_dir, timestamp=timestamp)
-        index_path = write_index_html(results, run_dir, timestamp=timestamp)
-    except (OSError, ValueError) as exc:
+        recipe_results = [] if args.no_recipe_previews else render_recipe_previews(run_dir)
+        manifest_path = write_manifest(results, run_dir, timestamp=timestamp, recipe_results=recipe_results)
+        index_path = write_index_html(results, run_dir, timestamp=timestamp, recipe_results=recipe_results)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 

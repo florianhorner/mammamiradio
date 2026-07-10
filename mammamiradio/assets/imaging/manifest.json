@@ -1,140 +1,1742 @@
 {
-  "schema_version": 1,
-  "pack": "Mamma Mi Radio — Italian Night Drive",
-  "format": {
-    "codec": "mp3",
-    "sample_rate_hz": 48000,
-    "channels": 2,
-    "bitrate_kbps": 192
-  },
-  "license": "Apache-2.0",
-  "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples.",
+  "schema_version": 2,
+  "pack": "Mamma Mi Radio — Recorded Night Drive",
+  "provenance": "CC0 source recordings, clipped and mixed locally by scripts/build_public_imaging_pack.py.",
+  "sources": [
+    {
+      "id": "cafe-kentspublicdomain",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/kentspublicdomain/sounds/324668/",
+      "source_sha256": "548d85e3bff2c44e0136a6908326202c10504e85e95cdc88b9347d5d41b26f22",
+      "creator": "kentspublicdomain",
+      "title": "Freesound #324668 cafe ambience",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "cash-register-cv",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/C-V/sounds/534066/",
+      "source_sha256": "6d2b0625dbd5b3ef0835885edfde8dde3e6197f55e3a5115b410dd4bdc8492fe",
+      "creator": "C-V",
+      "title": "Freesound #534066 cash register",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "cassette-albertomarun",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/albertomarun/sounds/423871/",
+      "source_sha256": "83f3718ac0a51150a33811eb7666ae4b69d963081488ef8b4ecd80eaa5111a80",
+      "creator": "albertomarun",
+      "title": "Freesound #423871 cassette tape",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "crowd-cheer-beeproductive",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/BeeProductive/sounds/430046/",
+      "source_sha256": "0addb428c47fb0504ae9378724a3cd6052249e13fc5b5f47c0c6e43c20ba0ffd",
+      "creator": "BeeProductive",
+      "title": "Freesound #430046 crowd cheering and clapping",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "crowd-laugh-mdrivet",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/MDRivet/sounds/269461/",
+      "source_sha256": "a794c1465b0142071f31e4db39e72012c2d46f6e22efc76277dce843d536abb1",
+      "creator": "MDRivet",
+      "title": "Crowd Laughing.wav",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "espresso-andra4",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/Andra4/sounds/504961/",
+      "source_sha256": "1ea8697f81ec94d313e7ba70bee14942ea720da8816e54e7915196e1a112ca01",
+      "creator": "Andra4",
+      "title": "Freesound #504961 espresso machine sequence",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "ice-athenspublic",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/athenspublic/sounds/341579/",
+      "source_sha256": "66142b1ebb1e9126ee37138f8f7387fff562e60b882723e9c5584bcd5f625125",
+      "creator": "athenspublic",
+      "title": "Freesound #341579 cocktail ice swish",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "mandolin-gollybob",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/gollybob/sounds/413490/",
+      "source_sha256": "7b851a584956e53ccb1eb3b4f308854dcc55efcb2566c92013e72cf48191042c",
+      "creator": "gollybob",
+      "title": "Mandolin Strum High G Chord.wav",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "telephone-kyles",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/kyles/sounds/450042/",
+      "source_sha256": "dc1785ade0404b311dcc34277ae109a519aac66cb5e8b68b9062390056b7decc",
+      "creator": "kyles",
+      "title": "Freesound #450042 telephone ring",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "trumpet-joepayne",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/joepayne/sounds/413201/",
+      "source_sha256": "5e0b3d1822463aba43b1ba4d34dbb6043625aebd8c3f35c49e7057d6687acc35",
+      "creator": "joepayne",
+      "title": "Clean Trumpet Fanfare .mp3",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    },
+    {
+      "id": "car-highway-yinyang",
+      "license": "CC0-1.0",
+      "source_url": "https://freesound.org/people/Yin_Yang_Jake007/sounds/435358/",
+      "source_sha256": "d71af8f24599c64f9ae20aea1662384e4cbdc7f63666ebe6066104d4b9f81f92",
+      "creator": "Yin_Yang_Jake007",
+      "title": "Car Passing on Highway.mp3",
+      "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset."
+    }
+  ],
   "assets": [
     {
+      "id": "identity.station-id",
       "path": "station_id.mp3",
-      "purpose": "Three-second master sonic logo for full station ident voice tags.",
-      "duration_target_sec": 3.0,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Short brass-and-mandolin station ident under a spoken name.",
+      "kind": "identity",
+      "tags": [
+        "station",
+        "trumpet",
+        "mandolin",
+        "warm"
+      ],
+      "source_ids": [
+        "trumpet-joepayne",
+        "mandolin-gollybob",
+        "cassette-albertomarun"
+      ],
+      "sha256": "961fb30c979b4e64b4fc3a8438150107d082206b40d72c5a6b765b5eaab22693",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 3.2,
+      "license": "CC0-1.0"
     },
     {
+      "id": "identity.sweeper",
       "path": "sweeper.mp3",
-      "purpose": "Short house sting beneath between-song station sweepers.",
-      "duration_target_sec": 2.0,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Fast mandolin-and-brass sweep beneath a station sweeper.",
+      "kind": "identity",
+      "tags": [
+        "station",
+        "mandolin",
+        "trumpet",
+        "quick"
+      ],
+      "source_ids": [
+        "mandolin-gollybob",
+        "trumpet-joepayne"
+      ],
+      "sha256": "657cb0d917a14bea6b5d4f7d84ec3afea23aeae8e05c27df91b2b6e30f6c0437",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.9,
+      "license": "CC0-1.0"
     },
     {
+      "id": "identity.time-check",
       "path": "time_check.mp3",
-      "purpose": "Half-second warm clock punctuation before time checks.",
-      "duration_target_sec": 0.5,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "A small glass-and-string punctuation before a time check.",
+      "kind": "identity",
+      "tags": [
+        "time",
+        "ice",
+        "mandolin",
+        "small"
+      ],
+      "source_ids": [
+        "ice-athenspublic",
+        "mandolin-gollybob"
+      ],
+      "sha256": "3a2eb5deb9d3f3fe3144ddf28a0c52a782f2c146c9083d15fb8df2e3c2b299cb",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.82,
+      "license": "CC0-1.0"
     },
     {
+      "id": "identity.ad-break",
       "path": "bumpers/ad_break.mp3",
-      "purpose": "Compact break opener for fictional-ad handoffs.",
-      "duration_target_sec": 1.2,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "A real till-and-trumpet handoff into a fictional ad break.",
+      "kind": "transition",
+      "tags": [
+        "ads",
+        "cash-register",
+        "trumpet",
+        "handoff"
+      ],
+      "source_ids": [
+        "cash-register-cv",
+        "trumpet-joepayne"
+      ],
+      "sha256": "dba37df1560da5b75021d2ed78a5aece624aeaa6c12f471dccaf5992a9d0e280",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.45,
+      "license": "CC0-1.0"
     },
     {
+      "id": "transition.music-to-speech",
       "path": "stingers/music_to_speech.mp3",
-      "purpose": "Night-drive transition from music into speech.",
-      "duration_target_sec": 1.5,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Cassette click and mandolin turn from music into speech.",
+      "kind": "transition",
+      "tags": [
+        "music",
+        "speech",
+        "cassette",
+        "mandolin"
+      ],
+      "source_ids": [
+        "cassette-albertomarun",
+        "mandolin-gollybob"
+      ],
+      "sha256": "f7a32596a89ae2ba9683bc5d35ebc64a5e33a8d286e8d939dfabd9439d83dafd",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.55,
+      "license": "CC0-1.0"
     },
     {
+      "id": "transition.speech-to-music",
       "path": "stingers/speech_to_music.mp3",
-      "purpose": "Night-drive release from speech back into music.",
-      "duration_target_sec": 1.0,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Short trumpet release from speech back into music.",
+      "kind": "transition",
+      "tags": [
+        "speech",
+        "music",
+        "trumpet",
+        "release"
+      ],
+      "source_ids": [
+        "trumpet-joepayne",
+        "cassette-albertomarun"
+      ],
+      "sha256": "d2f7cef37fe2c61fb4df15569e937d50ee00b48255e09abd29a74aa105ddd459",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.3,
+      "license": "CC0-1.0"
     },
     {
+      "id": "bed.casa-notte",
       "path": "beds/casa_notte.mp3",
-      "purpose": "Loopable non-drone Rhodes-and-mandolin bed for Casa-notte speech.",
+      "purpose": "Low continuous café room tone for ordinary spoken segments.",
+      "kind": "bed",
+      "tags": [
+        "cafe",
+        "room-tone",
+        "spoken",
+        "loopable"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain",
+        "cassette-albertomarun"
+      ],
+      "sha256": "71e76c253616e403e9e304b0b4f81fecaff0aa74f1a347a638527953719f14d8",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
       "duration_target_sec": 16.0,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.chime",
       "path": "sfx/chime.mp3",
-      "purpose": "Warm two-note glass-and-Rhodes confirmation chime.",
-      "duration_target_sec": 0.62,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility chime rendered from a real cocktail glass.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "ice",
+        "chime"
+      ],
+      "source_ids": [
+        "ice-athenspublic"
+      ],
+      "sha256": "cd97c5a44f1b56a1b0a113c39d73a104057b35dc245ea852f8bad158bed62b31",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.82,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.ding",
       "path": "sfx/ding.mp3",
-      "purpose": "Small rounded brass bell punctuation.",
-      "duration_target_sec": 0.38,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility ding rendered from a short glass tap.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "ice",
+        "ding"
+      ],
+      "source_ids": [
+        "ice-athenspublic"
+      ],
+      "sha256": "bb3a23df3dc907fe7b41a74b2910c87ae45880daea86dcbd065146ce88f294b2",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.45,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.cash-register",
       "path": "sfx/cash_register.mp3",
-      "purpose": "Bright analogue till bell with a short mechanical tick.",
-      "duration_target_sec": 0.52,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility till cue from the recorded cash register.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "cash-register",
+        "till"
+      ],
+      "source_ids": [
+        "cash-register-cv"
+      ],
+      "sha256": "217f2f45e224ce99ae72b8d70c5b8facc472a46e32c7b486ea30ce26888f2182",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.92,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.register-hit",
       "path": "sfx/register_hit.mp3",
-      "purpose": "Low wooden-metal till impact, distinct from the register bell.",
-      "duration_target_sec": 0.28,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility till impact from a different moment in the recording.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "cash-register",
+        "hit"
+      ],
+      "source_ids": [
+        "cash-register-cv"
+      ],
+      "sha256": "a36f90d6a2b13e3a54a357181160e48817595deb07d3874f43987ef9b24ab363",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.52,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.sweep",
       "path": "sfx/sweep.mp3",
-      "purpose": "Clean ascending radio dial sweep.",
-      "duration_target_sec": 0.72,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility sweep using tape motion rather than an oscillator.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "cassette",
+        "motion"
+      ],
+      "source_ids": [
+        "cassette-albertomarun"
+      ],
+      "sha256": "0da40f92aa611a41a6bd4046002952d96fd1ee0c023412c44f0d8defa8a73366",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.86,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.whoosh",
       "path": "sfx/whoosh.mp3",
-      "purpose": "Soft filtered air whoosh for motion and handoff.",
-      "duration_target_sec": 0.8,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility whoosh using a real car pass.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "car",
+        "pass"
+      ],
+      "source_ids": [
+        "car-highway-yinyang"
+      ],
+      "sha256": "6cc857695f9b9ee441f405a028a091ee5b4c7c2956ed8193f0069cfc28492847",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.94,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.tape-stop",
       "path": "sfx/tape_stop.mp3",
-      "purpose": "Short descending analogue tape-stop release.",
-      "duration_target_sec": 0.62,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility tape cue from a recorded cassette mechanism.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "cassette",
+        "stop"
+      ],
+      "source_ids": [
+        "cassette-albertomarun"
+      ],
+      "sha256": "b8b488b6acf08ec55b20d390927526a61203fe2786ab89c8b555c15742f26c52",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.9,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.hotline-beep",
       "path": "sfx/hotline_beep.mp3",
-      "purpose": "Italian late-night hotline dual-tone beep.",
-      "duration_target_sec": 0.28,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility hotline cue from a real telephone recording.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "telephone",
+        "hotline"
+      ],
+      "source_ids": [
+        "telephone-kyles"
+      ],
+      "sha256": "bbd68201b80a7c2f01a70bfa2c179aea047f9e9b8f636fcfff3699f5b1f651d5",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.86,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.mandolin-sting",
       "path": "sfx/mandolin_sting.mp3",
-      "purpose": "Plucked four-note Mediterranean mandolin-style sting.",
-      "duration_target_sec": 0.72,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility sting from the recorded mandolin chord.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "mandolin",
+        "sting"
+      ],
+      "source_ids": [
+        "mandolin-gollybob"
+      ],
+      "sha256": "9f97424e2624fac65be5d8c1580b0583388fb7ea49247403cc39c48840beacd1",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.72,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.ice-clink",
       "path": "sfx/ice_clink.mp3",
-      "purpose": "Small inharmonic aperitivo ice-glass clink.",
-      "duration_target_sec": 0.46,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Compatibility aperitivo clink from the cocktail-ice recording.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "ice",
+        "aperitivo"
+      ],
+      "source_ids": [
+        "ice-athenspublic"
+      ],
+      "sha256": "f11ec5208edbb6dd2fb3c32ace449e0abf41685b45cd8181f3e8c5ed0326b0ab",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.0,
+      "license": "CC0-1.0"
     },
     {
+      "id": "compat.startup-synth",
       "path": "sfx/startup_synth.mp3",
-      "purpose": "Ascending analogue synth bloom for faux-tech ads.",
-      "duration_target_sec": 0.85,
-      "license": "Apache-2.0",
-      "provenance": "Original deterministic FFmpeg procedural synthesis by scripts/generate_sonic_brand_assets.py; no downloaded or external samples."
+      "purpose": "Legacy filename retained; it now contains a real trumpet flourish.",
+      "kind": "compatibility",
+      "tags": [
+        "legacy",
+        "trumpet",
+        "flourish"
+      ],
+      "source_ids": [
+        "trumpet-joepayne"
+      ],
+      "sha256": "39beb9c129184bc68fbe3b7721f70e223e820dc2735043bd29ba3c287ebd5a3f",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.94,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.cafe-testimonial",
+      "path": "ads/beds/cafe_testimonial.mp3",
+      "purpose": "Dry café bed for a suspiciously polished testimonial.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "cafe",
+        "testimonial",
+        "room"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain"
+      ],
+      "sha256": "454ceb1540fce63301bcc67448c4157c583bef3e00862474e111124cfc1219bc",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.stadium-win",
+      "path": "ads/beds/stadium_win.mp3",
+      "purpose": "Crowd-and-applause bed for a ridiculous victory lap.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "crowd",
+        "applause",
+        "victory"
+      ],
+      "source_ids": [
+        "crowd-cheer-beeproductive"
+      ],
+      "sha256": "f6184f29b7c635e313bcf94567865b4ad06ab07a2fb5da976ecbc8485da7f92a",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.showroom-reveal",
+      "path": "ads/beds/showroom_reveal.mp3",
+      "purpose": "Cassette-and-room bed for an overlit showroom reveal.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "cassette",
+        "showroom",
+        "reveal"
+      ],
+      "source_ids": [
+        "cassette-albertomarun",
+        "cafe-kentspublicdomain"
+      ],
+      "sha256": "55f4797f0abec10283f3b37de0b091ebd230ff13da3eb88fdea8dd5f822ca370",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 7.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.bureaucracy-stamp",
+      "path": "ads/beds/bureaucracy_stamp.mp3",
+      "purpose": "Quiet room tone for a deadpan official notice.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "bureaucracy",
+        "room",
+        "deadpan"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain",
+        "cassette-albertomarun"
+      ],
+      "sha256": "19449aa74fd488fc03fceb8859cc48b06d26416edb97f3fd48836d8b9b8aaa20",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 7.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.motorway-pass",
+      "path": "ads/beds/motorway_pass.mp3",
+      "purpose": "Real roadside ambience for a fast motorway spot.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "motorway",
+        "car",
+        "road"
+      ],
+      "source_ids": [
+        "car-highway-yinyang"
+      ],
+      "sha256": "8a5ba45e882a0f3c035f3d988e35cb97c164d9a1ded95e065442f27fb873165b",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.late-night-hotline",
+      "path": "ads/beds/late_night_hotline.mp3",
+      "purpose": "Tape-led late-night bed with a distant phone colour.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "telephone",
+        "cassette",
+        "late-night"
+      ],
+      "source_ids": [
+        "cassette-albertomarun",
+        "telephone-kyles"
+      ],
+      "sha256": "e7aaf641e6ac068580de45dff7048e1b2f014bcfcae4335976a17ef4d431a0e3",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.supermarket-dash",
+      "path": "ads/beds/supermarket_dash.mp3",
+      "purpose": "Busy café room with a faint till detail for supermarket comedy.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "supermarket",
+        "cash-register",
+        "busy"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain",
+        "cash-register-cv"
+      ],
+      "sha256": "b90410a978d0ad9add1f6c6c3987a6ed24a447f1a173ee2bdce19bd583ea4143",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.pharmacy-whisper",
+      "path": "ads/beds/pharmacy_whisper.mp3",
+      "purpose": "Restrained room-and-tape bed for a whispered health claim.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "pharmacy",
+        "whisper",
+        "quiet"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain",
+        "cassette-albertomarun"
+      ],
+      "sha256": "3a566fc205e60ea361a77cc15a5d60ff3e28b379f74a790738ce1e2a60669cb2",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 7.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-bed.home-reveal",
+      "path": "ads/beds/home_reveal.mp3",
+      "purpose": "A grounded espresso-and-café bed for a domestic reveal.",
+      "kind": "ad_bed",
+      "tags": [
+        "ad",
+        "home",
+        "espresso",
+        "cafe"
+      ],
+      "source_ids": [
+        "espresso-andra4",
+        "cafe-kentspublicdomain"
+      ],
+      "sha256": "eed340e4f301f3d801f3631f3d3a2d904a64ed61c0349e86f0ae09df7a0d503d",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 8.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.laugh-open",
+      "path": "ads/cues/laugh_open.mp3",
+      "purpose": "Short warm audience laugh to open a deliberately silly line.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "laugh",
+        "open",
+        "audience"
+      ],
+      "source_ids": [
+        "crowd-laugh-mdrivet"
+      ],
+      "sha256": "f9de0c6eeb432ee0d804e58041a60ddb926eef39c0cc2eabadabb85eacbe6e65",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.35,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.laugh-mid",
+      "path": "ads/cues/laugh_mid.mp3",
+      "purpose": "Compact mid-copy audience laugh.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "laugh",
+        "mid",
+        "audience"
+      ],
+      "source_ids": [
+        "crowd-laugh-mdrivet"
+      ],
+      "sha256": "5f6a73539ed6c5561d7eb2bbca13b2d5df4aaee9bb281c1de5f14a0189be41e4",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.1,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.laugh-button",
+      "path": "ads/cues/laugh_button.mp3",
+      "purpose": "Short laugh button after a punchline.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "laugh",
+        "outro",
+        "button"
+      ],
+      "source_ids": [
+        "crowd-laugh-mdrivet"
+      ],
+      "sha256": "dcda85008a7a208666fb684b6617a2773b481de608243a167a63d5ec2d45ee75",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.5,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.laugh-release",
+      "path": "ads/cues/laugh_release.mp3",
+      "purpose": "A longer laugh release for the end of a testimonial.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "laugh",
+        "release",
+        "audience"
+      ],
+      "source_ids": [
+        "crowd-laugh-mdrivet"
+      ],
+      "sha256": "4283fb03a1d0b924332aa0572cf3f0cad9c33a9fb932868de485e1cc44b1ee07",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 2.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.applause-open",
+      "path": "ads/cues/applause_open.mp3",
+      "purpose": "Immediate crowd applause for a grand opening.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "applause",
+        "crowd",
+        "open"
+      ],
+      "source_ids": [
+        "crowd-cheer-beeproductive"
+      ],
+      "sha256": "e5948d42d614c7a1591182895599d3af854f0905e6620f2e5be4531dda04816c",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.45,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.applause-mid",
+      "path": "ads/cues/applause_mid.mp3",
+      "purpose": "Dry applause hit for a mid-copy win.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "applause",
+        "crowd",
+        "mid"
+      ],
+      "source_ids": [
+        "crowd-cheer-beeproductive"
+      ],
+      "sha256": "5a59589db0b301ed7e2b1e63e7aadff651fdccb5f8e061e5cf73396a5ec4c72a",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.15,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.applause-button",
+      "path": "ads/cues/applause_button.mp3",
+      "purpose": "Tight applause button to close a winner.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "applause",
+        "crowd",
+        "outro"
+      ],
+      "source_ids": [
+        "crowd-cheer-beeproductive"
+      ],
+      "sha256": "3ee3394750199b229647321e3ff7a046d60fbd949f8cf88666a5bf0a9b9e2621",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.65,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.applause-release",
+      "path": "ads/cues/applause_release.mp3",
+      "purpose": "Longer applause release, never used with another reaction cue.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "applause",
+        "crowd",
+        "release"
+      ],
+      "source_ids": [
+        "crowd-cheer-beeproductive"
+      ],
+      "sha256": "8bf03e3e366a2add0ca081dadb5899409464f5a20dcc62cdd5ae15e8eb73b00e",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 2.2,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.trumpet-open",
+      "path": "ads/cues/trumpet_open.mp3",
+      "purpose": "A real trumpet fanfare head for a proud claim.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "trumpet",
+        "brass",
+        "open"
+      ],
+      "source_ids": [
+        "trumpet-joepayne"
+      ],
+      "sha256": "f36e51af0991ef603dd9aa0fc5c63ca40c7239d316f78c24980f46a7bd832cff",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.25,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.trumpet-hit",
+      "path": "ads/cues/trumpet_hit.mp3",
+      "purpose": "A compact brass hit for a reveal.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "trumpet",
+        "brass",
+        "hit"
+      ],
+      "source_ids": [
+        "trumpet-joepayne"
+      ],
+      "sha256": "f9dfa2005506fb89e0a55ed3e3017557ec32eda960969d70f85bd0b2f980a0ee",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.82,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.trumpet-out",
+      "path": "ads/cues/trumpet_out.mp3",
+      "purpose": "Brass release for an ad outro.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "trumpet",
+        "brass",
+        "outro"
+      ],
+      "source_ids": [
+        "trumpet-joepayne"
+      ],
+      "sha256": "07207ba3fdbebb44d4d8e5b5969b475091828d277a9f625b814596ee34676ed8",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.25,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.mandolin-open",
+      "path": "ads/cues/mandolin_open.mp3",
+      "purpose": "A bright real mandolin opening strum.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "mandolin",
+        "open",
+        "warm"
+      ],
+      "source_ids": [
+        "mandolin-gollybob"
+      ],
+      "sha256": "915c701728408f1470f14f81c1265bc8a5866e5f9f7b9e5a1ae295a0a98e074d",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.35,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.mandolin-mid",
+      "path": "ads/cues/mandolin_mid.mp3",
+      "purpose": "A clipped mandolin accent for a scene turn.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "mandolin",
+        "mid",
+        "accent"
+      ],
+      "source_ids": [
+        "mandolin-gollybob"
+      ],
+      "sha256": "b2a8371b5150a9113d412505855085747245d41b31970dfeb0f6f4b625a3063c",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.9,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.mandolin-out",
+      "path": "ads/cues/mandolin_out.mp3",
+      "purpose": "Mandolin release after a domestic punchline.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "mandolin",
+        "outro",
+        "release"
+      ],
+      "source_ids": [
+        "mandolin-gollybob"
+      ],
+      "sha256": "fa3587462c1ca7808b8025142331a2427d81731749ac43bde52415dc4bd39dae",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.55,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.espresso-hiss",
+      "path": "ads/cues/espresso_hiss.mp3",
+      "purpose": "Short espresso steam detail, kept dry and brief.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "espresso",
+        "steam",
+        "cafe"
+      ],
+      "source_ids": [
+        "espresso-andra4"
+      ],
+      "sha256": "722188632b138590aba10538da15056586bba55e3d585d73e0a6d8ec20ba4375",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.1,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.espresso-pour",
+      "path": "ads/cues/espresso_pour.mp3",
+      "purpose": "Recorded espresso action for a café scene.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "espresso",
+        "pour",
+        "cafe"
+      ],
+      "source_ids": [
+        "espresso-andra4"
+      ],
+      "sha256": "03a28c72acdfb294dca0ba0dbfce75f9274d055b3acab2842af1c965ada32dd6",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.4,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.espresso-button",
+      "path": "ads/cues/espresso_button.mp3",
+      "purpose": "Quick espresso-machine button for a scene turn.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "espresso",
+        "button",
+        "foley"
+      ],
+      "source_ids": [
+        "espresso-andra4"
+      ],
+      "sha256": "7776c2ea6a8aa9c0dd972875c10dfa68a889be9a0e6e0f98023f0d9f42004bcb",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.72,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.espresso-release",
+      "path": "ads/cues/espresso_release.mp3",
+      "purpose": "Short espresso-machine release after copy.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "espresso",
+        "release",
+        "foley"
+      ],
+      "source_ids": [
+        "espresso-andra4"
+      ],
+      "sha256": "9640aa1e080f7ea1c5e4a1829aefba9725bac799c45e29dd83ae188d9c19ccaf",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.25,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.cafe-clatter",
+      "path": "ads/cues/cafe_clatter.mp3",
+      "purpose": "A small café clatter, not an ambient loop.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cafe",
+        "clatter",
+        "foley"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain"
+      ],
+      "sha256": "a459199dfb03e2fdaf81cc3a0375fba2146a3028a9e33740387711865e3dc5ef",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.cafe-room-hit",
+      "path": "ads/cues/cafe_room_hit.mp3",
+      "purpose": "A compact room response for a scene reveal.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cafe",
+        "room",
+        "accent"
+      ],
+      "source_ids": [
+        "cafe-kentspublicdomain"
+      ],
+      "sha256": "b042d017d0d771a9a5152d4f209f45ac1c5c6fef2a215416cc8e8334cf0e30d5",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.15,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.cash-stamp",
+      "path": "ads/cues/cash_stamp.mp3",
+      "purpose": "Mechanical cash-register strike used like a bureaucratic stamp.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cash-register",
+        "stamp",
+        "bureaucracy"
+      ],
+      "source_ids": [
+        "cash-register-cv"
+      ],
+      "sha256": "34a704adcf82a77b3647a55e0dcec0ad36b3cbc072980a8e3a696f06dac763de",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.68,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.cash-open",
+      "path": "ads/cues/cash_open.mp3",
+      "purpose": "Recorded till opening for a supermarket reveal.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cash-register",
+        "open",
+        "supermarket"
+      ],
+      "source_ids": [
+        "cash-register-cv"
+      ],
+      "sha256": "92d8f22b343181b2264b98a8d91d3ac0e2aa01ddfb16944bd27a42f6f6e132fc",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.1,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.cash-close",
+      "path": "ads/cues/cash_close.mp3",
+      "purpose": "Short till close for an ad button.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cash-register",
+        "close",
+        "button"
+      ],
+      "source_ids": [
+        "cash-register-cv"
+      ],
+      "sha256": "9c06aede721a7d7b7f07430670a7b161de86afbf5d9d45cdb5ba19ee88a2b155",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.86,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.phone-ring",
+      "path": "ads/cues/phone_ring.mp3",
+      "purpose": "Real phone ring for a late-night hotline opener.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "telephone",
+        "ring",
+        "hotline"
+      ],
+      "source_ids": [
+        "telephone-kyles"
+      ],
+      "sha256": "8790db150f73bbf572f115a8dcbe1d9bca87480feb0d8f5be3b2c0a307bb35cb",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.25,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.phone-click",
+      "path": "ads/cues/phone_click.mp3",
+      "purpose": "Small telephone mechanism detail.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "telephone",
+        "click",
+        "foley"
+      ],
+      "source_ids": [
+        "telephone-kyles"
+      ],
+      "sha256": "6755fa1b00491e259e05b9a15af8a5e4962a62c34a3d6c42a3c791f207e10f8e",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.72,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.phone-out",
+      "path": "ads/cues/phone_out.mp3",
+      "purpose": "Telephone release for a late-night outro.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "telephone",
+        "outro",
+        "hotline"
+      ],
+      "source_ids": [
+        "telephone-kyles"
+      ],
+      "sha256": "540c1d5bc0cc606b9635d7359efcfab099ea6d21a1b7ca4d33af99b433401c9f",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.1,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.tape-click",
+      "path": "ads/cues/tape_click.mp3",
+      "purpose": "Cassette mechanism click for a scene transition.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cassette",
+        "click",
+        "transition"
+      ],
+      "source_ids": [
+        "cassette-albertomarun"
+      ],
+      "sha256": "72118c7fef5d70769d063657a392e98f621a1b23f6e71aebfa5a69b898151986",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.75,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.tape-slap",
+      "path": "ads/cues/tape_slap.mp3",
+      "purpose": "A different cassette hit for a bureaucratic button.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cassette",
+        "slap",
+        "button"
+      ],
+      "source_ids": [
+        "cassette-albertomarun"
+      ],
+      "sha256": "b95cd764cbf2f8aa6b83815747ab6bc0fb2021179bca98ee8f990fc64911ff56",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.9,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.tape-out",
+      "path": "ads/cues/tape_out.mp3",
+      "purpose": "Cassette tail used as a single dry outro detail.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "cassette",
+        "outro",
+        "release"
+      ],
+      "source_ids": [
+        "cassette-albertomarun"
+      ],
+      "sha256": "a9e521021fdd54297a98ec77c3fbbbe88f776362a3d22cc59712f18c36178d7e",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.05,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.ice-rattle",
+      "path": "ads/cues/ice_rattle.mp3",
+      "purpose": "A soft cocktail-ice rattle for a whispered scene.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "ice",
+        "rattle",
+        "whisper"
+      ],
+      "source_ids": [
+        "ice-athenspublic"
+      ],
+      "sha256": "a2bd8b43776a907a73c3f3e2b045a3175fed84e98380d8d287c4803f504cdd51",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.15,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.ice-button",
+      "path": "ads/cues/ice_button.mp3",
+      "purpose": "Tight cocktail-glass button.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "ice",
+        "button",
+        "aperitivo"
+      ],
+      "source_ids": [
+        "ice-athenspublic"
+      ],
+      "sha256": "be1c02aa77ded0c04188f53d7ff6d1284a56388bf42095127835e2373d9a1b20",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 0.62,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.car-pass-open",
+      "path": "ads/cues/car_pass_open.mp3",
+      "purpose": "A real motorway pass to open a driving spot.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "car",
+        "motorway",
+        "open"
+      ],
+      "source_ids": [
+        "car-highway-yinyang"
+      ],
+      "sha256": "09928482f8d6a89877b89ce62a28836389af6dca7e530222084e18a29c10e3cb",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.5,
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ad-cue.car-pass-out",
+      "path": "ads/cues/car_pass_out.mp3",
+      "purpose": "Short roadway release for the end of a driving spot.",
+      "kind": "ad_cue",
+      "tags": [
+        "ad",
+        "car",
+        "motorway",
+        "outro"
+      ],
+      "source_ids": [
+        "car-highway-yinyang"
+      ],
+      "sha256": "2b9e6324071ce86e1e4aa4fc6222336a847607af3d26f0392cdd80d9160198fa",
+      "format": {
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192
+      },
+      "duration_target_sec": 1.3,
+      "license": "CC0-1.0"
+    }
+  ],
+  "recipes": [
+    {
+      "id": "cafe_testimonial",
+      "bed": {
+        "asset_id": "ad-bed.cafe-testimonial",
+        "gain_db": -19.0
+      },
+      "cues": [
+        {
+          "anchor": "after_first_voice",
+          "asset_id": "ad-cue.espresso-hiss",
+          "gain_db": -13.0,
+          "max_duration_sec": 1.1
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.laugh-button",
+          "gain_db": -12.0,
+          "max_duration_sec": 1.5
+        }
+      ]
+    },
+    {
+      "id": "stadium_win",
+      "bed": {
+        "asset_id": "ad-bed.stadium-win",
+        "gain_db": -22.0
+      },
+      "cues": [
+        {
+          "anchor": "intro",
+          "asset_id": "ad-cue.trumpet-open",
+          "gain_db": -8.0,
+          "max_duration_sec": 1.25
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.applause-button",
+          "gain_db": -12.0,
+          "max_duration_sec": 1.65
+        }
+      ]
+    },
+    {
+      "id": "showroom_reveal",
+      "bed": {
+        "asset_id": "ad-bed.showroom-reveal",
+        "gain_db": -21.0
+      },
+      "cues": [
+        {
+          "anchor": "intro",
+          "asset_id": "ad-cue.ice-rattle",
+          "gain_db": -14.0,
+          "max_duration_sec": 1.15
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.mandolin-out",
+          "gain_db": -13.0,
+          "max_duration_sec": 1.55
+        }
+      ]
+    },
+    {
+      "id": "bureaucracy_stamp",
+      "bed": {
+        "asset_id": "ad-bed.bureaucracy-stamp",
+        "gain_db": -23.0
+      },
+      "cues": [
+        {
+          "anchor": "after_first_voice",
+          "asset_id": "ad-cue.cash-stamp",
+          "gain_db": -10.0,
+          "max_duration_sec": 0.68
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.tape-slap",
+          "gain_db": -14.0,
+          "max_duration_sec": 0.9
+        }
+      ]
+    },
+    {
+      "id": "motorway_pass",
+      "bed": {
+        "asset_id": "ad-bed.motorway-pass",
+        "gain_db": -23.0
+      },
+      "cues": [
+        {
+          "anchor": "intro",
+          "asset_id": "ad-cue.car-pass-open",
+          "gain_db": -13.0,
+          "max_duration_sec": 1.5
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.car-pass-out",
+          "gain_db": -15.0,
+          "max_duration_sec": 1.3
+        }
+      ]
+    },
+    {
+      "id": "late_night_hotline",
+      "bed": {
+        "asset_id": "ad-bed.late-night-hotline",
+        "gain_db": -23.0
+      },
+      "cues": [
+        {
+          "anchor": "intro",
+          "asset_id": "ad-cue.phone-ring",
+          "gain_db": -14.0,
+          "max_duration_sec": 1.25
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.phone-out",
+          "gain_db": -15.0,
+          "max_duration_sec": 1.1
+        }
+      ]
+    },
+    {
+      "id": "supermarket_dash",
+      "bed": {
+        "asset_id": "ad-bed.supermarket-dash",
+        "gain_db": -24.0
+      },
+      "cues": [
+        {
+          "anchor": "after_first_voice",
+          "asset_id": "ad-cue.cash-open",
+          "gain_db": -11.0,
+          "max_duration_sec": 1.1
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.laugh-release",
+          "gain_db": -14.0,
+          "max_duration_sec": 2.0
+        }
+      ]
+    },
+    {
+      "id": "pharmacy_whisper",
+      "bed": {
+        "asset_id": "ad-bed.pharmacy-whisper",
+        "gain_db": -27.0
+      },
+      "cues": [
+        {
+          "anchor": "intro",
+          "asset_id": "ad-cue.ice-rattle",
+          "gain_db": -17.0,
+          "max_duration_sec": 1.15
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.ice-button",
+          "gain_db": -15.0,
+          "max_duration_sec": 0.62
+        }
+      ]
+    },
+    {
+      "id": "home_reveal",
+      "bed": {
+        "asset_id": "ad-bed.home-reveal",
+        "gain_db": -23.0
+      },
+      "cues": [
+        {
+          "anchor": "after_first_voice",
+          "asset_id": "ad-cue.espresso-pour",
+          "gain_db": -14.0,
+          "max_duration_sec": 1.4
+        },
+        {
+          "anchor": "outro",
+          "asset_id": "ad-cue.mandolin-mid",
+          "gain_db": -14.0,
+          "max_duration_sec": 0.9
+        }
+      ]
     }
   ]
 }

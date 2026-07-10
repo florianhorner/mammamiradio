@@ -21,8 +21,9 @@ from mammamiradio.hosts.ad_creative import (
     CampaignSpine,
     SonicWorld,
     _pick_brand,
+    _select_ad_creative,
 )
-from mammamiradio.hosts.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
+from mammamiradio.hosts.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS, _ensure_attention_grabbing_ad_parts
 
 # --- _pick_brand tests ---
 
@@ -227,12 +228,15 @@ def test_sonic_world_defaults():
     assert sw.music_bed == "lounge"
     assert sw.transition_motif == "chime"
     assert sw.sonic_signature == ""
+    assert sw.recipe_id == ""
+    assert sw.is_recipe_driven is False
 
 
 def test_campaign_spine_defaults():
     cs = CampaignSpine()
     assert cs.premise == ""
     assert cs.sonic_signature == ""
+    assert cs.sonic_recipe == ""
     assert cs.format_pool == []
     assert cs.spokesperson == ""
     assert cs.escalation_rule == ""
@@ -249,6 +253,60 @@ def test_ad_brand_with_campaign():
     assert brand.campaign is not None
     assert brand.campaign.premise == "Test premise"
     assert len(brand.campaign.format_pool) == 2
+
+
+def test_campaign_recipe_overrides_brand_recipe_and_legacy_signature():
+    """Recipe-driven spots leave all procedural motif fields empty."""
+    brand = AdBrand(
+        name="Test",
+        tagline="Tag",
+        category="food",
+        sonic_recipe="supermarket_dash",
+        campaign=CampaignSpine(
+            sonic_recipe="cafe_testimonial",
+            sonic_signature="chime+whoosh",
+        ),
+    )
+
+    _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
+
+    assert sonic.recipe_id == "cafe_testimonial"
+    assert sonic.is_recipe_driven is True
+    assert sonic.sonic_signature == ""
+    assert sonic.transition_motif == ""
+
+
+def test_recipe_driven_ad_strips_llm_sfx_before_audio_rendering():
+    """The recipe is the only source of accents for an official spot."""
+    sonic = SonicWorld(recipe_id="stadium_win")
+    parts = [
+        AdPart(type="sfx", sfx="whoosh"),
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="sfx", sfx="chime"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(parts, sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+
+def test_legacy_sonic_signature_still_selects_procedural_motif():
+    """Old custom campaigns continue to work when no recipe is configured."""
+    brand = AdBrand(
+        name="Legacy",
+        tagline="Tag",
+        category="food",
+        campaign=CampaignSpine(sonic_signature="ice_clink+startup_synth"),
+    )
+
+    _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
+
+    assert sonic.recipe_id == ""
+    assert sonic.is_recipe_driven is False
+    assert sonic.sonic_signature == "ice_clink+startup_synth"
+    assert sonic.transition_motif == "ice_clink"
 
 
 def test_ad_brand_without_campaign_compat():

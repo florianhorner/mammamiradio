@@ -3720,15 +3720,30 @@ async def run_producer(
                     num_voices = len(config.ads.voices) if config.ads.voices else 1
                     ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
                     voice_map = _cast_voices(brand, config.ads.voices, _sw._regular_hosts(config), roles_needed)
+                    recipe = (
+                        imaging_lib.resolve_ad_recipe(
+                            sonic.recipe_id,
+                            variant_key=f"{brand.name}:{spot_idx}:{len(state.ad_history)}",
+                        )
+                        if sonic.recipe_id
+                        else None
+                    )
+                    if sonic.recipe_id and recipe is None:
+                        logger.warning(
+                            "Ad recipe %s for %s is unavailable; using the recorded compatibility bed path",
+                            sonic.recipe_id,
+                            brand.name,
+                        )
                     logger.info(
-                        "  Spot %d/%d: %s (format=%s, roles=%s)",
+                        "  Spot %d/%d: %s (format=%s, recipe=%s, roles=%s)",
                         spot_idx + 1,
                         num_spots,
                         brand.name,
                         ad_format,
+                        recipe.id if recipe is not None else "compatibility",
                         list(voice_map.keys()),
                     )
-                    spot_params.append((brand, ad_format, sonic, voice_map))
+                    spot_params.append((brand, ad_format, sonic, voice_map, recipe))
 
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
@@ -3845,7 +3860,7 @@ async def run_producer(
                                     spot_index=i,
                                     callback_gag=(_cb_gag_text if i == 0 else None),
                                 )
-                                for i, (brand, af, sn, vm) in enumerate(spot_params)
+                                for i, (brand, af, sn, vm, _recipe) in enumerate(spot_params)
                             )
                         ),
                         _build_bumpers(),
@@ -3866,8 +3881,9 @@ async def run_producer(
                             state=state,
                             cache_dir=config.cache_dir,
                             bed_assets_dir=bed_assets_dir,
+                            recipe=recipe,
                         )
-                        for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                        for script, (_, _, _, vm, recipe) in zip(scripts, spot_params, strict=False)
                     )
                 )
 

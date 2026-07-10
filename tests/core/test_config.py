@@ -1122,10 +1122,13 @@ def test_load_config_parses_campaign_spines():
 def test_load_config_parses_campaign_sonic_recipe_override(tmp_path):
     """A campaign may override its brand recipe without touching legacy fields."""
     source = Path(__file__).resolve().parents[2] / "radio.toml"
+    premise = (
+        "premise = \"Prezzoforte's legendary weekly offers: discounts so aggressive "
+        'the staff look personally offended by them"'
+    )
     custom = source.read_text().replace(
-        'premise = "Prezzoforte\'s legendary weekly offers: discounts so aggressive the staff look personally offended by them"',
-        'premise = "Prezzoforte\'s legendary weekly offers: discounts so aggressive the staff look personally offended by them"\n'
-        'sonic_recipe = "cafe_testimonial"',
+        premise,
+        f'{premise}\nsonic_recipe = "cafe_testimonial"',
         1,
     )
     custom_path = tmp_path / "radio.toml"
