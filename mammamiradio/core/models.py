@@ -29,6 +29,16 @@ if TYPE_CHECKING:
 
 
 PartyMode = Literal["festival"]
+
+# Record Hunt ("Find records") selection lift. The multiplier applied to heading-matched
+# tracks in select_next_track() is adaptive: sized from the live pool so the hunt set
+# reliably lands ~HEADING_TARGET_SHARE of picks no matter how large rotation is, then
+# clamped to [MIN, MAX]. MIN preserves the historical fixed x4 floor for small pools;
+# MAX stops a tiny hunt set from making one song dominate the station.
+HEADING_TARGET_SHARE = 0.45
+HEADING_MIN_LIFT = 4.0
+HEADING_MAX_LIFT = 60.0
+
 CostCategory = Literal["script_banter", "script_transition", "script_ads", "script_home_mood", "script_memory", "tts"]
 LLM_COST_CATEGORIES: tuple[CostCategory, ...] = (
     "script_banter",
@@ -1226,9 +1236,14 @@ class StationState:
             candidates = [max(pool, key=_staleness)]
 
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
-        weights: list[float] = []
+        # Pass 1: base weight per candidate (everything EXCEPT the Record Hunt lift), plus
+        # the heading-match flag and the split base-weight sums the adaptive lift needs.
         heading = self.heading
         preference_scores = preference_score_map(self.song_preferences)
+        base_weights: list[float] = []
+        heading_flags: list[bool] = []
+        sum_heading_base = 0.0
+        sum_other_base = 0.0
         for track in candidates:
             w = 1.0
 
@@ -1250,18 +1265,40 @@ class StationState:
             if track.popularity:
                 w *= 0.8 + 0.2 * (track.popularity / 100.0)
 
-            heading_match = heading is not None and heading.id and track.heading_id == heading.id
-            if heading_match:
-                # Record Hunt is steering, not queue control: matching records get a
-                # durable lift, but cooldowns, bans, pinned tracks, and diversity still win.
-                w *= 4.0
-
+            heading_match = bool(heading is not None and heading.id and track.heading_id == heading.id)
             score = preference_scores.get(normalized_track_key(track), 0)
+            # A thumbs-down never fights an active Record Hunt: clamp a negative
+            # preference to neutral for heading matches (unchanged from before).
             if score < 0 and heading_match:
                 score = 0
             w *= preference_weight(score)
 
-            weights.append(max(w, 0.01))  # Floor to avoid zero weights
+            base_weights.append(w)
+            heading_flags.append(heading_match)
+            if heading_match:
+                sum_heading_base += w
+            else:
+                sum_other_base += w
+
+        # Record Hunt is steering, not queue control: matching records get an adaptive
+        # lift sized so the hunt set reliably lands ~HEADING_TARGET_SHARE of picks
+        # regardless of how big the rotation pool is (a fixed xN is inaudible in a
+        # 200-track pool). Cooldowns, bans, pinned tracks, and diversity still win —
+        # they run as hard filters before we ever weight, and the lift only rebalances
+        # whatever survived. heading_lift is clamped to [HEADING_MIN_LIFT, HEADING_MAX_LIFT]
+        # so a small pool keeps the historical x4 floor and a tiny hunt set can never make
+        # one song dominate the station.
+        if sum_heading_base <= 0.0 or sum_other_base <= 0.0:
+            heading_lift = HEADING_MIN_LIFT
+        else:
+            computed = (HEADING_TARGET_SHARE / (1.0 - HEADING_TARGET_SHARE)) * (sum_other_base / sum_heading_base)
+            heading_lift = min(HEADING_MAX_LIFT, max(HEADING_MIN_LIFT, computed))
+
+        # Pass 2: apply the lift to heading matches and floor to avoid zero weights.
+        weights = [
+            max(w * (heading_lift if is_heading else 1.0), 0.01)
+            for w, is_heading in zip(base_weights, heading_flags, strict=False)
+        ]
 
         selected = random.choices(candidates, weights=weights, k=1)[0]
         return selected
