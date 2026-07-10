@@ -1,7 +1,7 @@
 name: Mamma Mi Radio (Edge)
 description: Development channel — always the latest main-branch build. For testing only; use the stable Mamma Mi Radio add-on for daily listening.
 slug: mammamiradio-edge
-version: 901e542
+version: da7485b
 stage: experimental
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}

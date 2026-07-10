@@ -8,6 +8,7 @@
 default_profile = "balanced"
 
 [models.catalog.anthropic]
+fable = "claude-fable-5"  # ported from main #806; unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
 opus = "claude-opus-4-8"
 sonnet = "claude-sonnet-4-6"
 haiku = "claude-haiku-4-5-20251001"
