@@ -25,6 +25,7 @@ The current version source of truth is `pyproject.toml`.
 ### Refactored
 
 - **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
+- **Startup and restart-handoff cleanup now consistently refuse to follow shortcut files (symlinks) into or out of the cache.** The scratch-file, restart-handoff, and cache-admission cleanup paths shared duplicated path-safety checks with small inconsistencies between them; they now share one containment helper, so a stray or malformed cache entry is skipped everywhere the same way instead of behaving slightly differently depending on which cleanup pass touched it first.
 
 ## [2.17.0] - 2026-07-07
 
