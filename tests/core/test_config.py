@@ -404,7 +404,7 @@ def test_audio_section_loaded():
     assert config.audio.sample_rate == 48000
     assert config.audio.channels == 2
     assert config.audio.bitrate == 192
-    # Model IDs now live in [models]; the audio section no longer carries them.
+    # Model IDs now live in the sibling registry; the audio section no longer carries them.
     assert resolve_model(config.models, "banter", "anthropic")
     assert resolve_model(config.models, "memory_extract", "anthropic") == resolve_model(
         config.models,
@@ -815,7 +815,7 @@ def test_legacy_audio_model_keys_do_not_break_boot(tmp_path):
     toml_path.write_text(patched)
 
     config = load_config(str(toml_path))  # must not raise TypeError
-    assert resolve_model(config.models, "banter", "anthropic")
+    assert resolve_model(config.models, "banter", "anthropic") is None
     assert not hasattr(config.audio, "claude_model")
 
 

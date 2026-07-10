@@ -11,6 +11,12 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY mammamiradio/ mammamiradio/
 COPY radio.toml .
+# Model selection and pricing policy is canonical at the repository root and is
+# loaded at runtime as a sibling of radio.toml (/app/model_registry.toml).
+# Without it, load_config falls to _empty_models() and the station has no
+# LLM/TTS routing — a silent stock-copy/Edge-TTS degrade with keys still set.
+# The HA add-on stages the same file via its own build workflow.
+COPY model_registry.toml .
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN pip install --no-cache-dir . \
     && chmod +x /usr/local/bin/docker-entrypoint.sh

@@ -209,8 +209,9 @@ def test_cost_counter_never_zero_without_per_model_data():
     state.api_input_tokens = 1_000_000
     state.api_output_tokens = 1_000_000
     cost, unpriced = _estimate_api_cost(state)
-    assert cost > 0
-    assert unpriced is False
+    # Cheapest configured tier (haiku: 0.8 + 4.0), never inflated.
+    assert cost == pytest.approx(4.8, abs=0.01)
+    assert unpriced is False  # no per-model data is not an unpriced *model*
 
 
 def test_cost_counter_includes_tts_characters():
@@ -284,7 +285,7 @@ def test_cost_counter_tts_folds_into_legacy_aggregate_branch():
     state.tts_characters = 500_000  # * 0.00002 = 10.00
     cost, unpriced = _estimate_api_cost(state)
     assert cost == pytest.approx(10.0, abs=0.01)
-    assert unpriced is False
+    assert unpriced is False  # no per-model data is not an unpriced *model*
 
 
 def test_cost_counter_tts_getattr_safe_on_legacy_state():

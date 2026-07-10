@@ -593,6 +593,41 @@ def _create_validate_addon_repo(
     _write(tmp_path / web_module, streamer_body)
     _write(tmp_path / "radio.toml", "[station]\nname = 'Test'\n")
     _write(tmp_path / "ha-addon/mammamiradio/radio.toml", "[station]\nname = 'Test'\n")
+    _write(
+        tmp_path / "model_registry.toml",
+        """
+[models]
+default_profile = "balanced"
+
+[models.catalog.anthropic]
+opus = "anthropic-creative"
+haiku = "anthropic-fast"
+
+[models.catalog.openai]
+large = "openai-creative"
+small = "openai-fast"
+
+[models.routing]
+banter = "creative"
+news_flash = "creative"
+ad = "creative"
+transition = "fast"
+home_mood = "fast"
+memory_extract = "fast"
+direction = "creative"
+
+[models.profiles.balanced]
+anthropic = { creative = "opus", fast = "haiku" }
+openai = { creative = "large", fast = "small" }
+
+[tts.openai]
+model = "openai-tts"
+
+[pricing]
+fallback_input_per_million = 15.0
+fallback_output_per_million = 75.0
+""".lstrip(),
+    )
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
     _write(tmp_path / "repository.yaml", "name: test\n")
 
@@ -624,6 +659,65 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
     assert result.returncode != 0
     assert "rewrites single-quoted JS path" in result.stdout
+
+
+def test_validate_addon_requires_the_canonical_model_registry(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    (tmp_path / "model_registry.toml").unlink()
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "Missing canonical model_registry.toml" in result.stdout
+
+
+def test_validate_addon_rejects_a_committed_addon_registry_copy(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    _write(tmp_path / "ha-addon/mammamiradio/model_registry.toml", "[models]\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "must not be committed" in result.stdout
+
+
+def test_validate_addon_rejects_registry_that_runtime_cannot_route(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    _write(tmp_path / "model_registry.toml", "[models]\ndefault_profile = 'balanced'\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "model_registry.toml parse/schema error" in result.stdout
+
+
+def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
+    import re
+
+    workflow = (ROOT / ".github" / "workflows" / "addon-build.yml").read_text()
+    script = (ROOT / "scripts" / "cut-edge-release.sh").read_text()
+
+    trigger_section_match = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", workflow, re.DOTALL)
+    assert trigger_section_match, "Could not locate addon-build.yml `on:` block"
+    trigger_paths = {
+        line.split("-", 1)[1].strip().strip('"').strip("'").removesuffix("/**")
+        for line in trigger_section_match.group(0).splitlines()
+        if line.lstrip().startswith("- ")
+    }
+    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', script, re.MULTILINE)
+    assert image_paths_match, "scripts/cut-edge-release.sh must declare IMAGE_PATHS"
+    image_paths = set(image_paths_match.group(1).split())
+
+    assert image_paths == trigger_paths
 
 
 def test_validate_addon_allows_service_worker_rewrite(tmp_path: Path) -> None:
@@ -1063,6 +1157,25 @@ def test_port_is_consistent_across_addon_files() -> None:
         f"run.sh MAMMAMIRADIO_PORT={env_port}, "
         f"run.sh --port={uvicorn_port}, "
         f"config.py default={py_port}"
+    )
+
+
+def test_standalone_dockerfile_stages_the_model_registry() -> None:
+    """Standalone Dockerfile must copy the canonical model_registry.toml.
+
+    load_config() reads the registry as a sibling of radio.toml
+    (/app/model_registry.toml). Without a COPY here, every standalone /
+    docker-compose deployment boots with _empty_models() and silently loses all
+    LLM script generation and OpenAI TTS routing — no crash, no CI signal. The
+    HA add-on stages the same file via addon-build.yml; this guards the
+    standalone path that has no build-time hash assert.
+    """
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert (ROOT / "model_registry.toml").is_file(), "canonical model_registry.toml missing at repo root"
+    assert "COPY model_registry.toml" in dockerfile, (
+        "Standalone Dockerfile does not COPY model_registry.toml — "
+        "standalone deployments would boot without LLM/TTS routing"
     )
 
 

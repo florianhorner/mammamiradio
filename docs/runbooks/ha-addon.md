@@ -166,12 +166,15 @@ defaults to `balanced`, which keeps Anthropic on the prior Opus/Haiku routing wh
 using the frontier OpenAI catalog for creative fallback). If an existing
 `/data/options.json` still contains the removed `claude_model` key, `run.sh` also
 exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator saves
-`quality_profile`. The actual model IDs live in `[models]` in `radio.toml` (see
-"Dynamic LLM routing" in the root `CLAUDE.md`).
-**To add or swap a model:** edit the relevant `[models.catalog.<provider>]` line in
-`radio.toml` — one line, no code change, no schema change. New models air correctly
-immediately; their cost line shows `estimate (unpriced model)` until a price is added
-to `MODEL_PRICES` in `web/streamer.py`.
+`quality_profile`. The canonical model IDs, OpenAI TTS selection, and
+script-token prices live in the root `model_registry.toml` (see "Dynamic LLM
+routing" in the root `CLAUDE.md`).
+**To add or swap a model:** update the relevant registry catalog entry and its
+matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
+change. The add-on image copies this canonical root file; do not create an
+add-on-specific registry copy. An unknown experimental `--models` candidate in
+the evaluator uses the registry's conservative fallback price and is marked
+unpriced in its JSONL output.
 
 The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
 
@@ -206,7 +209,8 @@ The addon Dockerfile installs mammamiradio from LOCAL source copied by CI into t
 - No dependency on GitHub being reachable during Docker build
 - No risk of building with stale code from a different branch
 
-CI copies `mammamiradio/`, `pyproject.toml`, and `radio.toml` into `ha-addon/mammamiradio/` before building.
+CI copies `mammamiradio/`, `pyproject.toml`, `radio.toml`, and the root
+`model_registry.toml` into `ha-addon/mammamiradio/` before building.
 The checked-in `ha-addon/mammamiradio/radio.toml` must remain byte-for-byte identical to the root `radio.toml`; local validation and CI now fail if those files drift.
 
 Before every commit or push that touches addon packaging, run:
@@ -405,7 +409,9 @@ Use these to tell intentional degradation from a real regression during post-mer
 ### "An unknown error occurred with addon"
 - Check addon logs (Settings > Add-ons > Mamma Mi Radio > Log)
 - If "radio.toml not found": image is corrupt, rebuild
-- If "model not found": a model ID in `[models.catalog]` in `radio.toml` doesn't match the provider's API (the circuit breaker falls back automatically, but fix the catalog line)
+- If "model not found": the provider's registry catalog value does not match its
+  API (the circuit breaker falls back automatically, but fix the canonical
+  `model_registry.toml` catalog entry)
 - If Python traceback: the code has a bug, check the specific error
 
 ### Image shows as "private" on GHCR

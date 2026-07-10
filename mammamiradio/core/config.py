@@ -162,35 +162,14 @@ class AudioSection:
     broadcast_chain: bool = False
 
 
-# ── Dynamic LLM routing ───────────────────────────────────────────────────
-# Script generation never names a model in code. Tasks ask for a ROLE; a
-# per-provider catalog maps role→model; a quality profile selects which catalog
-# entry each role resolves to. Swap any model by editing radio.toml [models]
-# (or an env var) — no code change, no stale dropdown.
-#
-#   task (caller) ──routing──▶ role ──active_profile──▶ catalog_key ──catalog──▶ model_id
-#
-# DEFAULT_ROLE and DEFAULT_MODELS are the ONLY places a model identity lives in
-# code, and only as the cold-start safety net: if [models] is missing or
-# malformed the station still boots and airs on these (degrade, never die).
+# ── Dynamic model routing ─────────────────────────────────────────────────
+# Model identities live only in model_registry.toml.  Code works with stable
+# roles and catalog keys, so a provider upgrade is configuration-only rather
+# than a multi-file source change.
 DEFAULT_ROLE = "creative"
+MODEL_REGISTRY_FILENAME = "model_registry.toml"
+CONSERVATIVE_FALLBACK_PRICE: tuple[float, float] = (15.0 / 1_000_000, 75.0 / 1_000_000)
 
-# Built-in fallback catalog. `balanced` reproduces today's exact mapping
-# (creative=opus for banter/news/ads, fast=haiku for transitions) so removing
-# [models] from radio.toml is behavior-preserving. `fast` is pinned to the
-# lowest-latency model in EVERY profile — transitions are the latency-sensitive
-# glue between songs and must never risk dead air (leadership principle #2).
-_DEFAULT_CATALOG: dict[str, dict[str, str]] = {
-    "anthropic": {
-        "opus": "claude-opus-4-8",
-        "sonnet": "claude-sonnet-4-6",
-        "haiku": "claude-haiku-4-5-20251001",
-    },
-    "openai": {
-        "large": "gpt-5.5",
-        "small": "gpt-5.4-mini",
-    },
-}
 _DEFAULT_ROUTING: dict[str, str] = {
     "banter": "creative",
     "news_flash": "creative",
@@ -198,105 +177,86 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "transition": "fast",
     "home_mood": "fast",
     "memory_extract": "fast",
-}
-_DEFAULT_PROFILES: dict[str, dict[str, dict[str, str]]] = {
-    "premium": {
-        "anthropic": {"creative": "opus", "fast": "haiku"},
-        "openai": {"creative": "large", "fast": "small"},
-    },
-    "balanced": {
-        "anthropic": {"creative": "opus", "fast": "haiku"},
-        "openai": {"creative": "large", "fast": "small"},
-    },
-    "economy": {
-        "anthropic": {"creative": "haiku", "fast": "haiku"},
-        "openai": {"creative": "small", "fast": "small"},
-    },
+    "direction": "creative",
 }
 
 
 @dataclass
 class ModelsSection:
-    """Role-based model routing. All fields are plain data (dicts), so adding a
-    model or a profile is a config edit, never a code change.
-
-    catalog:  provider → catalog_key → model_id  (the only place model IDs live)
-    routing:  task/caller → role
-    profiles: profile → provider → role → catalog_key
-    """
+    """Role-based model routing and pricing loaded from model_registry.toml."""
 
     catalog: dict[str, dict[str, str]] = field(default_factory=dict)
     routing: dict[str, str] = field(default_factory=dict)
     profiles: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     default_profile: str = "balanced"
     active_profile: str = "balanced"
+    tts_models: dict[str, str] = field(default_factory=dict)
+    prices: dict[str, tuple[float, float]] = field(default_factory=dict)
+    fallback_price: tuple[float, float] = CONSERVATIVE_FALLBACK_PRICE
+    source: str = "unavailable"
+
+    def default_openai_eval_models(self) -> list[str]:
+        """Return the configured OpenAI catalog IDs once, in catalog order."""
+        return list(dict.fromkeys(self.catalog.get("openai", {}).values()))
+
+    def price_for_model(self, model_id: str) -> tuple[float, float, bool]:
+        """Return per-token rates and whether the conservative fallback was used."""
+        rates = self.prices.get(model_id)
+        if rates is None:
+            return (*self.fallback_price, True)
+        return (*rates, False)
+
+    def tts_model(self, provider: str) -> str | None:
+        return self.tts_models.get(provider) or None
 
 
-def _build_default_models() -> ModelsSection:
-    """Fresh ModelsSection backed by the built-in catalog (deep-copied so the
-    module-level defaults can never be mutated by a running config)."""
-    import copy
+def _empty_models(*, source: str = "unavailable") -> ModelsSection:
+    """Keep boot safe when model configuration cannot be read.
 
-    return ModelsSection(
-        catalog=copy.deepcopy(_DEFAULT_CATALOG),
-        routing=copy.deepcopy(_DEFAULT_ROUTING),
-        profiles=copy.deepcopy(_DEFAULT_PROFILES),
-    )
+    No executable provider ID is embedded here: callers see an unavailable
+    route and use their existing stock-copy/Edge-TTS degradation paths.
+    """
+    return ModelsSection(routing=dict(_DEFAULT_ROUTING), source=source)
 
 
-def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str:
+def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str | None:
     """Resolve which model voices `caller` on `provider`, right now.
 
-    Total by construction — never raises, always returns a non-empty model ID:
+    Never raises. Returns ``None`` when the model registry is unavailable or
+    incomplete, allowing the caller to use its no-LLM fallback rather than make
+    an invalid provider request:
       1. role  = routing[caller]  (DEFAULT_ROLE if the task isn't routed)
       2. key   = profiles[active|default][provider][role]
-      3. floor = profiles[default_profile][provider][role]  (NEVER "first entry":
-                 TOML ordering must not leak into production behavior)
-      4. id    = catalog[provider][key]  → any catalog entry for the provider as
-                 the last resort. `_validate` guarantees catalog[provider] is
-                 non-empty for every API-keyed provider.
+      3. fallback = profiles[default_profile][provider][role]
+      4. id       = catalog[provider][key]
 
-    A Python exception here would crash segment generation = dead air, so every
-    lookup is defensive.
+    Any missing mapping is unavailable rather than an arbitrary catalog entry:
+    a malformed registry must not turn into an accidental provider request.
     """
     role = models.routing.get(caller or "", DEFAULT_ROLE)
     prof = profile or models.active_profile or models.default_profile
 
     def _key_for(profile_name: str) -> str | None:
         prov_map = models.profiles.get(profile_name, {}).get(provider, {})
-        return prov_map.get(role) or prov_map.get(DEFAULT_ROLE)
+        return prov_map.get(role)
 
     key = _key_for(prof) or _key_for(models.default_profile)
     provider_catalog = models.catalog.get(provider, {})
-    if key and key in provider_catalog:
-        return provider_catalog[key]
-    # Floor (reached when a profile references a key absent from the catalog —
-    # possible for a non-active profile that escaped _validate_models). Choose
-    # deterministically: prefer a named low-cost key, else the lexicographically
-    # first key. NEVER insertion order — TOML ordering must not leak into which
-    # model airs.
-    if provider_catalog:
-        for _pref in ("haiku", "small"):
-            if _pref in provider_catalog:
-                return provider_catalog[_pref]
-        return provider_catalog[min(provider_catalog)]
-    # Last resort: provider catalog entirely empty (_validate_models prevents
-    # this for API-keyed providers). Pin to a named built-in low-cost model.
-    builtin = _DEFAULT_CATALOG.get(provider, {})
-    return builtin.get("haiku") or builtin.get("small") or next(iter(builtin.values()), "claude-haiku-4-5-20251001")
+    if key:
+        model_id = provider_catalog.get(key)
+        if isinstance(model_id, str) and model_id.strip():
+            return model_id
+    return None
 
 
-def _parse_models_section(raw: dict) -> ModelsSection:
-    """Build a ModelsSection from raw [models] TOML, degrading to the built-in
-    catalog on a missing or malformed block (never raises — the station must
-    boot and air even with a broken [models] edit)."""
+def _parse_models_section(raw: dict, *, source: str = "inline registry") -> ModelsSection:
+    """Build routing data from a registry-shaped mapping without model defaults."""
     import logging as _log
 
     log = _log.getLogger(__name__)
     section = raw.get("models")
     if not section:
-        # No [models] block (minimal/legacy radio.toml) → built-in defaults.
-        return _build_default_models()
+        raise ValueError("models table is missing")
     try:
         catalog = section.get("catalog") or {}
         routing = section.get("routing") or {}
@@ -306,10 +266,6 @@ def _parse_models_section(raw: dict) -> ModelsSection:
         if not catalog or not profiles:
             raise ValueError("models.catalog and models.profiles must be non-empty")
         default_profile = section.get("default_profile", "balanced")
-        # Merge operator routing OVER the built-in defaults: a partial or empty
-        # [models.routing] must not drop the transition→fast mapping, or
-        # transitions would silently resolve to the creative (slow) model and
-        # risk dead air between songs. Operator entries still win.
         merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
         return ModelsSection(
             catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
@@ -320,13 +276,114 @@ def _parse_models_section(raw: dict) -> ModelsSection:
             },
             default_profile=str(default_profile),
             active_profile=str(default_profile),
+            source=source,
         )
     except Exception as exc:
-        log.error(
-            "Invalid [models] config (%s) — falling back to built-in DEFAULT_MODELS so the station still boots",
-            exc,
-        )
-        return _build_default_models()
+        log.error("Invalid model registry %s: %s", source, exc)
+        raise
+
+
+def _parse_registry_pricing(raw: dict, models: ModelsSection) -> None:
+    """Attach model prices by catalog reference, never by copied model ID."""
+    pricing = raw.get("pricing") or {}
+    if not isinstance(pricing, dict):
+        raise ValueError("pricing must be a table")
+    fallback_input = (
+        float(pricing.get("fallback_input_per_million", CONSERVATIVE_FALLBACK_PRICE[0] * 1_000_000)) / 1_000_000
+    )
+    fallback_output = (
+        float(pricing.get("fallback_output_per_million", CONSERVATIVE_FALLBACK_PRICE[1] * 1_000_000)) / 1_000_000
+    )
+    if fallback_input < 0 or fallback_output < 0:
+        raise ValueError("pricing fallback rates must be non-negative")
+    models.fallback_price = (fallback_input, fallback_output)
+    catalog_prices = pricing.get("catalog") or {}
+    if not isinstance(catalog_prices, dict):
+        raise ValueError("pricing.catalog must be a table")
+    for provider, catalog in models.catalog.items():
+        configured_prices = catalog_prices.get(provider) or {}
+        if not isinstance(configured_prices, dict):
+            raise ValueError(f"pricing.catalog.{provider} must be a table")
+        for key, model_id in catalog.items():
+            rate = configured_prices.get(key)
+            if not isinstance(rate, dict):
+                continue
+            if "input_per_million" not in rate or "output_per_million" not in rate:
+                # A stub table missing a rate field must NOT silently price at $0.
+                # Leave it unpriced so price_for_model() returns the fallback and
+                # trips the UI flag, rather than under-reporting real cost.
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "Incomplete pricing for %s.%s (needs input_per_million and output_per_million); "
+                    "treating this model as unpriced",
+                    provider,
+                    key,
+                )
+                continue
+            input_rate = float(rate["input_per_million"]) / 1_000_000
+            output_rate = float(rate["output_per_million"]) / 1_000_000
+            if input_rate < 0 or output_rate < 0:
+                raise ValueError(f"pricing rate for {provider}.{key} must be non-negative")
+            models.prices[model_id] = (input_rate, output_rate)
+
+
+def _load_model_registry(path: Path, *, legacy_raw: dict | None = None) -> ModelsSection:
+    """Load the canonical registry, falling back to read-only legacy routing.
+
+    A missing/malformed registry deliberately leaves routes unavailable. Existing
+    standalone ``radio.toml`` files carrying the former [models] block keep
+    their script routes for this transition, but never become a new canonical
+    source and do not supply TTS or pricing metadata.
+    """
+    import logging as _log
+
+    log = _log.getLogger(__name__)
+    try:
+        with path.open("rb") as registry_file:
+            raw = tomllib.load(registry_file)
+        models = _parse_models_section(raw, source=str(path))
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, tomllib.TOMLDecodeError) as exc:
+        log.error("Model registry unavailable (%s): %s", path, exc)
+        if legacy_raw and legacy_raw.get("models"):
+            try:
+                models = _parse_models_section(legacy_raw, source="legacy radio.toml [models]")
+                log.warning(
+                    "Using deprecated legacy [models] routing; add %s beside radio.toml",
+                    MODEL_REGISTRY_FILENAME,
+                )
+                return models
+            except Exception:
+                log.error("Legacy [models] routing is invalid too", exc_info=True)
+        return _empty_models()
+
+    # Script routing parsed successfully. TTS selection and pricing are secondary
+    # metadata — a typo there must NOT strip working script routes (leadership
+    # principle #2: the station keeps airing). Parse each best-effort: on failure
+    # log and keep routing, so OpenAI TTS degrades to its Edge fallback and the
+    # cost estimate uses the conservative fallback rate instead of going dark.
+    try:
+        tts = raw.get("tts") or {}
+        openai_tts = tts.get("openai") if isinstance(tts, dict) else None
+        if not isinstance(openai_tts, dict) or not str(openai_tts.get("model", "")).strip():
+            raise ValueError("tts.openai.model must be a non-empty string")
+        models.tts_models["openai"] = str(openai_tts["model"])
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        log.error("Registry TTS selection unavailable (%s): %s — OpenAI TTS will use its Edge fallback", path, exc)
+    try:
+        _parse_registry_pricing(raw, models)
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        log.error("Registry pricing unavailable (%s): %s — cost estimate uses the conservative fallback", path, exc)
+    return models
+
+
+def _build_default_models() -> ModelsSection:
+    """Compatibility helper for callers that need the packaged registry.
+
+    Unlike the former built-in fallback catalog, this reads the one canonical
+    configuration file and contains no provider model identity in Python.
+    """
+    return _load_model_registry(Path(MODEL_REGISTRY_FILENAME))
 
 
 def _apply_model_env_overrides(models: ModelsSection) -> None:
@@ -359,11 +416,7 @@ def _apply_model_env_overrides(models: ModelsSection) -> None:
 
 
 def _validate_models(config: StationConfig) -> None:
-    """Degrade-don't-die validation for [models]. Every routed role (plus the
-    DEFAULT_ROLE floor) must resolve to a real catalog entry for each API-keyed
-    provider under both the active and default profile. On any gap, log loud and
-    fall back to the built-in DEFAULT_MODELS — a model misconfig must never take
-    the station off air (leadership principle #1+#2)."""
+    """Log incomplete routing without inventing a provider model fallback."""
     import logging
 
     log = logging.getLogger(__name__)
@@ -393,16 +446,7 @@ def _validate_models(config: StationConfig) -> None:
                     problems.append(f"profile '{prof}'/{prov}/role '{role}' unresolved")
 
     if problems:
-        log.error(
-            "Invalid [models] (%s) — falling back to built-in DEFAULT_MODELS so the station stays on air",
-            "; ".join(problems[:6]),
-        )
-        prev_active = config.models.active_profile
-        config.models = _build_default_models()
-        if prev_active in config.models.profiles:
-            config.models.active_profile = prev_active
-        # Re-apply env overrides — the fresh defaults dropped them.
-        _apply_model_env_overrides(config.models)
+        log.error("Model routing unavailable (%s); script generation will use stock copy", "; ".join(problems[:6]))
 
 
 @dataclass
@@ -662,7 +706,7 @@ class StationConfig:
     imaging: ImagingSection = field(default_factory=ImagingSection)
     sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
     audio: AudioSection = field(default_factory=AudioSection)
-    models: ModelsSection = field(default_factory=_build_default_models)
+    models: ModelsSection = field(default_factory=_empty_models)
     homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
     running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
     radio_events: list[RadioEventRule] = field(default_factory=list)
@@ -1675,12 +1719,13 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         else:
             station_raw.pop("bitrate")
 
-    # Legacy: model IDs moved from [audio] to [models]. An upgraded standalone
+    # Legacy: model IDs moved from [audio] to model_registry.toml. An upgraded standalone
     # radio.toml may still carry claude_model / claude_creative_model /
     # openai_script_model in [audio]; drop them so AudioSection(**audio_raw) does
-    # not raise TypeError and refuse to boot. Model selection now lives in
-    # [models] (or the built-in defaults); the matching env vars still override
-    # the catalog. Leadership principle #2: the station must always boot.
+    # not raise TypeError and refuse to boot. Model selection now lives in the
+    # registry; matching environment overrides still take precedence when a
+    # usable registry route exists. Leadership principle #2: the station must
+    # always boot.
     _legacy_audio_model_keys = [
         k for k in ("claude_model", "claude_creative_model", "openai_script_model") if k in audio_raw
     ]
@@ -1688,7 +1733,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         import logging as _log
 
         _log.getLogger(__name__).warning(
-            "Ignoring deprecated [audio] keys %s — model selection now lives in [models] "
+            "Ignoring deprecated [audio] keys %s — model selection now lives in model_registry.toml "
             "(see CLAUDE.md). Remove them from radio.toml.",
             _legacy_audio_model_keys,
         )
@@ -1804,10 +1849,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         station_raw["name"] = env_station_name
     if os.getenv("STATION_THEME"):
         station_raw["theme"] = os.getenv("STATION_THEME")
-    # Dynamic LLM routing: model IDs live in [models], never in code. Parse the
-    # catalog/routing/profiles (degrade to built-in DEFAULT_MODELS on malformed
-    # config so the station always boots), then apply back-compat env overrides.
-    models_section = _parse_models_section(raw)
+    # Dynamic model routing comes from the sibling canonical registry. Legacy
+    # standalone [models] blocks remain a read-only bridge for upgrades.
+    registry_path = Path(path).with_name(MODEL_REGISTRY_FILENAME)
+    models_section = _load_model_registry(registry_path, legacy_raw=raw)
     _apply_model_env_overrides(models_section)
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:

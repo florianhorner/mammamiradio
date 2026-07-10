@@ -34,7 +34,7 @@ from mammamiradio.audio.normalizer import (
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.core.config import PACING_BOUNDS
+from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, _load_model_registry
 from mammamiradio.core.models import (
     ChaosSubtype,
     GenerationWasteReason,
@@ -914,7 +914,11 @@ def _tts_provider_status(config, state: StationState) -> dict:
     if cloud_engines:
         primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
         configured = {
-            "openai": bool(config.openai_api_key),
+            # OpenAI TTS also needs a registry-selected speech model. Without it
+            # provider checks report model_routing_unavailable, so runtime status
+            # must agree and treat the voice as falling back to Edge — otherwise
+            # the two operator surfaces disagree.
+            "openai": bool(config.openai_api_key and config.models.tts_model("openai")),
             "azure": bool(config.azure_speech_key and config.azure_speech_region),
             "elevenlabs": bool(config.elevenlabs_api_key),
         }
@@ -982,7 +986,7 @@ def _runtime_status_snapshot(
     station_on_air = tasks_alive and not silence_with_listeners and not state.session_stopped
     bridge_health = _bridge_health_snapshot(state)
     bridge_unhealthy = bool(bridge_health.get("unhealthy"))
-    generation_waste = _generation_waste_snapshot(state)
+    generation_waste = _generation_waste_snapshot(state, config.models)
     if not tasks_alive:
         health_state = "blocked"
         health_color = "red"
@@ -1112,7 +1116,7 @@ def _bridge_health_snapshot(state: StationState) -> dict:
     }
 
 
-def _generation_waste_snapshot(state: StationState) -> dict:
+def _generation_waste_snapshot(state: StationState, models: ModelsSection | None = None) -> dict:
     """Generated segment waste for the admin Runtime Status card (#397).
 
     Windows ``state.discard_events`` to surface recent pre-air drops and prorates
@@ -1133,7 +1137,7 @@ def _generation_waste_snapshot(state: StationState) -> dict:
         reason = str(event.get("reason") or "")
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
     recent_top_reason = max(reason_counts, key=lambda k: reason_counts[k]) if reason_counts else ""
-    session_cost, _ = _estimate_api_cost(state)
+    session_cost, _ = _estimate_api_cost(state, models)
     produced_plus_discarded = max(1, state.segments_produced + state.discarded_unproduced_segments_total)
     if state.discarded_segments_total:
         # Clamp at session_cost: you cannot waste more than you spent. A burst of
@@ -3574,22 +3578,6 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
     return {"ok": True, "active_profile": profile}
 
 
-# Approximate public per-token USD rates (input, output) for the models the
-# station routes to. Used ONLY for the operator's cost estimate — a stale or
-# missing entry never affects audio. With dynamic routing, one session can run
-# several models, so we price each model from per-model token tallies rather than
-# a single flat rate. Update when prices change; an unpriced model (just added to
-# the catalog) falls back to the highest known tier and is flagged in the UI.
-MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "claude-opus-4-8": (0.000015, 0.000075),
-    "claude-opus-4-6": (0.000015, 0.000075),
-    "claude-sonnet-4-6": (0.000003, 0.000015),
-    "claude-haiku-4-5-20251001": (0.0000008, 0.000004),
-    "gpt-5.5": (0.000005, 0.00003),
-    "gpt-5.4-mini": (0.00000075, 0.0000045),
-}
-_UNPRICED_FALLBACK = (0.000015, 0.000075)  # highest known tier — conservative
-
 # One deliberately-blended TTS rate (~$20 / 1M chars) across Azure / OpenAI /
 # ElevenLabs. Cent-accurate TTS cost is impossible — ElevenLabs alone swings 3-5x
 # by plan tier — so this is rough on purpose. The honesty lives in the UI label
@@ -3614,52 +3602,62 @@ LLM_COST_BREAKDOWN_CATEGORIES = (
 )
 
 
-def _model_token_cost(model_id: str, toks: dict) -> tuple[float, bool]:
-    rates = MODEL_PRICES.get(model_id)
-    has_unpriced = False
-    if rates is None:
-        rates = _UNPRICED_FALLBACK
-        has_unpriced = True
-    return toks.get("input", 0) * rates[0] + toks.get("output", 0) * rates[1], has_unpriced
+def _cost_models(models: ModelsSection | None) -> ModelsSection:
+    """Use the configured registry even for isolated legacy helper callers."""
+    return models or _load_model_registry(Path(MODEL_REGISTRY_FILENAME))
 
 
-def _estimate_api_cost(state) -> tuple[float, bool]:
+def _model_token_cost(model_id: str, toks: dict, models: ModelsSection | None = None) -> tuple[float, bool]:
+    input_rate, output_rate, has_unpriced = _cost_models(models).price_for_model(model_id)
+    return toks.get("input", 0) * input_rate + toks.get("output", 0) * output_rate, has_unpriced
+
+
+def _estimate_api_cost(state, models: ModelsSection | None = None) -> tuple[float, bool]:
     """Sum per-model token cost plus a rough TTS estimate. Returns (usd, has_unpriced).
 
     Prices each model the session actually used (api_tokens_by_model). A model
-    with no MODEL_PRICES entry falls back to the highest known tier and trips the
-    flag so the UI can annotate the estimate — never a silent $0, never a KeyError.
+    without a registry rate uses the registry's conservative fallback and trips
+    the UI flag — never a silent $0, never a KeyError.
     Adds a blended TTS character cost on top. getattr keeps a persisted/legacy state
     (no tts_characters attr) safe.
     """
+    models = _cost_models(models)
     tts_cost = getattr(state, "tts_characters", 0) * TTS_BLENDED_RATE
     by_model = getattr(state, "api_tokens_by_model", None) or {}
     if not by_model:
-        # No per-model data yet — flat haiku estimate on aggregate counters so
-        # the counter is never blank for a fresh/legacy session.
-        in_rate, out_rate = MODEL_PRICES["claude-haiku-4-5-20251001"]
+        # No per-model breakdown yet (fresh/legacy state). Price on the cheapest
+        # configured rate so the counter is never blank yet never inflated, and
+        # do NOT trip the unpriced flag — there is no unpriced *model* here, just
+        # no per-model data yet. Registry-driven (no hardcoded model id); this
+        # reproduces the prior haiku-tier flat estimate.
+        in_rate, out_rate = min(
+            models.prices.values(),
+            key=lambda rate: rate[0] + rate[1],
+            default=models.fallback_price,
+        )
         llm = state.api_input_tokens * in_rate + state.api_output_tokens * out_rate
         return round(llm + tts_cost, 4), False
     total = 0.0
     has_unpriced = False
     for model_id, toks in by_model.items():
-        model_cost, model_unpriced = _model_token_cost(model_id, toks)
+        model_cost, model_unpriced = _model_token_cost(model_id, toks, models)
         total += model_cost
         has_unpriced = has_unpriced or model_unpriced
     return round(total + tts_cost, 4), has_unpriced
 
 
-def _consumption_cost(state) -> dict:
+def _consumption_cost(state, models: ModelsSection | None = None) -> dict:
     """Cost fields for the /status consumption block (protected UI element)."""
-    cost, unpriced = _estimate_api_cost(state)
+    models = _cost_models(models)
+    cost, unpriced = _estimate_api_cost(state, models)
     return {
         "api_cost_estimate_usd": cost,
         "api_cost_unpriced_model": unpriced,
-        "cost_breakdown": _cost_breakdown(state, total_usd=cost, unpriced_model=unpriced),
+        "cost_breakdown": _cost_breakdown(state, total_usd=cost, unpriced_model=unpriced, models=models),
     }
 
 
-def _cost_breakdown(state, *, total_usd: float, unpriced_model: bool) -> dict:
+def _cost_breakdown(state, *, total_usd: float, unpriced_model: bool, models: ModelsSection | None = None) -> dict:
     by_category_model = getattr(state, "api_tokens_by_category_model", None) or {}
     calls_by_category = getattr(state, "api_calls_by_category", None) or {}
     tts_by_category = getattr(state, "tts_characters_by_category", None) or {}
@@ -3682,7 +3680,7 @@ def _cost_breakdown(state, *, total_usd: float, unpriced_model: bool) -> dict:
         if category in LLM_COST_BREAKDOWN_CATEGORIES:
             category_calls = int(calls_by_category.get(category, 0) or 0)
             for model_id, toks in (by_category_model.get(category) or {}).items():
-                model_cost, model_unpriced = _model_token_cost(model_id, toks)
+                model_cost, model_unpriced = _model_token_cost(model_id, toks, models)
                 category_raw_cost += model_cost
                 category_unpriced = category_unpriced or model_unpriced
                 category_input += int(toks.get("input", 0) or 0)
@@ -5819,7 +5817,7 @@ async def status(
                 "tts_characters": state.tts_characters,
                 # Model-aware cost: prices each model the session actually ran
                 # (api_cost_estimate_usd stays present — protected UI element).
-                **_consumption_cost(state),
+                **_consumption_cost(state, config.models),
                 "cache_size_mb": _cached_cache_size_mb(config.cache_dir),
                 "cache_limit_mb": config.max_cache_size_mb,
             },

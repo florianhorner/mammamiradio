@@ -45,6 +45,7 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     _apply_loaded_source,
     _bridge_health_snapshot,
+    _estimate_api_cost,
     _generation_waste_snapshot,
     _purge_queue_and_shadow,
     _runtime_health_snapshot,
@@ -1423,7 +1424,7 @@ def test_generation_waste_snapshot_clamps_cost_to_session_spend():
     # against a lagging produced counter) pushes the raw count ratio above 1.0.
     state = StationState()
     state.segments_produced = 1
-    state.api_input_tokens = 1_000_000  # session_cost == 0.8 (see prorate test below)
+    state.api_input_tokens = 1_000_000
     state.api_output_tokens = 0
     state.api_tokens_by_model = {}
     segment = Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=10.0)
@@ -1433,8 +1434,11 @@ def test_generation_waste_snapshot_clamps_cost_to_session_spend():
     gw = _generation_waste_snapshot(state)
 
     assert gw["total_segments"] == 5
-    # Raw proration would be 0.8 * 5 / 1 = 4.0; clamp pins it to session_cost (0.8).
-    assert gw["estimated_waste_cost_usd"] == 0.8
+    session_cost, unpriced = _estimate_api_cost(state)
+    # Raw proration would exceed the registry-priced session cost; the clamp
+    # keeps waste at exactly that cost. No per-model data is not an unpriced model.
+    assert unpriced is False
+    assert gw["estimated_waste_cost_usd"] == session_cost
 
 
 def test_generation_waste_snapshot_prorates_cost():
@@ -1451,7 +1455,9 @@ def test_generation_waste_snapshot_prorates_cost():
 
     assert gw["total_segments"] == 2
     assert gw["unproduced_segments"] == 0
-    assert gw["estimated_waste_cost_usd"] == 0.5333
+    session_cost, unpriced = _estimate_api_cost(state)
+    assert unpriced is False
+    assert gw["estimated_waste_cost_usd"] == round(session_cost * 2 / 3, 4)
     assert "discarded" in gw["cost_basis"]
     assert "produced" in gw["cost_basis"]
 
@@ -1470,7 +1476,9 @@ def test_generation_waste_snapshot_adds_prequeue_discards_to_cost_denominator():
 
     assert gw["total_segments"] == 2
     assert gw["unproduced_segments"] == 2
-    assert gw["estimated_waste_cost_usd"] == 0.32
+    session_cost, unpriced = _estimate_api_cost(state)
+    assert unpriced is False
+    assert gw["estimated_waste_cost_usd"] == round(session_cost * 2 / 5, 4)
 
 
 def test_generation_waste_snapshot_ignores_events_outside_window(tmp_path):

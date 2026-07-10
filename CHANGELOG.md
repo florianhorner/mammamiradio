@@ -21,6 +21,7 @@ The current version source of truth is `pyproject.toml`.
 ### Refactored
 
 - **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
+- **AI model selection now lives in one file.** Which AI models the station uses, how tasks route to them, the OpenAI voice model, and per-model cost estimates now live in a new `model_registry.toml` next to `radio.toml`, instead of inside `radio.toml` itself. Swapping a model is a one-line config change with no code edit. Self-hosted and source installs must keep `model_registry.toml` beside `radio.toml` (the Docker image and Home Assistant add-on bundle it automatically); if it is missing, the station still boots and plays music but uses stock host copy and standard voices until it is restored. A `[models]` block left in an older `radio.toml` still works for now but is deprecated.
 
 ## [2.17.0] - 2026-07-07
 

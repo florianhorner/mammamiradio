@@ -13,6 +13,19 @@ def test_addon_dockerfile_preserves_package_directory():
     assert "COPY pyproject.toml mammamiradio/ ./" not in dockerfile, "single COPY would flatten package dir"
 
 
+def test_addon_stages_the_root_model_registry_without_a_duplicate_copy():
+    """The image must use the canonical root registry, not an add-on-maintained fork."""
+    dockerfile = (REPO_ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+
+    assert (REPO_ROOT / "model_registry.toml").is_file()
+    assert not (REPO_ROOT / "ha-addon" / "mammamiradio" / "model_registry.toml").exists()
+    assert "COPY model_registry.toml ./" in dockerfile
+
+    validator = (REPO_ROOT / "scripts" / "validate-addon.sh").read_text()
+    assert "ha-addon/mammamiradio/model_registry.toml must not be committed" in validator
+    assert 'cp model_registry.toml "$TMPCTX/"' in validator
+
+
 def test_addon_dockerfile_declares_home_assistant_image_labels():
     dockerfile = (REPO_ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
 

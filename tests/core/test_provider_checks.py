@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import ModelsSection, load_config, resolve_model
 from mammamiradio.core.provider_checks import check_provider_keys
 
 TOML_PATH = "radio.toml"
@@ -33,6 +33,38 @@ async def test_provider_check_reports_missing_keys_without_network(monkeypatch):
     assert result["providers"]["openai_tts"]["error_type"] == "not_configured"
     assert result["providers"]["azure_speech"]["error_type"] == "not_configured"
     assert result["providers"]["elevenlabs_tts"]["error_type"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_provider_check_skips_requests_when_model_routing_is_unavailable(monkeypatch):
+    """Saved provider keys must not turn a broken registry into invalid API calls."""
+    config = load_config(TOML_PATH)
+    config.anthropic_api_key = "anthropic-secret"
+    config.openai_api_key = "openai-secret"
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
+    config.models = ModelsSection()
+
+    async_client = httpx.AsyncClient
+
+    def no_request(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"model routing must prevent this request: {request.url}")
+
+    transport = httpx.MockTransport(no_request)
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    result = await check_provider_keys(config)
+
+    assert result["ok"] is False
+    assert result["providers"]["anthropic"]["error_type"] == "model_routing_unavailable"
+    assert result["providers"]["openai_chat"]["error_type"] == "model_routing_unavailable"
+    assert result["providers"]["openai_tts"]["error_type"] == "model_routing_unavailable"
 
 
 @pytest.mark.asyncio
@@ -133,7 +165,19 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
     config.azure_speech_key = ""
     config.azure_speech_region = ""
     config.elevenlabs_api_key = ""
-    config.models.active_profile = "premium"  # creative=gpt-5.5, fast=gpt-5.4-mini
+    config.models.active_profile = "premium"
+    expected_models = list(
+        dict.fromkeys(
+            filter(
+                None,
+                (
+                    resolve_model(config.models, "banter", "openai"),
+                    resolve_model(config.models, "transition", "openai"),
+                ),
+            )
+        )
+    )
+    broken_model = expected_models[-1]
 
     async_client = httpx.AsyncClient
     seen_chat_models: list[str] = []
@@ -142,7 +186,7 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
         if str(request.url).endswith("/v1/chat/completions"):
             model = json.loads(request.content.decode("utf-8"))["model"]
             seen_chat_models.append(model)
-            if model == "gpt-5.4-mini":
+            if model == broken_model:
                 return httpx.Response(
                     404,
                     json={"error": {"type": "invalid_request_error", "code": "model_not_found", "message": "nope"}},
@@ -162,7 +206,7 @@ async def test_provider_check_probes_distinct_openai_routed_models(monkeypatch):
 
     result = await check_provider_keys(config)
 
-    assert seen_chat_models == ["gpt-5.5", "gpt-5.4-mini"]
+    assert seen_chat_models == expected_models
     assert result["providers"]["openai_chat"]["ok"] is False
     assert result["providers"]["openai_chat"]["error_type"] == "model_not_found"
     assert "openai-secret" not in str(result)

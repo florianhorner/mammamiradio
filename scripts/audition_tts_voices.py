@@ -27,6 +27,7 @@ from mammamiradio.audio.tts import (
     _openai_instructions_for_ad_voice,
     _openai_instructions_for_host,
     _prosody_for_host,
+    configure_openai_tts_model,
 )
 from mammamiradio.audio.voice_catalog import AZURE_ITALIAN_VOICES, EDGE_ITALIAN_VOICES, OPENAI_VOICES
 from mammamiradio.core.config import StationConfig, load_config
@@ -576,6 +577,11 @@ def main(argv: list[str] | None = None) -> int:
         manual_voices = parse_manual_voice_specs(args.voice)
         stamp = _timestamp(args.timestamp)
         config = load_config(str(args.config))
+        # Use the registry that load_config resolved from --config (sibling of
+        # radio.toml), not a cwd-relative one — otherwise OpenAI auditions run
+        # from another directory would fall back to the wrong/absent registry.
+        # Mirrors mammamiradio.main.startup.
+        configure_openai_tts_model(config.models.tts_model("openai"))
         targets = build_audition_targets(
             config,
             providers=providers,

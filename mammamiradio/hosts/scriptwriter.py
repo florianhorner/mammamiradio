@@ -426,8 +426,13 @@ def _get_openai_client(api_key: str):
 
 
 def has_script_llm(config: StationConfig) -> bool:
-    """Return whether any script-generation backend is configured."""
-    return bool(config.anthropic_api_key or config.openai_api_key)
+    """Return whether a keyed provider also has a resolved script route."""
+    callers = tuple(config.models.routing) or ("banter",)
+    return any(
+        (config.anthropic_api_key and resolve_model(config.models, caller, "anthropic"))
+        or (config.openai_api_key and resolve_model(config.models, caller, "openai"))
+        for caller in callers
+    )
 
 
 def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
@@ -576,7 +581,7 @@ async def _generate_json_response(
     prompt: str,
     config: StationConfig,
     state: StationState,
-    model: str,
+    model: str | None,
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
@@ -596,7 +601,7 @@ async def _generate_json_response(
     # Anthropic exhausted its escalated retries on truncation.
     final_anthropic_max_tokens = max_tokens
 
-    if config.anthropic_api_key:
+    if config.anthropic_api_key and model:
         now = time.time()
         key_changed = _anthropic_auth_blocked_key and _anthropic_auth_blocked_key != config.anthropic_api_key
         if key_changed:
@@ -866,13 +871,15 @@ async def _generate_json_response(
     # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
     # so a transition falls back to the fast OpenAI model and banter to the creative one.
     openai_model = resolve_model(config.models, caller, "openai")
+    if not openai_model:
+        raise RuntimeError("No configured OpenAI script model; check model_registry.toml")
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
     # Visible-output floor for the fallback: when Anthropic exhausted its
     # escalated retries on truncation, the same long content is coming here —
     # the original small floor is how the live incident's second half happened
-    # (gpt-5.5 returned an EMPTY completion, reasoning tokens starving the
+    # (the prior reasoning-model incident returned an EMPTY completion, reasoning tokens starving the
     # visible JSON). The raised TPM reservation is confined to that path.
     visible_budget = final_anthropic_max_tokens
     raw = ""
@@ -1472,7 +1479,7 @@ async def _generate_json_response_with_language_guard(
     prompt: str,
     config: StationConfig,
     state: StationState,
-    model: str,
+    model: str | None,
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
@@ -2311,7 +2318,7 @@ Return JSON:
                 # so a malformed line falls through to stock copy instead of airing junk.
                 text = raw_text if isinstance(raw_text, str) else ""
             elif isinstance(line, str):
-                # The OpenAI fallback (gpt-4o-mini) sometimes returns lines as plain
+                # The OpenAI fallback sometimes returns lines as plain
                 # strings with no host. Alternate hosts across the string lines we
                 # actually air (counting only emitted lines, so interleaved blanks
                 # don't collapse two lines onto one host) so it still reads as

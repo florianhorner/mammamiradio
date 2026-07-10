@@ -56,6 +56,7 @@ _instructions_cache: dict[int, str] = {}
 # Singleton OpenAI client — reuses HTTP connection pool across calls
 _openai_client = None
 _openai_client_key: str = ""
+_openai_tts_model: str | None = None
 # Singleton httpx clients for Azure and ElevenLabs — same pattern as OpenAI
 _azure_client: httpx.AsyncClient | None = None
 _azure_client_key: tuple[str, str] = ("", "")
@@ -88,6 +89,21 @@ _DISCLAIMER_RATE_BY_FORMAT = {
 
 def _looks_like_openai_voice(voice: str) -> bool:
     return _catalog_is_openai_voice(voice)
+
+
+def configure_openai_tts_model(model: str | None) -> None:
+    """Set the registry-selected OpenAI speech model for this running station."""
+    global _openai_tts_model
+    _openai_tts_model = model or None
+
+
+def _configured_openai_tts_model() -> str | None:
+    """Resolve a test/CLI fallback without embedding a provider model ID here."""
+    if _openai_tts_model:
+        return _openai_tts_model
+    from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, _load_model_registry
+
+    return _load_model_registry(Path(MODEL_REGISTRY_FILENAME)).tts_model("openai")
 
 
 def reset_voice_failures() -> None:
@@ -240,18 +256,22 @@ async def synthesize_openai(
     *,
     instructions: str = "",
     loudnorm: bool = True,
+    model: str | None = None,
 ) -> Path:
-    """Render text with OpenAI gpt-4o-mini-tts, then normalize to station settings."""
+    """Render text with the registry-selected OpenAI speech model."""
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
+    model = model or _configured_openai_tts_model()
+    if not model:
+        raise RuntimeError("OpenAI TTS model is unavailable; check model_registry.toml")
 
     client = _get_openai_client(api_key)
     loop = asyncio.get_running_loop()
 
     def _call_openai() -> bytes:
         response = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
+            model=model,
             voice=voice,
             input=text,
             instructions=instructions or _OPENAI_TTS_INSTRUCTIONS,
@@ -400,8 +420,9 @@ async def synthesize(
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
 
-    engine="openai" uses OpenAI gpt-4o-mini-tts. Falls back to edge-tts if
-    OPENAI_API_KEY is missing. When falling back, uses edge_fallback_voice if set.
+    engine="openai" uses the registry-selected OpenAI speech model. Falls back
+    to edge-tts if the key or registry route is unavailable. When falling back,
+    uses edge_fallback_voice if set.
 
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.

@@ -202,9 +202,10 @@ async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
 @pytest.mark.asyncio
 async def test_synthesize_openai_happy_path(_mock_all, tmp_path, monkeypatch):
     """When engine='openai' and OPENAI_API_KEY is set, use OpenAI TTS."""
-    from mammamiradio.audio.tts import synthesize
+    from mammamiradio.audio.tts import configure_openai_tts_model, synthesize
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model("registry-selected-tts")
 
     mock_response = MagicMock()
     mock_response.content = b"\x00" * 512
@@ -212,21 +213,53 @@ async def test_synthesize_openai_happy_path(_mock_all, tmp_path, monkeypatch):
     mock_client_instance = MagicMock()
     mock_client_instance.audio.speech.create.return_value = mock_response
 
-    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client_instance) as mock_get_client:
-        output = tmp_path / "openai_out.mp3"
-        result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
+    try:
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client_instance) as mock_get_client:
+            output = tmp_path / "openai_out.mp3"
+            result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
 
-        assert result == output
-        mock_get_client.assert_called_once_with("sk-test-key")
-        mock_client_instance.audio.speech.create.assert_called_once_with(
-            model="gpt-4o-mini-tts",
-            voice="onyx",
-            input="Ciao mondo",
-            instructions="Speak like a charismatic Italian radio host. Warm, energetic, natural pacing.",
-        )
-        _mock_all["normalize"].assert_called_once()
-        # Edge TTS should NOT have been called
-        _mock_all["Communicate"].assert_not_called()
+            assert result == output
+            mock_get_client.assert_called_once_with("sk-test-key")
+            mock_client_instance.audio.speech.create.assert_called_once_with(
+                model="registry-selected-tts",
+                voice="onyx",
+                input="Ciao mondo",
+                instructions="Speak like a charismatic Italian radio host. Warm, energetic, natural pacing.",
+            )
+            _mock_all["normalize"].assert_called_once()
+            # Edge TTS should NOT have been called
+            _mock_all["Communicate"].assert_not_called()
+    finally:
+        configure_openai_tts_model(None)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_falls_back_to_edge_when_tts_model_unavailable(_mock_all, tmp_path, monkeypatch):
+    """Registry TTS model missing -> OpenAI synth raises, synthesize() lands on Edge.
+
+    _configured_openai_tts_model() is neutralized so the test exercises the None
+    branch rather than silently reading the packaged registry's real model.
+    """
+    from mammamiradio.audio import tts as tts_mod
+    from mammamiradio.audio.tts import configure_openai_tts_model, synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model(None)
+    monkeypatch.setattr(tts_mod, "_configured_openai_tts_model", lambda: None)
+
+    openai_client = MagicMock()
+    try:
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=openai_client) as mock_get_client:
+            output = tmp_path / "edge_fallback.mp3"
+            result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
+
+            assert result == output
+            # OpenAI speech was never billed; Edge covered the render.
+            openai_client.audio.speech.create.assert_not_called()
+            mock_get_client.assert_not_called()
+            _mock_all["Communicate"].assert_called_once()
+    finally:
+        configure_openai_tts_model(None)
 
 
 @pytest.mark.asyncio

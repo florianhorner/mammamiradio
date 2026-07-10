@@ -223,6 +223,10 @@ async def startup():
     config = load_config()
     logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
 
+    from mammamiradio.audio.tts import configure_openai_tts_model
+
+    configure_openai_tts_model(config.models.tts_model("openai"))
+
     # One integrated-LUFS target across every segment type: configure the
     # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
     # bedded banter and ads then all land at the same perceived level.
