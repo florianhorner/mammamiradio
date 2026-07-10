@@ -791,7 +791,7 @@ def _safe_mtime_for_sort(path: Path) -> float:
 
 
 def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache_root: Path) -> int:
-    resolved_dir = safe_path_within(directory, cache_root)
+    resolved_dir = safe_path_within(directory, cache_root, reject_symlinks=True)
     if resolved_dir is None:
         logger.warning(
             "Failed to resolve restart handoff scratch cleanup dir %s or it is outside cache dir",

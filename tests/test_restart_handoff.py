@@ -380,6 +380,27 @@ def test_prune_stale_handoff_tmp_files_tolerates_symlink_loop_handoff_dir(tmp_pa
     assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
 
 
+def test_prune_stale_handoff_tmp_files_rejects_handoff_dir_symlinked_inside_cache(tmp_path, caplog):
+    # handoff_dir resolves fine and stays inside cache_root (no ValueError,
+    # no RuntimeError) but is itself a symlink to another in-cache directory.
+    # Without reject_symlinks=True this redirected location would be scanned
+    # and pruned as if it were the real restart-handoff scratch dir.
+    cache_dir = tmp_path / "cache"
+    redirect_target = cache_dir / "elsewhere-in-cache"
+    redirect_target.mkdir(parents=True)
+    stray = redirect_target / ".manifest-stray.tmp"
+    stray.write_bytes(b"data")
+    old_mtime = time.time() - 7 * 3600
+    os.utime(stray, (old_mtime, old_mtime))
+    restart_handoff_dir(cache_dir).symlink_to(redirect_target, target_is_directory=True)
+
+    assert prune_stale_handoff_tmp_files(cache_dir, max_age_hours=6) == 0
+
+    assert stray.exists()
+    assert "Failed to resolve restart handoff scratch cleanup dir" in caplog.text
+    assert "outside cache dir" in caplog.text
+
+
 def test_prune_stale_handoff_tmp_files_warns_on_dangling_handoff_dir_symlink(tmp_path, caplog):
     # A dangling symlink survives resolve(strict=False) on every supported
     # interpreter, so it reaches the not-a-dir branch in _prune_stale_tmp_glob
