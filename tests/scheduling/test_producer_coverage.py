@@ -567,7 +567,9 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "voice.mp3"),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dia.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=tmp_path / "banter.mp3"),
@@ -626,7 +628,7 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati."),
+            return_value=(host, "Bentornati.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -747,7 +749,9 @@ async def test_humanity_event_fires_only_once(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda **kw: banter_audio),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_audio),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_files_side_effect),
@@ -823,7 +827,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(config.hosts[0], "Pubblicità!"),
+            return_value=(config.hosts[0], "Pubblicità!", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
@@ -1896,7 +1900,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati."),
+            return_value=(host, "Bentornati.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1928,3 +1932,139 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
     assert seg.type == SegmentType.BANTER
     # When _try_crossfade produces xfade_out (different from input path), has_music_tail must be True
     assert seg.metadata.get("has_music_tail") is True
+
+
+@pytest.mark.asyncio
+async def test_banter_metadata_includes_transition_track_ref(tmp_path):
+    """The played_track_ref write_transition() returns for its "just finished
+    playing" claim must land on the produced BANTER segment's metadata, so
+    _front_insert_queue_and_shadow can detect a later stale claim (see
+    test_air_next.py's stale-head-drop tests for the consuming side)."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    state.force_next = SegmentType.BANTER
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    xfade_out = tmp_path / "banter_trans_abc.mp3"
+    xfade_out.write_bytes(b"\x00" * 2048)
+    combined = tmp_path / "banter_combined.mp3"
+    combined.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati.", "youtube|abc123"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=combined),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 15.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue banter")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued a banter segment"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("transition_track_ref") == "youtube|abc123"
+
+
+@pytest.mark.asyncio
+async def test_canned_banter_quality_fallback_clears_transition_track_ref(tmp_path):
+    """A canned quality fallback must not inherit the generated transition's
+    played-track claim, because that clip never says it."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    state.force_next = SegmentType.BANTER
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    xfade_out = tmp_path / "banter_trans_abc.mp3"
+    xfade_out.write_bytes(b"\x00" * 2048)
+    combined = tmp_path / "banter_combined.mp3"
+    combined.write_bytes(b"\x00" * 2048)
+    canned_clip = tmp_path / "canned_banter.mp3"
+    canned_clip.write_bytes(b"\x00" * 2048)
+
+    validate_calls: list[Path] = []
+
+    def _validate_side_effect(path, seg_type, **_kwargs):
+        validate_calls.append(Path(path))
+        if len(validate_calls) == 1:
+            raise AudioQualityError("generated banter too quiet")
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Bentornati.", "youtube|abc123"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=xfade_out),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=combined),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 15.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue canned fallback banter")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued canned fallback banter"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+    assert seg.metadata.get("transition_track_ref") is None

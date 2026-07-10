@@ -342,6 +342,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_directive",
         "ritual_moment_id",
         "gag_moment_id",
+        "transition_track_ref",
     }
 )
 

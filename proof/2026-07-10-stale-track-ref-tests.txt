@@ -1,0 +1,85 @@
+=== ruff check (touched files) ===
+All checks passed!
+
+=== ruff format --check (repo-wide) ===
+275 files already formatted
+
+=== mypy ===
+tests/web/test_public_status_contract.py:462: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:776: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 248 source files
+
+=== full pytest suite ===
+....................s................................................... [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 93%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+........................................................................ [ 99%]
+...........                                                              [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /Users/florianhorner/conductor/workspaces/mammamiradio/provo-v1/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4401 passed, 2 skipped, 21 deselected, 1 warning in 107.97s (0:01:47)
+
+=== coverage ratchet check ===
+--------------------------------------------------------------------------------------
+TOTAL                                      17244    963   5612    559    93%
+Required test coverage of 92.0% reached. Total coverage: 93.04%
+4401 passed, 2 skipped, 21 deselected, 1 warning in 112.86s (0:01:52)
+
+
+All coverage floors held. Total: 93% (floor: 92%)
+
+Modules with ratchet headroom (will auto-update on main):
+  mammamiradio.hosts.context_cues: 99% (floor: 94%)
+  mammamiradio.integrations.now_playing: 92% (floor: 88%)
+  mammamiradio.scheduling.producer: 90% (floor: 83%)
+
+=== release invariants ===
+  [PASS] _pick_canned_clip returning None is tested (10 test file(s))
+
+4. Test coverage — post-restart scenario
+  [PASS] session_stopped scenario is tested (54 test file(s))
+
+5. HA Green fallback performance gates
+  [PASS] queue fallback wait is 5.0s (<= 5s)
+  [PASS] norm-cache rescue avoids deterministic first-file selection
+  [PASS] HA Green perf smoke script and Make target are present
+  [PASS] HA Green cold-launch smoke script and Make target are present
+
+6. Release beat manifest
+release beat: no manifest at mammamiradio/assets/release/release_beat.toml; no-op
+  [PASS] release beat manifest is absent, disabled, or schema-valid
+
+=======================================
+  Passed: 10  Failed: 0
+=======================================
+
+All invariants passed.
+
+=== new tests added by this fix ===
+tests/scheduling/test_air_next.py::test_front_insert_drops_stale_transition_claim_head PASSED
+tests/scheduling/test_air_next.py::test_front_insert_unlinks_stale_transition_claim_ephemeral PASSED
+tests/scheduling/test_air_next.py::test_front_insert_keeps_non_transition_head_segment PASSED
+tests/hosts/test_scriptwriter.py::test_system_prompt_bans_forward_framing_for_played_tracks PASSED
+tests/hosts/test_scriptwriter.py::test_write_transition_returns_played_track_ref_matching_last_played PASSED
+tests/hosts/test_scriptwriter.py::test_write_transition_played_track_ref_none_when_no_history PASSED
+tests/web/test_status_payload.py::test_public_segment_metadata_redacts_transition_track_ref PASSED
+tests/scheduling/test_producer_coverage.py::test_banter_metadata_includes_transition_track_ref PASSED
+tests/scheduling/test_producer_extended.py::test_ad_break_metadata_includes_transition_track_ref PASSED
+
+=== pre-ship review squad ===
+3 parallel agents: adversarial code review, test coverage audit, docs/config
+consistency. 2 real P1 findings fixed before this run:
+  1. transition_track_ref metadata leaked to the public /public-status API
+     (mammamiradio/web/status_payload.py) — added to the existing internal
+     metadata denylist, regression test added.
+  2. No integration test verified the metadata actually flows through the
+     real run_producer() pipeline (only its two endpoints were tested in
+     isolation) — two new end-to-end producer tests added.
+No unresolved P0/P1 findings after fixes.

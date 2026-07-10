@@ -132,6 +132,17 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
+def test_system_prompt_bans_forward_framing_for_played_tracks(config):
+    """A track pulled from played_tracks history must never be framed as upcoming
+    — this is what let a host's "and after that ... —" line about an already-aired
+    song sound like it was teasing something still ahead of the listener."""
+    prompt = _build_system_prompt(config)
+    assert "ALREADY-PLAYED TRACKS" in prompt
+    assert '"after that"' in prompt
+    assert '"next"' in prompt
+    assert "we just heard" in prompt
+
+
 def test_system_prompt_uses_resolved_station_identity(config):
     config.station.name = "Engine Internal"
     config.brand.station_name = "Legacy Brand"
@@ -1142,7 +1153,7 @@ async def test_write_transition_normal_mode_retries_all_italian_response(config,
         ) as mock_generate,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert text == "That landing was clean, mamma mia, and now we keep moving."
     assert mock_generate.await_count == 2
@@ -1163,7 +1174,7 @@ async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is
         ),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert text == "All right..."
 
@@ -4422,19 +4433,58 @@ async def test_write_transition_returns_host_and_text(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="ad")
+        host, text, _ = await write_transition(state, config, next_segment="ad")
 
     assert isinstance(host, HostPersonality)
     assert text == "Bellissima... e adesso una pausa."
 
 
 @pytest.mark.asyncio
+async def test_write_transition_returns_played_track_ref_matching_last_played(config, state):
+    """The third return value lets a caller detect when a later queue reorder
+    breaks this transition's "just finished playing" claim (see
+    _front_insert_queue_and_shadow's stale-head drop)."""
+    track = Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")
+    state.played_tracks = [track]
+    response_json = json.dumps({"text": "Bellissima... e adesso una pausa."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref == track.cache_key
+
+
+@pytest.mark.asyncio
+async def test_write_transition_played_track_ref_none_when_no_history(config, state):
+    """No played_tracks history yet (opening of the show) means no specific
+    track claim to invalidate later."""
+    state.played_tracks = []
+    response_json = json.dumps({"text": "E si comincia."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
 async def test_write_transition_no_key_returns_fallback(config, state):
     config.anthropic_api_key = ""
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     for next_seg, expected in [("banter", "All right..."), ("ad", "And now..."), ("news_flash", "Attention...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+        host, text, played_track_ref = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
+        # Generic fallback lines never name a specific track, even with history present.
+        assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -4442,13 +4492,14 @@ async def test_write_transition_no_key_super_italian_returns_italian_fallback(co
     config.super_italian_mode = True
     config.anthropic_api_key = ""
     for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+        host, text, _ = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
 
 
 @pytest.mark.asyncio
 async def test_write_transition_api_exception_returns_fallback(config, state):
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=Exception("timeout"))
@@ -4458,10 +4509,12 @@ async def test_write_transition_api_exception_returns_fallback(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="banter")
+        host, text, played_track_ref = await write_transition(state, config, next_segment="banter")
 
     assert isinstance(host, HostPersonality)
     assert text == "All right..."
+    # The LLM-exception fallback also uses a generic line — no track claim to invalidate.
+    assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -4473,7 +4526,7 @@ async def test_write_transition_strips_markdown_fences(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        _host, text = await write_transition(state, config)
+        _host, text, _ = await write_transition(state, config)
 
     assert text == "Che bel pezzo..."
 
@@ -4493,7 +4546,7 @@ async def test_write_transition_exclaim_style_selected_when_cues_present(config,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=cues)
+        host, text, _ = await write_transition(state, config, song_cues=cues)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4522,7 +4575,7 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=[])
+        host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert isinstance(host, HostPersonality)
     assert text == "Bellissima, e adesso..."
@@ -4554,7 +4607,7 @@ async def test_write_transition_loads_song_cues_from_current_track(config, state
         patch("mammamiradio.playlist.song_cues.get_cues", new=AsyncMock(return_value=fake_cues)) as mock_get_cues,
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4682,7 +4735,7 @@ async def test_write_transition_default_song_cues_is_none(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert isinstance(text, str)

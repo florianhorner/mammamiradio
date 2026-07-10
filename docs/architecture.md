@@ -108,9 +108,14 @@ auto" can't resurrect a just-cleared course on the next restart.
 
 Narration and stickiness are selection-driven, not queue-control-driven.
 `StationState.select_next_track()` first applies the normal diversity filters and
-then gives eligible tracks tagged with the active heading id a durable soft weight.
-Cooldowns, bans, artist diversity, pinned tracks, and rescue paths can still win;
-the heading never purges the queue, forces play-next, or interrupts audio.
+then gives eligible tracks tagged with the active heading id an **adaptive lift**:
+the multiplier is sized from the live pool so the hunt set reliably lands roughly
+`HEADING_TARGET_SHARE` of picks no matter how large rotation is (a fixed ×N is
+inaudible in a 200-track pool), clamped to `[HEADING_MIN_LIFT, HEADING_MAX_LIFT]`
+so a small pool keeps the historical ×4 floor and a tiny hunt set can never make
+one song dominate. Cooldowns, bans, artist diversity, pinned tracks, and rescue
+paths can still win; the heading never purges the queue, forces play-next, or
+interrupts audio.
 `heading_pending_announcement` is armed for hunt start, first found record, and
 occasional crate-digging beats. The next ordinary host break consumes that
 dedicated slot at prompt-build into a Record Hunt block; it does not reuse or
@@ -254,7 +259,7 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
 | Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
-| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
+| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail, and unconditionally drops a stale-claim head†) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **no** |
@@ -281,6 +286,12 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- † A front-insert also drops the **queue head** outright (not just the
+  furthest-future tail) when it carries a `transition_track_ref` — its "just
+  finished playing" claim (baked into audio, crossfaded over the prior song's
+  fade) is unconditionally broken the moment anything gets wedged ahead of it.
+  Recorded as `GenerationWasteReason.STALE_PLAYED_TRACK_REF`; a fresh, accurate
+  banter/ad-intro is produced on the next normal cycle.
 - BANTER memory extraction is deliberately **not** a queue-time commit. The
   scriptwriter snapshots context, the producer rewrites that snapshot with the
   final aired lines including the transition, and the streamer schedules
