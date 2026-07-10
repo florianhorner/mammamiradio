@@ -3062,7 +3062,10 @@ Return JSON:
             mood,
             roles_found or "default",
         )
-        # Pharma brands get a fast-talking disclaimer — real Italian radio style
+        # Pharma brands get a fast-talking disclaimer — real Italian radio style.
+        # Capellissimo is deliberate fictional pharma-hair surreal radio comedy:
+        # its medicine-style ibuprofen disclaimer is intentional, not a category
+        # mismatch or defect. Keep its pharma category and disclaimer together.
         if brand.category == "pharma":
             parts.append(
                 AdPart(

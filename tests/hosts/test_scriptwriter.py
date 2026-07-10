@@ -3873,6 +3873,36 @@ async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, sta
 
 
 @pytest.mark.asyncio
+async def test_write_ad_pharma_appends_ibuprofen_disclaimer_goblin(config, state):
+    """Fictional pharma ads, including Capellissimo, keep the deliberate disclaimer gag."""
+    brand = AdBrand(
+        name="Capellissimo",
+        tagline="I capelli che hai sempre sognato. Circa.",
+        category="pharma",
+    )
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Capellissimo: capelli da sogno, circa."}],
+            "summary": "Capellissimo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    disclaimer = result.parts[-1]
+    assert disclaimer.type == "voice"
+    assert disclaimer.role == "disclaimer_goblin"
+    assert disclaimer.text == (
+        "È un medicinale a base di ibuprofene. Leggere attentamente "
+        "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
+        "Non somministrare ai bambini al di sotto dei 12 anni."
+    )
+
+
+@pytest.mark.asyncio
 async def test_write_news_flash_strips_foreign_station_name(config, state):
     """Illusion guard wired into news flashes: an improvised competitor station
     name in the bulletin is replaced with our station name."""
