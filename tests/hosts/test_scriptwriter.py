@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
-from mammamiradio.core.config import DEFAULT_ROLE, load_config, resolve_model
+from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
 from mammamiradio.core.models import (
     LLM_COST_CATEGORIES,
     ChaosSubtype,
@@ -130,6 +130,17 @@ def test_system_prompt_includes_theme(config):
 def test_system_prompt_includes_station_name(config):
     prompt = _build_system_prompt(config)
     assert config.station.name in prompt
+
+
+def test_system_prompt_bans_forward_framing_for_played_tracks(config):
+    """A track pulled from played_tracks history must never be framed as upcoming
+    — this is what let a host's "and after that ... —" line about an already-aired
+    song sound like it was teasing something still ahead of the listener."""
+    prompt = _build_system_prompt(config)
+    assert "ALREADY-PLAYED TRACKS" in prompt
+    assert '"after that"' in prompt
+    assert '"next"' in prompt
+    assert "we just heard" in prompt
 
 
 def test_system_prompt_uses_resolved_station_identity(config):
@@ -1142,7 +1153,7 @@ async def test_write_transition_normal_mode_retries_all_italian_response(config,
         ) as mock_generate,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert text == "That landing was clean, mamma mia, and now we keep moving."
     assert mock_generate.await_count == 2
@@ -1163,7 +1174,7 @@ async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is
         ),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert text == "All right..."
 
@@ -1834,8 +1845,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.5."""
+async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -1853,7 +1864,7 @@ async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["model"] == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio
@@ -1949,8 +1960,8 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "large"
-    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
+    # banter → creative role → balanced OpenAI creative = "small"
+    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -1967,15 +1978,15 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5-test"
+    assert call_kwargs["model"] == "gpt-5.4-mini-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.5"),
-        ("ad", "gpt-5.5"),
+        ("news_flash", "gpt-5.4-mini"),
+        ("ad", "gpt-5.4-mini"),
         ("transition", "gpt-5.4-mini"),
     ],
 )
@@ -2032,7 +2043,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.5"
+    assert record.model == "gpt-5.4-mini"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True
@@ -2763,7 +2774,7 @@ def test_script_cost_callers_have_valid_categories_and_model_routes(config):
     assert set(mapping.values()) <= set(LLM_COST_CATEGORIES)
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == "fast"
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == config.models.routing["transition"]
-    assert "direction" not in config.models.routing  # intentional DEFAULT_ROLE fallback
+    assert config.models.routing["direction"] == DEFAULT_ROLE
 
     for caller in mapping:
         role = config.models.routing.get(caller, DEFAULT_ROLE)
@@ -4422,19 +4433,58 @@ async def test_write_transition_returns_host_and_text(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="ad")
+        host, text, _ = await write_transition(state, config, next_segment="ad")
 
     assert isinstance(host, HostPersonality)
     assert text == "Bellissima... e adesso una pausa."
 
 
 @pytest.mark.asyncio
+async def test_write_transition_returns_played_track_ref_matching_last_played(config, state):
+    """The third return value lets a caller detect when a later queue reorder
+    breaks this transition's "just finished playing" claim (see
+    _front_insert_queue_and_shadow's stale-head drop)."""
+    track = Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")
+    state.played_tracks = [track]
+    response_json = json.dumps({"text": "Bellissima... e adesso una pausa."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref == track.cache_key
+
+
+@pytest.mark.asyncio
+async def test_write_transition_played_track_ref_none_when_no_history(config, state):
+    """No played_tracks history yet (opening of the show) means no specific
+    track claim to invalidate later."""
+    state.played_tracks = []
+    response_json = json.dumps({"text": "E si comincia."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
 async def test_write_transition_no_key_returns_fallback(config, state):
     config.anthropic_api_key = ""
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     for next_seg, expected in [("banter", "All right..."), ("ad", "And now..."), ("news_flash", "Attention...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+        host, text, played_track_ref = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
+        # Generic fallback lines never name a specific track, even with history present.
+        assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -4442,13 +4492,14 @@ async def test_write_transition_no_key_super_italian_returns_italian_fallback(co
     config.super_italian_mode = True
     config.anthropic_api_key = ""
     for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+        host, text, _ = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
 
 
 @pytest.mark.asyncio
 async def test_write_transition_api_exception_returns_fallback(config, state):
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=Exception("timeout"))
@@ -4458,10 +4509,12 @@ async def test_write_transition_api_exception_returns_fallback(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="banter")
+        host, text, played_track_ref = await write_transition(state, config, next_segment="banter")
 
     assert isinstance(host, HostPersonality)
     assert text == "All right..."
+    # The LLM-exception fallback also uses a generic line — no track claim to invalidate.
+    assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -4473,7 +4526,7 @@ async def test_write_transition_strips_markdown_fences(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        _host, text = await write_transition(state, config)
+        _host, text, _ = await write_transition(state, config)
 
     assert text == "Che bel pezzo..."
 
@@ -4493,7 +4546,7 @@ async def test_write_transition_exclaim_style_selected_when_cues_present(config,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=cues)
+        host, text, _ = await write_transition(state, config, song_cues=cues)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4522,7 +4575,7 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=[])
+        host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert isinstance(host, HostPersonality)
     assert text == "Bellissima, e adesso..."
@@ -4554,7 +4607,7 @@ async def test_write_transition_loads_song_cues_from_current_track(config, state
         patch("mammamiradio.playlist.song_cues.get_cues", new=AsyncMock(return_value=fake_cues)) as mock_get_cues,
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4682,7 +4735,7 @@ async def test_write_transition_default_song_cues_is_none(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert isinstance(text, str)
@@ -5036,6 +5089,93 @@ def test_has_script_llm_is_public():
     config = load_config(toml_path)
     # Result is bool — function is accessible and callable
     assert isinstance(has_script_llm(config), bool)
+
+
+def test_has_script_llm_true_with_registry_false_when_registry_unavailable(config):
+    """The gate that keeps a None model out of the API path.
+
+    With keys present it must be True only while the registry resolves a route;
+    an unavailable registry (empty catalog/profiles) must read as no-LLM so the
+    callers degrade to stock copy instead of sending model=None to a provider.
+    """
+    from mammamiradio.hosts.scriptwriter import has_script_llm
+
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    # Real registry loaded by the fixture resolves a route.
+    assert has_script_llm(config) is True
+
+    # Registry unavailable — keys still set, but no route resolves.
+    config.models = _empty_models()
+    assert has_script_llm(config) is False
+
+
+@pytest.mark.asyncio
+async def test_write_banter_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Keys present but no registry route -> stock copy, never model=None to an API."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "E torniamo alla musica!"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Ad generation with keys but no registry route -> minimal stock spot, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    assert result.brand == "FallbackBrand"
+    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """News flash with keys but no registry route -> mode-driven stock line, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.super_italian_mode = False
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        _host, text, _category = await write_news_flash(state, config)
+
+    assert "breaking news" in text.lower()
 
 
 # --- WS3-A concurrent auth-flood prevention ---

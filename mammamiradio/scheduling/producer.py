@@ -1115,8 +1115,11 @@ def _front_insert_queue_and_shadow(
     the streamer cannot interleave (mirrors ``_purge_queue_and_shadow`` and the
     ``/api/queue/remove`` critical section). Drops the furthest-future tail if the
     bounded queue would otherwise overflow ``maxsize`` (which would raise QueueFull
-    and risk dead air); dropped renders are re-produced on a later cycle. Returns
-    False (dropping the segment) if the session was stopped mid-build.
+    and risk dead air). Also drops the queue head outright when it carries a
+    ``transition_track_ref`` (a "just finished playing X" claim baked into its
+    audio) — front-inserting anything breaks that adjacency claim unconditionally.
+    Dropped renders are re-produced on a later cycle. Returns False (dropping the
+    segment) if the session was stopped mid-build.
     """
     if state.session_stopped:
         state.record_discard(segment, reason=GenerationWasteReason.SESSION_STOPPED)
@@ -1134,6 +1137,15 @@ def _front_insert_queue_and_shadow(
             queue.task_done()
         except asyncio.QueueEmpty:
             break
+    # A queue-head speech segment that carries a "just finished playing X" claim
+    # (baked into its audio, crossfaded over X's fade) has that claim unconditionally
+    # broken the moment anything gets wedged ahead of it — X is no longer what plays
+    # right before it. Drop it here rather than airing a now-false claim; a fresh,
+    # accurate one is produced on the next normal cycle (see #641 for the sibling
+    # audio-level version of this problem).
+    stale_head: Segment | None = None
+    if items and items[0].metadata.get("transition_track_ref"):
+        stale_head = items.pop(0)
     items.insert(0, segment)
     dropped: list[Segment] = []
     while queue.maxsize and len(items) > queue.maxsize:
@@ -1145,6 +1157,18 @@ def _front_insert_queue_and_shadow(
     # guard never has to "correct" a shadow > queue overshoot and log a false alarm
     # on every air-next.
     state.queued_segments.insert(0, shadow_entry)
+    if stale_head is not None:
+        state.record_discard(
+            stale_head, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF, already_counted_in_produced=True
+        )
+        _drop_segment_moment_receipts(
+            state, stale_head, GenerationWasteReason.STALE_PLAYED_TRACK_REF, "air-next-stale-transition"
+        )
+        if getattr(stale_head, "ephemeral", False) and not _is_packaged_asset(stale_head.path):
+            stale_head.path.unlink(missing_ok=True)
+        # The stale head's shadow entry sits right after the new front entry (index 0).
+        if len(state.queued_segments) > 1:
+            del state.queued_segments[1]
     for seg in dropped:
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, seg, GenerationWasteReason.AIR_NEXT_OVERFLOW, "air-next-overflow")
@@ -1177,9 +1201,10 @@ def _front_insert_queue_and_shadow(
     # can never be front-inserted ahead of it.
     state.operator_force_pending = None
     logger.info(
-        "Air-next: front-inserted %s%s",
+        "Air-next: front-inserted %s%s%s",
         segment.type.value,
         f" (dropped {len(dropped)} buffered tail segment(s))" if dropped else "",
+        " (dropped stale transition-claim head)" if stale_head is not None else "",
     )
     return True
 
@@ -3029,6 +3054,7 @@ async def run_producer(
                 canned = None
                 listener_request_commit = None
                 has_music_tail = False
+                trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
 
@@ -3138,9 +3164,13 @@ async def run_producer(
                                     is_new_listener=_is_new_listener,
                                     is_first_listener=_is_first_listener,
                                 )
-                                (trans_host, trans_text), (lines, listener_request_commit) = await asyncio.gather(
-                                    transition_task, banter_task
-                                )
+                                (
+                                    (trans_host, trans_text, trans_track_ref),
+                                    (
+                                        lines,
+                                        listener_request_commit,
+                                    ),
+                                ) = await asyncio.gather(transition_task, banter_task)
                                 _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
@@ -3309,6 +3339,7 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
+                                trans_track_ref = None
                                 # Same as the chaos-exception fallback above: this canned
                                 # clip carries neither receipt on air, so demote both now
                                 # rather than leaving the gag id to leak into a later
@@ -3425,6 +3456,7 @@ async def run_producer(
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",
                         "has_music_tail": bool(has_music_tail),
+                        "transition_track_ref": trans_track_ref,
                         "ledger_segment_id": _banter_attempt_id or None,
                         # Moment Receipt ids (opaque; safe to cross public payload
                         # boundaries). Generated banter only — canned fallbacks and
@@ -3759,10 +3791,11 @@ async def run_producer(
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
-                        ihost, itext = await _sw.write_transition(state, config, next_segment="ad")
+                        ihost, itext, itrack_ref = await _sw.write_transition(state, config, next_segment="ad")
                     except Exception:
                         ihost = random.choice(_sw._regular_hosts(config))
                         itext = random.choice(_sw.AD_BREAK_INTROS)
+                        itrack_ref = None
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
                     await synthesize(
                         itext,
@@ -3801,7 +3834,7 @@ async def run_producer(
                         parts.append(ppath)
                     except Exception:
                         pass
-                    return parts, itext, has_music_tail
+                    return parts, itext, has_music_tail, itrack_ref
 
                 async def _build_bumpers(_num_spots=num_spots, _loop=loop):
                     """Opening bumper + sparse mid-spot bumpers.
@@ -3850,7 +3883,7 @@ async def run_producer(
                 _gen_ok = False
                 try:
                     (
-                        (intro_parts, intro_text, intro_has_music_tail),
+                        (intro_parts, intro_text, intro_has_music_tail, intro_track_ref),
                         scripts,
                         (bumper_in, mid_bumpers),
                     ) = await asyncio.gather(
@@ -4001,6 +4034,7 @@ async def run_producer(
                         "roles_used": break_roles,
                         "title": _ad_title(break_brands),
                         "has_music_tail": bool(intro_has_music_tail),
+                        "transition_track_ref": intro_track_ref,
                         "ledger_segment_id": _ad_attempt_id,
                     },
                 )

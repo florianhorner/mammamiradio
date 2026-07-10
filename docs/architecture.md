@@ -108,9 +108,14 @@ auto" can't resurrect a just-cleared course on the next restart.
 
 Narration and stickiness are selection-driven, not queue-control-driven.
 `StationState.select_next_track()` first applies the normal diversity filters and
-then gives eligible tracks tagged with the active heading id a durable soft weight.
-Cooldowns, bans, artist diversity, pinned tracks, and rescue paths can still win;
-the heading never purges the queue, forces play-next, or interrupts audio.
+then gives eligible tracks tagged with the active heading id an **adaptive lift**:
+the multiplier is sized from the live pool so the hunt set reliably lands roughly
+`HEADING_TARGET_SHARE` of picks no matter how large rotation is (a fixed ×N is
+inaudible in a 200-track pool), clamped to `[HEADING_MIN_LIFT, HEADING_MAX_LIFT]`
+so a small pool keeps the historical ×4 floor and a tiny hunt set can never make
+one song dominate. Cooldowns, bans, artist diversity, pinned tracks, and rescue
+paths can still win; the heading never purges the queue, forces play-next, or
+interrupts audio.
 `heading_pending_announcement` is armed for hunt start, first found record, and
 occasional crate-digging beats. The next ordinary host break consumes that
 dedicated slot at prompt-build into a Record Hunt block; it does not reuse or
@@ -254,7 +259,7 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
 | Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
-| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail) | yes (at head) |
+| Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail, and unconditionally drops a stale-claim head†) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
@@ -281,6 +286,12 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- † A front-insert also drops the **queue head** outright (not just the
+  furthest-future tail) when it carries a `transition_track_ref` — its "just
+  finished playing" claim (baked into audio, crossfaded over the prior song's
+  fade) is unconditionally broken the moment anything gets wedged ahead of it.
+  Recorded as `GenerationWasteReason.STALE_PLAYED_TRACK_REF`; a fresh, accurate
+  banter/ad-intro is produced on the next normal cycle.
 - BANTER memory extraction is deliberately **not** a queue-time commit. The
   scriptwriter snapshots context, the producer rewrites that snapshot with the
   final aired lines including the transition, and the streamer schedules
@@ -292,23 +303,26 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Script generation never names a model in code. Each call site asks for a model by
 **role**, and `resolve_model()` in `mammamiradio/core/config.py` resolves it:
 
-```text
-task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
-  "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
-  "transition"              "fast"                                          "haiku"     "claude-haiku-..."
-  "memory_extract"          "fast"                                          "haiku"     "claude-haiku-..."
-```
+| Profile | Anthropic creative | OpenAI creative | Fast routes |
+| --- | --- | --- | --- |
+| Premium | `opus` | `large` | `haiku` / `small` |
+| Balanced (default) | `sonnet` | `small` | `haiku` / `small` |
+| Economy | `haiku` | `small` | `haiku` / `small` |
 
-- The `[models]` block in `radio.toml` is the only place model IDs live: a
-  per-provider `catalog`, a `routing` map (task→role), and named `profiles`
-  (the admin "quality dial": `premium` | `balanced` | `economy`).
-- `resolve_model()` is **total** — an unrouted task, missing profile, or missing
-  catalog key resolves through `default_profile` to a real model ID, never a crash
-  (a crash here would be dead air). The only hardcoded constant is the role name
-  `DEFAULT_ROLE = "creative"`; no model ID is baked into code except the built-in
-  `DEFAULT_MODELS` cold-start safety net.
-- A missing or malformed `[models]` block **degrades** to `DEFAULT_MODELS` so the
-  station always boots and airs; it never fails boot.
+- `model_registry.toml` is the canonical place provider model IDs and token prices
+  live: a per-provider `catalog`, a `routing` map (task→role), named `profiles`
+  (the admin "quality dial": `premium` | `balanced` | `economy`), the OpenAI
+  TTS model, and catalog-keyed pricing. `radio.toml` no longer owns model
+  selection; a legacy `[models]` block is compatibility input only and emits a
+  deprecation warning.
+- `resolve_model()` is **total** — it tries the active profile, then
+  `default_profile`, and returns `None` instead of raising when a registry route
+  is unavailable. Callers degrade to stock copy or Edge TTS rather than making an
+  arbitrary provider request. The only code-level default is the `creative` role;
+  no model ID or price is baked into the application.
+- A missing or malformed registry prevents provider calls and **degrades** to
+  stock scripts and Edge TTS so the station always boots and airs; provider
+  status reports that model routing is unavailable.
 - `fast` (transitions and post-air memory extraction) is pinned to the lowest-latency model in every profile.
 - The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
   falls back to the fast OpenAI model and banter to the creative one.
@@ -424,7 +438,11 @@ Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default), `e
 
 **Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
 
-**OpenAI TTS** (`gpt-4o-mini-tts`): requires `OPENAI_API_KEY`. Each host maps to an OpenAI voice (e.g., `onyx`). Personality-aware delivery instructions are generated from the host's energy, warmth, and chaos axes — the model interprets these as acting direction, not just static parameters.
+**OpenAI TTS**: requires `OPENAI_API_KEY` and uses the separately configured
+`[tts.openai]` registry entry. Each host maps to an OpenAI voice (e.g., `onyx`).
+Personality-aware delivery instructions are generated from the host's energy,
+warmth, and chaos axes — the model interprets these as acting direction, not
+just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 

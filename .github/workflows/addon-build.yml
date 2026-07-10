@@ -8,6 +8,7 @@ on:
       - "mammamiradio/**"
       - "pyproject.toml"
       - "radio.toml"
+      - "model_registry.toml"
   workflow_dispatch:
 
 # Serialize runs on the same ref so two near-simultaneous merges don't run
@@ -81,6 +82,7 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
+          cp model_registry.toml ha-addon/mammamiradio/
 
       - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
 
@@ -116,6 +118,15 @@ jobs:
       contents: read
       packages: read
     steps:
+      # Needed by "Assert installed model registry": it hashes the canonical
+      # root model_registry.toml against the copy baked into the image. Without
+      # a checkout the file is absent on the runner and the step fails.
+      # Read-only: this checkout only reads the registry for hashing, so the
+      # token is not persisted into .git/config (zizmor: artipacked).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -201,6 +212,31 @@ jobs:
               + "; ".join(failures)
           )
           PY
+
+      - name: Assert installed model registry
+        env:
+          # Route trusted expansions through env so they reach the script as shell
+          # variables, not inline ${{ }} interpolation (zizmor: template-injection).
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="$IMAGE_REF"
+          EXPECTED="$(sha256sum model_registry.toml | awk '{print $1}')"
+          ACTUAL="$(docker run --rm -i "$IMAGE" python3 - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          registry = Path("/app/model_registry.toml")
+          if not registry.is_file():
+              raise SystemExit("missing /app/model_registry.toml in installed image")
+          print(sha256(registry.read_bytes()).hexdigest())
+          PY
+          )"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Installed model_registry.toml does not match the canonical root registry"
+            exit 1
+          fi
+          echo "Installed model registry matches the canonical root registry"
 
       - name: Run container smoke test
         if: ${{ always() && steps.pull_amd64.outcome == 'success' }}

@@ -64,3 +64,19 @@ def test_all_edge_hosts_report_edge_no_fallback():
     assert status["primary_provider"] == "edge"
     assert status["current_provider"] == "edge"
     assert status["fallback_active"] is False
+
+
+def test_openai_tts_without_registry_model_falls_back_to_edge():
+    """OpenAI TTS needs a registry-selected speech model, not just a key. Without
+    it, provider checks report model_routing_unavailable — runtime status must
+    agree and show Edge fallback instead of 'openai TTS configured'."""
+    config = load_config(TOML_PATH)
+    config.ads.voices = []
+    config.sonic_brand.sweeper_voice = ""
+    for host in config.hosts:
+        host.engine = "openai"
+    config.openai_api_key = "openai-key"
+    config.models.tts_models = {}  # registry TTS route unavailable (legacy/broken registry)
+    status = _tts_provider_status(config, StationState())
+    assert status["current_provider"] == "edge"
+    assert status["fallback_active"] is True

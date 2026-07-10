@@ -27,6 +27,7 @@ from typing import Any
 
 from mammamiradio.audio.normalizer import probe_duration_sec
 from mammamiradio.core.models import Segment, SegmentType, Track
+from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
 logger = logging.getLogger(__name__)
@@ -271,7 +272,15 @@ def restart_handoff_manifest_path(cache_dir: Path | str) -> Path:
 def load_restart_handoff_manifest(cache_dir: Path | str) -> RestartHandoffManifest:
     """Load the manifest, returning an empty manifest for missing/corrupt input."""
 
-    path = restart_handoff_manifest_path(cache_dir)
+    handoff_dir = _safe_handoff_dir(cache_dir)
+    if handoff_dir is None:
+        # A symlinked restart_handoff dir must never be read through: the
+        # manifest and every entry it names could belong to an attacker- or
+        # corruption-controlled location outside the cache, and the sha256
+        # check in _entry_rejection_reason offers no protection there since
+        # that same location would also control the manifest recording it.
+        return RestartHandoffManifest.empty()
+    path = handoff_dir / MANIFEST_FILENAME
     try:
         raw = path.read_text(encoding="utf-8")
         return RestartHandoffManifest.from_dict(json.loads(raw))
@@ -378,12 +387,25 @@ def write_restart_handoff_spool(
 
     now = time.time() if now is None else now
     with _SPOOL_WRITE_LOCK:
+        handoff_dir = _safe_handoff_dir(cache_dir)
+        if handoff_dir is None:
+            return RestartHandoffManifest.empty()
+        segments_dir = _safe_segments_dir(handoff_dir)
+        if segments_dir is None:
+            logger.warning(
+                "Skipping restart handoff spool write: segments dir is unsafe: %s",
+                handoff_dir / SEGMENTS_DIRNAME,
+            )
+            return RestartHandoffManifest.empty()
+
         entries: list[RestartHandoffEntry] = []
         for candidate in candidates:
             if len(entries) >= max_entries:
                 break
             entry = _entry_from_candidate(
                 cache_dir,
+                handoff_dir,
+                segments_dir,
                 candidate,
                 blocklist=blocklist,
                 now=now,
@@ -395,7 +417,7 @@ def write_restart_handoff_spool(
             return load_restart_handoff_manifest(cache_dir)
 
         manifest = RestartHandoffManifest(entries=tuple(entries), schema_version=SCHEMA_VERSION, created_at=now)
-        _publish_manifest(cache_dir, manifest)
+        _publish_manifest(handoff_dir, manifest)
         _prune_unreferenced_segments(cache_dir, manifest, protected_paths=protected_paths)
         return manifest
 
@@ -465,6 +487,8 @@ def prune_stale_handoff_tmp_files(cache_dir: Path | str, max_age_hours: float = 
 
 def _entry_from_candidate(
     cache_dir: Path | str,
+    handoff_dir: Path,
+    segments_dir: Path | None,
     candidate: RestartHandoffCandidate,
     *,
     blocklist: Mapping[BlockKey, object] | None,
@@ -476,14 +500,16 @@ def _entry_from_candidate(
         is not None
     ):
         return None
+    if segments_dir is None:
+        return None
     source = candidate.path
-    copied, digest, size_bytes = _copy_and_hash(source, _segments_dir(cache_dir), candidate.artist, candidate.title)
+    copied, digest, size_bytes = _copy_and_hash(source, segments_dir, candidate.artist, candidate.title)
     duration = _validated_duration(source, candidate.duration_sec, duration_probe)
     if duration is None:
         copied.unlink(missing_ok=True)
         return None
     return RestartHandoffEntry(
-        relative_path=_relative_to_handoff(cache_dir, copied),
+        relative_path=_relative_to_handoff(handoff_dir, copied),
         sha256=digest,
         size_bytes=size_bytes,
         duration_sec=duration,
@@ -643,8 +669,8 @@ def _music_admission_rejection_reason(
     return f"music_admission:{verdict.reason}"
 
 
-def _publish_manifest(cache_dir: Path | str, manifest: RestartHandoffManifest) -> None:
-    path = restart_handoff_manifest_path(cache_dir)
+def _publish_manifest(handoff_dir: Path, manifest: RestartHandoffManifest) -> None:
+    path = handoff_dir / MANIFEST_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=_MANIFEST_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
@@ -668,9 +694,13 @@ def _prune_unreferenced_segments(
 ) -> None:
     segments_dir = _segments_dir(cache_dir)
     try:
-        segments_root = segments_dir.resolve(strict=False)
-    except OSError as exc:
-        logger.warning("Failed to resolve restart handoff segments dir for pruning: %s", exc)
+        cache_root = Path(cache_dir).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        logger.warning("Failed to resolve restart handoff cache dir for segment pruning: %s", exc)
+        return
+    segments_root = safe_path_within(segments_dir, cache_root, reject_symlinks=True)
+    if segments_root is None:
+        logger.warning("Skipping restart handoff segment pruning outside cache dir: %s", segments_dir)
         return
 
     referenced: set[Path] = set()
@@ -678,10 +708,8 @@ def _prune_unreferenced_segments(
         path = _resolve_relative_to_handoff(cache_dir, entry.relative_path)
         if path is None:
             continue
-        resolved = path.resolve(strict=False)
-        try:
-            resolved.relative_to(segments_root)
-        except ValueError:
+        resolved = safe_path_within(path, segments_root)
+        if resolved is None:
             continue
         referenced.add(resolved)
 
@@ -694,7 +722,7 @@ def _prune_unreferenced_segments(
             continue
 
     try:
-        paths = list(segments_dir.rglob(f"*{_AUDIO_SUFFIX}"))
+        paths = list(segments_root.rglob(f"*{_AUDIO_SUFFIX}"))
     except FileNotFoundError:
         return
     except OSError as exc:
@@ -710,7 +738,9 @@ def _prune_unreferenced_segments(
             path.unlink()
         except FileNotFoundError:
             continue
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
+            # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
+            # loop; pruning must never crash the producer over a broken segment.
             logger.warning("Failed to prune unreferenced restart handoff segment %s: %s", path, exc)
 
 
@@ -741,6 +771,36 @@ def _segments_dir(cache_dir: Path | str) -> Path:
     return restart_handoff_dir(cache_dir) / SEGMENTS_DIRNAME
 
 
+def _safe_handoff_dir(cache_dir: Path | str) -> Path | None:
+    """Resolve a non-symlinked handoff root that remains inside the cache.
+
+    Used on both the write path (spool creation) and the read/admission path
+    (manifest load, entry resolution) — a symlinked ``cache_dir/restart_handoff``
+    would otherwise let ``safe_path_within(..., reject_symlinks=True)`` pass on
+    the read side too, since that guard only rejects a symlinked leaf, not a
+    symlinked root: root and path resolve through the same redirect and stay
+    "relative" to each other, so containment holds even though both point
+    outside the real cache dir.
+    """
+
+    try:
+        cache_root = Path(cache_dir).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        logger.warning("Failed to resolve restart handoff cache dir: %s", exc)
+        return None
+    handoff_dir = restart_handoff_dir(cache_dir)
+    resolved = safe_path_within(handoff_dir, cache_root, reject_symlinks=True)
+    if resolved is None:
+        logger.warning("Skipping restart handoff dir outside cache dir: %s", handoff_dir)
+    return resolved
+
+
+def _safe_segments_dir(handoff_dir: Path) -> Path | None:
+    """Resolve a non-symlinked spool destination below a safe handoff root."""
+
+    return safe_path_within(handoff_dir / SEGMENTS_DIRNAME, handoff_dir, reject_symlinks=True)
+
+
 def _safe_mtime_for_sort(path: Path) -> float:
     """mtime for cap-sorting only; a vanished/unreadable file sorts first (oldest) so the
     per-file loop's own FileNotFoundError/OSError handling still gets a chance at it."""
@@ -751,35 +811,18 @@ def _safe_mtime_for_sort(path: Path) -> float:
 
 
 def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache_root: Path) -> int:
-    try:
-        resolved_dir = directory.resolve(strict=False)
-        resolved_dir.relative_to(cache_root)
-    except ValueError:
+    resolved_dir = safe_path_within(directory, cache_root, reject_symlinks=True)
+    if resolved_dir is None:
         logger.warning(
-            "Skipping restart handoff scratch cleanup outside cache dir: %s -> %s",
-            directory,
-            resolved_dir,
-        )
-        return 0
-    except (OSError, RuntimeError) as exc:
-        # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
-        # loop. Startup cleanup must never crash the app over a broken cache dir.
-        logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
-        return 0
-
-    if directory.is_symlink() and not directory.exists():
-        logger.warning(
-            "Failed to resolve restart handoff scratch cleanup dir %s: symlink target unavailable",
+            "Failed to resolve restart handoff scratch cleanup dir %s or it is outside cache dir",
             directory,
         )
         return 0
 
+    # A symlinked directory (dangling or not) is already rejected above by
+    # reject_symlinks=True, so directory.is_symlink() can't be True past this
+    # point — no separate symlink handling needed for the not-a-dir case.
     if not directory.is_dir():
-        if directory.is_symlink():
-            try:
-                directory.resolve(strict=True)
-            except (OSError, RuntimeError) as exc:
-                logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
         return 0
     pruned = 0
     try:
@@ -819,7 +862,7 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
         paths = sorted(paths, key=_safe_mtime_for_sort)[:_MAX_SCRATCH_PRUNE_PER_PASS]
     for path in paths:
         try:
-            if path.is_symlink():
+            if safe_path_within(path, resolved_dir, reject_symlinks=True) is None:
                 continue
             if not path.is_file():
                 continue
@@ -834,8 +877,8 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
     return pruned
 
 
-def _relative_to_handoff(cache_dir: Path | str, path: Path) -> str:
-    return path.relative_to(restart_handoff_dir(cache_dir)).as_posix()
+def _relative_to_handoff(handoff_dir: Path, path: Path) -> str:
+    return path.relative_to(handoff_dir).as_posix()
 
 
 def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> Path | None:
@@ -844,11 +887,16 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
     raw = Path(relative_path)
     if raw.is_absolute():
         return None
-    root = restart_handoff_dir(cache_dir).resolve(strict=False)
-    resolved = (root / raw).resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError:
+    # _safe_handoff_dir, not the raw restart_handoff_dir(): reject_symlinks=True
+    # below only rejects a symlinked leaf, not a symlinked root, so an
+    # unvalidated root here would let a symlinked restart_handoff dir redirect
+    # every admitted entry outside the cache (root and path both resolve
+    # through the same symlink, so containment holds trivially).
+    root = _safe_handoff_dir(cache_dir)
+    if root is None:
+        return None
+    resolved = safe_path_within(root / raw, root, reject_symlinks=True)
+    if resolved is None:
         return None
     if resolved.suffix.lower() != _AUDIO_SUFFIX:
         return None
@@ -856,11 +904,7 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
 
 
 def _is_cache_backed(path: Path, cache_dir: Path | str) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(Path(cache_dir).resolve(strict=False))
-    except ValueError:
-        return False
-    return True
+    return safe_path_within(path, Path(cache_dir), reject_symlinks=True) is not None
 
 
 def _looks_temporary_path(path: Path) -> bool:

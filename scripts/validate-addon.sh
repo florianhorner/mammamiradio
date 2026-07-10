@@ -132,6 +132,37 @@ PY
     fi
 }
 
+assert_image_model_registry() {
+    local image="$1"
+    local expected_hash actual_hash
+
+    if ! expected_hash=$($PY -c "from hashlib import sha256; from pathlib import Path; print(sha256(Path('model_registry.toml').read_bytes()).hexdigest())"); then
+        fail "Could not hash canonical model_registry.toml"
+        return 1
+    fi
+
+    if ! actual_hash=$(docker run --rm -i "$image" python3 -c '
+from hashlib import sha256
+from pathlib import Path
+
+registry = Path("/app/model_registry.toml")
+if not registry.is_file():
+    raise SystemExit("missing /app/model_registry.toml in installed image")
+print(sha256(registry.read_bytes()).hexdigest())
+'); then
+        fail "Installed model_registry.toml missing or unreadable"
+        return 1
+    fi
+
+    if [ "$actual_hash" = "$expected_hash" ]; then
+        pass "Installed model registry matches canonical root registry"
+        return 0
+    fi
+
+    fail "Installed model registry drifted from canonical root registry"
+    return 1
+}
+
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
 
@@ -241,6 +272,7 @@ fi
 # ---- 4. Critical files exist ----
 echo "4. Critical files"
 for f in mammamiradio/__init__.py radio.toml ha-addon/mammamiradio/Dockerfile \
+         model_registry.toml \
          ha-addon/mammamiradio/rootfs/run.sh ha-addon/mammamiradio/config.yaml \
          ha-addon/mammamiradio/build.yaml ha-addon/mammamiradio/apparmor.txt \
          ha-addon/mammamiradio/translations/en.yaml; do
@@ -279,6 +311,78 @@ if cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
     pass "ha-addon/mammamiradio/radio.toml matches root radio.toml"
 else
     fail "ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
+fi
+
+echo "6c. Model registry"
+if [ ! -f model_registry.toml ]; then
+    fail "Missing canonical model_registry.toml"
+elif [ -e ha-addon/mammamiradio/model_registry.toml ]; then
+    fail "ha-addon/mammamiradio/model_registry.toml must not be committed; stage the canonical root file at build time"
+elif SCHEMA_ERR="$($PY -c "
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+with open('model_registry.toml', 'rb') as f:
+    raw = tomllib.load(f)
+models = raw.get('models')
+if not isinstance(models, dict):
+    raise SystemExit('model_registry.toml schema invalid: [models] table is required')
+catalog = models.get('catalog')
+profiles = models.get('profiles')
+routing = models.get('routing') or {}
+if not isinstance(catalog, dict) or not catalog:
+    raise SystemExit('model_registry.toml schema invalid: [models.catalog] must be non-empty')
+if not isinstance(profiles, dict) or not profiles:
+    raise SystemExit('model_registry.toml schema invalid: [models.profiles] must be non-empty')
+if routing and not isinstance(routing, dict):
+    raise SystemExit('model_registry.toml schema invalid: [models.routing] must be a table')
+default_routing = {
+    'banter': 'creative',
+    'news_flash': 'creative',
+    'ad': 'creative',
+    'transition': 'fast',
+    'home_mood': 'fast',
+    'memory_extract': 'fast',
+    'direction': 'creative',
+}
+merged_routing = {**default_routing, **{str(task): str(role) for task, role in routing.items()}}
+for provider in ('anthropic', 'openai'):
+    provider_catalog = catalog.get(provider)
+    if not isinstance(provider_catalog, dict) or not provider_catalog:
+        raise SystemExit(f'model_registry.toml schema invalid: models.catalog.{provider} must be non-empty')
+for profile_name, profile_data in profiles.items():
+    if not isinstance(profile_data, dict):
+        raise SystemExit(f'model_registry.toml schema invalid: profile {profile_name!r} must be a table')
+    for provider in ('anthropic', 'openai'):
+        provider_profile = profile_data.get(provider)
+        if not isinstance(provider_profile, dict):
+            raise SystemExit(
+                f'model_registry.toml schema invalid: models.profiles.{profile_name}.{provider} must be a table'
+            )
+        for task, role in merged_routing.items():
+            key = provider_profile.get(role)
+            model_id = catalog[provider].get(key) if key else None
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise SystemExit(
+                    f'model_registry.toml schema invalid: {profile_name}/{provider}/{task} role {role!r} '
+                    'does not resolve to a model id'
+                )
+tts = raw.get('tts')
+openai_tts = tts.get('openai') if isinstance(tts, dict) else None
+if not isinstance(openai_tts, dict) or not str(openai_tts.get('model', '')).strip():
+    raise SystemExit('model_registry.toml schema invalid: [tts.openai].model must be non-empty')
+pricing = raw.get('pricing')
+if not isinstance(pricing, dict):
+    raise SystemExit('model_registry.toml schema invalid: [pricing] table is required')
+fallback_input = float(pricing.get('fallback_input_per_million', 0.0))
+fallback_output = float(pricing.get('fallback_output_per_million', 0.0))
+if fallback_input <= 0 or fallback_output <= 0:
+    raise SystemExit('model_registry.toml schema invalid: pricing fallback rates must be positive')
+" 2>&1)"; then
+    pass "model_registry.toml is valid and remains root-canonical"
+else
+    fail "model_registry.toml parse/schema error: ${SCHEMA_ERR:-unknown}"
 fi
 
 # ---- 7. run.sh syntax check ----
@@ -584,6 +688,7 @@ if [ "${1:-}" = "--build" ]; then
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"
     cp radio.toml "$TMPCTX/"
+    cp model_registry.toml "$TMPCTX/"
 
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -602,6 +707,9 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Checking installed recovery assets..."
         assert_image_recovery_assets "mammamiradio-addon-test:local" || true
+
+        echo "  Checking installed model registry..."
+        assert_image_model_registry "mammamiradio-addon-test:local" || true
 
         echo "  Testing container startup..."
         # Create minimal options.json

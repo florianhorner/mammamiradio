@@ -170,6 +170,8 @@ async def _generate_scene(
     global _scene_cache
     try:
         model = resolve_model(config.models, "home_mood", "anthropic")
+        if not model:
+            return
         response = await _call_anthropic_scene(config, scored, local_hour=local_hour, model=model)
         usage = getattr(response, "usage", None)
         if usage is not None:

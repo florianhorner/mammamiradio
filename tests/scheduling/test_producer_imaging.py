@@ -126,7 +126,9 @@ async def test_banter_talk_bed_cold_start_no_last_music_file(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
@@ -169,7 +171,11 @@ async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_p
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Siamo tornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Siamo tornati.", None),
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect) as mock_concat,
@@ -216,7 +222,11 @@ async def test_emergency_tone_tail_at_startup_does_not_seed_transition_stinger(t
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Siamo tornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Siamo tornati.", None),
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "transition.mp3"),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
@@ -255,7 +265,9 @@ async def test_banter_talk_bed_severed_after_ad_no_stale_bleed(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
@@ -401,7 +413,9 @@ async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
@@ -466,7 +480,9 @@ async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_
         # logic under test actually runs, per the audio-delivery coverage rule.
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
@@ -509,7 +525,7 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Prima di tutto."),
+            return_value=(host, "Prima di tutto.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
@@ -590,7 +606,7 @@ async def test_banter_talk_bed_failure_queues_dry_banter(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora.")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora.", None)),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),

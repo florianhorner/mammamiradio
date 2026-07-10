@@ -10,7 +10,7 @@
 #
 # Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
 # builds an image when a commit touches ha-addon/**, mammamiradio/**, pyproject.toml,
-# or radio.toml. When the tip commits are tests/docs/CI-only, no :<sha> image exists
+# radio.toml, or model_registry.toml. When the tip commits are tests/docs/CI-only, no :<sha> image exists
 # for them, so pinning HEAD would make the Supervisor pull a missing tag. This script
 # picks the newest main commit with a successful build run (that success is the proof
 # both per-arch images were pushed) and HARD-FAILS rather than advertise an unverified
@@ -32,7 +32,7 @@ cd "$ROOT"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 
 # Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
-IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml"
+IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: working tree not clean — commit or stash first, then cut the edge release." >&2

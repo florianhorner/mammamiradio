@@ -426,8 +426,13 @@ def _get_openai_client(api_key: str):
 
 
 def has_script_llm(config: StationConfig) -> bool:
-    """Return whether any script-generation backend is configured."""
-    return bool(config.anthropic_api_key or config.openai_api_key)
+    """Return whether a keyed provider also has a resolved script route."""
+    callers = tuple(config.models.routing) or ("banter",)
+    return any(
+        (config.anthropic_api_key and resolve_model(config.models, caller, "anthropic"))
+        or (config.openai_api_key and resolve_model(config.models, caller, "openai"))
+        for caller in callers
+    )
 
 
 def _regular_hosts(config: StationConfig) -> list[HostPersonality]:
@@ -576,7 +581,7 @@ async def _generate_json_response(
     prompt: str,
     config: StationConfig,
     state: StationState,
-    model: str,
+    model: str | None,
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
@@ -596,7 +601,7 @@ async def _generate_json_response(
     # Anthropic exhausted its escalated retries on truncation.
     final_anthropic_max_tokens = max_tokens
 
-    if config.anthropic_api_key:
+    if config.anthropic_api_key and model:
         now = time.time()
         key_changed = _anthropic_auth_blocked_key and _anthropic_auth_blocked_key != config.anthropic_api_key
         if key_changed:
@@ -866,13 +871,15 @@ async def _generate_json_response(
     # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
     # so a transition falls back to the fast OpenAI model and banter to the creative one.
     openai_model = resolve_model(config.models, caller, "openai")
+    if not openai_model:
+        raise RuntimeError("No configured OpenAI script model; check model_registry.toml")
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
     # Visible-output floor for the fallback: when Anthropic exhausted its
     # escalated retries on truncation, the same long content is coming here —
     # the original small floor is how the live incident's second half happened
-    # (gpt-5.5 returned an EMPTY completion, reasoning tokens starving the
+    # (the prior reasoning-model incident returned an EMPTY completion, reasoning tokens starving the
     # visible JSON). The raised TPM reservation is confined to that path.
     visible_budget = final_anthropic_max_tokens
     raw = ""
@@ -1495,7 +1502,7 @@ async def _generate_json_response_with_language_guard(
     prompt: str,
     config: StationConfig,
     state: StationState,
-    model: str,
+    model: str | None,
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
@@ -1855,6 +1862,13 @@ Rules:
 - REACT TO THE MUSIC. If a track just played, at least one host must have a specific
   take on it: love it, hate it, or have a conspiracy theory about it. Generic "bella
   canzone" is banned. "Quella canzone la odio dal 2019 per ragioni personali." is allowed.
+- ALREADY-PLAYED TRACKS: any track mentioned from what already aired — "Just played",
+  "Just finished playing", TRACK MEMORY callbacks — is in the PAST. Never frame it as
+  upcoming. BANNED connectors before a played track: "next", "coming up", "after that",
+  "and after that", "then we'll hear", "get ready for", "up next". Use clearly-past
+  framing instead: "we just heard", "a bit ago", "earlier", "poco fa", "abbiamo appena
+  sentito". This holds even mid-sentence, even when the line also teases something new —
+  a played track must never sound like it's still ahead of you.
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
@@ -2334,7 +2348,7 @@ Return JSON:
                 # so a malformed line falls through to stock copy instead of airing junk.
                 text = raw_text if isinstance(raw_text, str) else ""
             elif isinstance(line, str):
-                # The OpenAI fallback (gpt-4o-mini) sometimes returns lines as plain
+                # The OpenAI fallback sometimes returns lines as plain
                 # strings with no host. Alternate hosts across the string lines we
                 # actually air (counting only emitted lines, so interleaved blanks
                 # don't collapse two lines onto one host) so it still reads as
@@ -2749,10 +2763,14 @@ async def write_transition(
     style: str | None = None,
     song_cues: list[dict] | None = None,
     role: str | None = None,
-) -> tuple[HostPersonality, str]:
+) -> tuple[HostPersonality, str, str | None]:
     """Generate a short host transition line to talk over the end of a song.
 
-    Returns (host, text). The text is meant to be overlaid on the fading music.
+    Returns (host, text, played_track_ref). The text is meant to be overlaid on the
+    fading music. ``played_track_ref`` is the ``cache_key`` of the track the "Just
+    finished playing" claim is about, or ``None`` when the line used a generic
+    fallback that never named a specific track — callers use it to detect when a
+    later queue reorder (e.g. an operator air-next) breaks that claim's adjacency.
 
     ``style`` can be:
     - ``None``  — auto-select: exclaim 10% / echo 10% / react 80% (when song_cues non-empty);
@@ -2768,7 +2786,7 @@ async def write_transition(
     if not has_script_llm(config):
         host = random.choice(_regular_hosts(config))
         fallback = _transition_fallbacks(config)
-        return (host, fallback.get(next_segment, fallback["banter"]))
+        return (host, fallback.get(next_segment, fallback["banter"]), None)
 
     if song_cues is None:
         song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
@@ -2784,6 +2802,7 @@ async def write_transition(
             style = "react"
 
     current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
+    played_track_ref = state.played_tracks[-1].cache_key if state.played_tracks else None
     host = random.choice(_regular_hosts(config))
     recent_texts = list(state.recent_transition_texts)[-4:]
     recent_openers = [_transition_stem(text) for text in recent_texts if text]
@@ -2848,13 +2867,13 @@ Return JSON:
         )
         text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
         logger.info("Generated transition: %s", text[:50])
-        return (host, text)
+        return (host, text, played_track_ref)
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
         fallback = _transition_fallbacks(config)
         text = _massage_transition_text(fallback.get(next_segment, fallback["banter"]), next_segment, recent_texts)
-        return (host, text)
+        return (host, text, None)
 
 
 async def write_ad(

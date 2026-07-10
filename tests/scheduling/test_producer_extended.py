@@ -224,6 +224,47 @@ async def test_ad_break_segment_queued(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ad_break_metadata_includes_transition_track_ref(tmp_path):
+    """The played_track_ref write_transition() returns for the ad-break intro's
+    "just finished playing" claim must land on the produced AD segment's
+    metadata, mirroring the banter path (see
+    test_banter_metadata_includes_transition_track_ref in test_producer_coverage.py)."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
+    config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    fake_script = AdScript(
+        brand="TestBrand",
+        summary="Test ad",
+        parts=[AdPart(type="voice", text="Buy TestBrand today!")],
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Ma prima...", "youtube|abc123"),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
+        patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.AD
+    assert seg.metadata.get("transition_track_ref") == "youtube|abc123"
+
+
+@pytest.mark.asyncio
 async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
     """The ad-break intro must not crossfade its host opener over a stale song
     when the previous segment wasn't music (prev_seg_type is None on a cold run)."""
@@ -493,7 +534,9 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -533,7 +576,9 @@ async def test_ha_context_disabled_skips_full_state_refresh(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -578,7 +623,9 @@ async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -638,7 +685,9 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -688,7 +737,9 @@ async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -728,7 +779,9 @@ async def test_ha_context_first_home_moment_armed_during_banter(tmp_path):
             new_callable=AsyncMock,
             side_effect=_write_banter_consumes_directive,
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -768,7 +821,9 @@ async def test_ha_context_first_home_moment_not_fired_when_directive_restored_af
             new_callable=AsyncMock,
             side_effect=_write_banter_restores_directive_after_fallback,
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -821,7 +876,9 @@ async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -864,7 +921,9 @@ async def test_banter_quality_reject_uses_canned_fallback(tmp_path):
             new_callable=AsyncMock,
             return_value=([(host, "Linea test")], None),
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.concat_files", return_value=generated),
@@ -920,7 +979,9 @@ async def test_banter_generated_audio_passes_expected_duration_context(tmp_path)
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -960,7 +1021,9 @@ async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tm
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1009,7 +1072,9 @@ async def test_banter_concat_duration_failure_cleans_temporary_parts(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1065,7 +1130,9 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1306,7 +1373,9 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated),
         patch(f"{MODULE}.concat_files", return_value=generated),
@@ -1751,7 +1820,7 @@ async def test_news_flash_tts_failure_skips_gracefully(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati."),
+            return_value=(host, "Bentornati.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1878,7 +1947,7 @@ async def test_producer_calls_fire_interrupt_when_check_reactive_returns_spec(tm
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -1920,7 +1989,7 @@ async def test_producer_sets_ha_directive_when_check_reactive_returns_str(tmp_pa
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Allora!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bene...", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -1974,7 +2043,7 @@ async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -2038,7 +2107,7 @@ async def test_timer_interrupt_poll_skips_muted_entity(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -2125,7 +2194,7 @@ async def test_timer_interrupt_poll_does_not_replay_finish_after_unmute(tmp_path
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
@@ -2200,7 +2269,7 @@ async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora")),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),

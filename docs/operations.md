@@ -37,6 +37,7 @@ Environment:
 Static config:
 
 - `radio.toml`
+- `model_registry.toml` — AI model IDs, task routing, OpenAI TTS model, and per-model pricing. Must sit beside `radio.toml`. If missing, the station boots and plays music but degrades to stock host copy and Edge voices until it is restored.
 
 ## Runtime outputs
 

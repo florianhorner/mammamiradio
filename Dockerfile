@@ -10,10 +10,18 @@ WORKDIR /app
 # Copy and install dependencies first for better layer caching
 COPY pyproject.toml .
 COPY mammamiradio/ mammamiradio/
+RUN pip install --no-cache-dir .
+# Runtime config is copied AFTER the install layer so a radio.toml / registry edit
+# doesn't invalidate the expensive pip layer (matches the HA add-on Dockerfile).
 COPY radio.toml .
+# Model selection and pricing policy is canonical at the repository root and is
+# loaded at runtime as a sibling of radio.toml (/app/model_registry.toml).
+# Without it, load_config falls to _empty_models() and the station has no
+# LLM/TTS routing — a silent stock-copy/Edge-TTS degrade with keys still set.
+# The HA add-on stages the same file via its own build workflow.
+COPY model_registry.toml .
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN pip install --no-cache-dir . \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Create non-root user and directories
 RUN useradd -r -s /bin/false radio \
