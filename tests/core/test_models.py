@@ -695,9 +695,7 @@ def test_select_next_track_empty_heading_id_does_not_lift():
     normal = _track(1)
     state = StationState(playlist=[normal, tagged], heading=heading)
 
-    candidates, weights = _capture_selection_weights(
-        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
-    )
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
 
     assert weights[candidates.index(tagged)] == pytest.approx(weights[candidates.index(normal)])
 
