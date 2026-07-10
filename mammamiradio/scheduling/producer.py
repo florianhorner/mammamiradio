@@ -3312,6 +3312,7 @@ async def run_producer(
                                 )
                                 audio_path = fallback_canned
                                 canned = fallback_canned
+                                trans_track_ref = None
                                 # Same as the chaos-exception fallback above: this canned
                                 # clip carries neither receipt on air, so demote both now
                                 # rather than leaving the gag id to leak into a later
