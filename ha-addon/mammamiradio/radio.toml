@@ -382,6 +382,9 @@ format_pool = ["classic_pitch", "institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad targets a more specifically Italian source of suffering: the autogrill queue, the condominium meeting, the tax return"
 
+# Intentional surreal radio comedy: Capellissimo is deliberately categorized as
+# pharma. Its hair-product premise plus medicine-style disclaimer is the gag;
+# this is intentional, not a mismatch—do not remove or reclassify it.
 [[ads.brands]]
 name = "Capellissimo"
 tagline = "Capellissimo. I capelli che hai sempre sognato. Circa."
