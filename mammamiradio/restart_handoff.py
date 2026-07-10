@@ -379,12 +379,21 @@ def write_restart_handoff_spool(
 
     now = time.time() if now is None else now
     with _SPOOL_WRITE_LOCK:
+        handoff_dir = _safe_handoff_dir(cache_dir)
+        if handoff_dir is None:
+            return RestartHandoffManifest.empty()
+        segments_dir = _safe_segments_dir(handoff_dir)
+        if segments_dir is None:
+            logger.warning("Skipping restart handoff spool write: segments dir is unsafe: %s", _segments_dir(cache_dir))
+
         entries: list[RestartHandoffEntry] = []
         for candidate in candidates:
             if len(entries) >= max_entries:
                 break
             entry = _entry_from_candidate(
                 cache_dir,
+                handoff_dir,
+                segments_dir,
                 candidate,
                 blocklist=blocklist,
                 now=now,
@@ -396,7 +405,7 @@ def write_restart_handoff_spool(
             return load_restart_handoff_manifest(cache_dir)
 
         manifest = RestartHandoffManifest(entries=tuple(entries), schema_version=SCHEMA_VERSION, created_at=now)
-        _publish_manifest(cache_dir, manifest)
+        _publish_manifest(handoff_dir, manifest)
         _prune_unreferenced_segments(cache_dir, manifest, protected_paths=protected_paths)
         return manifest
 
@@ -466,6 +475,8 @@ def prune_stale_handoff_tmp_files(cache_dir: Path | str, max_age_hours: float = 
 
 def _entry_from_candidate(
     cache_dir: Path | str,
+    handoff_dir: Path,
+    segments_dir: Path | None,
     candidate: RestartHandoffCandidate,
     *,
     blocklist: Mapping[BlockKey, object] | None,
@@ -477,14 +488,16 @@ def _entry_from_candidate(
         is not None
     ):
         return None
+    if segments_dir is None:
+        return None
     source = candidate.path
-    copied, digest, size_bytes = _copy_and_hash(source, _segments_dir(cache_dir), candidate.artist, candidate.title)
+    copied, digest, size_bytes = _copy_and_hash(source, segments_dir, candidate.artist, candidate.title)
     duration = _validated_duration(source, candidate.duration_sec, duration_probe)
     if duration is None:
         copied.unlink(missing_ok=True)
         return None
     return RestartHandoffEntry(
-        relative_path=_relative_to_handoff(cache_dir, copied),
+        relative_path=_relative_to_handoff(handoff_dir, copied),
         sha256=digest,
         size_bytes=size_bytes,
         duration_sec=duration,
@@ -644,8 +657,8 @@ def _music_admission_rejection_reason(
     return f"music_admission:{verdict.reason}"
 
 
-def _publish_manifest(cache_dir: Path | str, manifest: RestartHandoffManifest) -> None:
-    path = restart_handoff_manifest_path(cache_dir)
+def _publish_manifest(handoff_dir: Path, manifest: RestartHandoffManifest) -> None:
+    path = handoff_dir / MANIFEST_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=_MANIFEST_TMP_PREFIX, suffix=_TMP_SUFFIX)
     try:
@@ -744,6 +757,27 @@ def _segments_dir(cache_dir: Path | str) -> Path:
     return restart_handoff_dir(cache_dir) / SEGMENTS_DIRNAME
 
 
+def _safe_handoff_dir(cache_dir: Path | str) -> Path | None:
+    """Resolve a non-symlinked handoff root that remains inside the cache."""
+
+    try:
+        cache_root = Path(cache_dir).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        logger.warning("Failed to resolve restart handoff cache dir for spool write: %s", exc)
+        return None
+    handoff_dir = restart_handoff_dir(cache_dir)
+    resolved = safe_path_within(handoff_dir, cache_root, reject_symlinks=True)
+    if resolved is None:
+        logger.warning("Skipping restart handoff spool write outside cache dir: %s", handoff_dir)
+    return resolved
+
+
+def _safe_segments_dir(handoff_dir: Path) -> Path | None:
+    """Resolve a non-symlinked spool destination below a safe handoff root."""
+
+    return safe_path_within(handoff_dir / SEGMENTS_DIRNAME, handoff_dir, reject_symlinks=True)
+
+
 def _safe_mtime_for_sort(path: Path) -> float:
     """mtime for cap-sorting only; a vanished/unreadable file sorts first (oldest) so the
     per-file loop's own FileNotFoundError/OSError handling still gets a chance at it."""
@@ -829,8 +863,8 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
     return pruned
 
 
-def _relative_to_handoff(cache_dir: Path | str, path: Path) -> str:
-    return path.relative_to(restart_handoff_dir(cache_dir)).as_posix()
+def _relative_to_handoff(handoff_dir: Path, path: Path) -> str:
+    return path.relative_to(handoff_dir).as_posix()
 
 
 def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> Path | None:

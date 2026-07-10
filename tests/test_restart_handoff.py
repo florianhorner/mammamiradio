@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import mammamiradio.restart_handoff as restart_handoff
 from mammamiradio.core.models import Segment, SegmentType
 from mammamiradio.restart_handoff import (
     RestartHandoffCandidate,
@@ -555,6 +556,69 @@ def test_write_spool_rejects_symlinked_cache_candidate(tmp_path):
     assert manifest.entries == ()
     assert source.exists()
     assert linked_source.is_symlink()
+
+
+def test_write_spool_skips_handoff_dir_symlink_outside_cache(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    restart_handoff_dir(cache_dir).symlink_to(outside_dir, target_is_directory=True)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert not (outside_dir / "manifest.json").exists()
+    assert not list(outside_dir.rglob("*.mp3"))
+
+
+def test_write_spool_skips_segments_dir_symlink_outside_handoff(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    handoff_dir = restart_handoff_dir(cache_dir)
+    outside_dir = tmp_path / "outside-segments"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(source, 180.0, "Artist", "Song")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert not (outside_dir / "manifest.json").exists()
+    assert not list(outside_dir.rglob("*.mp3"))
+
+
+def test_prune_unreferenced_segments_skips_segments_symlink_outside_cache(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    handoff_dir = restart_handoff_dir(cache_dir)
+    outside_dir = tmp_path / "outside-segments"
+    handoff_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    victim = outside_dir / "victim.mp3"
+    victim.write_bytes(b"outside")
+    (handoff_dir / "segments").symlink_to(outside_dir, target_is_directory=True)
+
+    restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert victim.exists()
+    assert "Skipping restart handoff segment pruning outside cache dir" in caplog.text
+
+
+def test_prune_unreferenced_segments_tolerates_cache_resolve_failure(tmp_path, caplog):
+    with patch.object(Path, "resolve", side_effect=RuntimeError("symlink loop")):
+        restart_handoff._prune_unreferenced_segments(tmp_path, RestartHandoffManifest.empty())
+
+    assert "Failed to resolve restart handoff cache dir for segment pruning" in caplog.text
 
 
 def test_try_write_spool_logs_and_swallows_failures(tmp_path, caplog):
