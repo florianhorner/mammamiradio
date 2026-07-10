@@ -326,6 +326,15 @@ Script generation never names a model in code. Each call site asks for a model b
 - `fast` (transitions and post-air memory extraction) is pinned to the lowest-latency model in every profile.
 - The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
   falls back to the fast OpenAI model and banter to the creative one.
+- `scripts/eval_openai_script_model.py` is a local, paid evaluator for that **OpenAI
+  fallback** branch only. It runs parsed responses through the pure
+  `hosts/segment_floor.py` receipt before any live-path sanitization/coercion: foreign
+  prefix-form station names, non-roster named banter hosts, and missing spoken text are
+  deterministic `PASS`/`FAIL`/`N/A` checks. This is raw model-output integrity, not a
+  listener-output or Anthropic-quality claim. `direction` (playlist targets) and
+  `memory_extract` (post-air control plane) are intentionally N/A. The command's
+  `--dry-run` validates the corpus and previews paid-call bounds without provider access;
+  deterministic unit tests, not an online evaluator run, enforce the contract in CI.
 - The quality profile hot-swaps live via `POST /api/quality` (admin) with no restart
   and no queue purge — only the next generated segment changes model.
 
