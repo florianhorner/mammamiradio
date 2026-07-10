@@ -53,6 +53,7 @@ python scripts/showreel/mock_ha.py --port 8123 --scenario coffee &
 
 # 3. Start the REAL station against the mock HA (local, CC music, ledger on)
 MAMMAMIRADIO_BIND_HOST=127.0.0.1 MAMMAMIRADIO_PORT=8077 \
+MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=15 \
 HA_ENABLED=true HA_URL=http://127.0.0.1:8123 HA_TOKEN=dummy-token \
 MAMMAMIRADIO_LEDGER_ENABLED=true MAMMAMIRADIO_ALLOW_YTDLP=false JAMENDO_CLIENT_ID= \
 STATION_NAME="Mamma Mi Radio" \
@@ -71,8 +72,7 @@ serving the end state from boot produces no event. Flow:
 
 ```bash
 python scripts/showreel/mock_ha.py --port 8123 --scenario homecoming &
-# Start the station as above, with a short context TTL for the local capture.
-#   MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=15
+# Start the station as above. Its command sets the 15s context TTL required here.
 python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
   --lead-track "Night in Venice" --arc banter \
   --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \

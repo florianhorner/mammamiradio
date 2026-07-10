@@ -143,6 +143,13 @@ def test_default_lead_window_includes_the_warmup_settle_time() -> None:
     assert capture.LEAD_START_WINDOW_SECONDS > capture.DEFAULT_SETTLE_SECONDS
 
 
+def test_home_event_recipe_sets_the_station_context_ttl() -> None:
+    """The capture wait must match the mock station command's context TTL."""
+    readme = (Path(__file__).resolve().parents[2] / "scripts/showreel/README.md").read_text()
+
+    assert "MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=15 \\\nHA_ENABLED=true" in readme
+
+
 @pytest.mark.parametrize(
     "args",
     [
