@@ -966,6 +966,8 @@ async def test_error_recovery_recycles_last_known_good_music(tmp_path):
     assert seg.metadata.get("recycled") is True
     assert seg.metadata.get("artist") == "Artista Salvato"
     assert seg.metadata.get("title_only") == "Canzone Salvata"
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
     assert seg.metadata.get("audio_source") == "last_known_good"
 
 

@@ -63,7 +63,6 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .filter-pill:hover { color: var(--cream); border-color: rgba(245,237,216,0.25); }
 .filter-pill.active { background: var(--sun2); color: #14110F; border-color: var(--sun2); }
-.filter-count { font-size: 10px; color: var(--muted); margin-left: auto; font-family: var(--font-mono); }
 
 /* ── STOPPED BANNER ── */
 .stopped-banner {
@@ -779,8 +778,11 @@ input[type="range"]:focus-visible {
 .a-panel header .sub.live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lancia2); box-shadow: 0 0 6px var(--lancia2); animation: a-live-pulse 1.4s ease-in-out infinite; }
 
 /* Programme table */
-.programme-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
-.programme-toolbar .filter-count { font-size: 11px; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; }
+.programme-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: space-between; min-width: 0; }
+.programme-runway { display: grid; gap: 2px; min-width: 0; }
+.programme-runway[hidden] { display: none; }
+.programme-runway-primary { color: var(--cream); font-size: 13px; font-weight: 700; line-height: 1.25; }
+.programme-runway-detail { color: var(--muted); font-size: 11px; line-height: 1.35; }
 .programme-toolbar .filter-pills { margin: 0; min-width: 0; }
 #programmeList { max-width: 100%; min-width: 0; overflow-x: hidden; }
 .a-programme { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
@@ -1243,6 +1245,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 
 @media (max-width: 768px) {
   .programme-toolbar { width: 100%; justify-content: flex-start; }
+  .programme-runway { flex-basis: 100%; }
   .programme-toolbar .filter-pills { display: flex; flex-wrap: wrap; gap: 8px; }
   .programme-toolbar .filter-pill { flex: 0 1 auto; }
   #programmeList { overflow-x: hidden; }
@@ -1622,7 +1625,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 /* One header per panel */
 .mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .a-panel header.mmr-panel-head-stacked{display:grid;grid-template-columns:1fr;gap:10px}
-.mmr-panel-head-stacked .programme-toolbar{width:100%;justify-content:flex-end}
+.mmr-panel-head-stacked .programme-toolbar{width:100%;justify-content:space-between}
 /* The panel head keeps its own divider (from the generic `.a-panel header`
    rule) on every tab. Only list-era drawer sections directly below a head drop
    their redundant top rule; bordered standalone strips, such as pending listener
@@ -1816,8 +1819,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <header class="mmr-panel-head mmr-panel-head-stacked">
         <h2>Scaletta</h2>
         <div class="programme-toolbar">
-          <span class="filter-count" id="programmeCount"></span>
-          <span class="filter-count" id="bufferedReady" title="Audio rendered and ready to air"></span>
+          <div class="programme-runway" id="programmeRunway" role="status" aria-live="polite" hidden>
+            <span class="programme-runway-primary" id="programmeAhead"></span>
+            <span class="programme-runway-detail" id="programmeCount"></span>
+          </div>
           <div class="filter-pills">
             <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
             <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
@@ -2189,7 +2194,7 @@ const _base = (() => {
 let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
 let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
-let _programmeFilter='all', _lastProgrammeHash='';
+let _programmeFilter='all', _lastProgrammeHash='', _lastRunwayHash='';
 // Delayed-commit undo state (eng review T2/E3): destructive queue actions remove
 // the row optimistically and defer the backend call by 5s. Undo cancels the
 // pending call; the suppression set keeps status polls from resurrecting the row
@@ -2894,19 +2899,53 @@ function renderProduction(st){
   else{feed.innerHTML='';wrap.style.display='none';}
 }
 
-// Honest airtime-ahead readout: SECONDS of buffered audio, not item count
-// (3 short banters are not 3 songs of runway). Updated every poll so it never
-// goes stale; blank when nothing is queued — never a dead "0s" box.
-function updateBufferedReady(st){
-  const el=document.getElementById('bufferedReady');
-  if(!el)return;
+// Turn the real rendered-audio runway into a producer-facing promise. The
+// duration remains the source of truth, but "ahead" answers why it matters:
+// the hosts have already made enough of the next show to keep it moving.
+function updateProgrammeRunway(st){
+  const wrap=document.getElementById('programmeRunway');
+  const ahead=document.getElementById('programmeAhead');
+  const detail=document.getElementById('programmeCount');
+  if(!wrap||!ahead||!detail)return;
   const sec=st&&typeof st.buffered_audio_sec==='number'?st.buffered_audio_sec:0;
-  if(!(sec>0)){el.textContent='';return;}
-  // Round to whole seconds BEFORE splitting so a value like 119.6s renders
-  // "~2m00s", never an impossible "~1m60s" (no minute-carry if you round m and s
-  // independently).
-  const total=Math.round(sec),m=Math.floor(total/60),s=total%60;
-  el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready';
+  if(!(sec>0)){
+    if(_lastRunwayHash!==''){_lastRunwayHash='';wrap.hidden=true;ahead.textContent='';detail.textContent='';}
+    return;
+  }
+  // Sub-minute precision matters: rounding a 2s emergency bridge up to "1 minute
+  // ahead" would hide the exact near-starvation moment an operator most needs an
+  // accurate read on (the old readout deliberately used seconds for this reason).
+  const totalSec=Math.round(sec);
+  const minutes=Math.max(1,Math.round(sec/60));
+  const aheadLabel=totalSec<60
+    ? totalSec+' '+(totalSec===1?'second':'seconds')
+    : minutes+' '+(minutes===1?'minute':'minutes');
+  const queueDepth=Number.isInteger(st&&st.queue_depth)?st.queue_depth:(st?.upcoming||[]).length;
+  const records=Math.max(0,queueDepth);
+  // Filter-aware detail: a filter pill (Music/Banter/Ads) narrows what the
+  // operator cares about, so the count must narrow with it — otherwise the
+  // "Ads" filter still reports the total queue size, which is what it showed
+  // before this readout existed.
+  const filterActive=_programmeFilter!=='all';
+  const filteredCount=filterActive
+    ? (st?.upcoming||[]).filter(it=>!_pendingRemovals.has(it.id)&&segmentTypeKey(it.type)===_programmeFilter).length
+    : records;
+  // aria-live="polite" re-announces on every textContent write, even to the same
+  // value (Node.textContent always replaces the text node) — skip the DOM
+  // mutation when nothing actually changed so the poll loop doesn't nag
+  // screen reader users with the same "hosts are N minutes ahead" every tick.
+  const hash=aheadLabel+'|'+records+'|'+_programmeFilter+'|'+filteredCount;
+  if(hash===_lastRunwayHash)return;
+  _lastRunwayHash=hash;
+  ahead.textContent='The hosts are '+aheadLabel+' ahead';
+  detail.textContent=filterActive
+    ? filteredCount+' of '+records+' cued.'
+    : records===1
+      ? 'The next record is already cued.'
+      : records>1
+        ? 'The next '+records+' records are already cued.'
+        : 'The next set is already cued.';
+  wrap.hidden=false;
 }
 
 function renderProgramme(st){
@@ -2967,13 +3006,6 @@ function renderProgramme(st){
 
   if(upFiltered.length>8){
     rows.push(`<tr class="prog-more"><td colspan="6" class="prog-empty">+ ${upFiltered.length-8} more segments</td></tr>`);
-  }
-
-  const countEl=document.getElementById('programmeCount');
-  if(countEl){
-    countEl.textContent=_programmeFilter==='all'
-      ? upcoming.length+' ready'
-      : upFiltered.length+' of '+upcoming.length+' ready';
   }
 
   if(rows.length){
@@ -4845,7 +4877,7 @@ async function refreshFast(){
     renderProduction(_st);
     updateHeadingBanner(_st);
     renderActiveTab();
-    updateBufferedReady(_st);
+    updateProgrammeRunway(_st);
     updateRecent(_st);
     updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);

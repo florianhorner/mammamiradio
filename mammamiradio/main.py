@@ -11,7 +11,6 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import FastAPI
 
@@ -45,7 +44,7 @@ from mammamiradio.playlist.playlist import (
 from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
-from mammamiradio.scheduling.producer import prewarm_first_segment, run_producer
+from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     CLIP_MAX_SEGMENT_SECONDS,
@@ -171,8 +170,7 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
     for segment in admission.to_segments(config.cache_dir):
         if queue.full():
             break
-        queue_id = uuid4().hex
-        segment.metadata["queue_id"] = queue_id
+        shadow_entry = _queue_shadow_entry(segment, reason="Restored from safe restart handoff.")
         queue.put_nowait(segment)
         # Protect this file from the per-enqueue spool prune while it is still
         # queued — resolved to match how _prune_unreferenced_segments compares.
@@ -182,18 +180,7 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
             state.restart_handoff_admitted_paths.add(segment.path)
         state.last_enqueued_type = segment.type
         state.last_music_file = segment.path
-        state.queued_segments.append(
-            {
-                "id": queue_id,
-                "type": segment.type.value,
-                "label": segment.metadata.get("title", segment.type.value),
-                "spotify_id": segment.metadata.get("spotify_id", ""),
-                "reason": "Restored from safe restart handoff.",
-                "playlist_index": segment.metadata.get("playlist_index", -1),
-                "source_kind": segment.metadata.get("source_kind", ""),
-                "duration_sec": round(segment.duration_sec or 0, 1),
-            }
-        )
+        state.queued_segments.append(shadow_entry)
         state.last_state_change_at = time.time()
         accepted += 1
     if accepted:

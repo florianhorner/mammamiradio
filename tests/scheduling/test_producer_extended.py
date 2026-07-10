@@ -1509,6 +1509,10 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
     assert seg.metadata.get("recycled") is True
     assert seg.metadata.get("silence_fallback") is True
     assert call_count == 3
+    # The recycle rescue is a direct _queue_segment call with no shadow_entry — it
+    # must still publish a Scaletta row (the "0 ready" bug this fix closes).
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
 
 
 @pytest.mark.asyncio
@@ -1553,6 +1557,10 @@ async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("title") == "Station continuity"
     assert picked_subdirs == ["recovery"]
+    # Packaged-recovery-clip rescue is also a direct _queue_segment call with no
+    # shadow_entry — it must still publish a Scaletta row.
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
 
 
 # ---------------------------------------------------------------------------

@@ -261,8 +261,8 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
 | Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail, and unconditionally drops a stale-claim head†) | yes (at head) |
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
-| Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **no — airs invisibly** |
-| Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **no** |
+| Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
+| Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
 
 - The **main-loop** stale gate compares `generation_revision` (captured once per loop
   iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
@@ -273,10 +273,10 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   (shuffle/add/move/enrich) keeps the on-source pre-roll. It also passes a **post-egress**
   `stale_check` to the funnel, so a switch landing during the egress encode discards the
   pre-roll at the last moment instead of putting it into the just-purged queue.
-- Inner bridge / drain-recovery rescue and prewarm air with **no shadow row**, so
-  they don't appear in the "Up Next" projection until they reach the head (outer
-  error-recovery rescue, built in the loop body, *does* get a row). The streamer
-  reconciles the shadow list as it consumes the queue.
+- Every successful playback admission publishes the same stable-id shadow row, so
+  Scaletta contains only truly rendered audio while still showing startup prewarms
+  and continuity bridges. The streamer reconciles that projection as it consumes
+  the queue.
 - \* The blocklist gate is the funnel's last-resort drop for a banned song that a
   mid-render ban race slipped past the ingest doorways (music only). It always drops
   the **audio** — a banned song never airs on any path — and every commit path

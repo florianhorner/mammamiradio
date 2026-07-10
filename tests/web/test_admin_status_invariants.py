@@ -400,18 +400,31 @@ def test_production_feed_surfaces_operator_trigger() -> None:
     assert "statusInline('working','',segmentText(segmentTypeKey(fp)))" in block
 
 
-def test_buffered_ready_readout_shows_airtime_not_item_count() -> None:
-    """The buffered readout surfaces SECONDS of audio (not an item count), is
-    wired into the fast poll, blanks (not '0s') when empty, and rounds to whole
-    seconds before splitting so it can never print an impossible '1m60s'.
+def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
+    """Scaletta turns real rendered-audio seconds into the producer-facing
+    promise that the hosts are ahead, rather than exposing a cold buffer metric.
     """
     html = _read_admin_html()
 
-    assert 'id="bufferedReady"' in html
-    block = _function_block(html, "updateBufferedReady")
+    assert 'id="programmeRunway"' in html
+    assert 'id="programmeAhead"' in html
+    block = _function_block(html, "updateProgrammeRunway")
     assert "st.buffered_audio_sec" in block
-    assert "if(!(sec>0)){el.textContent='';return;}" in block  # no dead "0s" box
-    # Carry-safe: round to whole seconds, THEN split — guards the 1m60s boundary.
-    assert "const total=Math.round(sec),m=Math.floor(total/60),s=total%60;" in block
-    assert "el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready'" in block
-    assert "updateBufferedReady(_st)" in _function_block(html, "refreshFast")
+    assert "wrap.hidden=true;ahead.textContent='';detail.textContent='';" in block
+    assert "The hosts are " in block
+    assert "aheadLabel+' ahead'" in block
+    # Sub-minute precision: a near-starvation buffer must read in seconds, not
+    # get rounded up to a falsely-reassuring "1 minute ahead".
+    assert "totalSec<60" in block
+    assert "totalSec+' '+(totalSec===1?'second':'seconds')" in block
+    assert "The next record is already cued." in block
+    assert "The next '+records+' records are already cued." in block
+    assert "The next set is already cued." in block
+    # Filter-aware detail: an active filter pill (Music/Banter/Ads) must narrow
+    # the count instead of always reporting the total queue size.
+    assert "filterActive" in block
+    assert "filteredCount+' of '+records+' cued.'" in block
+    # aria-live="polite" must not re-announce identical text on every ~2s poll —
+    # a hash guard skips the DOM write when nothing actually changed.
+    assert "_lastRunwayHash" in block
+    assert "updateProgrammeRunway(_st)" in _function_block(html, "refreshFast")

@@ -20,8 +20,8 @@ What is pinned here:
 2. an operator AIR-NEXT discarded by that gate releases ``operator_force_pending``
    so the operator is not locked out (``producer.py:3022-3023``);
 3. direct-enqueue paths (prewarm + bridges, via ``_enqueue_with_egress`` with no
-   front-insert) air with NO up-next shadow row, while outer error-recovery
-   rescue — which flows through the epilogue — DOES get a row (``producer.py:3060``);
+   front-insert) publish the same identity-backed up-next row as the main-loop
+   epilogue, while outer error-recovery rescue follows that same contract;
 4. prewarm discards a stale segment when the SOURCE switches mid-render — it keys on
    ``source_revision`` (true switches only), not the broad ``playlist_revision``, so a
    benign in-place edit keeps the pre-roll; and a switch landing during the egress encode
@@ -238,15 +238,14 @@ async def test_air_next_stale_discard_releases_operator_guard(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3. Shadow-row visibility: direct-enqueue paths get NO row; epilogue rescue does.
+# 3. Shadow-row visibility: every successful admission gets an identity-backed row.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_direct_enqueue_airs_without_shadow_row(tmp_path):
-    """The funnel prewarm + bridges use (``_enqueue_with_egress`` without
-    front-insert) queues audio but appends NO up-next shadow row — those segments
-    air invisibly in the queue projection. Also pins that a rescue fill skips the
+async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
+    """A direct bridge is real queued audio, so Scaletta receives the same stable
+    identity-backed row as a normal producer commit. The rescue still skips the
     egress colour pass (patch ``apply_broadcast_chain``, never ``_apply_egress`` —
     mocking the latter would hide the rescue-skip branch)."""
     state = _make_state()
@@ -266,14 +265,16 @@ async def test_direct_enqueue_airs_without_shadow_row(tmp_path):
 
     assert ok is True
     assert queue.qsize() == 1  # the bridge audio aired
-    assert state.queued_segments == []  # but produced no up-next row
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
+    assert state.queued_segments[0]["label"] == "Resume bridge"
     m_chain.assert_not_called()  # rescue skipped the egress colour pass
 
 
 @pytest.mark.asyncio
-async def test_prewarm_airs_without_shadow_row(tmp_path):
-    """A pre-warmed first segment is queued but invisible in the up-next shadow
-    list until it airs (``prewarm_first_segment`` never appends a row)."""
+async def test_prewarm_publishes_matching_shadow_row(tmp_path):
+    """A pre-warmed first segment is real queued audio, so it must be visible in
+    Scaletta with the stable id carried by the matching Segment."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue()
@@ -288,7 +289,10 @@ async def test_prewarm_airs_without_shadow_row(tmp_path):
 
     assert result is True
     assert queue.qsize() == 1
-    assert state.queued_segments == []  # prewarm is invisible in up-next until aired
+    queued = queue.get_nowait()
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == queued.metadata["queue_id"]
+    assert state.queued_segments[0]["label"] == queued.metadata["title"]
 
 
 @pytest.mark.asyncio
