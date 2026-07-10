@@ -1083,6 +1083,29 @@ def _initial_previous_segment_type(queue: asyncio.Queue[Segment], state: Station
     return None
 
 
+def _queue_shadow_entry(segment: Segment, *, reason: str | None = None) -> dict:
+    """Create the admin-visible record for audio admitted to playback.
+
+    Scaletta is an honest projection of the real queue, not a scheduler preview.
+    Stamp the identity before egress so the eventual queue row can always remove
+    the matching segment, including startup prewarms and continuity bridges.
+    ``reason`` overrides the default for callers outside the normal egress funnel
+    (e.g. restart-handoff admission), so every shadow row shares one dict shape.
+    """
+    queue_id = str(segment.metadata.get("queue_id") or uuid4().hex)
+    segment.metadata["queue_id"] = queue_id
+    return {
+        "id": queue_id,
+        "type": segment.type.value,
+        "label": segment.metadata.get("title", segment.type.value),
+        "spotify_id": segment.metadata.get("spotify_id", ""),
+        "reason": reason or segment.metadata.get("queue_reason", "Rendered and queued for playback."),
+        "playlist_index": segment.metadata.get("playlist_index", -1),
+        "source_kind": segment.metadata.get("source_kind", ""),
+        "duration_sec": round(segment.duration_sec or 0, 1),
+    }
+
+
 def _front_insert_queue_and_shadow(
     queue: asyncio.Queue[Segment], state: StationState, segment: Segment, shadow_entry: dict
 ) -> bool:
@@ -1334,6 +1357,8 @@ async def _enqueue_with_egress(
     # never leaves a coloured egress tmp render orphaned on disk.
     if front_insert and shadow_entry is None:  # operator air-next must always supply a shadow entry
         raise ValueError("front_insert enqueue requires a shadow_entry")
+    if not front_insert and shadow_entry is None:
+        shadow_entry = _queue_shadow_entry(segment)
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
     segment = await _apply_egress(segment, config)
     # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
@@ -1352,6 +1377,8 @@ async def _enqueue_with_egress(
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
         return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
     await queue.put(segment)
+    assert shadow_entry is not None
+    state.queued_segments.append(shadow_entry)
     _remember_enqueued(state, segment, pre_egress_path)
     _schedule_restart_handoff_spool(state, config, segment)
     return True
@@ -2181,7 +2208,7 @@ async def run_producer(
     state.last_enqueued_type = _seed_adjacency_type(queue, state, prev_seg_type)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, shadow_entry: dict | None = None) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
         nonlocal prev_seg_type
         if state.session_stopped:
@@ -2190,7 +2217,7 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        if not await _enqueue_with_egress(queue, state, config, segment):
+        if not await _enqueue_with_egress(queue, state, config, segment, shadow_entry=shadow_entry):
             return False
         prev_seg_type = _adjacency_type_for(segment)
         return True
@@ -4080,22 +4107,9 @@ async def run_producer(
                     state.operator_force_pending = None  # render abandoned — let the operator retry
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
-            # Stable per-segment id: stamped on the Segment metadata AND the
-            # shadow-list entry so /api/queue/remove can target a segment by
-            # identity rather than position (the position shifts every time the
-            # streamer consumes the head).
-            queue_id = uuid4().hex
-            segment.metadata["queue_id"] = queue_id
-            shadow_entry = {
-                "id": queue_id,
-                "type": segment.type.value,
-                "label": segment.metadata.get("title", segment.type.value),
-                "spotify_id": segment.metadata.get("spotify_id", ""),
-                "reason": segment.metadata.get("queue_reason", "Rendered and queued for playback."),
-                "playlist_index": segment.metadata.get("playlist_index", -1),
-                "source_kind": segment.metadata.get("source_kind", ""),
-                "duration_sec": round(segment.duration_sec or 0, 1),
-            }
+            # Stable per-segment id: the shared queue publication helper stamps
+            # this on both the audio and its Scaletta row before admission.
+            shadow_entry = _queue_shadow_entry(segment)
             if is_operator_forced:
                 # Air-next: front-insert past the buffered lookahead so the operator
                 # hears their pick at the next boundary, never minutes later.
@@ -4109,12 +4123,11 @@ async def run_producer(
                 # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
                 prev_seg_type = _adjacency_type_for(segment)
             else:
-                if not await _queue_segment(segment):
+                if not await _queue_segment(segment, shadow_entry=shadow_entry):
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
-                state.queued_segments.append(shadow_entry)
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:

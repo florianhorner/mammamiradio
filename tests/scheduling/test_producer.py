@@ -247,7 +247,8 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
             bridge = queue.get_nowait()
             assert bridge.metadata.get("resume_bridge") is True
             assert bridge.metadata.get("audio_source") == "emergency_tone"
-            while not state.queued_segments:
+            assert state.queued_segments[0]["id"] == bridge.metadata["queue_id"]
+            while not any(row.get("playlist_index") == 0 for row in state.queued_segments):
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not queue after resume")
                 await asyncio.sleep(0.05)
@@ -258,7 +259,7 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    queued = state.queued_segments[-1]
+    queued = next(row for row in state.queued_segments if row["playlist_index"] == 0)
     assert queued["playlist_index"] == 0
     assert queued["source_kind"] == "classic"
 

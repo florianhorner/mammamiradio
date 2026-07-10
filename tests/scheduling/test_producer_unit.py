@@ -4139,6 +4139,8 @@ async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_avai
     assert runway.metadata.get("audio_source") == "norm_cache"
     assert runway.metadata.get("title") == "Resume Runway"
     assert runway.metadata.get("artist") == "Runway Artist"
+    assert [row["id"] for row in state.queued_segments] == [clip.metadata["queue_id"], runway.metadata["queue_id"]]
+    assert [row["label"] for row in state.queued_segments] == ["Resume bridge", "Resume Runway"]
     # #547: the bridge itself is recorded once for observability.
     assert state.bridge_fires_total >= 1
     last = state.bridge_events[-1]
