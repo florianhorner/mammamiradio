@@ -726,7 +726,9 @@ def _prune_unreferenced_segments(
             path.unlink()
         except FileNotFoundError:
             continue
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
+            # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
+            # loop; pruning must never crash the producer over a broken segment.
             logger.warning("Failed to prune unreferenced restart handoff segment %s: %s", path, exc)
 
 
@@ -874,7 +876,7 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
     if raw.is_absolute():
         return None
     root = restart_handoff_dir(cache_dir)
-    resolved = safe_path_within(root / raw, root)
+    resolved = safe_path_within(root / raw, root, reject_symlinks=True)
     if resolved is None:
         return None
     if resolved.suffix.lower() != _AUDIO_SUFFIX:

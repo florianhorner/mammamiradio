@@ -621,6 +621,44 @@ def test_prune_unreferenced_segments_tolerates_cache_resolve_failure(tmp_path, c
     assert "Failed to resolve restart handoff cache dir for segment pruning" in caplog.text
 
 
+def test_prune_unreferenced_segments_tolerates_resolve_runtime_error_on_a_segment(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    stray = _write_spooled_file(cache_dir, name="stray.mp3")
+    real_resolve = Path.resolve
+
+    def flaky_resolve(self, strict=False):
+        if self.name == "stray.mp3":
+            raise RuntimeError("symlink loop")
+        return real_resolve(self, strict=strict)
+
+    with patch.object(Path, "resolve", flaky_resolve):
+        restart_handoff._prune_unreferenced_segments(cache_dir, RestartHandoffManifest.empty())
+
+    assert stray.exists()
+    assert "Failed to prune unreferenced restart handoff segment" in caplog.text
+
+
+def test_resolve_relative_to_handoff_rejects_symlinked_segment(tmp_path):
+    cache_dir = tmp_path / "cache"
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(b"audio")
+    segments_dir = restart_handoff_dir(cache_dir) / "segments"
+    segments_dir.mkdir(parents=True)
+    linked = segments_dir / "linked.mp3"
+    linked.symlink_to(outside)
+
+    entry = RestartHandoffEntry(
+        relative_path="segments/linked.mp3",
+        sha256=_sha(outside),
+        size_bytes=outside.stat().st_size,
+        duration_sec=181.0,
+        artist="Artist",
+        title="Linked",
+    )
+
+    assert entry.path(cache_dir) is None
+
+
 def test_try_write_spool_logs_and_swallows_failures(tmp_path, caplog):
     source = _write_cache_file(tmp_path)
     candidate = RestartHandoffCandidate(source, 180.0, "Artist", "Song")
