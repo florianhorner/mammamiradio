@@ -1707,6 +1707,22 @@ def test_prune_stale_tmp_files_ignores_non_mp3(tmp_path):
     assert other.exists()  # only *.mp3 is touched
 
 
+def test_prune_stale_tmp_files_skips_symlinked_mp3(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    victim = outside_dir / "victim.mp3"
+    victim.write_bytes(b"x" * 2048)
+    _age_file(victim, hours=12)
+    scratch_link = tmp_path / "banter_link.mp3"
+    scratch_link.symlink_to(victim)
+
+    assert prune_stale_tmp_files(tmp_path) == 0
+    assert scratch_link.is_symlink()
+    assert victim.exists()
+
+
 def test_prune_stale_tmp_files_missing_dir_returns_zero(tmp_path):
     from mammamiradio.playlist.downloader import prune_stale_tmp_files
 

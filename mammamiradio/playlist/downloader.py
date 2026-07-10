@@ -20,6 +20,7 @@ from urllib.request import HTTPRedirectHandler, build_opener
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.audio.normalizer import _run_ffmpeg
 from mammamiradio.core.models import Track
+from mammamiradio.core.path_safety import safe_path_within
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,8 @@ def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
     pruned = 0
     for f in tmp_dir.glob("*.mp3"):
         try:
+            if safe_path_within(f, tmp_dir, reject_symlinks=True) is None:
+                continue
             if f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
                 pruned += 1

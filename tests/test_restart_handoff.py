@@ -539,6 +539,24 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
     assert [entry.title for entry in manifest.entries] == ["Good"]
 
 
+def test_write_spool_rejects_symlinked_cache_candidate(tmp_path):
+    cache_dir = tmp_path / "cache"
+    source = _write_cache_file(cache_dir, "norm_real_192k.mp3", b"real music")
+    linked_source = cache_dir / "norm_linked_192k.mp3"
+    linked_source.symlink_to(source)
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(linked_source, 180.0, "Artist", "Linked")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert manifest.entries == ()
+    assert source.exists()
+    assert linked_source.is_symlink()
+
+
 def test_try_write_spool_logs_and_swallows_failures(tmp_path, caplog):
     source = _write_cache_file(tmp_path)
     candidate = RestartHandoffCandidate(source, 180.0, "Artist", "Song")

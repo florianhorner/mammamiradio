@@ -27,6 +27,7 @@ from typing import Any
 
 from mammamiradio.audio.normalizer import probe_duration_sec
 from mammamiradio.core.models import Segment, SegmentType, Track
+from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
 logger = logging.getLogger(__name__)
@@ -668,9 +669,13 @@ def _prune_unreferenced_segments(
 ) -> None:
     segments_dir = _segments_dir(cache_dir)
     try:
-        segments_root = segments_dir.resolve(strict=False)
-    except OSError as exc:
-        logger.warning("Failed to resolve restart handoff segments dir for pruning: %s", exc)
+        cache_root = Path(cache_dir).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        logger.warning("Failed to resolve restart handoff cache dir for segment pruning: %s", exc)
+        return
+    segments_root = safe_path_within(segments_dir, cache_root)
+    if segments_root is None:
+        logger.warning("Skipping restart handoff segment pruning outside cache dir: %s", segments_dir)
         return
 
     referenced: set[Path] = set()
@@ -678,10 +683,8 @@ def _prune_unreferenced_segments(
         path = _resolve_relative_to_handoff(cache_dir, entry.relative_path)
         if path is None:
             continue
-        resolved = path.resolve(strict=False)
-        try:
-            resolved.relative_to(segments_root)
-        except ValueError:
+        resolved = safe_path_within(path, segments_root)
+        if resolved is None:
             continue
         referenced.add(resolved)
 
@@ -694,7 +697,7 @@ def _prune_unreferenced_segments(
             continue
 
     try:
-        paths = list(segments_dir.rglob(f"*{_AUDIO_SUFFIX}"))
+        paths = list(segments_root.rglob(f"*{_AUDIO_SUFFIX}"))
     except FileNotFoundError:
         return
     except OSError as exc:
@@ -751,20 +754,12 @@ def _safe_mtime_for_sort(path: Path) -> float:
 
 
 def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache_root: Path) -> int:
-    try:
-        resolved_dir = directory.resolve(strict=False)
-        resolved_dir.relative_to(cache_root)
-    except ValueError:
+    resolved_dir = safe_path_within(directory, cache_root)
+    if resolved_dir is None:
         logger.warning(
-            "Skipping restart handoff scratch cleanup outside cache dir: %s -> %s",
+            "Failed to resolve restart handoff scratch cleanup dir %s or it is outside cache dir",
             directory,
-            resolved_dir,
         )
-        return 0
-    except (OSError, RuntimeError) as exc:
-        # RuntimeError: Path.resolve() raises this (not OSError) on a symlink
-        # loop. Startup cleanup must never crash the app over a broken cache dir.
-        logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
         return 0
 
     if directory.is_symlink() and not directory.exists():
@@ -819,7 +814,7 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
         paths = sorted(paths, key=_safe_mtime_for_sort)[:_MAX_SCRATCH_PRUNE_PER_PASS]
     for path in paths:
         try:
-            if path.is_symlink():
+            if safe_path_within(path, resolved_dir, reject_symlinks=True) is None:
                 continue
             if not path.is_file():
                 continue
@@ -844,11 +839,9 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
     raw = Path(relative_path)
     if raw.is_absolute():
         return None
-    root = restart_handoff_dir(cache_dir).resolve(strict=False)
-    resolved = (root / raw).resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError:
+    root = restart_handoff_dir(cache_dir)
+    resolved = safe_path_within(root / raw, root)
+    if resolved is None:
         return None
     if resolved.suffix.lower() != _AUDIO_SUFFIX:
         return None
@@ -856,11 +849,7 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
 
 
 def _is_cache_backed(path: Path, cache_dir: Path | str) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(Path(cache_dir).resolve(strict=False))
-    except ValueError:
-        return False
-    return True
+    return safe_path_within(path, Path(cache_dir), reject_symlinks=True) is not None
 
 
 def _looks_temporary_path(path: Path) -> bool:
