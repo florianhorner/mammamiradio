@@ -1209,6 +1209,31 @@ async def test_synthesize_ad_recipe_owns_bed_and_two_real_cues(_mock_all, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_recipe_render_failure_restores_legacy_opener_and_motif(_mock_all, tmp_path):
+    """A recipe that resolves but fails in FFmpeg gets the complete legacy identity back."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("corrupt recorded bed")
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_called_once()
+    assert _mock_all["generate_sfx"].call_args.args[1] == "whoosh"
+    _mock_all["generate_brand_motif"].assert_called_once()
+    assert _mock_all["generate_brand_motif"].call_args.args[1] == "ice_clink+startup_synth"
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_corrupt_packaged_bed_retries_synthetic_layers(_mock_all, tmp_path, caplog):
     """A corrupt selected pack behaves like a missing pack, never a dry ad."""
     from mammamiradio.audio.tts import synthesize_ad

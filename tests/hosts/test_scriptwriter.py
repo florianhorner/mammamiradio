@@ -1228,7 +1228,9 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
     ):
         result = await write_ad(brand, voices, state, config)
 
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
     assert result.summary == "Fallback ad for FallbackBrand"
 
 
@@ -3896,12 +3898,13 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     assert result.brand == "FallbackBrand"
     assert "Fallback" in result.summary
     assert len(result.parts) >= 1
-    assert result.parts[0].type == "voice"
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
 
 
 @pytest.mark.asyncio
-async def test_write_ad_no_llm_returns_minimal_script(config, state):
+async def test_write_ad_no_llm_restores_legacy_attention_script(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
@@ -3911,7 +3914,9 @@ async def test_write_ad_no_llm_returns_minimal_script(config, state):
 
     assert result.brand == "FallbackBrand"
     assert result.summary == "Sempre il top"
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
 
 
 @pytest.mark.asyncio
@@ -3926,7 +3931,9 @@ async def test_write_ad_no_llm_super_italian_uses_italian_tagline(config, state)
 
     assert result.brand == "FallbackBrand"
     assert result.summary == "Sempre il top"
-    assert result.parts[0].text == "FallbackBrand. Sempre il top"
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Sempre il top"]
 
 
 @pytest.mark.asyncio

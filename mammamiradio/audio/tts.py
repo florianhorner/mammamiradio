@@ -44,7 +44,7 @@ from mammamiradio.audio.voice_catalog import (
     is_openai_voice as _catalog_is_openai_voice,
 )
 from mammamiradio.core.models import HostPersonality
-from mammamiradio.hosts.ad_creative import AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice
 
 if TYPE_CHECKING:
     from mammamiradio.audio.imaging import ResolvedAdRecipe
@@ -646,18 +646,18 @@ async def synthesize_ad(
             fingerprint.append(entry)
         return fingerprint
 
-    def _render_brand_motif(path: Path) -> Path:
+    def _render_brand_motif(path: Path, signature: str) -> Path:
         if cache_dir is None:
-            return generate_brand_motif(path, sonic_sig, sfx_dir)
+            return generate_brand_motif(path, signature, sfx_dir)
         return materialize_synth_mp3(
             cache_dir,
             "brand_motif",
             path,
             {
-                "sfx_assets": _sfx_asset_fingerprint(sonic_sig),
-                "sonic_signature": sonic_sig,
+                "sfx_assets": _sfx_asset_fingerprint(signature),
+                "sonic_signature": signature,
             },
-            lambda out: generate_brand_motif(out, sonic_sig, sfx_dir),
+            lambda out: generate_brand_motif(out, signature, sfx_dir),
         )
 
     def _asset_fingerprint(asset: Path | None) -> dict[str, object] | None:
@@ -780,7 +780,7 @@ async def synthesize_ad(
 
         async def _gen_motif():
             try:
-                await loop.run_in_executor(None, _render_brand_motif, motif_path)
+                await loop.run_in_executor(None, _render_brand_motif, motif_path, sonic_sig)
                 return motif_path
             except Exception as e:
                 logger.warning("Brand motif generation failed, skipping: %s", e)
@@ -920,6 +920,50 @@ async def synthesize_ad(
             voice_path.unlink(missing_ok=True)
         return current
 
+    async def _restore_legacy_recipe_accents() -> None:
+        """Put the legacy opener and motif back when a resolved recipe fails later."""
+        nonlocal voice_path
+        if recipe is None or script.sonic is None:
+            return
+
+        legacy_sonic = script.sonic
+        opener_path = tmp_dir / f"recipe_recovery_opener_{uuid4().hex[:8]}.mp3"
+        opener = await _render_part(AdPart(type="sfx", sfx=legacy_sonic.transition_motif or "chime"), opener_path)
+        if opener is not None:
+            recovered_voice_path = tmp_dir / f"recipe_recovery_voice_{uuid4().hex[:8]}.mp3"
+            try:
+                await loop.run_in_executor(
+                    None,
+                    concat_files,
+                    [opener, voice_path],
+                    recovered_voice_path,
+                    DEFAULT_CONCAT_SILENCE_MS,
+                    False,
+                )
+            except Exception as exc:
+                logger.warning("Could not restore legacy ad opener after recipe failure: %s", exc)
+                opener.unlink(missing_ok=True)
+                recovered_voice_path.unlink(missing_ok=True)
+            else:
+                opener.unlink(missing_ok=True)
+                voice_path.unlink(missing_ok=True)
+                voice_path = recovered_voice_path
+
+        signature = legacy_sonic.sonic_signature
+        if not signature:
+            return
+        motif_path = tmp_dir / f"recipe_recovery_motif_{uuid4().hex[:8]}.mp3"
+        try:
+            await loop.run_in_executor(None, _render_brand_motif, motif_path, signature)
+        except Exception as exc:
+            logger.warning("Could not restore legacy ad motif after recipe failure: %s", exc)
+            motif_path.unlink(missing_ok=True)
+            return
+        if motif_path.is_file() and motif_path.stat().st_size > 0:
+            ad_parts.append(motif_path)
+        else:
+            motif_path.unlink(missing_ok=True)
+
     recipe_output = await _apply_recipe_world()
     if recipe_output is not None:
         broadcast_path = tmp_dir / f"ad_broadcast_{uuid4().hex[:8]}.mp3"
@@ -932,6 +976,8 @@ async def synthesize_ad(
         except Exception as exc:
             logger.warning("Recipe ad broadcast processing failed, using unprocessed audio: %s", exc)
         return recipe_output
+
+    await _restore_legacy_recipe_accents()
 
     # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
     # Layer order (quietest → loudest): foley → env bed → music bed → voice.

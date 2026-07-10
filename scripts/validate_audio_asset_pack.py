@@ -331,6 +331,14 @@ def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord,
 
         identifier = _identifier(raw.get("id"), f"{label}.id", errors)
         path = _nonempty_text(raw.get("path"), f"{label}.path", errors)
+        kind = _nonempty_text(raw.get("kind"), f"{label}.kind", errors)
+        raw_tags = raw.get("tags")
+        tags = raw_tags if isinstance(raw_tags, list) else None
+        if tags is None:
+            errors.append(f"{label}.tags must be a list")
+        else:
+            for tag_index, tag in enumerate(tags):
+                _nonempty_text(tag, f"{label}.tags[{tag_index}]", errors)
         if path is not None:
             relative = PurePosixPath(path)
             if "\\" in path or relative.is_absolute() or any(part in {".", ".."} for part in relative.parts):
@@ -356,7 +364,15 @@ def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord,
             else:
                 seen_ids.add(identifier)
 
-        if identifier is None or path is None or source_ids is None or asset_sha256 is None or audio_format is None:
+        if (
+            identifier is None
+            or path is None
+            or kind is None
+            or tags is None
+            or source_ids is None
+            or asset_sha256 is None
+            or audio_format is None
+        ):
             continue
         records.append(
             AssetRecord(

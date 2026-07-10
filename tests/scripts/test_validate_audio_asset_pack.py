@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,8 @@ def _asset(pack_dir: Path, asset_id: str, path: str, source_ids: list[str], **ov
     payload: dict[str, object] = {
         "id": asset_id,
         "path": path,
+        "kind": "bed" if "/beds/" in f"/{path}" else "cue",
+        "tags": ["fixture", "audio"],
         "source_ids": source_ids,
         "sha256": _sha256(content),
         "format": _format(),
@@ -174,6 +177,30 @@ def test_asset_output_hash_and_format_are_checked(tmp_path: Path, fake_probe: No
     message = str(caught.value)
     assert "asset 'applause_short' SHA-256 differs from manifest" in message
     assert "sample rate is 48000Hz, expected 44100Hz" in message
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("kind", "assets[0].kind must be a non-empty string"),
+        ("tags", "assets[0].tags must be a list"),
+    ],
+)
+def test_asset_metadata_required_by_runtime_is_rejected_by_validator(
+    tmp_path: Path, fake_probe: None, field: str, message: str
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    asset = assets[0]
+    assert isinstance(asset, dict)
+    asset.pop(field)
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match=re.escape(message)):
+        validator.validate_audio_asset_pack(pack_dir)
 
 
 def test_recipes_resolve_asset_references_and_cue_duration_bounds(tmp_path: Path, fake_probe: None) -> None:
