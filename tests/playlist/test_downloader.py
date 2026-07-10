@@ -1729,6 +1729,27 @@ def test_prune_stale_tmp_files_missing_dir_returns_zero(tmp_path):
     assert prune_stale_tmp_files(tmp_path / "does_not_exist") == 0
 
 
+def test_prune_stale_tmp_files_rejects_symlinked_tmp_dir_root(tmp_path):
+    # Unlike a symlinked *leaf* (unlink() never dereferences a symlink), a
+    # symlinked tmp_dir *root* means every glob/stat/unlink targets real
+    # files in the redirected directory through normal path resolution —
+    # reject_symlinks=True on the per-file check can't catch this because
+    # both tmp_dir and the file resolve "contained" relative to each other.
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    sensitive_dir = tmp_path / "sensitive"
+    sensitive_dir.mkdir()
+    important = sensitive_dir / "important.mp3"
+    important.write_bytes(b"do not delete me")
+    _age_file(important, hours=12)
+
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.symlink_to(sensitive_dir, target_is_directory=True)
+
+    assert prune_stale_tmp_files(tmp_dir) == 0
+    assert important.exists()
+
+
 def test_prune_stale_tmp_files_swallows_unlink_error(tmp_path):
     from unittest.mock import patch
 

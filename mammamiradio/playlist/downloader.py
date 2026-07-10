@@ -263,6 +263,15 @@ def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
     """
     if not tmp_dir.is_dir():
         return 0
+    if tmp_dir.is_symlink():
+        # reject_symlinks=True below only rejects a symlinked *leaf* (f); it
+        # can't catch tmp_dir itself being a symlink, since a leaf under a
+        # symlinked root still resolves "contained" relative to that same
+        # root. Unlike a symlinked leaf (unlink() never dereferences), a
+        # symlinked root means every glob/stat/unlink here targets real files
+        # in the redirected directory — a genuine delete-outside-tmp_dir path.
+        logger.warning("Skipping tmp scratch cleanup: tmp_dir is a symlink: %s", tmp_dir)
+        return 0
     cutoff = time.time() - max_age_hours * 3600
     pruned = 0
     for f in tmp_dir.glob("*.mp3"):

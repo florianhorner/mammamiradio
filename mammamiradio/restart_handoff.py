@@ -272,7 +272,15 @@ def restart_handoff_manifest_path(cache_dir: Path | str) -> Path:
 def load_restart_handoff_manifest(cache_dir: Path | str) -> RestartHandoffManifest:
     """Load the manifest, returning an empty manifest for missing/corrupt input."""
 
-    path = restart_handoff_manifest_path(cache_dir)
+    handoff_dir = _safe_handoff_dir(cache_dir)
+    if handoff_dir is None:
+        # A symlinked restart_handoff dir must never be read through: the
+        # manifest and every entry it names could belong to an attacker- or
+        # corruption-controlled location outside the cache, and the sha256
+        # check in _entry_rejection_reason offers no protection there since
+        # that same location would also control the manifest recording it.
+        return RestartHandoffManifest.empty()
+    path = handoff_dir / MANIFEST_FILENAME
     try:
         raw = path.read_text(encoding="utf-8")
         return RestartHandoffManifest.from_dict(json.loads(raw))
@@ -384,7 +392,10 @@ def write_restart_handoff_spool(
             return RestartHandoffManifest.empty()
         segments_dir = _safe_segments_dir(handoff_dir)
         if segments_dir is None:
-            logger.warning("Skipping restart handoff spool write: segments dir is unsafe: %s", _segments_dir(cache_dir))
+            logger.warning(
+                "Skipping restart handoff spool write: segments dir is unsafe: %s",
+                handoff_dir / SEGMENTS_DIRNAME,
+            )
             return RestartHandoffManifest.empty()
 
         entries: list[RestartHandoffEntry] = []
@@ -761,17 +772,26 @@ def _segments_dir(cache_dir: Path | str) -> Path:
 
 
 def _safe_handoff_dir(cache_dir: Path | str) -> Path | None:
-    """Resolve a non-symlinked handoff root that remains inside the cache."""
+    """Resolve a non-symlinked handoff root that remains inside the cache.
+
+    Used on both the write path (spool creation) and the read/admission path
+    (manifest load, entry resolution) — a symlinked ``cache_dir/restart_handoff``
+    would otherwise let ``safe_path_within(..., reject_symlinks=True)`` pass on
+    the read side too, since that guard only rejects a symlinked leaf, not a
+    symlinked root: root and path resolve through the same redirect and stay
+    "relative" to each other, so containment holds even though both point
+    outside the real cache dir.
+    """
 
     try:
         cache_root = Path(cache_dir).resolve(strict=False)
     except (OSError, RuntimeError) as exc:
-        logger.warning("Failed to resolve restart handoff cache dir for spool write: %s", exc)
+        logger.warning("Failed to resolve restart handoff cache dir: %s", exc)
         return None
     handoff_dir = restart_handoff_dir(cache_dir)
     resolved = safe_path_within(handoff_dir, cache_root, reject_symlinks=True)
     if resolved is None:
-        logger.warning("Skipping restart handoff spool write outside cache dir: %s", handoff_dir)
+        logger.warning("Skipping restart handoff dir outside cache dir: %s", handoff_dir)
     return resolved
 
 
@@ -799,19 +819,10 @@ def _prune_stale_tmp_glob(directory: Path, pattern: str, cutoff: float, *, cache
         )
         return 0
 
-    if directory.is_symlink() and not directory.exists():
-        logger.warning(
-            "Failed to resolve restart handoff scratch cleanup dir %s: symlink target unavailable",
-            directory,
-        )
-        return 0
-
+    # A symlinked directory (dangling or not) is already rejected above by
+    # reject_symlinks=True, so directory.is_symlink() can't be True past this
+    # point — no separate symlink handling needed for the not-a-dir case.
     if not directory.is_dir():
-        if directory.is_symlink():
-            try:
-                directory.resolve(strict=True)
-            except (OSError, RuntimeError) as exc:
-                logger.warning("Failed to resolve restart handoff scratch cleanup dir %s: %s", directory, exc)
         return 0
     pruned = 0
     try:
@@ -876,7 +887,14 @@ def _resolve_relative_to_handoff(cache_dir: Path | str, relative_path: str) -> P
     raw = Path(relative_path)
     if raw.is_absolute():
         return None
-    root = restart_handoff_dir(cache_dir)
+    # _safe_handoff_dir, not the raw restart_handoff_dir(): reject_symlinks=True
+    # below only rejects a symlinked leaf, not a symlinked root, so an
+    # unvalidated root here would let a symlinked restart_handoff dir redirect
+    # every admitted entry outside the cache (root and path both resolve
+    # through the same symlink, so containment holds trivially).
+    root = _safe_handoff_dir(cache_dir)
+    if root is None:
+        return None
     resolved = safe_path_within(root / raw, root, reject_symlinks=True)
     if resolved is None:
         return None
