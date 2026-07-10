@@ -108,9 +108,14 @@ auto" can't resurrect a just-cleared course on the next restart.
 
 Narration and stickiness are selection-driven, not queue-control-driven.
 `StationState.select_next_track()` first applies the normal diversity filters and
-then gives eligible tracks tagged with the active heading id a durable soft weight.
-Cooldowns, bans, artist diversity, pinned tracks, and rescue paths can still win;
-the heading never purges the queue, forces play-next, or interrupts audio.
+then gives eligible tracks tagged with the active heading id an **adaptive lift**:
+the multiplier is sized from the live pool so the hunt set reliably lands roughly
+`HEADING_TARGET_SHARE` of picks no matter how large rotation is (a fixed ×N is
+inaudible in a 200-track pool), clamped to `[HEADING_MIN_LIFT, HEADING_MAX_LIFT]`
+so a small pool keeps the historical ×4 floor and a tiny hunt set can never make
+one song dominate. Cooldowns, bans, artist diversity, pinned tracks, and rescue
+paths can still win; the heading never purges the queue, forces play-next, or
+interrupts audio.
 `heading_pending_announcement` is armed for hunt start, first found record, and
 occasional crate-digging beats. The next ordinary host break consumes that
 dedicated slot at prompt-build into a Record Hunt block; it does not reuse or

@@ -8,6 +8,9 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.models import (
+    HEADING_MAX_LIFT,
+    HEADING_MIN_LIFT,
+    HEADING_TARGET_SHARE,
     ChaosSubtype,
     Heading,
     ListenerProfile,
@@ -555,6 +558,146 @@ def test_select_next_track_heading_bias_persists_after_budget_spent():
     normal_idx = captured["candidates"].index(normal)
     tagged_idx = captured["candidates"].index(tagged)
     assert captured["weights"][tagged_idx] > captured["weights"][normal_idx]
+
+
+def _capture_selection_weights(state: StationState, **kwargs) -> tuple[list[Track], list[float]]:
+    """Run select_next_track once and return its (candidates, weights) without randomness."""
+    captured: dict = {}
+
+    def _choose(candidates, **choose_kwargs):
+        captured["candidates"] = candidates
+        captured["weights"] = choose_kwargs["weights"]
+        return [candidates[0]]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose):
+        state.select_next_track(**kwargs)
+    return captured["candidates"], captured["weights"]
+
+
+def _heading(heading_id: str = "heading-1") -> Heading:
+    return Heading(
+        id=heading_id,
+        seed="direction://2000s",
+        label="2000s female vocals",
+        set_at=1.0,
+        set_by="operator",
+    )
+
+
+def test_select_next_track_heading_lift_is_adaptive_in_large_pool():
+    # ~8 hunt tracks against a ~150-track pool: the fixed x4 lift only bought ~18% share;
+    # the adaptive lift rebalances so the hunt set lands near HEADING_TARGET_SHARE.
+    heading = _heading()
+    hunt = [_track(n) for n in range(8)]
+    for track in hunt:
+        track.heading_id = heading.id
+    rest = [_track(1000 + n) for n in range(150)]
+    state = StationState(playlist=hunt + rest, heading=heading)
+
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    hunt_keys = {t.cache_key for t in hunt}
+    total = sum(weights)
+    hunt_mass = sum(w for c, w in zip(candidates, weights, strict=False) if c.cache_key in hunt_keys)
+    share = hunt_mass / total
+
+    assert share == pytest.approx(HEADING_TARGET_SHARE, abs=0.05)
+    # Materially above the old fixed-x4 behaviour (~0.18 for this pool shape).
+    assert share > 0.35
+
+
+def test_select_next_track_heading_lift_floors_at_min_in_small_pool():
+    # 1 hunt + 1 normal: the computed adaptive multiplier is <1, so it clamps up to the
+    # historical x4 floor — small pools behave exactly as before.
+    heading = _heading()
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    normal = _track(1)
+    state = StationState(playlist=[normal, tagged], heading=heading)
+
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    tagged_w = weights[candidates.index(tagged)]
+    normal_w = weights[candidates.index(normal)]
+    assert tagged_w == pytest.approx(normal_w * HEADING_MIN_LIFT)
+
+
+def test_select_next_track_heading_lift_caps_in_lopsided_pool():
+    # A single hunt track against a huge non-heading pool would need a >MAX multiplier to
+    # reach the target share — the cap stops one song from dominating the station.
+    heading = _heading()
+    tagged = _track(2)
+    tagged.heading_id = heading.id
+    rest = [_track(1000 + n) for n in range(400)]
+    state = StationState(playlist=[tagged, *rest], heading=heading)
+
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    tagged_w = weights[candidates.index(tagged)]
+    normal_w = weights[candidates.index(rest[0])]
+    assert tagged_w == pytest.approx(normal_w * HEADING_MAX_LIFT)
+
+
+def test_select_next_track_all_hunt_pool_does_not_zero_weights():
+    # Every candidate matches the heading (sum_other_base == 0): the lift must not divide
+    # by zero or collapse weights — a hunt track still airs.
+    heading = _heading()
+    hunt = [_track(n) for n in range(4)]
+    for track in hunt:
+        track.heading_id = heading.id
+    state = StationState(playlist=hunt, heading=heading)
+
+    _candidates, weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    assert all(w > 0 for w in weights)
+    picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+    assert picked in hunt
+
+
+def test_select_next_track_heading_all_cooldown_filtered_picks_non_heading():
+    # Heading active but every tagged track sits in the repeat-cooldown window: selection
+    # must fall through to a non-heading track without raising.
+    heading = _heading()
+    hunt = [_track(0), _track(2)]
+    for track in hunt:
+        track.heading_id = heading.id
+    normals = [_track(10), _track(11)]
+    state = StationState(playlist=hunt + normals, heading=heading, played_tracks=list(hunt))
+
+    picked = state.select_next_track()
+    assert picked in normals
+
+
+def test_select_next_track_no_heading_leaves_weights_unlifted():
+    # Regression: with no active heading, never-played neutral tracks keep the plain
+    # never-played base weight (1.2) — no lift leaks in. A stale heading_id tag on a
+    # track must not lift it when state.heading is None (the `heading is not None`
+    # short-circuit guards this).
+    stale = _track(1)
+    stale.heading_id = "stale-heading"
+    state = StationState(playlist=[stale, _track(2)], heading=None)
+
+    _candidates, weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    assert all(w == pytest.approx(1.2) for w in weights)
+
+
+def test_select_next_track_empty_heading_id_does_not_lift():
+    # A Heading with an empty id must force heading_match=False for every track
+    # (the `and heading.id` sub-clause), so a tagged track gets no lift.
+    heading = _heading("")
+    tagged = _track(2)
+    tagged.heading_id = heading.id  # "" — matches nothing
+    normal = _track(1)
+    state = StationState(playlist=[normal, tagged], heading=heading)
+
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    assert weights[candidates.index(tagged)] == pytest.approx(weights[candidates.index(normal)])
 
 
 def test_after_music_spends_heading_budget_only_for_matching_track():
