@@ -277,6 +277,7 @@ async def test_startup_admits_restart_handoff_before_tasks(tmp_path: Path):
     assert app.state.queue.qsize() == 1
     assert app.state.station_state.queued_segments[0]["source_kind"] == "restart_handoff"
     assert app.state.station_state.queued_segments[0]["id"] == handoff.metadata["queue_id"]
+    assert app.state.station_state.queued_segments[0]["reason"] == "Restored from safe restart handoff."
     assert app.state.station_state.last_enqueued_type is SegmentType.MUSIC
     assert app.state.station_state.last_music_file == handoff.path
 
