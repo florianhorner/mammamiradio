@@ -144,6 +144,20 @@ def test_public_segment_metadata_redacts_private_ritual_internals():
     }
 
 
+def test_public_segment_metadata_redacts_transition_track_ref():
+    """transition_track_ref is internal claim-tracking bookkeeping (a track
+    cache_key used to detect a stale "just finished playing" claim after an
+    operator air-next) — it must never reach the public status payload."""
+    metadata = {
+        "source": "banter",
+        "transition_track_ref": "youtube|abc123",
+    }
+
+    payload = status_payload._public_segment_metadata(metadata)
+
+    assert payload == {"source": "banter"}
+
+
 def test_ha_details_payload_absent_without_ha_observability():
     assert status_payload._ha_details_payload(StationState()) is None
 
