@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
-from mammamiradio.core.config import DEFAULT_ROLE, load_config, resolve_model
+from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
 from mammamiradio.core.models import (
     LLM_COST_CATEGORIES,
     ChaosSubtype,
@@ -1845,8 +1845,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.5."""
+async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -1864,7 +1864,7 @@ async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["model"] == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio
@@ -1960,8 +1960,8 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "large"
-    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
+    # banter → creative role → balanced OpenAI creative = "small"
+    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -1978,15 +1978,15 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5-test"
+    assert call_kwargs["model"] == "gpt-5.4-mini-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.5"),
-        ("ad", "gpt-5.5"),
+        ("news_flash", "gpt-5.4-mini"),
+        ("ad", "gpt-5.4-mini"),
         ("transition", "gpt-5.4-mini"),
     ],
 )
@@ -2043,7 +2043,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.5"
+    assert record.model == "gpt-5.4-mini"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True
@@ -2774,7 +2774,7 @@ def test_script_cost_callers_have_valid_categories_and_model_routes(config):
     assert set(mapping.values()) <= set(LLM_COST_CATEGORIES)
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == "fast"
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == config.models.routing["transition"]
-    assert "direction" not in config.models.routing  # intentional DEFAULT_ROLE fallback
+    assert config.models.routing["direction"] == DEFAULT_ROLE
 
     for caller in mapping:
         role = config.models.routing.get(caller, DEFAULT_ROLE)
@@ -5089,6 +5089,93 @@ def test_has_script_llm_is_public():
     config = load_config(toml_path)
     # Result is bool — function is accessible and callable
     assert isinstance(has_script_llm(config), bool)
+
+
+def test_has_script_llm_true_with_registry_false_when_registry_unavailable(config):
+    """The gate that keeps a None model out of the API path.
+
+    With keys present it must be True only while the registry resolves a route;
+    an unavailable registry (empty catalog/profiles) must read as no-LLM so the
+    callers degrade to stock copy instead of sending model=None to a provider.
+    """
+    from mammamiradio.hosts.scriptwriter import has_script_llm
+
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    # Real registry loaded by the fixture resolves a route.
+    assert has_script_llm(config) is True
+
+    # Registry unavailable — keys still set, but no route resolves.
+    config.models = _empty_models()
+    assert has_script_llm(config) is False
+
+
+@pytest.mark.asyncio
+async def test_write_banter_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Keys present but no registry route -> stock copy, never model=None to an API."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "E torniamo alla musica!"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Ad generation with keys but no registry route -> minimal stock spot, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    assert result.brand == "FallbackBrand"
+    assert result.parts[0].text == "FallbackBrand. Because you deserve it."
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """News flash with keys but no registry route -> mode-driven stock line, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.super_italian_mode = False
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        _host, text, _category = await write_news_flash(state, config)
+
+    assert "breaking news" in text.lower()
 
 
 # --- WS3-A concurrent auth-flood prevention ---

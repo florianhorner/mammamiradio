@@ -8,7 +8,7 @@ per call. Writes a JSONL log to tmp/evals/ and prints a summary table.
 
 Usage:
     OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py
-    OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --models gpt-5.4-mini gpt-5.5
+    OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --models model-a model-b
     OPENAI_API_KEY=sk-... python scripts/eval_openai_script_model.py --fixtures path/to/prompts.json
 
 Decision criteria stay with the operator — this script ships the means to
@@ -35,23 +35,34 @@ from mammamiradio.core.config import load_config  # noqa: E402
 from mammamiradio.core.models import StationState, Track  # noqa: E402
 from mammamiradio.hosts.scriptwriter import _generate_json_response  # noqa: E402
 
-# Public per-1M-token rates (USD) as of 2026-06. Used for rough cost estimation
-# only — verify against your billing dashboard before drawing conclusions.
-COST_PER_1M_TOKENS = {
-    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
-    "gpt-5.5": {"input": 5.00, "output": 30.00},
-}
-
-DEFAULT_MODELS = ["gpt-5.4-mini", "gpt-5.5"]
 DEFAULT_FIXTURES = REPO_ROOT / "scripts" / "eval_fixtures" / "openai_script_prompts.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "tmp" / "evals"
 
 
-def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    rates = COST_PER_1M_TOKENS.get(model)
-    if not rates:
-        return 0.0
-    return (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1_000_000
+def default_models() -> list[str]:
+    """Return the OpenAI candidates declared by the canonical model registry."""
+    config = load_config(str(REPO_ROOT / "radio.toml"))
+    return config.models.default_openai_eval_models()
+
+
+def estimate_cost_usd(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    config,
+) -> tuple[float, bool]:
+    """Estimate a call using registry pricing.
+
+    The registry owns both known-model rates and the conservative unknown-model
+    fallback. The flag makes an exploratory candidate visible in the JSONL log
+    instead of silently treating it as a free call.
+    """
+    input_rate, output_rate, unpriced = config.models.price_for_model(model)
+    return (
+        prompt_tokens * input_rate + completion_tokens * output_rate,
+        unpriced,
+    )
 
 
 async def run_one(*, model: str, fixture: dict, config, state) -> dict:
@@ -93,7 +104,12 @@ async def run_one(*, model: str, fixture: dict, config, state) -> dict:
     # Token counts come from state deltas. Snapshot before/after each call.
     record["prompt_tokens"] = state._eval_last_prompt_tokens
     record["completion_tokens"] = state._eval_last_completion_tokens
-    record["cost_usd"] = estimate_cost_usd(model, record["prompt_tokens"], record["completion_tokens"])
+    record["cost_usd"], record["cost_unpriced"] = estimate_cost_usd(
+        model,
+        record["prompt_tokens"],
+        record["completion_tokens"],
+        config=config,
+    )
     return record
 
 
@@ -102,7 +118,7 @@ async def run_all(models: list[str], fixtures: list[dict]) -> list[dict]:
         print("ERROR: OPENAI_API_KEY must be set in the environment.", file=sys.stderr)
         sys.exit(2)
 
-    config = load_config()
+    config = load_config(str(REPO_ROOT / "radio.toml"))
     config.anthropic_api_key = ""  # force OpenAI branch
     config.openai_api_key = os.environ["OPENAI_API_KEY"]
 
@@ -192,7 +208,11 @@ def summarize(records: list[dict]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="OpenAI model IDs to evaluate")
+    ap.add_argument(
+        "--models",
+        nargs="+",
+        help="OpenAI model IDs to evaluate (default: OpenAI catalog entries in model_registry.toml)",
+    )
     ap.add_argument("--fixtures", type=Path, default=DEFAULT_FIXTURES, help="Prompt corpus JSON path")
     ap.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Where to write the JSONL log")
     args = ap.parse_args(argv)
@@ -205,10 +225,15 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: OPENAI_API_KEY must be set in the environment.", file=sys.stderr)
         return 2
 
+    models = args.models or default_models()
+    if not models:
+        print("ERROR: model_registry.toml does not declare any OpenAI eval candidates.", file=sys.stderr)
+        return 2
+
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = args.output_dir / f"eval-openai-script-model-{timestamp}.jsonl"
 
-    records = asyncio.run(run_all(args.models, fixtures))
+    records = asyncio.run(run_all(models, fixtures))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:

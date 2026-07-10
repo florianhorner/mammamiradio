@@ -368,7 +368,7 @@ def test_parser_exports_all_supported_keys():
 
 def test_parser_quality_profile_defaults_to_balanced():
     """Missing quality_profile (e.g. upgrade from the old claude_model dropdown)
-    maps to MAMMAMIRADIO_QUALITY=balanced — zero behavior change on update."""
+    maps to MAMMAMIRADIO_QUALITY=balanced, the shipped default profile."""
     rc, stdout, _ = _run_parser({"station_name": "X"})
     assert rc == 0
     exports = _parse_exports(stdout)

@@ -1,0 +1,57 @@
+# Canonical runtime model registry.
+#
+# Every provider model ID and script-token price belongs here. `radio.toml`
+# owns station behaviour; this file owns provider selection, so changing a
+# model is a configuration-only release.
+
+[models]
+default_profile = "balanced"
+
+[models.catalog.anthropic]
+fable = "claude-fable-5"  # ported from main #806; unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
+opus = "claude-opus-4-8"
+sonnet = "claude-sonnet-4-6"
+haiku = "claude-haiku-4-5-20251001"
+
+[models.catalog.openai]
+large = "gpt-5.5"
+small = "gpt-5.4-mini"
+
+[models.routing]
+banter = "creative"
+news_flash = "creative"
+ad = "creative"
+transition = "fast"
+home_mood = "fast"
+memory_extract = "fast"
+direction = "creative"
+
+[models.profiles.premium]
+anthropic = { creative = "opus", fast = "haiku" }
+openai = { creative = "large", fast = "small" }
+
+[models.profiles.balanced]
+anthropic = { creative = "sonnet", fast = "haiku" }
+openai = { creative = "small", fast = "small" }
+
+[models.profiles.economy]
+anthropic = { creative = "haiku", fast = "haiku" }
+openai = { creative = "small", fast = "small" }
+
+[tts.openai]
+model = "gpt-4o-mini-tts"
+
+[pricing]
+# Used only when a model is deliberately unpriced. It keeps the admin estimate
+# conservative without naming a provider model in application code.
+fallback_input_per_million = 15.0
+fallback_output_per_million = 75.0
+
+[pricing.catalog.anthropic]
+opus = { input_per_million = 15.0, output_per_million = 75.0 }
+sonnet = { input_per_million = 3.0, output_per_million = 15.0 }
+haiku = { input_per_million = 0.8, output_per_million = 4.0 }
+
+[pricing.catalog.openai]
+large = { input_per_million = 5.0, output_per_million = 30.0 }
+small = { input_per_million = 0.75, output_per_million = 4.5 }

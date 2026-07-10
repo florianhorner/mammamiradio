@@ -573,6 +573,8 @@ async def _call_anthropic_labels(
     from anthropic import AsyncAnthropic
 
     model = _resolve_anthropic_fast_model(config)
+    if not model:
+        return []
     client = AsyncAnthropic(api_key=config.anthropic_api_key)
     prompt_payload = [candidate.metadata for candidate in candidates]
     prompt = (
@@ -614,7 +616,7 @@ def _parse_label_payload(text: str) -> list[dict]:
     return labels if isinstance(labels, list) else []
 
 
-def _resolve_anthropic_fast_model(config: StationConfig) -> str:
+def _resolve_anthropic_fast_model(config: StationConfig) -> str | None:
     """Resolve the Anthropic fast-role model id for label generation.
 
     Delegates to the single resolver (the `transition` task routes to the fast

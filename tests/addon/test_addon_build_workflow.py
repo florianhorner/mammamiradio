@@ -148,6 +148,7 @@ def test_ci_trigger_paths_cover_version_bump_files():
         "mammamiradio/**",
         "pyproject.toml",
         "radio.toml",
+        "model_registry.toml",
     ]
 
     missing = [p for p in required_trigger_patterns if p not in trigger_block]
@@ -223,6 +224,19 @@ def _extract_step_block(workflow_text: str, step_name: str) -> str:
     m = re.search(pattern, workflow_text, re.DOTALL)
     assert m, f"Step '{step_name}' not found in addon-build.yml"
     return m.group(0)
+
+
+def test_ci_stages_and_verifies_the_canonical_model_registry():
+    """The add-on image gets the root registry at build time, never a checked-in copy."""
+    workflow_text = _workflow_text()
+
+    copy_block = _extract_step_block(workflow_text, "Copy source into addon build context")
+    assert "cp model_registry.toml ha-addon/mammamiradio/" in copy_block
+
+    registry_smoke_block = _extract_step_block(workflow_text, "Assert installed model registry")
+    assert "sha256sum model_registry.toml" in registry_smoke_block
+    assert "/app/model_registry.toml" in registry_smoke_block
+    assert "does not match the canonical root registry" in registry_smoke_block
 
 
 def test_ci_publishes_short_sha_edge_tag():

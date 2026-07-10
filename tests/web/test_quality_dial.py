@@ -19,7 +19,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from mammamiradio.core.config import load_config
+from mammamiradio.core.config import load_config, resolve_model
 from mammamiradio.core.models import LLM_COST_CATEGORIES, Segment, SegmentType, StationState, Track
 from mammamiradio.web.streamer import (
     COST_BREAKDOWN_CATEGORY_ORDER,
@@ -95,6 +95,26 @@ async def test_post_quality_applies_and_persists_standalone(monkeypatch):
     assert resp.json() == {"ok": True, "active_profile": "premium"}
     assert app.state.config.models.active_profile == "premium"
     save_dotenv.assert_called_once_with({"MAMMAMIRADIO_QUALITY": "premium"})
+
+
+@pytest.mark.asyncio
+async def test_post_quality_switch_changes_the_next_creative_model(monkeypatch):
+    """The dial changes future creative work, without changing its API contract."""
+    app = _make_test_app(is_addon=False)
+    monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
+    models = app.state.config.models
+    assert resolve_model(models, "banter", "anthropic") == "claude-sonnet-4-6"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.4-mini"
+
+    with patch("mammamiradio.web.streamer._save_dotenv"):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
+        ) as client:
+            response = await client.post("/api/quality", json={"quality_profile": "premium"})
+
+    assert response.status_code == 200
+    assert resolve_model(models, "banter", "anthropic") == "claude-opus-4-8"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -187,7 +207,7 @@ def test_cost_counter_prices_each_model():
     state = StationState(playlist=[])
     state.api_tokens_by_model = {
         "claude-opus-4-8": {"input": 1_000_000, "output": 1_000_000},  # 15 + 75 = 90
-        "gpt-5.5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 30 = 35 (default-profile creative fallback)
+        "gpt-5.5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 30 = 35 (premium creative fallback)
         "gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000},  # 0.75 + 4.50 = 5.25
     }
     cost, unpriced = _estimate_api_cost(state)
@@ -209,8 +229,9 @@ def test_cost_counter_never_zero_without_per_model_data():
     state.api_input_tokens = 1_000_000
     state.api_output_tokens = 1_000_000
     cost, unpriced = _estimate_api_cost(state)
-    assert cost > 0
-    assert unpriced is False
+    # Cheapest configured tier (haiku: 0.8 + 4.0), never inflated.
+    assert cost == pytest.approx(4.8, abs=0.01)
+    assert unpriced is False  # no per-model data is not an unpriced *model*
 
 
 def test_cost_counter_includes_tts_characters():
@@ -284,7 +305,7 @@ def test_cost_counter_tts_folds_into_legacy_aggregate_branch():
     state.tts_characters = 500_000  # * 0.00002 = 10.00
     cost, unpriced = _estimate_api_cost(state)
     assert cost == pytest.approx(10.0, abs=0.01)
-    assert unpriced is False
+    assert unpriced is False  # no per-model data is not an unpriced *model*
 
 
 def test_cost_counter_tts_getattr_safe_on_legacy_state():

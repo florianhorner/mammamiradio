@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **AI Quality now selects real creative tiers.** Premium uses the richest creative models, Balanced uses the middle tier, and Economy uses the lightest tier; quick transitions and post-air work stay on the fast models in every setting. A live dial change still waits for the current segment to finish and affects only future generated work.
 - **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the add-on now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the add-on's audio workers are busy, and its length is remembered so replays never wait on a re-measure.
 - **Health checks no longer flag an add-on that is audibly bridging as silent.** The silence alarm behind `/healthz` and `/readyz` now requires that nothing is airing at all, not just that the queue is empty — so a fresh install covering its first track render with the packaged continuity clip stays healthy instead of inviting a watchdog restart mid-recovery. Genuinely dead air still trips the alarm after 30 seconds.
 - **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the add-on's ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.

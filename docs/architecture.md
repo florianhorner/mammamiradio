@@ -303,23 +303,26 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Script generation never names a model in code. Each call site asks for a model by
 **role**, and `resolve_model()` in `mammamiradio/core/config.py` resolves it:
 
-```text
-task (caller)  ──routing──▶  role  ──active profile──▶  catalog key  ──catalog──▶  model id
-  "banter"                  "creative"     premium/balanced/economy        "opus"      "claude-opus-4-8"
-  "transition"              "fast"                                          "haiku"     "claude-haiku-..."
-  "memory_extract"          "fast"                                          "haiku"     "claude-haiku-..."
-```
+| Profile | Anthropic creative | OpenAI creative | Fast routes |
+| --- | --- | --- | --- |
+| Premium | `opus` | `large` | `haiku` / `small` |
+| Balanced (default) | `sonnet` | `small` | `haiku` / `small` |
+| Economy | `haiku` | `small` | `haiku` / `small` |
 
-- The `[models]` block in `radio.toml` is the only place model IDs live: a
-  per-provider `catalog`, a `routing` map (task→role), and named `profiles`
-  (the admin "quality dial": `premium` | `balanced` | `economy`).
-- `resolve_model()` is **total** — an unrouted task, missing profile, or missing
-  catalog key resolves through `default_profile` to a real model ID, never a crash
-  (a crash here would be dead air). The only hardcoded constant is the role name
-  `DEFAULT_ROLE = "creative"`; no model ID is baked into code except the built-in
-  `DEFAULT_MODELS` cold-start safety net.
-- A missing or malformed `[models]` block **degrades** to `DEFAULT_MODELS` so the
-  station always boots and airs; it never fails boot.
+- `model_registry.toml` is the canonical place provider model IDs and token prices
+  live: a per-provider `catalog`, a `routing` map (task→role), named `profiles`
+  (the admin "quality dial": `premium` | `balanced` | `economy`), the OpenAI
+  TTS model, and catalog-keyed pricing. `radio.toml` no longer owns model
+  selection; a legacy `[models]` block is compatibility input only and emits a
+  deprecation warning.
+- `resolve_model()` is **total** — it tries the active profile, then
+  `default_profile`, and returns `None` instead of raising when a registry route
+  is unavailable. Callers degrade to stock copy or Edge TTS rather than making an
+  arbitrary provider request. The only code-level default is the `creative` role;
+  no model ID or price is baked into the application.
+- A missing or malformed registry prevents provider calls and **degrades** to
+  stock scripts and Edge TTS so the station always boots and airs; provider
+  status reports that model routing is unavailable.
 - `fast` (transitions and post-air memory extraction) is pinned to the lowest-latency model in every profile.
 - The OpenAI fallback resolves the **same role** on the OpenAI side, so a transition
   falls back to the fast OpenAI model and banter to the creative one.
@@ -435,7 +438,11 @@ Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default), `e
 
 **Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
 
-**OpenAI TTS** (`gpt-4o-mini-tts`): requires `OPENAI_API_KEY`. Each host maps to an OpenAI voice (e.g., `onyx`). Personality-aware delivery instructions are generated from the host's energy, warmth, and chaos axes — the model interprets these as acting direction, not just static parameters.
+**OpenAI TTS**: requires `OPENAI_API_KEY` and uses the separately configured
+`[tts.openai]` registry entry. Each host maps to an OpenAI voice (e.g., `onyx`).
+Personality-aware delivery instructions are generated from the host's energy,
+warmth, and chaos axes — the model interprets these as acting direction, not
+just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 

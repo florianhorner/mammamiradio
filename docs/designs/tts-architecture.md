@@ -86,10 +86,10 @@ Italian voices beyond the small `edge-tts` Read Aloud catalog. Requires
 `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`; every configured Azure voice must
 also carry an Edge fallback.
 
-**OpenAI TTS:** Promptable `gpt-4o-mini-tts` voice path. The catalog includes
-`marin` and `cedar` in addition to the earlier built-ins. Good for host and ad
-character direction; falls back to Edge when `OPENAI_API_KEY` is absent or the
-request fails.
+**OpenAI TTS:** Promptable voice path selected by `[tts.openai]` in the canonical
+`model_registry.toml`. The voice catalog includes `marin` and `cedar` in addition
+to the earlier built-ins. Good for host and ad character direction; falls back to
+Edge when `OPENAI_API_KEY` is absent or the request fails.
 
 **ElevenLabs:** Optional custom character-voice backend for ads, guest bits, and
 station imaging. Requires `ELEVENLABS_API_KEY` and operator-provided voice IDs;
