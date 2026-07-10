@@ -39,6 +39,33 @@ Static config:
 - `radio.toml`
 - `model_registry.toml` — AI model IDs, task routing, OpenAI TTS model, and per-model pricing. Must sit beside `radio.toml`. If missing, the station boots and plays music but degrades to stock host copy and Edge voices until it is restored.
 
+## OpenAI fallback evaluator
+
+`scripts/eval_openai_script_model.py` is a local operator command for comparing the
+**OpenAI script-generation fallback**. It makes paid provider calls and does not evaluate
+the Anthropic-first live path, listener-ready output, or runtime enforcement.
+
+Always inspect the no-network preview first:
+
+```bash
+.venv/bin/python scripts/eval_openai_script_model.py --dry-run
+```
+
+The preview validates every fixture before a request and prints model, fixture, call,
+completion-token, and registry-pricing bounds. For a real run, set `OPENAI_API_KEY`; an
+explicit model without registry pricing also needs `--allow-unpriced`:
+
+```bash
+OPENAI_API_KEY=... .venv/bin/python scripts/eval_openai_script_model.py
+OPENAI_API_KEY=... .venv/bin/python scripts/eval_openai_script_model.py --models candidate-id --allow-unpriced
+```
+
+Each run writes schema-versioned JSONL under `tmp/evals/`. Parsed outputs include a
+deterministic raw-output integrity receipt (station-name, named-banter-roster, and
+spoken-text `PASS`/`FAIL`/`N/A` states); provider or JSON failures use `floor: null` and
+remain separate from those checks. A completed default run is observational and exits `0`
+even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
+
 ## Runtime outputs
 
 - `tmp/` rendered segments and temp assets
