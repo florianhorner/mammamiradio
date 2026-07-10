@@ -256,6 +256,13 @@ body[data-stopped="true"] .waveform {
     0 0 28px rgba(37, 99, 235, 0.15);
 }
 
+/* Act III — Il Battito (play button pulse). Keyframes live here (shared,
+   global) so listener.css's .mmr-play-btn variant can reference them —
+   .play-btn itself has no live template consumer, so it doesn't get its
+   own ripple/thump rules (dead-code finding, pre-landing review). */
+@keyframes tt-ripple { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(1.7); opacity: 0; } }
+@keyframes tt-thump  { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+
 /* ── Accessibility utilities ── */
 .sr-only {
   position: absolute;
