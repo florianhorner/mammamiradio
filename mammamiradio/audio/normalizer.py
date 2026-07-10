@@ -1482,7 +1482,7 @@ def generate_transition_sting(
     """Generate a station-branded transition sting for music/speech boundaries."""
     from_name = from_type_name.strip().lower()
     to_name = to_type_name.strip().lower()
-    speech_types = {"banter", "news_flash", "ad", "station_id"}
+    speech_types = {"banter", "news_flash", "ad", "station_id", "time_check", "sweeper"}
     notes = motif_notes or [523, 659, 784, 1047]
     variant_index = max(0, int(variant)) % 3
     rotated_notes = notes[1:] + notes[:1] if len(notes) > 1 else notes
