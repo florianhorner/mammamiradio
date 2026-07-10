@@ -1775,8 +1775,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.5."""
+async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -1794,7 +1794,7 @@ async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["model"] == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio
@@ -1890,8 +1890,8 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 async def test_openai_fallback_uses_configured_model(config, state):
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "large"
-    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
+    # banter → creative role → balanced OpenAI creative = "small"
+    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -1908,15 +1908,15 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5-test"
+    assert call_kwargs["model"] == "gpt-5.4-mini-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.5"),
-        ("ad", "gpt-5.5"),
+        ("news_flash", "gpt-5.4-mini"),
+        ("ad", "gpt-5.4-mini"),
         ("transition", "gpt-5.4-mini"),
     ],
 )
@@ -1973,7 +1973,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.5"
+    assert record.model == "gpt-5.4-mini"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True

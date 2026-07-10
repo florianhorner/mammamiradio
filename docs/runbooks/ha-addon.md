@@ -162,8 +162,9 @@ not special for unquoted values, so `OPENAI_API_KEY=sk#abc` means the value cont
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
 snapshot, and `run.sh` maps it to `MAMMAMIRADIO_QUALITY` (a missing/blank value
-defaults to `balanced`, which keeps Anthropic on the prior Opus/Haiku routing while
-using the frontier OpenAI catalog for creative fallback). If an existing
+defaults to `balanced`). Creative work uses Opus/large in `premium`, Sonnet/small
+in `balanced`, and Haiku/small in `economy`; latency-sensitive `fast` work stays
+on Haiku/small in every profile. If an existing
 `/data/options.json` still contains the removed `claude_model` key, `run.sh` also
 exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator saves
 `quality_profile`. The canonical model IDs, OpenAI TTS selection, and

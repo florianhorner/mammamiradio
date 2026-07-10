@@ -112,7 +112,9 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
     assert result["providers"]["openai_tts"]["ok"] is True
     assert "anthropic-secret" not in str(result)
     assert "openai-secret" not in str(result)
-    assert seen_auth_headers == ["Bearer openai-secret", "Bearer openai-secret", "Bearer openai-secret"]
+    # Balanced routes both creative and fast OpenAI work to the same small
+    # model, so the health check probes it once plus the separately configured TTS model.
+    assert seen_auth_headers == ["Bearer openai-secret", "Bearer openai-secret"]
 
 
 @pytest.mark.asyncio

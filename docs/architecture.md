@@ -292,13 +292,11 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Script generation never names a model in code. Each call site asks for a model by
 **role**, and `resolve_model()` in `mammamiradio/core/config.py` resolves it:
 
-```text
-task (caller)  ──routing──▶ role      ──profile+provider──▶ catalog key ──catalog──▶ model id
-  "banter"                  creative       balanced/anthropic     opus       registry value
-  "banter"                  creative       balanced/openai        large      registry value
-  "transition"              fast           any/anthropic          haiku      registry value
-  "transition"              fast           any/openai             small      registry value
-```
+| Profile | Anthropic creative | OpenAI creative | Fast routes |
+| --- | --- | --- | --- |
+| Premium | `opus` | `large` | `haiku` / `small` |
+| Balanced (default) | `sonnet` | `small` | `haiku` / `small` |
+| Economy | `haiku` | `small` | `haiku` / `small` |
 
 - `model_registry.toml` is the canonical place provider model IDs and token prices
   live: a per-provider `catalog`, a `routing` map (task→role), named `profiles`

@@ -30,8 +30,8 @@ anthropic = { creative = "opus", fast = "haiku" }
 openai = { creative = "large", fast = "small" }
 
 [models.profiles.balanced]
-anthropic = { creative = "opus", fast = "haiku" }
-openai = { creative = "large", fast = "small" }
+anthropic = { creative = "sonnet", fast = "haiku" }
+openai = { creative = "small", fast = "small" }
 
 [models.profiles.economy]
 anthropic = { creative = "haiku", fast = "haiku" }

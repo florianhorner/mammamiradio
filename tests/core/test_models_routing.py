@@ -37,13 +37,25 @@ def test_direction_is_explicitly_creative(models: ModelsSection) -> None:
     assert models.routing["direction"] == DEFAULT_ROLE
 
 
-def test_profile_switch_changes_the_resolved_catalog_key(models: ModelsSection) -> None:
-    models.active_profile = "economy"
-    economy_model = resolve_model(models, "banter", "anthropic")
-    models.active_profile = "premium"
-    premium_model = resolve_model(models, "banter", "anthropic")
-    assert economy_model and premium_model
-    assert economy_model != premium_model
+def test_shipped_quality_profiles_keep_their_creative_contract(models: ModelsSection) -> None:
+    expected_creative = {
+        "premium": {"anthropic": "claude-opus-4-8", "openai": "gpt-5.5"},
+        "balanced": {"anthropic": "claude-sonnet-4-6", "openai": "gpt-5.4-mini"},
+        "economy": {"anthropic": "claude-haiku-4-5-20251001", "openai": "gpt-5.4-mini"},
+    }
+    creative_callers = ("banter", "news_flash", "ad", "direction")
+    fast_callers = ("transition", "home_mood", "memory_extract")
+
+    for profile, expected_models in expected_creative.items():
+        for provider, expected_model in expected_models.items():
+            for caller in creative_callers:
+                assert resolve_model(models, caller, provider, profile=profile) == expected_model
+
+    for profile in expected_creative:
+        assert {resolve_model(models, caller, "anthropic", profile=profile) for caller in fast_callers} == {
+            "claude-haiku-4-5-20251001"
+        }
+        assert {resolve_model(models, caller, "openai", profile=profile) for caller in fast_callers} == {"gpt-5.4-mini"}
 
 
 def test_unrouted_caller_uses_default_role(models: ModelsSection) -> None:
