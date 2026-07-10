@@ -58,6 +58,7 @@ class GenerationWasteReason:
     SOURCE_SWITCH = "source_switch"
     OPERATOR_BAN = "operator_ban"
     OPERATOR_QUEUE_REMOVE = "operator_queue_remove"
+    STALE_PLAYED_TRACK_REF = "stale_played_track_ref"
 
 
 class SegmentType(Enum):
