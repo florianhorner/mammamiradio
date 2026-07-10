@@ -1,14 +1,37 @@
-=== Proof: model_registry.toml refactor — test + gate evidence ===
-commit: a0138a5ca927394cf0f3e2c157916d861ef76fef
-generated locally (fresh PR, no CI run yet)
+=== Proof: AI quality three-tier routing ===
+implementation commit: 726b57cc395e49d593df3314019c8c6af42ce614
+generated locally before the proof-only commit
 
---- new degrade-path tests (pre-ship squad coverage gaps) ---
-$ pytest tests/hosts/test_scriptwriter.py tests/audio/test_tts.py -k 'registry_unavailable or has_script_llm or tts_model_unavailable'
-......                                                                   [100%]
-6 passed, 304 deselected in 0.73s
+--- shipped routing + live dial regression ---
+$ .venv/bin/python -m pytest tests/core/test_models_routing.py tests/core/test_config_env_overrides.py tests/core/test_provider_checks.py tests/hosts/test_scriptwriter.py tests/web/test_quality_dial.py tests/repo/test_run_sh_options_parser.py -q -p no:cacheprovider
+368 passed in 3.91s
 
---- full suite (merged with origin/main) ---
-$ pytest tests/ -q
+--- full suite + coverage ---
+$ make test
+4389 passed, 2 skipped, 21 deselected, 1 warning in 127.53s (0:02:07)
+Required test coverage of 92.0% reached. Total coverage: 92.97%
 
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-4384 passed, 2 skipped, 21 deselected, 1 warning in 104.18s (0:01:44)
+--- repository gate ---
+$ make check
+4389 passed, 2 skipped, 21 deselected, 1 warning in 129.82s (0:02:09)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
+
+--- add-on + release checks ---
+$ ./scripts/validate-addon.sh
+All checks passed. Safe to push.
+
+$ bash scripts/check-release-invariants.sh
+Passed: 10  Failed: 0
+
+--- local image build ---
+$ ./scripts/validate-addon.sh --build
+Not run to completion: Docker is unavailable in this workspace. The non-Docker
+preflight passed; PR CI remains responsible for the installed-registry image hash
+check.
+
+--- provider comparison (operator evidence, not a release gate) ---
+The planned Anthropic creative ladder produced distinct real outputs for the same
+station prompt: Premium/Opus, Balanced/Sonnet, Economy/Haiku. The local comparison
+report is intentionally untracked at /tmp/mammamiradio-openai-quality-eval/
+quality-comparison-report.html. A single gpt-5.6-terra probe returned model_not_found.
