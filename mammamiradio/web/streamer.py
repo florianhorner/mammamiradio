@@ -34,7 +34,7 @@ from mammamiradio.audio.normalizer import (
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, _load_model_registry
+from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
 from mammamiradio.core.models import (
     ChaosSubtype,
     GenerationWasteReason,
@@ -3604,7 +3604,7 @@ LLM_COST_BREAKDOWN_CATEGORIES = (
 
 def _cost_models(models: ModelsSection | None) -> ModelsSection:
     """Use the configured registry even for isolated legacy helper callers."""
-    return models or _load_model_registry(Path(MODEL_REGISTRY_FILENAME))
+    return models or load_model_registry(Path(MODEL_REGISTRY_FILENAME))
 
 
 def _model_token_cost(model_id: str, toks: dict, models: ModelsSection | None = None) -> tuple[float, bool]:

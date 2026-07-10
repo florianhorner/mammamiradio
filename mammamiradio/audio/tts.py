@@ -57,6 +57,12 @@ _instructions_cache: dict[int, str] = {}
 _openai_client = None
 _openai_client_key: str = ""
 _openai_tts_model: str | None = None
+# Whether configure_openai_tts_model() has run. Distinguishes "startup explicitly
+# selected no OpenAI TTS model" (stay on Edge) from "not configured yet" (a
+# test/CLI caller may resolve the packaged registry). Without this, a startup
+# that configures None would fall through to a CWD registry read and could call
+# OpenAI with an unrelated model instead of degrading to Edge.
+_openai_tts_model_configured: bool = False
 # Singleton httpx clients for Azure and ElevenLabs — same pattern as OpenAI
 _azure_client: httpx.AsyncClient | None = None
 _azure_client_key: tuple[str, str] = ("", "")
@@ -93,17 +99,24 @@ def _looks_like_openai_voice(voice: str) -> bool:
 
 def configure_openai_tts_model(model: str | None) -> None:
     """Set the registry-selected OpenAI speech model for this running station."""
-    global _openai_tts_model
-    _openai_tts_model = model or None
+    global _openai_tts_model, _openai_tts_model_configured
+    _openai_tts_model = model.strip() if model and model.strip() else None
+    _openai_tts_model_configured = True
 
 
 def _configured_openai_tts_model() -> str | None:
-    """Resolve a test/CLI fallback without embedding a provider model ID here."""
-    if _openai_tts_model:
-        return _openai_tts_model
-    from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, _load_model_registry
+    """Resolve the OpenAI speech model, or None to stay on Edge.
 
-    return _load_model_registry(Path(MODEL_REGISTRY_FILENAME)).tts_model("openai")
+    Once startup has configured the station (even to None), that decision is
+    authoritative — we never second-guess it with a CWD registry read that could
+    load an unrelated file. Only an unconfigured test/CLI caller falls back to the
+    packaged registry.
+    """
+    if _openai_tts_model_configured:
+        return _openai_tts_model
+    from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, load_model_registry
+
+    return load_model_registry(Path(MODEL_REGISTRY_FILENAME)).tts_model("openai")
 
 
 def reset_voice_failures() -> None:

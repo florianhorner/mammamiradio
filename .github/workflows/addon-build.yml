@@ -121,7 +121,11 @@ jobs:
       # Needed by "Assert installed model registry": it hashes the canonical
       # root model_registry.toml against the copy baked into the image. Without
       # a checkout the file is absent on the runner and the step fails.
+      # Read-only: this checkout only reads the registry for hashing, so the
+      # token is not persisted into .git/config (zizmor: artipacked).
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
@@ -210,9 +214,13 @@ jobs:
           PY
 
       - name: Assert installed model registry
+        env:
+          # Route trusted expansions through env so they reach the script as shell
+          # variables, not inline ${{ }} interpolation (zizmor: template-injection).
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}"
+          IMAGE="$IMAGE_REF"
           EXPECTED="$(sha256sum model_registry.toml | awk '{print $1}')"
           ACTUAL="$(docker run --rm -i "$IMAGE" python3 - <<'PY'
           from hashlib import sha256

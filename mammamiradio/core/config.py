@@ -285,6 +285,7 @@ def _parse_models_section(raw: dict, *, source: str = "inline registry") -> Mode
 
 def _parse_registry_pricing(raw: dict, models: ModelsSection) -> None:
     """Attach model prices by catalog reference, never by copied model ID."""
+
     pricing = raw.get("pricing") or {}
     if not isinstance(pricing, dict):
         raise ValueError("pricing must be a table")
@@ -296,6 +297,10 @@ def _parse_registry_pricing(raw: dict, models: ModelsSection) -> None:
     )
     if fallback_input < 0 or fallback_output < 0:
         raise ValueError("pricing fallback rates must be non-negative")
+    if not (math.isfinite(fallback_input) and math.isfinite(fallback_output)):
+        # A nan/inf fallback would later serialize into the /status cost block and
+        # break the admin JSON response. Reject so the conservative default holds.
+        raise ValueError("pricing fallback rates must be finite")
     models.fallback_price = (fallback_input, fallback_output)
     catalog_prices = pricing.get("catalog") or {}
     if not isinstance(catalog_prices, dict):
@@ -325,6 +330,15 @@ def _parse_registry_pricing(raw: dict, models: ModelsSection) -> None:
             output_rate = float(rate["output_per_million"]) / 1_000_000
             if input_rate < 0 or output_rate < 0:
                 raise ValueError(f"pricing rate for {provider}.{key} must be non-negative")
+            if not (math.isfinite(input_rate) and math.isfinite(output_rate)):
+                # A nan/inf rate would break /status JSON serialization; leave this
+                # model unpriced (fallback + UI flag) instead of poisoning the block.
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "Non-finite pricing for %s.%s; treating this model as unpriced", provider, key
+                )
+                continue
             models.prices[model_id] = (input_rate, output_rate)
 
 
@@ -384,6 +398,12 @@ def _build_default_models() -> ModelsSection:
     configuration file and contains no provider model identity in Python.
     """
     return _load_model_registry(Path(MODEL_REGISTRY_FILENAME))
+
+
+# Public alias: cross-module callers (web/streamer.py, audio/tts.py) load the
+# registry through this stable name rather than the underscore-private helper,
+# so an internal rename can't silently break an out-of-module import.
+load_model_registry = _load_model_registry
 
 
 def _apply_model_env_overrides(models: ModelsSection) -> None:

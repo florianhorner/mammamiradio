@@ -205,6 +205,40 @@ def test_incomplete_price_entry_stays_unpriced(tmp_path) -> None:
     assert haiku_unknown is False  # sibling entry still priced
 
 
+def test_non_finite_fallback_rate_keeps_conservative_default(tmp_path) -> None:
+    """A nan/inf fallback rate must not reach /status; the conservative default holds."""
+    import math
+
+    models = _load_model_registry(_write_registry(tmp_path, fallback_input="nan"))
+    assert resolve_model(models, "banter", "anthropic") == "anthropic-creative"  # routing intact
+    input_rate, output_rate, _ = models.price_for_model("some-unpriced-model")
+    assert math.isfinite(input_rate) and math.isfinite(output_rate)
+    assert input_rate > 0 and output_rate > 0  # conservative fallback, not nan
+
+
+def test_non_finite_catalog_rate_stays_unpriced(tmp_path) -> None:
+    """An inf catalog rate flags the model unpriced (never serializes a bad float)."""
+    import math
+
+    models = _load_model_registry(
+        _write_registry(tmp_path, opus_price="{ input_per_million = inf, output_per_million = 75.0 }")
+    )
+    opus_in, opus_out, opus_unknown = models.price_for_model("anthropic-creative")
+    _, _, haiku_unknown = models.price_for_model("anthropic-fast")
+    assert opus_unknown is True  # non-finite entry dropped to unpriced
+    assert math.isfinite(opus_in) and math.isfinite(opus_out)  # fallback, finite
+    assert haiku_unknown is False  # sibling entry still priced
+
+
+def test_invalid_utf8_registry_falls_back_without_aborting(tmp_path) -> None:
+    """A corrupt (non-UTF-8) registry must degrade to unavailable, never crash boot."""
+    registry_path = tmp_path / MODEL_REGISTRY_FILENAME
+    registry_path.write_bytes(b"[models]\nkey = \xff\xfe\x00\n")
+    models = _load_model_registry(registry_path)
+    assert models.source == "unavailable"
+    assert resolve_model(models, "banter", "anthropic") is None
+
+
 def test_registry_pricing_and_unknown_fallback_are_exposed(models: ModelsSection) -> None:
     priced = models.default_openai_eval_models()
     assert priced == list(dict.fromkeys(models.catalog["openai"].values()))

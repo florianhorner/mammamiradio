@@ -318,7 +318,7 @@ if [ ! -f model_registry.toml ]; then
     fail "Missing canonical model_registry.toml"
 elif [ -e ha-addon/mammamiradio/model_registry.toml ]; then
     fail "ha-addon/mammamiradio/model_registry.toml must not be committed; stage the canonical root file at build time"
-elif $PY -c "
+elif SCHEMA_ERR="$($PY -c "
 try:
     import tomllib
 except ImportError:
@@ -379,10 +379,10 @@ fallback_input = float(pricing.get('fallback_input_per_million', 0.0))
 fallback_output = float(pricing.get('fallback_output_per_million', 0.0))
 if fallback_input <= 0 or fallback_output <= 0:
     raise SystemExit('model_registry.toml schema invalid: pricing fallback rates must be positive')
-" 2>/dev/null; then
+" 2>&1)"; then
     pass "model_registry.toml is valid and remains root-canonical"
 else
-    fail "model_registry.toml parse/schema error"
+    fail "model_registry.toml parse/schema error: ${SCHEMA_ERR:-unknown}"
 fi
 
 # ---- 7. run.sh syntax check ----
