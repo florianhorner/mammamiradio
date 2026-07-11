@@ -2333,10 +2333,13 @@ def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     state = getattr(request.app.state, "station_state", None)
     stopped = "true" if bool(getattr(state, "session_stopped", False)) else "false"
-    html = html.replace(
-        "\n<body>\n",
-        f'\n<body data-stopped="{stopped}">\n',
-        1,
+    # Keep the stopped-state first paint resilient to harmless body-tag
+    # formatting or attributes added by future admin-page work.
+    html = _re.sub(
+        r"(</head>\s*<body)(?![^>]*\bdata-stopped\b)",
+        lambda match: f'{match.group(1)} data-stopped="{stopped}"',
+        html,
+        count=1,
     )
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     csp = "script-src 'self' 'unsafe-inline'"
@@ -2883,12 +2886,18 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     # that lands while skip history persists must remain the final state rather
     # than being overwritten with a stale skipping sentinel or forced track.
     if skipped_music_metadata is not None:
-        await _persist_skipped_music(
-            state,
-            config,
-            skipped_music_metadata,
-            listen_sec=skipped_music_listen_sec,
-        )
+        try:
+            await _persist_skipped_music(
+                state,
+                config,
+                skipped_music_metadata,
+                listen_sec=skipped_music_listen_sec,
+            )
+        except Exception:
+            # The cut is already committed above. Skip history improves later
+            # programming, but must never turn a successful transport action
+            # into an operator-facing failure.
+            logger.warning("Could not persist skipped music history after transport commit", exc_info=True)
     return bridged
 
 

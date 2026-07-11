@@ -2546,7 +2546,7 @@ async function doBanNowPlaying(el){
     toast(msg);
   }
 }
-async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
+async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r&&r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast((r&&r.error)||wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
@@ -2557,7 +2557,7 @@ async function doQuickAction(action,el){
   }else if(action==='more_chaos'){
     try{
       const r=await api('POST','/api/trigger',{type:'banter'});
-      toast(r.ok?'Chaos incoming — banter queued':wayOut());
+      toast(r&&r.ok?'Chaos incoming — banter queued':(r&&r.error)||wayOut());
     }catch(_){toast(offlineMsg());}
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);

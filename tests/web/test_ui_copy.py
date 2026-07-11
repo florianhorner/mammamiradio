@@ -173,6 +173,19 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         "through wayOut()/offlineMsg() (warm + a concrete way-out, principle #5):\n  " + "\n  ".join(hits)
     )
 
+    # Trigger routes return deliberately human, actionable copy (for example,
+    # how to resume a paused station). That server copy may reach a toast only
+    # through the established r&&r.error path with a wayOut() fallback; every
+    # other raw error field remains forbidden.
+    for line in text.splitlines():
+        if not re.search(r"\br\.error\b", line):
+            continue
+        assert "r&&r.error" in line and "||wayOut(" in line, (
+            "server error copy must use the guarded r&&r.error form and retain "
+            "a local wayOut() fallback so an unexpected response never becomes "
+            f"a dead end: {line.strip()}"
+        )
+
     # Pattern-based backstop so unanticipated variants (double quotes, new
     # wrappers, raw fields) cannot slip past the exact-string list above.
     patterns = (
@@ -180,9 +193,13 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         r"toast\(\s*['\"](?:Error:|Failed |Network error)",
         # A toast that interpolates a raw backend error field. [^;] (no \n
         # exclusion) + DOTALL so a multiline toast() can't slip the field past.
-        r"toast\([^;]*\b(?:r\.error|r\.exception|error_code|r\.detail|resp\.error)\b",
+        r"toast\([^;]*\b(?:r\.exception|error_code|r\.detail|resp\.error)\b",
     )
-    pattern_hits = [m.group(0) for p in patterns for m in re.finditer(p, text, re.DOTALL)]
+    pattern_hits = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.DOTALL):
+            hit = match.group(0)
+            pattern_hits.append(hit)
     assert not pattern_hits, (
         "admin.html has a toast() that shows a machine phrase or a raw error "
         "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)

@@ -1936,6 +1936,32 @@ async def test_skip_route_persists_music_skips_with_youtube_id():
 
 
 @pytest.mark.asyncio
+async def test_skip_route_succeeds_when_skip_history_persistence_fails():
+    """Once the cut is committed, history persistence is best-effort."""
+    app = _make_test_app()
+    persona_store = MagicMock()
+    persona_store._session_id = "session-persistence-failure"
+    persona_store.record_play = AsyncMock(side_effect=OSError("skip history unavailable"))
+    app.state.station_state.persona_store = persona_store
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Skipped Song",
+        "started": time.time() - 8,
+        "metadata": {"youtube_id": "yt_skip_failure"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/skip")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert app.state.skip_event.is_set()
+    assert app.state.station_state.now_streaming["type"] == "skipping"
+    persona_store.record_play.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_skip_bit_sets_pending_directive():
     """When detect_skip_bit returns True, ha_pending_directive is set for reactive banter."""
     app = _make_test_app()
@@ -3027,6 +3053,41 @@ async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_rout
     for response in (direct, ingress):
         assert response.status_code == 200
         assert re.search(r'</head>\s*<body data-stopped="false">', response.text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_admin_first_paint_injects_state_when_body_has_attributes(monkeypatch, stopped):
+    """The stopped marker must survive harmless body-tag layout changes."""
+    import mammamiradio.web.streamer as streamer
+    from mammamiradio.web import pages
+
+    altered_html = streamer._ADMIN_HTML.replace(
+        "</head>\n<body>",
+        '</head>\n<body class="admin-shell">',
+        1,
+    )
+    assert altered_html != streamer._ADMIN_HTML
+    monkeypatch.setattr(streamer, "_ADMIN_HTML", altered_html)
+    monkeypatch.setattr(pages, "_injected_html_cache", {})
+
+    app = _make_test_app(is_addon=True)
+    app.state.station_state.session_stopped = stopped
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        direct = await client.get("/admin")
+        ingress = await client.get(
+            "/",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/test-token"},
+        )
+
+    expected = "true" if stopped else "false"
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        body_tag = re.search(r"</head>\s*(<body\b[^>]*>)", response.text)
+        assert body_tag is not None
+        assert 'class="admin-shell"' in body_tag.group(1)
+        assert f'data-stopped="{expected}"' in body_tag.group(1)
 
 
 @pytest.mark.asyncio

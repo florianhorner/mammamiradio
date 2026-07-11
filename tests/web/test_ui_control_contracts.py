@@ -29,7 +29,7 @@ import asyncio
 import re
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -329,6 +329,34 @@ class TestBanNowPlayingEndpoint:
             response = await asyncio.wait_for(ban_task, timeout=2)
 
         assert response.json()["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ban_now_succeeds_when_shared_skip_history_fails(self, monkeypatch):
+        """The shared best-effort history guard also protects Ban-now-playing."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Artist — Song A",
+                "started": time.time(),
+                "metadata": {
+                    "artist": "Artist",
+                    "title_only": "Song A",
+                    "youtube_id": "yt-ban-history-failure",
+                },
+            }
+        )
+        monkeypatch.setattr("mammamiradio.web.streamer.save_blocklist", lambda *_args, **_kwargs: True)
+        persist = AsyncMock(side_effect=OSError("skip history unavailable"))
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/track/ban-now-playing", headers=AUTH)
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming["type"] == "skipping"
+        persist.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_ban_now_rejects_non_music_without_skipping(self):
@@ -936,6 +964,15 @@ class TestTriggerEndpoint:
 
         assert resp.json()["ok"] is False
         assert app.state.station_state.force_next is None
+
+    def test_admin_trigger_actions_surface_server_way_out_copy(self):
+        """Stopped and pending-trigger remediation must reach the operator."""
+        trigger = _admin_function_block("doTrigger")
+        quick_action = _admin_function_block("doQuickAction")
+
+        assert "if(r&&r.ok)" in trigger
+        assert "toast((r&&r.error)||wayOut())" in trigger
+        assert "r&&r.ok?'Chaos incoming — banter queued':(r&&r.error)||wayOut()" in quick_action
 
 
 # ---------------------------------------------------------------------------
