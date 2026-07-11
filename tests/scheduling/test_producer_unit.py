@@ -1028,7 +1028,11 @@ async def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path)
     with patch(f"{PRODUCER_MODULE}.evict_cache_lru") as evict:
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            deadline = asyncio.get_running_loop().time() + 1.0
+            # Generous ceiling: the loop exits the instant evict is called, so a
+            # larger bound costs nothing on a healthy run. Under coverage
+            # instrumentation the producer's first pass to the eviction call can
+            # exceed 1s, which made this a wall-clock flake in the CI quality job.
+            deadline = asyncio.get_running_loop().time() + 5.0
             while not evict.called and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.01)
         finally:

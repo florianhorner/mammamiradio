@@ -1134,7 +1134,10 @@ async def test_run_playback_loop_stop_during_queue_wait_skips_fallback(tmp_path)
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 1.0
+            # Exits the instant the loop reaches its queue wait, so a generous
+            # ceiling costs nothing on a healthy run and avoids a wall-clock
+            # flake under coverage instrumentation in CI.
+            deadline = time.monotonic() + 5.0
             while calls == 0:
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not enter queue wait")

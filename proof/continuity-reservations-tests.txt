@@ -1,6 +1,11 @@
 # Proof: test suite — PR #825 (protected continuity reservations + render timings)
-# Captured 2026-07-11T22:17:59Z on 9750fa13
+# Captured 2026-07-11T22:30:48Z on a55edebd (pending flake-fix commit)
 
-## New tests added by this PR (targeted run)
-....                                                                     [100%]
-4 passed in 0.88s
+## Full suite WITH coverage (exact CI quality-gate path)
+4615 passed, 3 skipped, 21 deselected in 129.60s — total coverage 92.97%, all module floors held
+
+## New tests added by this PR
+- test_continuity_reservation_honors_excluded_track_keys_not_on_blocklist
+- test_continuity_reservation_honors_excluded_paths
+- test_remember_rendered_music_populates_immediate_audio_index
+- test_remember_enqueued_indexes_rescue_music_and_skips_breaks
