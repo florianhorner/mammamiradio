@@ -13,6 +13,7 @@ import html
 import re
 import sys
 import unicodedata
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -31,6 +32,7 @@ _MUTATION_WORD = re.compile(
 )
 _RESTART_WORD = re.compile(r"\brestart(?:ing|ed|s)?\b", re.IGNORECASE)
 _SSH_WORD = re.compile(r"\bssh\b", re.IGNORECASE)
+_COORDINATOR = re.compile(r"\s*(?:or|and|nor)\b", re.IGNORECASE)
 _DIRECT_NEGATION = re.compile(
     r"(?:\bdo\s+not|\bdon['’]t|\bnever|\bmust\s+not|\bshould\s+not|\bavoid|\bno)"
     r"(?:\s+(?:ever|use|using|run|running|call|calling))?\s*$",
@@ -85,8 +87,9 @@ class Issue:
 
 @dataclass(frozen=True)
 class Block:
-    line: int
     text: str
+    line_offsets: tuple[int, ...]
+    source_lines: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -101,19 +104,30 @@ def _read(path: Path) -> str:
 
 def _blocks(text: str) -> list[Block]:
     blocks: list[Block] = []
-    current: list[str] = []
-    start = 1
+    current: list[tuple[int, str]] = []
+
+    def append_block(lines: list[tuple[int, str]]) -> None:
+        parts: list[str] = []
+        offsets: list[int] = []
+        source_lines: list[int] = []
+        offset = 0
+        for line_number, line in lines:
+            part = re.sub(r"\s+", " ", line.strip())
+            offsets.append(offset)
+            source_lines.append(line_number)
+            parts.append(part)
+            offset += len(part) + 1
+        blocks.append(Block(" ".join(parts), tuple(offsets), tuple(source_lines)))
+
     for line_number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             if current:
-                blocks.append(Block(start, " ".join(part.strip() for part in current)))
+                append_block(current)
                 current = []
             continue
-        if not current:
-            start = line_number
-        current.append(line)
+        current.append((line_number, line))
     if current:
-        blocks.append(Block(start, " ".join(part.strip() for part in current)))
+        append_block(current)
     return blocks
 
 
@@ -136,10 +150,39 @@ def _directly_negated(clause: str, position: int) -> bool:
     return bool(_DIRECT_NEGATION.search(prefix))
 
 
+def _uncovered_positions(clause: str, positions: list[int]) -> list[int]:
+    """Return dangerous positions not covered by one direct negation.
+
+    A directly negated first action covers that comma segment. It extends over
+    an Oxford-style serial list only through the final comma segment introduced
+    by ``or``, ``and``, or ``nor``. A trailing comma-splice imperative is a
+    separate instruction and remains unsafe.
+    """
+    if not positions or not _directly_negated(clause, positions[0]):
+        return positions
+
+    segment_starts = [positions[0]]
+    for match in re.finditer(",", clause[positions[0] :]):
+        segment_starts.append(positions[0] + match.end())
+
+    last_covered_segment = 0
+    for index, start in enumerate(segment_starts[1:], 1):
+        if _COORDINATOR.match(clause[start:]):
+            last_covered_segment = index
+
+    return [position for position in positions if bisect_right(segment_starts, position) - 1 > last_covered_segment]
+
+
 def _danger_positions(clause: str, *, ssh_sequence: bool) -> list[int]:
     positions: set[int] = set()
     for pattern in _SIMPLE_DANGERS:
-        positions.update(match.start() for match in pattern.finditer(clause))
+        search_from = 0
+        while match := pattern.search(clause, search_from):
+            positions.add(match.start())
+            # The protected-path patterns can span a later comma segment. Keep
+            # searching from the next character so a second imperative remains
+            # available to negation-scope analysis.
+            search_from = match.start() + 1
 
     for match in _DOCKER_EXEC.finditer(clause):
         if _MUTATION_WORD.search(clause[match.end() :]):
@@ -156,20 +199,19 @@ def _danger_positions(clause: str, *, ssh_sequence: bool) -> list[int]:
 def live_surgery_issues(path: Path, text: str) -> list[Issue]:
     issues: list[Issue] = []
     for block in _blocks(text):
-        normalized = re.sub(r"\s+", " ", block.text)
-        ssh_sequence = bool(
-            _SSH_WORD.search(normalized) and _GENERIC_MUTATION.search(normalized) and _RESTART_WORD.search(normalized)
-        )
+        normalized = block.text
+        ssh_sequence = bool(_SSH_WORD.search(normalized) and _RESTART_WORD.search(normalized))
         for offset, clause in _clauses(normalized):
             positions = _danger_positions(clause, ssh_sequence=ssh_sequence)
-            if not positions:
+            uncovered_positions = _uncovered_positions(clause, positions)
+            if not uncovered_positions:
                 continue
             # A direct warning such as "do not SSH ..., edit ..., or restart"
-            # negates the coordinated actions in that clause. A separate clause
-            # such as "Do not wait; SSH ..." does not.
-            if _directly_negated(clause, positions[0]):
-                continue
-            line = block.line + normalized[: offset + positions[0]].count("\n")
+            # negates the coordinated actions in that clause. A comma-splice or
+            # a separate clause such as "Do not wait; SSH ..." does not.
+            position = offset + uncovered_positions[0]
+            line_index = bisect_right(block.line_offsets, position) - 1
+            line = block.source_lines[line_index]
             issues.append(
                 Issue(
                     path,

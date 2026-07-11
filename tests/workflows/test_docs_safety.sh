@@ -43,6 +43,23 @@ expect_unsafe() {
   expect_failure "$label" "unsafe recovery instruction" "$file"
 }
 
+expect_unsafe_at_line() {
+  local label=$1
+  local file=$2
+  local expected_line=$3
+  local output
+
+  if output=$(bash "$CHECK" "$file" 2>&1); then
+    echo "FAIL: $label unexpectedly passed"
+    exit 1
+  fi
+  if ! grep -Fq "$file:$expected_line  [unsafe recovery instruction]" <<< "$output"; then
+    echo "FAIL: $label reported the wrong source line"
+    echo "$output"
+    exit 1
+  fi
+}
+
 expect_default_install_guard() {
   local label=$1
   local guarded_file=$2
@@ -98,6 +115,15 @@ expect_success "directly negated warning" "$TMP/safe.md"
 printf '# Safe\n\nPlease do not SSH in to edit container or runtime files,\ndelete live cache, or restart as an experiment.\n' > "$TMP/safe-wrapped.md"
 expect_success "wrapped directly negated warning" "$TMP/safe-wrapped.md"
 
+printf '# Safe\n\nDo not edit /config/x or rm /data/y.\n' > "$TMP/safe-negated-pair.md"
+expect_success "directly negated paired mutations" "$TMP/safe-negated-pair.md"
+
+printf '# Safe\n\nDo not SSH in and restart the add-on.\n' > "$TMP/safe-negated-ssh-restart.md"
+expect_success "directly negated SSH restart" "$TMP/safe-negated-ssh-restart.md"
+
+printf '# Safe\n\nRestart the add-on from the Home Assistant UI.\n' > "$TMP/safe-ha-ui-restart.md"
+expect_success "Home Assistant UI restart without SSH" "$TMP/safe-ha-ui-restart.md"
+
 # shellcheck disable=SC2016  # literal Markdown code span in the fixture
 printf '# Safe diagnosis\n\nFor diagnosis, `docker exec addon cat /data/options.json` is read-only.\n' > "$TMP/safe-docker-exec.md"
 expect_success "read-only docker exec" "$TMP/safe-docker-exec.md"
@@ -113,6 +139,15 @@ expect_unsafe "multiline live surgery" "$TMP/unsafe-multiline.md"
 
 printf '# Unsafe\n\n**Fix**: Do not wait; SSH to the host, edit /data/options.json, then restart the app.\n' > "$TMP/unsafe-unrelated-negation.md"
 expect_unsafe "unrelated negation does not suppress danger" "$TMP/unsafe-unrelated-negation.md"
+
+printf '# Unsafe\n\nDo not edit /config/x, edit /data/y instead.\n' > "$TMP/unsafe-negation-comma-splice.md"
+expect_unsafe "negation does not cover a comma-splice imperative" "$TMP/unsafe-negation-comma-splice.md"
+
+printf '# Unsafe\n\nSSH into the Pi and restart the add-on.\n' > "$TMP/unsafe-ssh-restart.md"
+expect_unsafe "SSH restart without another mutation" "$TMP/unsafe-ssh-restart.md"
+
+printf '# Unsafe\n\nDo not edit /config/x,\nedit /data/y instead.\n' > "$TMP/unsafe-negation-line-attribution.md"
+expect_unsafe_at_line "comma-splice points to the offending source line" "$TMP/unsafe-negation-line-attribution.md" 4
 
 printf '# Unsafe\n\nDo not SSH for diagnosis, but docker restart the app.\n' > "$TMP/unsafe-contrast-negation.md"
 expect_unsafe "negation does not cross a contrasting clause" "$TMP/unsafe-contrast-negation.md"
@@ -164,6 +199,8 @@ expect_failure "stale Edge release promise" "incorrect Edge release wording" "$T
 
 expect_default_install_guard "operations" "docs/operations.md"
 expect_default_install_guard "addon-runbook" "docs/runbooks/ha-addon.md"
+
+expect_failure "missing documentation file" "documentation file is missing" "$TMP/missing.md"
 
 printf '# Broken\n\n[Missing](does-not-exist.md)\n' > "$TMP/broken.md"
 expect_failure "broken relative link" "target does not exist" "$TMP/broken.md"

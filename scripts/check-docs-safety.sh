@@ -65,7 +65,7 @@ MISSING_FILES=()
 record_missing_file() {
   local file=$1
   local existing
-  for existing in "${MISSING_FILES[@]}"; do
+  for existing in "${MISSING_FILES[@]+"${MISSING_FILES[@]}"}"; do
     if [ "$existing" = "$file" ]; then
       return
     fi
@@ -123,8 +123,8 @@ done
 
 STRUCTURAL_OUTPUT=""
 if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
-  --copy "${EXISTING_COPY_FILES[@]}" \
-  --links "${EXISTING_LINK_FILES[@]}" 2>&1); then
+  --copy "${EXISTING_COPY_FILES[@]+"${EXISTING_COPY_FILES[@]}"}" \
+  --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" 2>&1); then
   printf '%s\n' "$STRUCTURAL_OUTPUT"
   STRUCTURAL_HITS=$(printf '%s\n' "$STRUCTURAL_OUTPUT" | grep -c '^FAIL:' || true)
   if [ "$STRUCTURAL_HITS" -eq 0 ]; then
