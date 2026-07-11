@@ -1,4 +1,4 @@
-.PHONY: help dev test test-fast test-watch lint format format-check typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke pre-release edge-release
+.PHONY: help dev test test-fast test-watch lint format format-check typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke player-smoke pre-release edge-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -57,6 +57,9 @@ perf-smoke: ## Run HA Green perf smoke against a live station
 
 launch-smoke: ## Cold-launch a station on temp dirs and assert first byte <= 2s
 	$(PYTHON) scripts/ha-green-launch-smoke.py
+
+player-smoke: ## Run deterministic listener interactions against PLAYER_SMOKE_URL
+	PLAYER_SMOKE_URL="$(or $(PLAYER_SMOKE_URL),http://127.0.0.1:8000)" PLAYWRIGHT_CLI="$(PLAYWRIGHT_CLI)" ./scripts/player-smoke.sh
 
 pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head + merge-gate settings)
 	./scripts/pre-release-check.sh
