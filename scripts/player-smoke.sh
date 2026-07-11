@@ -9,17 +9,29 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
+
+# Treat an optional run-code path exactly like the built-in fixture: relative
+# paths are always resolved from the repository, even when this script is
+# invoked from elsewhere.
+cd "$REPO_ROOT"
+
+if [[ "$#" -gt 1 ]]; then
+  echo "Usage: $0 [run-code-file]" >&2
+  exit 2
+fi
+
+RUN_CODE_FILE="${1:-$REPO_ROOT/scripts/player-smoke.js}"
+if [[ ! -f "$RUN_CODE_FILE" ]]; then
+  echo "player-smoke run-code file does not exist: $RUN_CODE_FILE" >&2
+  exit 2
+fi
+readonly RUN_CODE_FILE
 CLI_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/.playwright-cli-version")"
 readonly CLI_VERSION
-readonly RUN_CODE_FILE="$REPO_ROOT/scripts/player-smoke.js"
 readonly BASE_URL="${PLAYER_SMOKE_URL:-http://127.0.0.1:8000}"
 readonly SESSION="${PLAYER_SMOKE_SESSION:-mammamiradio-player-smoke-$$}"
 readonly COMMAND_TIMEOUT_SEC="${PLAYER_SMOKE_CLI_TIMEOUT_SEC:-90}"
 readonly CLOSE_TIMEOUT_SEC="${PLAYER_SMOKE_CLOSE_TIMEOUT_SEC:-15}"
-
-# The browser fixture uses a repo-relative packaged MP3. Make direct script
-# invocation behave the same as `make player-smoke`, regardless of caller cwd.
-cd "$REPO_ROOT"
 
 if [[ ! "$COMMAND_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ ]] || [[ ! "$CLOSE_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ ]]; then
   echo "Player smoke timeouts must be positive integer seconds." >&2
@@ -32,18 +44,41 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 if [[ -n "${PLAYWRIGHT_CLI:-}" ]]; then
-  if [[ "$PLAYWRIGHT_CLI" == */* ]]; then
-    [[ -x "$PLAYWRIGHT_CLI" ]] || {
-      echo "PLAYWRIGHT_CLI is not executable: $PLAYWRIGHT_CLI" >&2
+  # Keep the admin smoke's former command-string override contract while
+  # avoiding eval: Python's shlex parser emits NUL-delimited safe array items.
+  cli=()
+  while IFS= read -r -d '' cli_arg; do
+    cli+=("$cli_arg")
+  done < <(PLAYWRIGHT_CLI="$PLAYWRIGHT_CLI" python3 - <<'PY'
+import os
+import shlex
+import sys
+
+try:
+    arguments = shlex.split(os.environ["PLAYWRIGHT_CLI"])
+except ValueError as exc:
+    print(f"player-smoke: invalid PLAYWRIGHT_CLI: {exc}", file=sys.stderr)
+    raise SystemExit(2) from exc
+
+for argument in arguments:
+    sys.stdout.buffer.write(argument.encode("utf-8") + b"\0")
+PY
+)
+  if [[ "${#cli[@]}" -eq 0 ]]; then
+    echo "PLAYWRIGHT_CLI did not contain an executable command." >&2
+    exit 2
+  fi
+  if [[ "${cli[0]}" == */* ]]; then
+    [[ -x "${cli[0]}" ]] || {
+      echo "PLAYWRIGHT_CLI is not executable: ${cli[0]}" >&2
       exit 2
     }
   else
-    command -v "$PLAYWRIGHT_CLI" >/dev/null 2>&1 || {
-      echo "PLAYWRIGHT_CLI is not on PATH: $PLAYWRIGHT_CLI" >&2
+    command -v "${cli[0]}" >/dev/null 2>&1 || {
+      echo "PLAYWRIGHT_CLI is not on PATH: ${cli[0]}" >&2
       exit 2
     }
   fi
-  cli=("$PLAYWRIGHT_CLI")
 else
   command -v npx >/dev/null 2>&1 || {
     echo "player-smoke needs npx, or set PLAYWRIGHT_CLI to a preinstalled playwright-cli wrapper." >&2

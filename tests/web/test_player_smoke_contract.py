@@ -88,7 +88,14 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     assert ".playwright-cli-version" in runner
     assert "@playwright/cli@$CLI_VERSION" in runner
     assert "PLAYWRIGHT_CLI" in runner, "offline/preinstalled CLI override must remain supported."
+    assert "import shlex" in runner, "PLAYWRIGHT_CLI command strings must preserve quoted arguments."
+    assert "NUL-delimited safe array items" in runner
     assert "start_new_session=True" in runner
+    assert 'RUN_CODE_FILE="${1:-$REPO_ROOT/scripts/player-smoke.js}"' in runner
+    assert "Usage: $0 [run-code-file]" in runner
+    assert runner.index('cd "$REPO_ROOT"') < runner.index("RUN_CODE_FILE="), (
+        "alternate run-code paths must resolve from the repo before validation and execution."
+    )
     assert 'readonly COMMAND_TIMEOUT_SEC="${PLAYER_SMOKE_CLI_TIMEOUT_SEC:-90}"' in runner
     assert 'readonly CLOSE_TIMEOUT_SEC="${PLAYER_SMOKE_CLOSE_TIMEOUT_SEC:-15}"' in runner
     assert "run_bounded" in runner
@@ -127,6 +134,10 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
         "reducedMotion: 'reduce'",
         "stream request intent took",
         "pending play was not cancellable",
+        "play click left the audio element paused",
+        "external pause did not restore listen copy",
+        "one click after an external pause did not request the stream again",
+        "pause cancel left the audio element playing",
         "scheduled retry restarted audio after explicit pause",
         "disabled stopped control requested audio",
         "blockedOffOriginRequests",

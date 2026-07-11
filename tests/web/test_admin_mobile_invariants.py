@@ -11,6 +11,8 @@ import functools
 import re
 from pathlib import Path
 
+from mammamiradio.core.config import _contrast_ratio, _hex_to_rgb, _relative_luminance
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
@@ -170,21 +172,6 @@ def _assert_touch_target(selector: str) -> None:
     assert height >= 44, f"{selector} must expose at least a 44px tall touch target; got {height}px."
 
 
-def _rgb(hex_color: str) -> tuple[int, int, int]:
-    return tuple(int(hex_color[index : index + 2], 16) for index in (1, 3, 5))  # type: ignore[return-value]
-
-
-def _relative_luminance(color: tuple[int, int, int]) -> float:
-    channels = [value / 255 for value in color]
-    linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-
-def _contrast_ratio(foreground: tuple[int, int, int], background: tuple[int, int, int]) -> float:
-    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
-    return (lighter + 0.05) / (darker + 0.05)
-
-
 def _token_hex(name: str) -> str:
     match = re.search(rf"{re.escape(name)}\s*:\s*(#[0-9a-fA-F]{{6}})", TOKENS_CSS.read_text(encoding="utf-8"))
     assert match, f"tokens.css must define a six-digit color for {name}."
@@ -308,9 +295,13 @@ def test_fast_poll_deadlines_generation_and_auxiliary_isolation() -> None:
     text = _read_admin_html()
     polling = text[text.index("const FAST_POLL_INTERVAL_MS") : text.index("async function refreshSlow()")]
 
-    interval = int(re.search(r"FAST_POLL_INTERVAL_MS=(\d+)", polling).group(1))
-    status_deadline = int(re.search(r"FAST_STATUS_DEADLINE_MS=(\d+)", polling).group(1))
-    aux_deadline = int(re.search(r"FAST_AUX_DEADLINE_MS=(\d+)", polling).group(1))
+    interval_match = re.search(r"FAST_POLL_INTERVAL_MS=(\d+)", polling)
+    status_deadline_match = re.search(r"FAST_STATUS_DEADLINE_MS=(\d+)", polling)
+    aux_deadline_match = re.search(r"FAST_AUX_DEADLINE_MS=(\d+)", polling)
+    assert interval_match and status_deadline_match and aux_deadline_match
+    interval = int(interval_match.group(1))
+    status_deadline = int(status_deadline_match.group(1))
+    aux_deadline = int(aux_deadline_match.group(1))
     assert status_deadline < interval
     assert aux_deadline < interval
     for needle in (
@@ -355,12 +346,18 @@ def test_console_metadata_uses_aa_safe_secondary_text() -> None:
     recent = _declarations_for_selector(css, ".prod-entry.recent")
     assert recent.get("opacity") == "1", "Ancestor opacity must not fade 11px production text below WCAG AA."
 
-    foreground = _rgb(_token_hex("--text-secondary"))
+    foreground_hex = _token_hex("--text-secondary")
+    foreground = _hex_to_rgb(foreground_hex)
+    assert foreground is not None
     console_background = _declarations_for_selector(css, ".mmr-console").get("background", "")
     gradient_stops = re.findall(r"#[0-9a-fA-F]{6}", console_background)
     assert len(gradient_stops) >= 2, "The console background must expose both gradient endpoints for contrast checks."
     for stop in gradient_stops:
-        ratio = _contrast_ratio(foreground, _rgb(stop))
+        background = _hex_to_rgb(stop)
+        assert background is not None
+        assert _relative_luminance(foreground) > _relative_luminance(background)
+        ratio = _contrast_ratio(foreground_hex, stop)
+        assert ratio is not None
         assert ratio >= 4.5, f"--text-secondary contrast is {ratio:.2f}:1 on {stop}; expected at least 4.5:1."
 
 
