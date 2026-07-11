@@ -646,7 +646,7 @@ async def _queue_drain_recovery_bridge(
     state: StationState,
     config: StationConfig,
 ) -> bool:
-    """Queue the best available continuity bridge when active playback drains."""
+    """Queue a drain bridge and, when available, cached music runway."""
     return await _queue_continuity_bridge(
         queue_segment,
         state,
@@ -654,6 +654,7 @@ async def _queue_drain_recovery_bridge(
         bridge_type="drain",
         bridge_flag="queue_drain_recovery",
         canned_title="Station continuity",
+        music_runway=True,
     )
 
 
