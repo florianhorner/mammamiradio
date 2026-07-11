@@ -1,0 +1,12 @@
+Home Context Director — test proof
+Generated: 2026-07-11
+Branch: florianhorner/fix/temperature-announcement-limits
+HEAD: 7ba2a66a2927529ef5069c9a8f829bf57101d753
+
+== Full suite (make target: pytest tests/) ==
+4559 passed, 2 skipped, 21 deselected in 131.23s
+
+== Feature + regression subset (re-run for this proof) ==
+........................................................................ [ 96%]
+.............                                                            [100%]
+373 passed in 21.61s
