@@ -13,6 +13,15 @@ async (page) => {
   const blockedOffOriginRequests = [];
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message || String(error)));
+  await page.addInitScript(() => {
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.__adminSmokeIntervals = [];
+    window.setInterval = (handler, delay, ...args) => {
+      const id = nativeSetInterval(handler, delay, ...args);
+      window.__adminSmokeIntervals.push({ id, delay });
+      return id;
+    };
+  });
   await page.route('**/*', async (route) => {
     const requestUrl = route.request().url();
     const requestOrigin = httpOrigin(requestUrl);
@@ -32,6 +41,30 @@ async (page) => {
     null,
     { timeout: 5000 },
   );
+  await page.evaluate(() => {
+    (window.__adminSmokeIntervals || [])
+      .filter(({ delay }) => delay === 3000 || delay === 30000)
+      .forEach(({ id }) => clearInterval(id));
+  });
+
+  const seededStoppedFirstPaint = await page.evaluate(() => {
+    document.body.setAttribute('data-stopped', 'true');
+    stoppedBanner.classList.remove('show');
+    stopBtn.style.removeProperty('display');
+    resumeBtn.style.removeProperty('display');
+    return {
+      banner: getComputedStyle(stoppedBanner).display,
+      stop: getComputedStyle(stopBtn).display,
+      resume: getComputedStyle(resumeBtn).display,
+    };
+  });
+  assert(seededStoppedFirstPaint.banner === 'block', 'server-seeded stopped state hid the paused banner');
+  assert(seededStoppedFirstPaint.stop === 'none', 'server-seeded stopped state exposed Stop on first paint');
+  assert(
+    seededStoppedFirstPaint.resume === 'flex',
+    `server-seeded stopped state hid Start on first paint: ${JSON.stringify(seededStoppedFirstPaint)}`,
+  );
+  await page.evaluate(() => updateStopState(false));
 
   const productionStates = await page.evaluate(() => {
     const states = [
@@ -61,8 +94,25 @@ async (page) => {
   assert(liveStatusResponse.ok(), 'local /status was unavailable');
   const liveStatus = await liveStatusResponse.json();
   let statusScenario = 'network';
+  const statusResponseQueue = [];
+  const makeQueuedStatus = (body, { status = 200, held = false } = {}) => {
+    let markSeen;
+    let release;
+    let markDone;
+    return {
+      body,
+      status,
+      seen: new Promise((resolve) => { markSeen = resolve; }),
+      releaseGate: held ? new Promise((resolve) => { release = resolve; }) : Promise.resolve(),
+      done: new Promise((resolve) => { markDone = resolve; }),
+      markSeen: () => markSeen(),
+      release: () => { if (release) release(); },
+      markDone: () => markDone(),
+    };
+  };
   let failListenerRequests = false;
   let failHosts = false;
+  let skipScenario = 'declined';
   const restoredStatus = {
     ...liveStatus,
     session_stopped: false,
@@ -80,6 +130,7 @@ async (page) => {
       recent: [],
     },
   };
+  let statusPayload = restoredStatus;
   await page.route('**/status*', async (route) => {
     if (statusScenario === 'network') {
       await route.abort();
@@ -89,7 +140,23 @@ async (page) => {
       await route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"warming"}' });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(restoredStatus) });
+    if (statusScenario === 'queued') {
+      const response = statusResponseQueue.shift();
+      assert(response, 'status response queue was empty');
+      response.markSeen();
+      await response.releaseGate;
+      try {
+        await route.fulfill({
+          status: response.status,
+          contentType: 'application/json',
+          body: JSON.stringify(response.body),
+        });
+      } finally {
+        response.markDone();
+      }
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(statusPayload) });
   });
   await page.route('**/api/listener-requests', async (route) => {
     if (failListenerRequests) {
@@ -104,6 +171,41 @@ async (page) => {
       return;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"hosts":[]}' });
+  });
+  await page.route('**/api/skip', async (route) => {
+    if (skipScenario === 'network') {
+      await route.abort();
+      return;
+    }
+    if (skipScenario === 'declined') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: '{"ok":false,"error":"Station paused by browser smoke"}',
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
+  });
+  await page.evaluate(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.__adminSmokeHangPath = '';
+    window.__adminSmokeHangingFetches = 0;
+    window.fetch = (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (window.__adminSmokeHangPath && url.includes(window.__adminSmokeHangPath)) {
+        window.__adminSmokeHangingFetches += 1;
+        return new Promise((_resolve, reject) => {
+          const abort = () => {
+            window.__adminSmokeHangingFetches -= 1;
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          };
+          if (init.signal && init.signal.aborted) abort();
+          else if (init.signal) init.signal.addEventListener('abort', abort, { once: true });
+        });
+      }
+      return nativeFetch(input, init);
+    };
   });
   await page.evaluate(() => renderProduction({
     session_stopped: false,
@@ -158,9 +260,128 @@ async (page) => {
   assert(hostsFailedPoll.feed.includes('Writing restored copy'), 'hosts failure discarded healthy production copy');
   assert(!hostsFailedPoll.feed.includes('reconnecting'), 'hosts failure falsely marked the producer desk offline');
   failHosts = false;
+
+  statusPayload = {
+    ...restoredStatus,
+    production: { current: { label: 'Writing while requests hang', kind: 'banter' }, recent: [] },
+  };
+  await page.evaluate(() => {
+    window.__adminSmokeHangPath = '/api/listener-requests';
+    window.__adminSmokeRefreshPromise = refreshFast();
+  });
+  await page.waitForFunction(
+    () => productionFeed.innerText.includes('Writing while requests hang') && window.__adminSmokeHangingFetches === 1,
+    null,
+    { timeout: 2000 },
+  );
+  await page.waitForFunction(() => window.__adminSmokeHangingFetches === 0, null, { timeout: 2000 });
+  await page.evaluate(() => window.__adminSmokeRefreshPromise);
+  const hangingListenerPoll = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+  }));
+  assert(
+    hangingListenerPoll.feed.includes('Writing while requests hang'),
+    'never-settling listener request blocked authoritative status',
+  );
+  assert(!hangingListenerPoll.label.endsWith('reconnecting'), 'listener timeout falsely marked status unavailable');
+
+  statusPayload = {
+    ...restoredStatus,
+    production: { current: { label: 'Writing while hosts hang', kind: 'banter' }, recent: [] },
+  };
+  await page.evaluate(() => {
+    window.__adminSmokeHangPath = '/api/hosts';
+    _hostsOk = false;
+    window.__adminSmokeRefreshPromise = refreshFast();
+  });
+  await page.waitForFunction(
+    () => productionFeed.innerText.includes('Writing while hosts hang') && window.__adminSmokeHangingFetches === 1,
+    null,
+    { timeout: 2000 },
+  );
+  await page.waitForFunction(() => window.__adminSmokeHangingFetches === 0, null, { timeout: 2000 });
+  await page.evaluate(() => window.__adminSmokeRefreshPromise);
+  assert(
+    await page.locator('#productionFeed').innerText().then((text) => text.includes('Writing while hosts hang')),
+    'never-settling hosts request blocked authoritative status',
+  );
+  await page.evaluate(() => { window.__adminSmokeHangPath = ''; });
+
+  statusScenario = 'queued';
+  const staleSuccess = makeQueuedStatus({
+    ...restoredStatus,
+    production: { current: { label: 'Stale slow status', kind: 'banter' }, recent: [] },
+  }, { held: true });
+  const freshSuccess = makeQueuedStatus({
+    ...restoredStatus,
+    production: { current: { label: 'Newest fast status', kind: 'banter' }, recent: [] },
+  });
+  statusResponseQueue.push(staleSuccess, freshSuccess);
+  await page.evaluate(() => { window.__adminSmokeOldRefresh = refreshFast(); });
+  await staleSuccess.seen;
+  await page.evaluate(() => { window.__adminSmokeNewRefresh = refreshFast(); });
+  await freshSuccess.seen;
+  await freshSuccess.done;
+  await page.evaluate(() => window.__adminSmokeNewRefresh);
+  staleSuccess.release();
+  await staleSuccess.done;
+  await page.evaluate(() => window.__adminSmokeOldRefresh);
+  const afterStaleSuccess = await page.locator('#productionFeed').innerText();
+  assert(afterStaleSuccess.includes('Newest fast status'), 'stale status success overwrote the newest response');
+  assert(!afterStaleSuccess.includes('Stale slow status'), 'stale status success remained visible');
+
+  const staleFailure = makeQueuedStatus({ detail: 'late outage' }, { status: 503, held: true });
+  const successAfterFailure = makeQueuedStatus({
+    ...restoredStatus,
+    production: { current: { label: 'Healthy after stale failure', kind: 'banter' }, recent: [] },
+  });
+  statusResponseQueue.push(staleFailure, successAfterFailure);
+  await page.evaluate(() => { window.__adminSmokeOldRefresh = refreshFast(); });
+  await staleFailure.seen;
+  await page.evaluate(() => { window.__adminSmokeNewRefresh = refreshFast(); });
+  await successAfterFailure.seen;
+  await successAfterFailure.done;
+  await page.evaluate(() => window.__adminSmokeNewRefresh);
+  staleFailure.release();
+  await staleFailure.done;
+  await page.evaluate(() => window.__adminSmokeOldRefresh);
+  const afterStaleFailure = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+  }));
+  assert(afterStaleFailure.feed.includes('Healthy after stale failure'), 'stale status failure displaced healthy state');
+  assert(!afterStaleFailure.label.endsWith('reconnecting'), 'stale status failure showed a false reconnecting state');
+
+  await page.evaluate(() => {
+    window.__adminSmokeToasts = [];
+    window.toast = (message) => window.__adminSmokeToasts.push(message);
+    updateStopState(false);
+  });
+  skipScenario = 'declined';
+  await page.evaluate(() => doSkip(skipBtn));
+  assert(
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Station paused by browser smoke',
+    'declined skip showed success instead of the backend error',
+  );
+  const offlineCopy = await page.evaluate(() => offlineMsg());
+  skipScenario = 'network';
+  await page.evaluate(() => doSkip(skipBtn));
+  assert(
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === offlineCopy,
+    'network-failed skip did not show the offline recovery message',
+  );
+  skipScenario = 'success';
+  await page.evaluate(() => doSkip(skipBtn));
+  assert(
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Skip — moving to the next segment',
+    'successful skip lost its confirmation',
+  );
+
   await page.unroute('**/status*');
   await page.unroute('**/api/listener-requests');
   await page.unroute('**/api/hosts');
+  await page.unroute('**/api/skip');
 
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
@@ -267,22 +488,37 @@ async (page) => {
         const rect = element.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
       };
+      const controlGeometry = (element, labelElement = element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          id: element.id,
+          text: element.textContent.trim(),
+          label: (element.getAttribute('aria-label') || element.getAttribute('title') || element.textContent).trim(),
+          visible: visible(element),
+          width: rect.width,
+          height: rect.height,
+          textFits: labelElement.scrollWidth <= labelElement.clientWidth + 1
+            && labelElement.scrollHeight <= labelElement.clientHeight + 1,
+        };
+      };
       const overflow = [...document.querySelectorAll('body *')].filter((element) => {
         if (!visible(element)) return false;
         const rect = element.getBoundingClientRect();
         return rect.left < -0.5 || rect.right > innerWidth + 0.5;
       }).map((element) => ({ tag: element.tagName, id: element.id, className: String(element.className) }));
-      const controls = [
-        ...document.querySelectorAll('.mmr-console-triggers .a-trigger, .mmr-air-controls button, .quick-actions .btn-chip'),
-      ].filter(visible).map((element) => {
-        const rect = element.getBoundingClientRect();
-        return { text: element.textContent.trim(), width: rect.width, height: rect.height };
-      });
+      const airNext = [...document.querySelectorAll('.mmr-console-triggers .a-trigger')]
+        .map((element) => controlGeometry(element, element.querySelector('.lb')));
+      updateStopState(false);
+      const coreTransport = [skipBtn, stopBtn].map((element) => controlGeometry(element));
+      updateStopState(true);
+      coreTransport.push(controlGeometry(resumeBtn));
+      updateStopState(false);
       return {
         documentClientWidth: document.documentElement.clientWidth,
         documentScrollWidth: document.documentElement.scrollWidth,
         overflow,
-        controls,
+        airNext,
+        coreTransport,
         titleFits: nowTitle.scrollWidth <= nowTitle.clientWidth,
         productionFits: productionFeed.scrollWidth <= productionFeed.clientWidth,
       };
@@ -290,9 +526,24 @@ async (page) => {
     assert(geometry.documentScrollWidth <= geometry.documentClientWidth, `${width}px page acquired horizontal scroll`);
     assert(geometry.overflow.length === 0, `${width}px viewport clipped ${JSON.stringify(geometry.overflow)}`);
     assert(geometry.titleFits && geometry.productionFits, `${width}px console text clipped internally`);
+    assert(geometry.airNext.length === 4, `${width}px lost an Air Next control: ${JSON.stringify(geometry.airNext)}`);
     assert(
-      geometry.controls.every((control) => control.width >= 44 && control.height >= 44),
-      `${width}px touch target fell below 44px: ${JSON.stringify(geometry.controls)}`,
+      geometry.airNext.map((control) => control.text).join('|') === 'Banter|Ad break|News flash|More chaos',
+      `${width}px Air Next labels changed or disappeared: ${JSON.stringify(geometry.airNext)}`,
+    );
+    assert(
+      geometry.coreTransport.length === 3
+        && geometry.coreTransport.map((control) => control.id).join('|') === 'skipBtn|stopBtn|resumeBtn',
+      `${width}px core transport controls are incomplete: ${JSON.stringify(geometry.coreTransport)}`,
+    );
+    const measuredControls = [...geometry.airNext, ...geometry.coreTransport];
+    assert(
+      measuredControls.every((control) => control.visible && control.width >= 44 && control.height >= 44),
+      `${width}px touch target fell below 44px: ${JSON.stringify(measuredControls)}`,
+    );
+    assert(
+      measuredControls.every((control) => control.label && control.textFits),
+      `${width}px control label clipped internally: ${JSON.stringify(measuredControls)}`,
     );
   }
 
@@ -350,7 +601,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 7,
+    checks: 16,
     viewports: [320, 375],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

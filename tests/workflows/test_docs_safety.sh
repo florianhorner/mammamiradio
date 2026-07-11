@@ -43,6 +43,54 @@ expect_unsafe() {
   expect_failure "$label" "unsafe recovery instruction" "$file"
 }
 
+expect_default_install_guard() {
+  local label=$1
+  local guarded_file=$2
+  local fixture_root="$TMP/default-$label"
+  local output
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+
+  for file in \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # A maintainer runbook may edit repository files. The default check should
+  # catch its retired Home Assistant navigation without treating that repo-level
+  # command as live surgery against a running add-on.
+  # shellcheck disable=SC2016  # literal Markdown code span in the fixture
+  printf '# Canonical guide\n\n`sed -i old/new repository-file`\n\nSettings > Add-ons > Add-on Store.\n' \
+    > "$fixture_root/$guarded_file"
+
+  if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
+    echo "FAIL: default install scope omitted $guarded_file"
+    exit 1
+  fi
+  if ! grep -Fq "$guarded_file" <<< "$output" || ! grep -Fq "retired Home Assistant install wording" <<< "$output"; then
+    echo "FAIL: default install scope returned the wrong failure for $guarded_file"
+    echo "$output"
+    exit 1
+  fi
+  if grep -Fq "unsafe recovery instruction" <<< "$output"; then
+    echo "FAIL: default install scope sent maintainer commands through the live-surgery scanner"
+    echo "$output"
+    exit 1
+  fi
+}
+
 printf '# Guide\n' > "$TMP/guide.md"
 printf '# Safe\n\nPlease do not SSH in to edit container or runtime files, delete live cache, or restart as an experiment.\n\n[Guide](guide.md)\n' > "$TMP/safe.md"
 expect_success "directly negated warning" "$TMP/safe.md"
@@ -113,6 +161,9 @@ expect_unsafe "quality-gate bypass" "$TMP/unsafe-quality-bypass.md"
 # shellcheck disable=SC2016  # literal Markdown code span in the fixture
 printf '# Edge\n\nMamma Mi Radio (Edge) updates on every change merged to `main`.\n' > "$TMP/stale-edge.md"
 expect_failure "stale Edge release promise" "incorrect Edge release wording" "$TMP/stale-edge.md"
+
+expect_default_install_guard "operations" "docs/operations.md"
+expect_default_install_guard "addon-runbook" "docs/runbooks/ha-addon.md"
 
 printf '# Broken\n\n[Missing](does-not-exist.md)\n' > "$TMP/broken.md"
 expect_failure "broken relative link" "target does not exist" "$TMP/broken.md"

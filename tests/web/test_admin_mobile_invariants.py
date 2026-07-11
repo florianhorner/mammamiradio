@@ -272,6 +272,70 @@ def test_production_fetch_failure_replaces_stale_work_with_retry_state() -> None
     assert "renderProductionUnavailable();" in refresh_fast
 
 
+def test_server_seeded_stopped_state_controls_first_paint() -> None:
+    """A paused server render must be truthful before the first status request completes."""
+    text = _read_admin_html()
+    css = _admin_css()
+
+    resume = re.search(r'<button[^>]+id="resumeBtn"[^>]*>', text)
+    assert resume, "admin.html must render the Start control."
+    assert "style=" not in resume.group(0), "inline display:none would override the server-seeded stopped-state CSS."
+    for rule in (
+        "#resumeBtn { display: none; }",
+        'body[data-stopped="true"] #stoppedBanner { display: block; }',
+        'body[data-stopped="true"] #stopBtn { display: none; }',
+        'body[data-stopped="true"] #resumeBtn { display: inline-flex; }',
+    ):
+        assert rule in css, f"server-seeded stopped first paint lost CSS rule: {rule}"
+
+
+def test_skip_control_reports_backend_declines_and_network_failure() -> None:
+    """Skip success copy must never mask an explicit backend rejection or an offline desk."""
+    text = _read_admin_html()
+    block = text[text.index("async function doSkip") : text.index("async function doBanNowPlaying")]
+
+    assert "try{" in block and "catch(_)" in block
+    assert "if(!(r&&r.ok))" in block
+    assert "(r&&r.error)||wayOut('skip that segment')" in block
+    assert "toast(offlineMsg())" in block
+    assert block.index("if(!(r&&r.ok))") < block.index("Skip prepared"), (
+        "skip success copy must only run after the response proves ok=true."
+    )
+
+
+def test_fast_poll_deadlines_generation_and_auxiliary_isolation() -> None:
+    """Authoritative status must not wait on, or be rolled back by, auxiliary polling."""
+    text = _read_admin_html()
+    polling = text[text.index("const FAST_POLL_INTERVAL_MS") : text.index("async function refreshSlow()")]
+
+    interval = int(re.search(r"FAST_POLL_INTERVAL_MS=(\d+)", polling).group(1))
+    status_deadline = int(re.search(r"FAST_STATUS_DEADLINE_MS=(\d+)", polling).group(1))
+    aux_deadline = int(re.search(r"FAST_AUX_DEADLINE_MS=(\d+)", polling).group(1))
+    assert status_deadline < interval
+    assert aux_deadline < interval
+    for needle in (
+        "const controller=new AbortController()",
+        "signal:controller.signal",
+        "setTimeout(()=>controller.abort(),deadlineMs)",
+        "finally{clearTimeout(deadline);}",
+        "const generation=++_fastPollGeneration",
+        "if(generation!==_fastPollGeneration)return;",
+        "fetchAdminJson('/api/listener-requests',FAST_AUX_DEADLINE_MS)",
+        "fetchAdminJson('/api/hosts',FAST_AUX_DEADLINE_MS)",
+    ):
+        assert needle in polling, f"fast poll lost bounded/stale-response guard: {needle}"
+
+    listener_start = polling.index("const listenerPromise=")
+    hosts_start = polling.index("const hostsPromise=")
+    status_fetch = polling.index("nextStatus=await fetchAdminJson(`/status")
+    status_apply = polling.index("_st=nextStatus")
+    aux_wait = polling.index("await Promise.all([listenerPromise,hostsPromise])")
+    assert listener_start < status_fetch and hosts_start < status_fetch, (
+        "both auxiliary deadlines must run in parallel with status so the whole poll stays below its interval."
+    )
+    assert status_fetch < status_apply < aux_wait, "status must render before either auxiliary request is awaited."
+
+
 def test_console_metadata_uses_aa_safe_secondary_text() -> None:
     """Small operational labels must clear AA on the console's light gradient stop."""
     css = _admin_css()

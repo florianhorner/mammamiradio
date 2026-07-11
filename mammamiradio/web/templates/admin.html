@@ -73,6 +73,14 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .stopped-banner.show { display: block; }
 
+/* The server seeds data-stopped for first paint. Keep these rules independent
+   from the polling script so a paused station never flashes live controls while
+   /status is still in flight. JS only toggles the same body attribute later. */
+#resumeBtn { display: none; }
+body[data-stopped="true"] #stoppedBanner { display: block; }
+body[data-stopped="true"] #stopBtn { display: none; }
+body[data-stopped="true"] #resumeBtn { display: inline-flex; }
+
 /* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
    Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
 body[data-stopped="true"] .live-dot { animation-play-state: paused; }
@@ -1741,7 +1749,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" id="stopBtn" class="btn-icon" title="Stop" onclick="doStop(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
             </button>
-            <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)" style="display:none">
+            <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
             </button>
             <span class="mmr-air-badge label on" id="onAirBadge">In onda</span>
@@ -2496,7 +2504,17 @@ function initOnAirSticky(){
 initOnAirSticky();
 
 // ── Transport ──
-async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
+async function doSkip(el){
+  flash(el);
+  try{
+    const r=await api('POST','/api/skip');
+    if(!(r&&r.ok)){
+      toast((r&&r.error)||wayOut('skip that segment'));
+      return;
+    }
+    toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
+  }catch(_){toast(offlineMsg());}
+}
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
   // the segment leaves the air the instant the skip lands.
@@ -4915,24 +4933,37 @@ function renderActiveTab(){
   // is fed by the always-on calls (updateRecent, renderHosts one-shot, updateEngineRoom).
   syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
 }
+const FAST_POLL_INTERVAL_MS=3000;
+const FAST_STATUS_DEADLINE_MS=2400;
+const FAST_AUX_DEADLINE_MS=1200;
+let _fastPollGeneration=0;
+async function fetchAdminJson(path,deadlineMs){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),deadlineMs);
+  try{
+    const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
+    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
+    const payload=await response.json();
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    return payload;
+  }finally{clearTimeout(deadline);}
+}
 async function refreshFast(){
+  const generation=++_fastPollGeneration;
   const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
   let nextStatus;
-  let lrData={requests:[]};
+  // Listener requests are additive. Start them in parallel, but never make
+  // authoritative /status wait for this auxiliary surface.
+  const listenerPromise=fetchAdminJson('/api/listener-requests',FAST_AUX_DEADLINE_MS)
+    .catch(()=>({requests:[]}));
+  const hostsPromise=!_hostsOk
+    ? fetchAdminJson('/api/hosts',FAST_AUX_DEADLINE_MS)
+        .catch(e=>{console.error('refreshFast hosts',e);return null;})
+    : Promise.resolve(null);
   try{
-    // /status alone owns the producer-desk truth. Listener-request polling is
-    // additive: a failure there must not replace healthy production state with
-    // a false "reconnecting" claim.
-    const statusRequest=fetch(_base+`/status?playlist_limit=${playlistLimit}`,{headers:H()});
-    const listenerRequest=fetch(_base+'/api/listener-requests',{headers:H()})
-      .then(async response=>response.ok?await response.json():{requests:[]})
-      .catch(()=>({requests:[]}));
-    const [sr,nextListenerData]=await Promise.all([statusRequest,listenerRequest]);
-    if(!sr.ok)throw new Error(`status poll returned ${sr.status}`);
-    nextStatus=await sr.json();
-    if(!nextStatus||typeof nextStatus!=='object'||Array.isArray(nextStatus))throw new Error('status poll returned an invalid payload');
-    lrData=nextListenerData;
+    nextStatus=await fetchAdminJson(`/status?playlist_limit=${playlistLimit}`,FAST_STATUS_DEADLINE_MS);
   }catch(e){
+    if(generation!==_fastPollGeneration)return;
     console.error('refreshFast status',e);
     const _oa=document.getElementById('on-air');
     if(_oa)_oa.classList.remove('is-idle');
@@ -4940,6 +4971,7 @@ async function refreshFast(){
     return;
   }
 
+  if(generation!==_fastPollGeneration)return;
   _st=nextStatus;
   try{
     // Paint the authoritative production state before unrelated widgets. A
@@ -4956,7 +4988,6 @@ async function refreshFast(){
     renderActiveTab();
     updateProgrammeRunway(_st);
     updateRecent(_st);
-    updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
     updateMoments(_st);
@@ -4964,19 +4995,16 @@ async function refreshFast(){
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
     if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
-    if(!_hostsOk){
-      try{
-        const r=await fetch(_base+'/api/hosts',{headers:H()});
-        if(!r.ok)throw new Error(`hosts poll returned ${r.status}`);
-        renderHosts((await r.json()).hosts||[]);
-        _hostsOk=true;
-      }catch(e){console.error('refreshFast hosts',e)}
-    }
   }catch(e){
     // A client-side renderer failure is not evidence that the producer/status
     // source is unavailable. Keep the status-derived production truth visible.
     console.error('refreshFast render',e);
   }
+
+  const [lrData,hostsData]=await Promise.all([listenerPromise,hostsPromise]);
+  if(generation!==_fastPollGeneration)return;
+  updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
+  if(hostsData){renderHosts(hostsData.hosts||[]);_hostsOk=true;}
 }
 async function refreshSlow(){
   try{
@@ -4999,7 +5027,7 @@ loadQuality();
 loadChaosToggle();
 loadFestivalToggle();
 refreshBanCount();
-setInterval(refreshFast,3000);
+setInterval(refreshFast,FAST_POLL_INTERVAL_MS);
 setInterval(refreshSlow,30000);
 </script>
 </body>

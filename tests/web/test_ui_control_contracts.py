@@ -210,6 +210,45 @@ class TestSkipEndpoint:
         assert profile.songs_skipped >= 1
 
     @pytest.mark.asyncio
+    async def test_stop_wins_while_skip_persistence_is_in_flight(self, monkeypatch):
+        """Skip commits transport state before persistence yields, so a later Stop wins."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song A",
+                "started": time.time(),
+                "metadata": {"youtube_id": "yt-song-a"},
+            }
+        )
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", delayed_persistence)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            skip_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+
+            assert app.state.skip_event.is_set()
+            assert app.state.station_state.now_streaming["type"] == "skipping"
+
+            try:
+                stop_response = await c.post("/api/stop", headers=AUTH)
+            finally:
+                release_persistence.set()
+            skip_response = await asyncio.wait_for(skip_task, timeout=2)
+
+        assert skip_response.json()["ok"] is True
+        assert stop_response.json()["ok"] is True
+        assert app.state.station_state.session_stopped is True
+        assert app.state.station_state.now_streaming["type"] == "stopped"
+        assert app.state.station_state.force_next is None
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_record_outcome_for_non_music_segment(self):
         """Skip of banter/ad/station_id should not pollute listener music history."""
         app = _make_app(
@@ -248,6 +287,48 @@ class TestBanNowPlayingEndpoint:
         assert app.state.skip_event.is_set()
         assert app.state.station_state.now_streaming["type"] == "skipping"
         assert ("modugno", "volare") in app.state.station_state.blocklist
+
+    @pytest.mark.asyncio
+    async def test_ban_now_shared_skip_helper_commits_transport_before_persistence(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Ban-now-playing inherits the shared helper's pre-persistence transport commit."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Modugno — Volare",
+                "started": time.time(),
+                "metadata": {
+                    "artist": "Modugno",
+                    "title_only": "Volare",
+                    "youtube_id": "yt-volare",
+                },
+            }
+        )
+        app.state.config.cache_dir = tmp_path
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", delayed_persistence)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            ban_task = asyncio.create_task(c.post("/api/track/ban-now-playing", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+            try:
+                assert app.state.skip_event.is_set()
+                assert app.state.station_state.now_streaming["type"] == "skipping"
+                assert ("modugno", "volare") in app.state.station_state.blocklist
+            finally:
+                release_persistence.set()
+            response = await asyncio.wait_for(ban_task, timeout=2)
+
+        assert response.json()["ok"] is True
 
     @pytest.mark.asyncio
     async def test_ban_now_rejects_non_music_without_skipping(self):

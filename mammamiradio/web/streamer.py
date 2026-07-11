@@ -2331,6 +2331,13 @@ def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
     # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
     # esc() on all HA fields in admin.html is the load-bearing XSS defense.
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+    state = getattr(request.app.state, "station_state", None)
+    stopped = "true" if bool(getattr(state, "session_stopped", False)) else "false"
+    html = html.replace(
+        "\n<body>\n",
+        f'\n<body data-stopped="{stopped}">\n',
+        1,
+    )
     html = _inject_csrf_token(html, _get_csrf_token(request.app))
     csp = "script-src 'self' 'unsafe-inline'"
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
@@ -2844,15 +2851,17 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     was forced.
     """
     now_seg = state.now_streaming or {}
+    skipped_music_metadata: dict | None = None
+    skipped_music_listen_sec = 0.0
     if now_seg.get("type") == "music":
         started = now_seg.get("started", time.time())
-        listen_sec = time.time() - started
+        skipped_music_listen_sec = time.time() - started
+        skipped_music_metadata = now_seg.get("metadata") or {}
         state.listener.record_outcome(
             skipped=True,
-            listen_sec=listen_sec,
+            listen_sec=skipped_music_listen_sec,
             track_display=now_seg.get("label", ""),
         )
-        await _persist_skipped_music(state, config, now_seg.get("metadata") or {}, listen_sec=listen_sec)
 
     bridged = False
     if app_state.queue.empty() and not state.queued_segments:
@@ -2870,6 +2879,16 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
 
     app_state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
+    # Commit every transport mutation before the first yield. A concurrent Stop
+    # that lands while skip history persists must remain the final state rather
+    # than being overwritten with a stale skipping sentinel or forced track.
+    if skipped_music_metadata is not None:
+        await _persist_skipped_music(
+            state,
+            config,
+            skipped_music_metadata,
+            listen_sec=skipped_music_listen_sec,
+        )
     return bridged
 
 
@@ -2901,10 +2920,16 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
 async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     """Emergency cut: purge queue, skip current segment, force next segment to music.
 
-    Does NOT set session_stopped — the stream stays live and listeners do not
-    disconnect. Use /api/stop when a full session halt is intended.
+    While the station is running, this does NOT set session_stopped — the stream
+    stays live and listeners do not disconnect. A stopped session rejects the
+    action; use /api/resume before cutting again.
     """
     state = request.app.state.station_state
+    if state.session_stopped:
+        return {
+            "ok": False,
+            "error": "The station is paused. Press Start before using Panic Cut.",
+        }
     purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PANIC)
     if state.now_streaming:
         request.app.state.skip_event.set()

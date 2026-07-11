@@ -2332,7 +2332,7 @@ async def test_trigger_rejects_operator_pick_while_session_stopped():
 
 @pytest.mark.asyncio
 async def test_skip_rejects_while_session_stopped_without_mutating_playback():
-    """Only Start may change transport state while the session is stopped."""
+    """The routine Next-track control cannot change a stopped session's transport."""
     app = _make_test_app()
     state = app.state.station_state
     state.session_stopped = True
@@ -2804,6 +2804,65 @@ async def test_panic_does_not_set_session_stopped():
 
 
 @pytest.mark.asyncio
+async def test_panic_rejects_while_stopped_without_mutating_transport_or_queue(tmp_path):
+    """Panic Cut is a live transport action, so a stopped station rejects it unchanged."""
+    app = _make_test_app()
+    state = app.state.station_state
+    queued = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "queued.mp3",
+        metadata={"title": "Queued"},
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"type": "music", "label": "Queued", "metadata": {}}]
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": 123.0,
+        "metadata": {},
+    }
+    state.force_next = SegmentType.BANTER
+    before_now = dict(state.now_streaming)
+    before_shadow = list(state.queued_segments)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/panic")
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert list(app.state.queue._queue) == [queued]
+    assert state.queued_segments == before_shadow
+    assert state.now_streaming == before_now
+    assert state.force_next is SegmentType.BANTER
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_remains_available_after_session_stop():
+    """The emergency interrupt is intentional recovery, not a routine stopped transport control."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch(
+        "mammamiradio.scheduling.producer._fire_interrupt",
+        new=AsyncMock(return_value=True),
+    ) as fire_interrupt:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/interrupt",
+                json={"directive": "Return to air with a short recovery message.", "urgency": "urgent"},
+            )
+
+    assert response.json()["ok"] is True
+    fire_interrupt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_loopback_bypasses_auth_when_no_password():
     """Loopback client with no admin_password/token configured gets through."""
     app = _make_test_app()  # no password, no token
@@ -2935,6 +2994,39 @@ async def test_admin_panel_loopback_no_password_returns_html():
         resp = await client.get("/admin")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+async def _admin_first_paint_responses(*, stopped: bool) -> tuple[httpx.Response, httpx.Response]:
+    app = _make_test_app(is_addon=True)
+    app.state.station_state.session_stopped = stopped
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        direct = await client.get("/admin")
+        ingress = await client.get(
+            "/",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/test-token"},
+        )
+    return direct, ingress
+
+
+@pytest.mark.asyncio
+async def test_admin_first_paint_seeds_stopped_state_for_direct_and_ingress_routes():
+    """A stopped admin page must not flash enabled producer controls before polling."""
+    direct, ingress = await _admin_first_paint_responses(stopped=True)
+
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        assert re.search(r'</head>\s*<body data-stopped="true">', response.text)
+
+
+@pytest.mark.asyncio
+async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_routes():
+    """A running admin page explicitly paints enabled producer controls."""
+    direct, ingress = await _admin_first_paint_responses(stopped=False)
+
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        assert re.search(r'</head>\s*<body data-stopped="false">', response.text)
 
 
 @pytest.mark.asyncio
