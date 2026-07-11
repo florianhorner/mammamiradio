@@ -2877,6 +2877,11 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
 async def skip_track(request: Request, _: None = Depends(require_admin_access)):
     """Skip the currently streaming segment."""
     state = request.app.state.station_state
+    if state.session_stopped:
+        return {
+            "ok": False,
+            "error": "The station is paused. Press Start before skipping to the next track.",
+        }
     if not state.now_streaming:
         return {"ok": False, "error": "Nothing is currently streaming"}
     bridged = await _request_skip(request.app.state, state, request.app.state.config, source="admin_skip")
@@ -3060,6 +3065,11 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         return {"ok": False, "error": f"type must be one of: {list(valid.keys())}"}
 
     state = request.app.state.station_state
+    if state.session_stopped:
+        return {
+            "ok": False,
+            "error": "The station is paused. Press Start, then tap the Air Next control again.",
+        }
     # Air-next builds and front-inserts one operator trigger at a time. Reject a
     # second tap while one is still pending — with a way out (leadership #5),
     # never a silent overwrite of the first pick.

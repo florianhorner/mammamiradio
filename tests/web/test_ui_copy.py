@@ -9,6 +9,7 @@ from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ADMIN_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+_LISTENER_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
 _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 
 
@@ -19,16 +20,65 @@ def test_key_parity_between_languages():
     assert en_keys == it_keys, f"missing in it: {en_keys - it_keys}; missing in en: {it_keys - en_keys}"
 
 
+def test_every_listener_copy_reference_exists_in_both_modes():
+    """Parity alone is false-green when a key is absent from both dictionaries."""
+    js = _LISTENER_JS.read_text(encoding="utf-8")
+    html = _LISTENER_HTML.read_text(encoding="utf-8")
+    referenced = set(re.findall(r"_t\(\s*['\"]([^'\"]+)", js))
+    referenced.update(re.findall(r"copy\.get\(\s*['\"]([^'\"]+)", html))
+
+    for lang in ("en", "it"):
+        missing = referenced - set(COPY[lang])
+        assert not missing, f"listener copy references missing from {lang}: {sorted(missing)}"
+
+
 def test_default_off_returns_english():
     assert get_copy(False, "listen_now") == "Listen Now"
+    assert get_copy(False, "listen_pause_aria") == "Pause station"
     assert get_copy(False, "stat_tracks") == "Tracks in Rotation"
     assert get_copy(False, "form_message_placeholder").startswith("Dear Radio")
+    assert get_copy(False, "form_message_required").startswith("Write a message")
+    assert get_copy(False, "form_success_shoutout").startswith("Dedication received")
+    assert "{s}" in get_copy(False, "form_rate_limited")
+    assert get_copy(False, "form_network_error").startswith("We lost the connection")
 
 
 def test_super_italian_on_returns_italian():
     assert get_copy(True, "listen_now") == "Ascolta Ora"
+    assert get_copy(True, "listen_pause_aria") == "Metti in pausa la radio"
     assert get_copy(True, "stat_tracks") == "Tracce in playlist"
     assert get_copy(True, "form_message_placeholder").startswith("Cara Radio")
+    assert get_copy(True, "form_message_required").startswith("Scrivi prima")
+    assert get_copy(True, "form_success_shoutout").startswith("Dedica ricevuta")
+    assert "{s}" in get_copy(True, "form_rate_limited")
+    assert get_copy(True, "form_network_error").startswith("Abbiamo perso la connessione")
+
+
+def test_request_outcome_copy_is_complete_in_both_modes():
+    outcome_keys = (
+        "form_success_song",
+        "form_success_shoutout",
+        "form_rate_limited",
+        "form_queue_full",
+        "form_declined",
+        "form_network_error",
+    )
+    for lang in ("en", "it"):
+        for key in outcome_keys:
+            assert COPY[lang].get(key), f"missing request outcome {key} in {lang}"
+        assert "{s}" in COPY[lang]["form_rate_limited"]
+
+    text = _LISTENER_JS.read_text(encoding="utf-8")
+    for key in outcome_keys:
+        assert re.search(rf"_t\(\s*'{key}'", text), f"listener request flow bypasses localized {key} copy"
+
+    hardcoded_italian_receipts = (
+        "Saluto ricevuto",
+        "Canzone in arrivo",
+        "Coda piena",
+        "Invio non riuscito",
+    )
+    assert not any(receipt in text for receipt in hardcoded_italian_receipts)
 
 
 def test_missing_key_returns_default():

@@ -2010,7 +2010,11 @@ async def test_get_root_bakes_stopped_state_into_first_paint():
     assert resp.status_code == 200
     assert 'data-stopped="true"' in resp.text
     assert "is-stopped" in resp.text
-    assert re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Resume station")', resp.text)
+    for control_id in ("nav-cta", "np-play", "hero-play"):
+        assert re.search(
+            rf'<button\b(?=[^>]*\bid="{control_id}")(?=[^>]*\baria-label="Station paused")(?=[^>]*\bdisabled\b)',
+            resp.text,
+        ), f"{control_id} must paint as a disabled paused-status control."
     assert not re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Listen now")', resp.text)
     assert "In Onda" not in resp.text  # live label must not flash on a stopped station
 
@@ -2306,6 +2310,51 @@ async def test_trigger_rejects_second_while_one_pending():
     assert "tap again" in body["error"].lower()  # a way out, not a dead end
     # The operator's first pick is preserved, not overwritten by the rejected tap.
     assert app.state.station_state.operator_force_pending == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_trigger_rejects_operator_pick_while_session_stopped():
+    """A visually disabled Air Next control must also be rejected server-side."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "banter"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_skip_rejects_while_session_stopped_without_mutating_playback():
+    """Only Start may change transport state while the session is stopped."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": 123.0,
+        "metadata": {},
+    }
+    before = dict(state.now_streaming)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/skip")
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert state.now_streaming == before
+    assert state.force_next is None
+    assert not app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio
