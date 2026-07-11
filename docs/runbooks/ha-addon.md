@@ -290,7 +290,7 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 
 **Smoke runs in addon mode.** Every smoke `docker run` (`addon-build.yml`, and both blocks in `addon-release.yml`) sets `-e SUPERVISOR_TOKEN=smoke-ci`, mirroring how the HA Supervisor launches the image. Without it the container boots in standalone mode, where binding `0.0.0.0` with no admin token is a fatal config error (`config._is_addon` is false), uvicorn never starts, and the smoke fails with `/healthz` connection-refused — a false negative that doesn't reflect the real addon. Keep the token on any new smoke step.
 
-**Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same add-on store entry, re-enter API keys. Reverse it to go back.
+**Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
 
 **Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
 
@@ -376,7 +376,7 @@ After merging to main, verify the full chain:
 1. **CI passed**: Check GitHub Actions for green build
 2. **Image exists on GHCR**: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
 3. **Image is public**: Check github.com/florianhorner?tab=packages
-4. **HA sees update**: Settings > Add-ons > Mamma Mi Radio > shows new version
+4. **HA sees update**: Settings > Apps > Mamma Mi Radio > shows new version
 5. **Update works**: Click Update, wait for download, check logs
 6. **App starts**: Addon log shows "Starting uvicorn on 0.0.0.0:8000..."
 7. **Ingress works**: Click addon in sidebar, dashboard loads
@@ -409,7 +409,7 @@ Use these to tell intentional degradation from a real regression during post-mer
 ## Common failures
 
 ### "An unknown error occurred with addon"
-- Check addon logs (Settings > Add-ons > Mamma Mi Radio > Log)
+- Check app logs (**Settings > Apps > Mamma Mi Radio > Log**)
 - If "radio.toml not found": image is corrupt, rebuild
 - If "model not found": the provider's registry catalog value does not match its
   API (the circuit breaker falls back automatically, but fix the canonical

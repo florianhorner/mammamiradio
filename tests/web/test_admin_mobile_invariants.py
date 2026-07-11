@@ -11,8 +11,11 @@ import functools
 import re
 from pathlib import Path
 
+from mammamiradio.core.config import _contrast_ratio, _hex_to_rgb, _relative_luminance
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _STYLE_RE = re.compile(r"<style>\s*(.*?)</style>", re.DOTALL)
@@ -169,6 +172,12 @@ def _assert_touch_target(selector: str) -> None:
     assert height >= 44, f"{selector} must expose at least a 44px tall touch target; got {height}px."
 
 
+def _token_hex(name: str) -> str:
+    match = re.search(rf"{re.escape(name)}\s*:\s*(#[0-9a-fA-F]{{6}})", TOKENS_CSS.read_text(encoding="utf-8"))
+    assert match, f"tokens.css must define a six-digit color for {name}."
+    return match.group(1)
+
+
 def test_programme_list_contains_horizontal_overflow() -> None:
     """The programme wrapper must keep table internals inside the panel."""
     text = _read_admin_html()
@@ -197,13 +206,238 @@ def test_admin_transport_buttons_have_44px_touch_targets() -> None:
     _assert_touch_target(".btn-primary-sm")
 
 
+def test_diretta_quick_actions_have_44px_touch_targets() -> None:
+    """Diretta quick actions must not shrink below the transport touch floor."""
+    _assert_touch_target(".btn-chip")
+
+
+def test_320px_console_content_can_shrink_without_clipping() -> None:
+    """The on-air title, transport, and Air Next grid must fit a 320px viewport."""
+    css = _admin_css()
+    for selector in (".mmr-console-grid", ".mmr-console-air", ".mmr-console-side", ".mmr-air-title"):
+        declarations = _declarations_for_selector(css, selector)
+        assert declarations.get("min-width") == "0", f"{selector} must be allowed to shrink inside the console."
+
+    controls = _declarations_for_selector(css, ".mmr-air-controls")
+    triggers = _declarations_for_selector(css, ".mmr-console-triggers")
+    trigger = _declarations_for_selector(css, ".mmr-console-triggers .a-trigger")
+    assert controls.get("flex-wrap") == "wrap"
+    assert controls.get("min-width") == "0"
+    assert triggers.get("min-width") == "0"
+    assert "minmax(0,1fr)" in triggers.get("grid-template-columns", "")
+    assert trigger.get("min-width") == "0"
+    assert re.search(
+        r"@media \(max-width:900px\)\{[^}]*\.mmr-console-triggers\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)",
+        css,
+        re.DOTALL,
+    ), "Phone Air Next controls need two shrinkable columns so labels remain reachable at 320px."
+
+
+def test_production_feed_never_claims_backstage_work_is_live() -> None:
+    """Only the on-air console may declare the live state."""
+    text = _read_admin_html()
+    block = text[text.index("function renderProduction(st)") : text.index("function updateProgrammeRunway")]
+
+    assert 'id="productionStateLabel"' in text
+    assert "In produzione · live" not in text
+    assert "shouldFaderDown(st)" in block
+    assert "const productionStateBase=building?'building ahead':'recent work'" in block
+    for state in ("station paused", "waiting for listeners", "building ahead", "recent work"):
+        assert f"'{state}'" in block
+
+
+def test_production_fetch_failure_replaces_stale_work_with_retry_state() -> None:
+    """A failed status poll must stop claiming that frozen production is current."""
+    text = _read_admin_html()
+    unavailable = text[
+        text.index("function renderProductionUnavailable") : text.index("function updateProgrammeRunway")
+    ]
+    refresh_fast = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    assert "In produzione · reconnecting" in unavailable
+    assert "The producer desk will retry automatically." in unavailable
+    assert "renderProductionUnavailable();" in refresh_fast
+
+
+def test_production_render_cannot_starve_stopped_state_updaters() -> None:
+    """A renderProduction() throw must not skip the stopped-state honesty updaters.
+
+    renderProduction is painted first but is the least critical widget; if it can
+    throw its way into refreshFast's outer catch, updateStopState/updateNow are
+    skipped and the desk keeps showing live On-Air controls over a paused station
+    (leadership #1). It must be isolated in its own try so it can never starve them.
+    """
+    text = _read_admin_html()
+    refresh_fast = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    # renderProduction must be wrapped in its own try that precedes the honesty
+    # updaters, so its failure is isolated from updateStopState/updateNow.
+    render_idx = refresh_fast.index("renderProduction(_st);")
+    guarded_prefix = refresh_fast[:render_idx]
+    assert guarded_prefix.rstrip().endswith("try{"), (
+        "renderProduction(_st) must sit inside its own try{} so a malformed production "
+        "shape cannot starve the stopped-state honesty updaters below it."
+    )
+    stop_idx = refresh_fast.index("updateStopState(_st.session_stopped)")
+    assert render_idx < stop_idx, "renderProduction must still paint before updateStopState."
+
+
+def test_server_seeded_stopped_state_controls_first_paint() -> None:
+    """A paused server render must be truthful before the first status request completes."""
+    text = _read_admin_html()
+    css = _admin_css()
+
+    resume = re.search(r'<button[^>]+id="resumeBtn"[^>]*>', text)
+    assert resume, "admin.html must render the Start control."
+    assert "style=" not in resume.group(0), "inline display:none would override the server-seeded stopped-state CSS."
+    for rule in (
+        "#resumeBtn { display: none; }",
+        'body[data-stopped="true"] #stoppedBanner { display: block; }',
+        'body[data-stopped="true"] #stopBtn { display: none; }',
+        'body[data-stopped="true"] #resumeBtn { display: inline-flex; }',
+    ):
+        assert rule in css, f"server-seeded stopped first paint lost CSS rule: {rule}"
+
+
+def test_skip_control_reports_backend_declines_and_network_failure() -> None:
+    """Skip success copy must never mask an explicit backend rejection or an offline desk."""
+    text = _read_admin_html()
+    block = text[text.index("async function doSkip") : text.index("async function doBanNowPlaying")]
+
+    assert "try{" in block and "catch(_)" in block
+    assert "if(!(r&&r.ok))" in block
+    assert "(r&&r.error)||wayOut('skip that segment')" in block
+    assert "toast(offlineMsg())" in block
+    assert block.index("if(!(r&&r.ok))") < block.index("Skip prepared"), (
+        "skip success copy must only run after the response proves ok=true."
+    )
+
+
+def test_fast_poll_deadlines_generation_and_auxiliary_isolation() -> None:
+    """Authoritative status must not wait on, or be rolled back by, auxiliary polling."""
+    text = _read_admin_html()
+    polling = text[text.index("const FAST_POLL_INTERVAL_MS") : text.index("async function refreshSlow()")]
+
+    interval_match = re.search(r"FAST_POLL_INTERVAL_MS=(\d+)", polling)
+    status_deadline_match = re.search(r"FAST_STATUS_DEADLINE_MS=(\d+)", polling)
+    aux_deadline_match = re.search(r"FAST_AUX_DEADLINE_MS=(\d+)", polling)
+    assert interval_match and status_deadline_match and aux_deadline_match
+    interval = int(interval_match.group(1))
+    status_deadline = int(status_deadline_match.group(1))
+    aux_deadline = int(aux_deadline_match.group(1))
+    assert status_deadline < interval
+    assert aux_deadline < interval
+    for needle in (
+        "const controller=new AbortController()",
+        "signal:controller.signal",
+        "setTimeout(()=>controller.abort(),deadlineMs)",
+        "finally{clearTimeout(deadline);}",
+        "const generation=++_fastPollGeneration",
+        "if(generation!==_fastPollGeneration)return;",
+        "fetchAdminJson('/api/listener-requests',FAST_AUX_DEADLINE_MS)",
+        "fetchAdminJson('/api/hosts',FAST_AUX_DEADLINE_MS)",
+    ):
+        assert needle in polling, f"fast poll lost bounded/stale-response guard: {needle}"
+
+    listener_start = polling.index("const listenerPromise=")
+    hosts_start = polling.index("const hostsPromise=")
+    status_fetch = polling.index("nextStatus=await fetchAdminJson(`/status")
+    status_apply = polling.index("_st=nextStatus")
+    aux_wait = polling.index("await Promise.all([listenerPromise,hostsPromise])")
+    assert listener_start < status_fetch and hosts_start < status_fetch, (
+        "both auxiliary deadlines must run in parallel with status so the whole poll stays below its interval."
+    )
+    assert status_fetch < status_apply < aux_wait, "status must render before either auxiliary request is awaited."
+
+
+def test_console_metadata_uses_aa_safe_secondary_text() -> None:
+    """Small operational labels must clear AA on the console's light gradient stop."""
+    css = _admin_css()
+    for selector in (
+        ".mmr-air-sig",
+        ".mmr-air-artist",
+        ".mmr-air-progress .progress-time",
+        ".mmr-air-cost",
+        ".mmr-side-label",
+        ".prod-entry .prod-elapsed",
+    ):
+        declarations = _declarations_for_selector(css, selector)
+        assert declarations.get("color") == "var(--text-secondary)", (
+            f"{selector} must use --text-secondary (8.10:1 on the console gradient), not --muted (4.41:1)."
+        )
+
+    recent = _declarations_for_selector(css, ".prod-entry.recent")
+    assert recent.get("opacity") == "1", "Ancestor opacity must not fade 11px production text below WCAG AA."
+
+    foreground_hex = _token_hex("--text-secondary")
+    foreground = _hex_to_rgb(foreground_hex)
+    assert foreground is not None
+    console_background = _declarations_for_selector(css, ".mmr-console").get("background", "")
+    gradient_stops = re.findall(r"#[0-9a-fA-F]{6}", console_background)
+    assert len(gradient_stops) >= 2, "The console background must expose both gradient endpoints for contrast checks."
+    for stop in gradient_stops:
+        background = _hex_to_rgb(stop)
+        assert background is not None
+        assert _relative_luminance(foreground) > _relative_luminance(background)
+        ratio = _contrast_ratio(foreground_hex, stop)
+        assert ratio is not None
+        assert ratio >= 4.5, f"--text-secondary contrast is {ratio:.2f}:1 on {stop}; expected at least 4.5:1."
+
+
+def test_stopped_producer_controls_use_native_inert_semantics() -> None:
+    """Stopped controls must be unavailable without clobbering capability-disabled state."""
+    text = _read_admin_html()
+    update_stop = text[text.index("function updateStopState") : text.index("function fmtClock")]
+    refresh_slow = text[text.index("async function refreshSlow()") : text.index("async function refresh()")]
+
+    assert "syncStoppedProducerControls(stopped);" in update_stop
+    assert "control.inert=stopped" in update_stop
+    assert "stopped||control.disabled" in update_stop
+    assert "control.removeAttribute('aria-disabled')" in update_stop
+    assert "new MutationObserver" in update_stop
+    assert "{childList:true,subtree:true}" in update_stop
+    assert "#skipBtn" in update_stop, "Next track must be inert while the station is stopped."
+    assert "syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true')" in refresh_slow
+    assert "#resumeBtn" not in update_stop, "The Start control must remain outside the disabled producer-action set."
+
+
+def test_stopped_segment_does_not_restart_the_elapsed_timer() -> None:
+    """The synthetic stopped record is a status marker, not advancing media."""
+    text = _read_admin_html()
+    update_now = text[text.index("function updateNow(ns)") : text.index("// ── Programme Filter")]
+
+    assert "if(typeKey==='stopped')" in update_now
+    assert "if(_tick){clearInterval(_tick);_tick=null;}" in update_now
+    assert "document.getElementById('nowElapsed').textContent='—'" in update_now
+    assert "document.getElementById('progFill').style.width='0'" in update_now
+
+
+def test_last_banter_typewriter_hides_future_empty_rows() -> None:
+    """Future speaker rows stay hidden until their own dialogue begins typing."""
+    text = _read_admin_html()
+    sequence = text[text.index("function _typeRecentSegments") : text.index("const TT_TYPE_MAX_CHARS")]
+    line_factory = text[text.index("function _recentLineEl") : text.index("function updateRecent")]
+
+    assert "lineEl.hidden=!instant" in line_factory
+    assert "seg.lineEl.hidden=false" in sequence
+    assert sequence.index("seg.lineEl.hidden=false") < sequence.index("seg.lineEl.classList.add('tt-typing')")
+    assert "const instant=reduced||text.length>TT_TYPE_MAX_CHARS" in line_factory
+
+
+def test_super_italian_copy_describes_the_actual_default_listener_mix() -> None:
+    """Default mode keeps Italian headings while its utility controls use English."""
+    text = _read_admin_html()
+    assert "listener controls and labels are English while Italian headings and station flair remain" in text
+    assert "listener page is in English" not in text
+
+
 def test_producer_desk_console_is_responsive() -> None:
     """Concept B: the console is two-column on desktop, stacks to one column on
     narrow screens, and the tab bar wraps instead of exposing a scrollbar."""
     css = _admin_css()
 
     # Desktop: two columns (air | triggers+cooking).
-    assert ".mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}" in css
+    assert ".mmr-console-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)" in css
     # Narrow: single column.
     assert "@media (max-width:768px)" in css
     assert re.search(
@@ -280,10 +514,10 @@ def test_on_air_idle_state_compacts_dead_space() -> None:
     assert idle_title.get("color") == "var(--muted)"
     assert idle_artist.get("display") == "none"
     assert idle_progress.get("display") == "none"
-    assert trigger_grid.get("grid-template-columns") == "repeat(4,1fr)"
+    assert trigger_grid.get("grid-template-columns") == "repeat(4,minmax(0,1fr))"
     assert trigger_button.get("padding") == "10px 12px"
     assert re.search(
-        r"@media \(max-width:900px\)\{[^}]*\.mmr-console-triggers\{grid-template-columns:1fr 1fr\}",
+        r"@media \(max-width:900px\)\{[^}]*\.mmr-console-triggers\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}",
         css,
         re.DOTALL,
     )

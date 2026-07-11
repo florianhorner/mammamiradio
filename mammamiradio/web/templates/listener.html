@@ -55,13 +55,13 @@
       {% endif %}
     </a>
     <nav>
-      <a href="#stasera" class="active">Stasera</a>
-      <a href="#palinsesto">Palinsesto</a>
-      <a href="#dediche">Dediche</a>
+      <a href="#stasera" class="active" lang="it">Stasera</a>
+      <a href="#palinsesto" lang="it">Palinsesto</a>
+      <a href="#dediche" lang="it">Dediche</a>
       <a href="#about">About</a>
     </nav>
-    <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-label="{% if session_stopped %}{{ copy.get('listen_resume_aria', 'Resume station') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}">
-      <span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}In Onda{% endif %}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
+    <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-pressed="false" aria-label="{% if session_stopped %}{{ copy.get('listen_paused_aria', 'Station paused') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}"{% if session_stopped %} disabled{% endif %}>
+      <span class="dot"></span><span aria-hidden="true">{% if session_stopped %}&#9208;{% else %}&#9654;{% endif %}</span> {% if session_stopped %}{{ copy.get('listen_stopped', 'Station paused') }}{% else %}{{ copy.get('listen_now', 'Listen Now') }}{% endif %}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>
   </div>
 </header>
@@ -71,9 +71,9 @@
 <!-- HERO STAGE -->
 <section class="mmr-stage" id="stasera">
   <div class="mmr-stage-header">
-    <span class="mmr-live{% if session_stopped %} is-stopped{% endif %}"><span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}In Onda{% endif %}</span>
+    <span class="mmr-live{% if session_stopped %} is-stopped{% endif %}"><span class="dot"></span> {% if session_stopped %}{{ copy.get('np_paused', 'Fermo') }}{% else %}<span lang="it">In Onda</span>{% endif %}</span>
     <div class="mmr-np-meta">
-      <div class="eyebrow" id="np-eyebrow">Ora in onda{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
+      <div class="eyebrow" id="np-eyebrow">{{ copy.get('np_on_air', 'On Air') }}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
       <div class="title" id="np-track">{{ copy.get('tuning_in', 'Tuning in…') }}</div>
       <div class="artist" id="np-artist"></div>
     </div>
@@ -89,7 +89,7 @@
       <span></span><span></span><span></span><span></span><span></span>
       <span></span><span></span><span></span><span></span><span></span>
     </div>
-    <button class="mmr-play-btn" id="np-play" type="button" aria-label="Play"><span class="mmr-play-icon">&#9654;</span></button>
+    <button class="mmr-play-btn" id="np-play" type="button" aria-pressed="false" aria-label="{% if session_stopped %}{{ copy.get('listen_paused_aria', 'Station paused') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}"{% if session_stopped %} disabled{% endif %}><span class="mmr-play-icon">{% if session_stopped %}&#9208;{% else %}&#9654;{% endif %}</span></button>
     <button class="btn-ghost mmr-share-btn" id="share-clip-btn" type="button"
             aria-label="{{ copy.get('share_clip_aria', 'Condividi clip') }}" data-state="hidden" hidden>
       <span aria-hidden="true">&#10530;</span> <span class="mmr-share-btn-label">{{ copy.get('share_clip', 'Condividi clip') }}</span>
@@ -101,12 +101,12 @@
   </div>
 
   <div class="mmr-hero-copy" id="hero">
-    <div class="mmr-eyebrow">In Diretta{% if brand.frequency %} · {{ brand.frequency }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</div>
-    <h1 class="mmr-h1">{{ brand.tagline or "La notte è italiana." }}</h1>
+    <div class="mmr-eyebrow"><span lang="it">In Diretta</span>{% if brand.frequency %} · {{ brand.frequency }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</div>
+    <h1 class="mmr-h1" lang="it">{{ brand.tagline or "La notte è italiana." }}</h1>
     <div class="mmr-tricolor" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
-    <p class="mmr-lede">{{ brand.about or "Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi." }}</p>
+    <p class="mmr-lede" lang="it">{{ brand.about or "Radio scritta dall'intelligenza artificiale, voci umane dai conduttori di piazza, musica dal cuore del Bel Paese. Accendi e resta con noi." }}</p>
     <div class="mmr-cta-row">
-      <button class="btn-primary" id="hero-play" type="button">{{ copy.get('listen_now', 'Listen Now') }}</button>
+      <button class="btn-primary" id="hero-play" type="button" aria-pressed="false" aria-label="{% if session_stopped %}{{ copy.get('listen_paused_aria', 'Station paused') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}"{% if session_stopped %} disabled{% endif %}>{% if session_stopped %}{{ copy.get('listen_stopped', 'Station paused') }}{% else %}{{ copy.get('listen_now', 'Listen Now') }}{% endif %}</button>
       <button class="btn-ghost" id="hero-palinsesto" type="button">{{ copy.get('schedule_button', 'Schedule') }}</button>
     </div>
     <div class="mmr-stats">
@@ -147,7 +147,7 @@
         <div class="mmr-display">
           <div class="mmr-display-inner">
             <div class="mmr-display-line">
-              <span class="mmr-display-lede">Stazione</span>
+              <span class="mmr-display-lede" lang="it">Stazione</span>
               {% if brand.frequency %}
                 <span class="mmr-display-mhz">{{ brand.frequency.split(" ")[0] }}</span>
                 <span class="mmr-display-unit">FM</span>
@@ -162,12 +162,12 @@
         <div class="mmr-knob mmr-knob-big" aria-hidden="true">
           <span class="mmr-knob-face"></span>
           <span class="mmr-knob-pip"></span>
-          <span class="mmr-knob-cap">Sintonia</span>
+          <span class="mmr-knob-cap" lang="it">Sintonia</span>
         </div>
         <div class="mmr-knob mmr-knob-small" aria-hidden="true">
           <span class="mmr-knob-face"></span>
           <span class="mmr-knob-pip"></span>
-          <span class="mmr-knob-cap">Volume</span>
+          <span class="mmr-knob-cap" lang="it">Volume</span>
         </div>
         <svg class="mmr-waves" viewBox="0 0 120 160" aria-hidden="true">
           <path d="M 28 40 A 22 46 0 0 1 28 120"/>
@@ -184,8 +184,8 @@
 <!-- PALINSESTO -->
 <section class="mmr-section" id="palinsesto">
   <div class="mmr-sec-head">
-    <h2>Stasera in <em>onda</em></h2>
-    <span class="mmr-sec-note" id="palinsesto-date">—</span>
+    <h2 lang="it">Stasera in <em>onda</em></h2>
+    <span class="mmr-sec-note" id="palinsesto-date" lang="it">—</span>
   </div>
   <ol class="mmr-schedule" id="slots" aria-live="polite">
     <li><span class="t">—</span><div class="m"><div class="title">{{ copy.get('schedule_loading', 'Schedule loading…') }}</div></div></li>
@@ -195,13 +195,13 @@
 <!-- DEDICHE -->
 <section class="mmr-section" id="dediche">
   <div class="mmr-sec-head">
-    <h2>Dediche &amp; <em>Saluti</em></h2>
-    <span class="mmr-sec-note">aperte fino all'alba</span>
+    <h2 lang="it">Dediche &amp; <em>Saluti</em></h2>
+    <span class="mmr-sec-note" lang="it">aperte fino all'alba</span>
   </div>
   <div class="mmr-dediche-grid">
     <div class="mmr-dediche-list" id="quote-stack">
       <div class="mmr-dedica">
-        <div class="eyebrow">Dedica</div>
+        <div class="eyebrow" lang="it">Dedica</div>
         <div class="quote">{{ copy.get('waiting_dedication', 'Waiting for the first dedication tonight…') }}</div>
         <div class="sig">— {{ brand.station_name }}</div>
       </div>
@@ -216,15 +216,15 @@
           </span>
         </span>
       </div>
-      <div class="eyebrow">Manda al DJ <span class="mmr-dedica-postmark">· cara Radio ·</span></div>
+      <div class="eyebrow" lang="it">Manda al DJ <span class="mmr-dedica-postmark">· cara Radio ·</span></div>
       <label for="req-name" class="sr-only">{{ copy.get('form_name_label', 'Name (optional)') }}</label>
       <input class="mmr-dedica-form-input" type="text" id="req-name" placeholder="{{ copy.get('form_name_placeholder', 'Your name (optional)') }}" autocomplete="name">
       <label for="req-msg" class="sr-only">{{ copy.get('form_message_label', 'Message or song request') }}</label>
-      <textarea id="req-msg" rows="4" placeholder="{{ copy.get('form_message_placeholder', 'Dear Radio, I’d like to dedicate a song to…') }}" autocomplete="off"></textarea>
+      <textarea id="req-msg" rows="4" placeholder="{{ copy.get('form_message_placeholder', 'Dear Radio, I’d like to dedicate a song to…') }}" autocomplete="off" aria-describedby="request-sent" required></textarea>
       <button type="submit">
         <span aria-hidden="true" style="margin-right:8px">&#9993;</span>{{ copy.get('form_submit', 'Send with a kiss') }}
       </button>
-      <div class="hint">{% if brand.hosts %}Letta stasera da {{ brand.hosts[-1].display_name }} · <em>con amore</em>{% else %}<em>con amore</em>{% endif %}</div>
+      <div class="hint" lang="it">{% if brand.hosts %}Letta stasera da {{ brand.hosts[-1].display_name }} · <em>con amore</em>{% else %}<em>con amore</em>{% endif %}</div>
       <div class="form-sent" id="request-sent" style="display:none" role="status" aria-live="polite"></div>
     </form>
   </div>
@@ -233,14 +233,14 @@
 <!-- ABOUT -->
 <section class="mmr-section mmr-about" id="about">
   <div class="mmr-sec-head">
-    <h2>La <em>stazione</em></h2>
-    <span class="mmr-sec-note">{% if brand.founded %}dal {{ brand.founded }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</span>
+    <h2 lang="it">La <em>stazione</em></h2>
+    <span class="mmr-sec-note" lang="it">{% if brand.founded %}dal {{ brand.founded }}{% endif %}{% if brand.city %} · {{ brand.city }}{% endif %}</span>
   </div>
   <div class="mmr-about-grid">
-    <div class="mmr-about-card"><div class="eyebrow">Palinsesto</div><p>Scritto ogni sera da un modello linguistico addestrato sulla radiofonia italiana, dalle notti di Radio Montecarlo alle trasmissioni di quartiere degli anni '80.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow">Voci</div><p>Conduttori — {% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %}, {% endif %}{% endfor %} — registrati su nastro e rimixati per la sera.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow">Musica</div><p>Catalogo curato: cantautori, melodico leggero, disco italiana, napoletano classico. Niente algoritmi di scoperta.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow">Codice</div><p>Open source su GitHub. <span data-cap="pwa" hidden>PWA installabile.</span> <span data-cap="ha" hidden>Home Assistant integrato.</span> <span data-cap="llm" hidden>AI scriptwriter.</span> Stream MP3 · 320 kbps. Made with espresso.</p></div>
+    <div class="mmr-about-card" lang="it"><div class="eyebrow">Palinsesto</div><p>Scritto ogni sera da un modello linguistico addestrato sulla radiofonia italiana, dalle notti di Radio Montecarlo alle trasmissioni di quartiere degli anni '80.</p></div>
+    <div class="mmr-about-card" lang="it"><div class="eyebrow">Voci</div><p>Conduttori — {% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %}, {% endif %}{% endfor %} — registrati su nastro e rimixati per la sera.</p></div>
+    <div class="mmr-about-card" lang="it"><div class="eyebrow">Musica</div><p>Catalogo curato: cantautori, melodico leggero, disco italiana, napoletano classico. Niente algoritmi di scoperta.</p></div>
+    <div class="mmr-about-card"><div class="eyebrow" lang="it">Codice</div><p><span lang="en">Open source</span> <span lang="it">su</span> GitHub. <span data-cap="pwa" hidden>PWA <span lang="it">installabile</span>.</span> <span data-cap="ha" hidden>Home Assistant <span lang="it">integrato</span>.</span> <span data-cap="llm" lang="en" hidden>AI scriptwriter.</span> <span lang="en">Stream MP3</span> · 320 kbps. <span lang="en">Made with espresso.</span></p></div>
   </div>
 </section>
 
@@ -249,20 +249,20 @@
 <!-- TICKER -->
 <div class="mmr-ticker" aria-hidden="true">
   <div class="track">
-    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
-    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
-    <span>Dediche aperte</span><span class="dot">&#10022;</span>
-    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span lang="it">{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
+    <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
+    <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
     {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
-    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
-    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
-    <span>Dediche aperte</span><span class="dot">&#10022;</span>
-    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span lang="it">{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
+    <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
+    <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
     {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
-    <span>{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
-    {% if brand.hosts %}<span>Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
-    <span>Dediche aperte</span><span class="dot">&#10022;</span>
-    <span>Manda al DJ</span><span class="dot">&#10022;</span>
+    <span lang="it">{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
+    {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
+    <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
+    <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
     {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
   </div>
 </div>
@@ -280,12 +280,12 @@
         {% endif %}
       </div>
       <div class="mmr-tricolor thin" aria-hidden="true"><div class="g"></div><div class="w"></div><div class="r"></div></div>
-      <p class="fine">Radio scritta dall'intelligenza artificiale. Musica umana. Made with espresso.</p>
+      <p class="fine"><span lang="it">Radio scritta dall'intelligenza artificiale. Musica umana.</span> <span lang="en">Made with espresso.</span></p>
     </div>
     <div class="foot-col">
-      <div class="foot-head">Stazione</div>
-      <a href="#palinsesto">Palinsesto</a>
-      <a href="#dediche">Dediche</a>
+      <div class="foot-head" lang="it">Stazione</div>
+      <a href="#palinsesto" lang="it">Palinsesto</a>
+      <a href="#dediche" lang="it">Dediche</a>
       <a href="#about">About</a>
       <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>{{ copy.get('install_app', 'Install app') }}</button>
     </div>

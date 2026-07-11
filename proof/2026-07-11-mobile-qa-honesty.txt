@@ -1,0 +1,46 @@
+Proof — mobile QA / operator-honesty pass (branch florianhorner/chore/mobile-qa)
+Captured 2026-07-11 on Python 3.11.15, macOS, local venv.
+Run with MAMMAMIRADIO_CHAOS_MODE="" to neutralize a local .env value that
+otherwise shadows one chaos-boot test (CI has no .env; the test passes there).
+
+== full test suite ==
+$ MAMMAMIRADIO_CHAOS_MODE="" pytest tests/ -q
+4559 passed, 3 skipped, 21 deselected in 139.48s
+
+== coverage gate (CI-blocking) ==
+Required test coverage of 92.0% reached. Total coverage: 93.11%
+Per-module floors met:
+  mammamiradio.web.streamer            92%  (floor 91)
+  mammamiradio.web.listener_requests   97%  (floor 97)
+  mammamiradio.web.ui_copy            100%  (floor 100)
+  mammamiradio.web.og_card             96%  (floor 96)
+
+== release invariants ==
+$ bash scripts/check-release-invariants.sh
+Passed: 10  Failed: 0 — All invariants passed.
+
+== docs-safety lint (new gate this branch) ==
+$ bash scripts/check-docs-safety.sh
+Documentation safety lint clean.
+
+== changelog editorial-boundary lint ==
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+== ruff ==
+$ ruff check .        -> All checks passed!
+$ ruff format --check -> 283 files already formatted
+
+== web suite after the P1 fix (admin production-render isolation) ==
+$ MAMMAMIRADIO_CHAOS_MODE="" pytest tests/web/ -q
+1410 passed, 1 skipped in 17.38s
+New guard: test_production_render_cannot_starve_stopped_state_updaters (passes).
+
+== pre-ship review squad ==
+Adversarial + test-coverage + docs/config-consistency, run in parallel.
+No P0 findings from any reviewer.
+One P1 (adversarial): refreshFast painted renderProduction() before the
+stopped-state honesty updaters in one shared try; a production-shape throw
+could skip flipping data-stopped and leave live controls over a paused
+station. Fixed in commit e78ec5db + static guard test. All other findings P2
+(conscious tradeoffs, pre-existing behavior, or optional test hardening).

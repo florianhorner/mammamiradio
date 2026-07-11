@@ -29,7 +29,7 @@ import asyncio
 import re
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -210,6 +210,45 @@ class TestSkipEndpoint:
         assert profile.songs_skipped >= 1
 
     @pytest.mark.asyncio
+    async def test_stop_wins_while_skip_persistence_is_in_flight(self, monkeypatch):
+        """Skip commits transport state before persistence yields, so a later Stop wins."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song A",
+                "started": time.time(),
+                "metadata": {"youtube_id": "yt-song-a"},
+            }
+        )
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", delayed_persistence)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            skip_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+
+            assert app.state.skip_event.is_set()
+            assert app.state.station_state.now_streaming["type"] == "skipping"
+
+            try:
+                stop_response = await c.post("/api/stop", headers=AUTH)
+            finally:
+                release_persistence.set()
+            skip_response = await asyncio.wait_for(skip_task, timeout=2)
+
+        assert skip_response.json()["ok"] is True
+        assert stop_response.json()["ok"] is True
+        assert app.state.station_state.session_stopped is True
+        assert app.state.station_state.now_streaming["type"] == "stopped"
+        assert app.state.station_state.force_next is None
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_record_outcome_for_non_music_segment(self):
         """Skip of banter/ad/station_id should not pollute listener music history."""
         app = _make_app(
@@ -248,6 +287,76 @@ class TestBanNowPlayingEndpoint:
         assert app.state.skip_event.is_set()
         assert app.state.station_state.now_streaming["type"] == "skipping"
         assert ("modugno", "volare") in app.state.station_state.blocklist
+
+    @pytest.mark.asyncio
+    async def test_ban_now_shared_skip_helper_commits_transport_before_persistence(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Ban-now-playing inherits the shared helper's pre-persistence transport commit."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Modugno — Volare",
+                "started": time.time(),
+                "metadata": {
+                    "artist": "Modugno",
+                    "title_only": "Volare",
+                    "youtube_id": "yt-volare",
+                },
+            }
+        )
+        app.state.config.cache_dir = tmp_path
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", delayed_persistence)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            ban_task = asyncio.create_task(c.post("/api/track/ban-now-playing", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+            try:
+                assert app.state.skip_event.is_set()
+                assert app.state.station_state.now_streaming["type"] == "skipping"
+                assert ("modugno", "volare") in app.state.station_state.blocklist
+            finally:
+                release_persistence.set()
+            response = await asyncio.wait_for(ban_task, timeout=2)
+
+        assert response.json()["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ban_now_succeeds_when_shared_skip_history_fails(self, monkeypatch):
+        """The shared best-effort history guard also protects Ban-now-playing."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Artist — Song A",
+                "started": time.time(),
+                "metadata": {
+                    "artist": "Artist",
+                    "title_only": "Song A",
+                    "youtube_id": "yt-ban-history-failure",
+                },
+            }
+        )
+        monkeypatch.setattr("mammamiradio.web.streamer.save_blocklist", lambda *_args, **_kwargs: True)
+        persist = AsyncMock(side_effect=OSError("skip history unavailable"))
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/track/ban-now-playing", headers=AUTH)
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming["type"] == "skipping"
+        persist.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_ban_now_rejects_non_music_without_skipping(self):
@@ -856,6 +965,15 @@ class TestTriggerEndpoint:
         assert resp.json()["ok"] is False
         assert app.state.station_state.force_next is None
 
+    def test_admin_trigger_actions_surface_server_way_out_copy(self):
+        """Stopped and pending-trigger remediation must reach the operator."""
+        trigger = _admin_function_block("doTrigger")
+        quick_action = _admin_function_block("doQuickAction")
+
+        assert "if(r&&r.ok)" in trigger
+        assert "toast((r&&r.error)||wayOut())" in trigger
+        assert "r&&r.ok?'Chaos incoming — banter queued':(r&&r.error)||wayOut()" in quick_action
+
 
 # ---------------------------------------------------------------------------
 # Pending requests — source-change outcome on playlist switch
@@ -1249,6 +1367,44 @@ class TestStoppedStateQuietsTheUI:
             "admin.html must dim producer trigger buttons when stopped (Item 19)."
         )
         assert "pointer-events: none" in html, "admin.html must disable producer buttons under stopped state (Item 19)."
+
+    def test_stopped_state_exempts_setup_and_diagnostic_controls_only(self):
+        """Paused transport still leaves recovery and read-only desk actions usable."""
+        html = ADMIN_HTML.read_text()
+        selector = (
+            "#skipBtn,.btn-trigger:not([data-stopped-exempt]),"
+            ".btn-chip:not([data-stopped-exempt]),"
+            ".btn-util:not([data-stopped-exempt]),.a-trigger"
+        )
+
+        assert f"const STOPPED_PRODUCER_ACTION_SELECTOR='{selector}';" in html
+        for class_name in (".btn-trigger", ".btn-chip", ".btn-util"):
+            assert f'body[data-stopped="true"] {class_name}:not([data-stopped-exempt])' in html
+
+        # The only paused-state opt-outs are configuration/recovery controls or
+        # read-only diagnostics; live transport and Air Next remain inert.
+        for pattern in (
+            r'<button\b(?=[^>]*\bonclick="doSearch\(\)")(?=[^>]*\bdata-stopped-exempt\b)[^>]*>',
+            r"<button\b[^>]*setup-inline-action[^>]*\bdata-stopped-exempt\b",
+            r'<button\b[^>]*\bid="setupSaveBtn"[^>]*\bdata-stopped-exempt\b',
+            r"<button\b[^>]*setup-home-preview-action[^>]*\bdata-stopped-exempt\b",
+            r"<button\b[^>]*setup-recheck-action[^>]*\bdata-stopped-exempt\b",
+            r'<button\b(?=[^>]*\bonclick="copySetupSnippet\(\)")(?=[^>]*\bdata-stopped-exempt\b)[^>]*>',
+            r'setup-strip-action" data-stopped-exempt',
+            r'ha-preview-action" data-stopped-exempt',
+            r'btn btn-util" data-stopped-exempt style="font-size:0\.8em[^>]*clearArchivioFilters',
+        ):
+            assert re.search(pattern, html), f"missing stopped-state exemption: {pattern}"
+
+        assert ".a-trigger:not([data-stopped-exempt])" not in selector
+        assert "#skipBtn" in selector
+
+    def test_listener_request_deadline_retains_last_good_panel(self):
+        """An auxiliary timeout must not erase accepted listener requests."""
+        refresh = _admin_function_block("refreshFast")
+
+        assert ".catch(()=>null)" in refresh
+        assert "if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);" in refresh
 
     def test_admin_html_clears_tick_interval_on_stop(self):
         html = ADMIN_HTML.read_text()
