@@ -12,6 +12,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -36,6 +37,89 @@ jobs:
           pip install -e .
           pip install -r requirements-dev.txt
 
+      - name: Set up Node.js for browser smoke
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.17.1"
+          check-latest: false
+
+      - name: Install listener smoke browser
+        timeout-minutes: 10
+        run: |
+          PLAYWRIGHT_CLI_VERSION="$(tr -d '[:space:]' < .playwright-cli-version)"
+          npx --yes --package "@playwright/cli@$PLAYWRIGHT_CLI_VERSION" playwright-cli install-browser chromium --with-deps --only-shell
+
+      - name: Listener interaction browser smoke
+        timeout-minutes: 10
+        env:
+          ADMIN_PASSWORD: ""
+          ADMIN_TOKEN: ""
+          ADMIN_BROWSER_SMOKE_URL: http://127.0.0.1:8765
+          MAMMAMIRADIO_ALLOW_YTDLP: "false"
+          MAMMAMIRADIO_BIND_HOST: "127.0.0.1"
+          MAMMAMIRADIO_CACHE_DIR: ${{ runner.temp }}/player-smoke-cache
+          MAMMAMIRADIO_PORT: "8765"
+          MAMMAMIRADIO_TMP_DIR: ${{ runner.temp }}/player-smoke-tmp
+          PLAYER_SMOKE_CLI_TIMEOUT_SEC: "90"
+          PLAYER_SMOKE_CLOSE_TIMEOUT_SEC: "15"
+          PLAYER_SMOKE_URL: http://127.0.0.1:8765
+        run: |
+          set -euo pipefail
+          mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
+          server_log="$RUNNER_TEMP/player-smoke-server.log"
+          setsid python -m uvicorn mammamiradio.main:app \
+            --host "$MAMMAMIRADIO_BIND_HOST" \
+            --port "$MAMMAMIRADIO_PORT" \
+            --no-access-log \
+            >"$server_log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill -TERM -- "-$server_pid" 2>/dev/null || true
+              for _ in {1..20}; do
+                if ! kill -0 "$server_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.25
+              done
+            fi
+            if kill -0 "$server_pid" 2>/dev/null; then
+              echo "Smoke server did not stop after TERM; sending KILL." >&2
+              kill -KILL -- "-$server_pid" 2>/dev/null || true
+            fi
+            wait "$server_pid" 2>/dev/null || true
+            if [[ "$status" -ne 0 ]]; then
+              echo "--- player smoke server log ---" >&2
+              cat "$server_log" >&2 || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          ready=false
+          for _ in {1..60}; do
+            if curl --fail --silent "http://127.0.0.1:$MAMMAMIRADIO_PORT/healthz" >/dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "Listener smoke server exited before becoming healthy." >&2
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [[ "$ready" != "true" ]]; then
+            echo "Listener smoke server did not become healthy." >&2
+            exit 1
+          fi
+
+          make player-smoke
+          python -m pytest tests/web/test_admin_browser_smoke.py -q
+
       - name: Release cooldown gate self-test
         run: bash tests/workflows/test_cooldown_gate.sh
 
@@ -59,6 +143,9 @@ jobs:
 
       - name: Merge-gate drift check self-test
         run: bash tests/workflows/test_check_merge_gate.sh
+
+      - name: Documentation safety lint self-test
+        run: bash tests/workflows/test_docs_safety.sh
 
       - name: ShellCheck scripts
         # Pinned to v0.11.0 by digest, matching this job's other supply-chain-hardened steps.
@@ -99,6 +186,11 @@ jobs:
       # or planning vocabulary. See scripts/check-changelog-lint.sh for the pattern set.
       - name: Changelog content lint
         run: bash scripts/check-changelog-lint.sh
+
+      # Public install/operator guides must use the current Home Assistant Apps path,
+      # avoid live-surgery recovery advice, and keep relative links resolvable.
+      - name: Documentation safety lint
+        run: bash scripts/check-docs-safety.sh
 
       # Catch-all TODO/backlog files are banned (CLAUDE.md). Public work goes to
       # GitHub issues; private strategy goes to a private durable store.

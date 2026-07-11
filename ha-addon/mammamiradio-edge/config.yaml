@@ -1,5 +1,5 @@
 name: Mamma Mi Radio (Edge)
-description: Development channel — always the latest main-branch build. For testing only; use the stable Mamma Mi Radio add-on for daily listening.
+description: Development channel pinned to the newest tested main image when Edge is deliberately cut. May trail main; use stable for daily listening.
 slug: mammamiradio-edge
 version: 4ce9e04
 stage: experimental

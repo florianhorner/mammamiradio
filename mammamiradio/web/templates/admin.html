@@ -73,14 +73,23 @@ body { font-family: var(--font-body); color: var(--cream); line-height: 1.5; }
 }
 .stopped-banner.show { display: block; }
 
+/* The server seeds data-stopped for first paint. Keep these rules independent
+   from the polling script so a paused station never flashes live controls while
+   /status is still in flight. JS only toggles the same body attribute later. */
+#resumeBtn { display: none; }
+body[data-stopped="true"] #stoppedBanner { display: block; }
+body[data-stopped="true"] #stopBtn { display: none; }
+body[data-stopped="true"] #resumeBtn { display: inline-flex; }
+
 /* ── STOPPED STATE — the station is paused; the UI quiets down with it ──
    Driven by `data-stopped="true"` on <body>, toggled by updateStopState(). */
 body[data-stopped="true"] .live-dot { animation-play-state: paused; }
 /* Producer actions are meaningless while paused — dim and disable them so the
-   operator can't fire a banter/ad/news trigger into a stopped stream. */
-body[data-stopped="true"] .btn-trigger,
-body[data-stopped="true"] .btn-chip,
-body[data-stopped="true"] .btn-util {
+   operator can't fire a banter/ad/news trigger into a stopped stream. Setup
+   recovery and read-only diagnostic controls opt out explicitly below. */
+body[data-stopped="true"] .btn-trigger:not([data-stopped-exempt]),
+body[data-stopped="true"] .btn-chip:not([data-stopped-exempt]),
+body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
   opacity: 0.35; pointer-events: none; filter: saturate(0.5);
 }
 .prog-empty { padding: 20px; text-align: center; font-size: 12px; font-style: italic; color: var(--muted); }
@@ -147,7 +156,7 @@ body[data-stopped="true"] .btn-util {
 .btn-chip {
   background: rgba(20,17,15,0.35); color: rgba(245,237,216,0.7);
   border: 1px solid rgba(245,237,216,0.15); font-size: 12px; padding: 7px 12px;
-  border-radius: 20px; min-height: 36px;
+  border-radius: 20px; min-width: 44px; min-height: 44px;
 }
 .btn-chip:hover { color: var(--cream); border-color: rgba(245,237,216,0.35); background: rgba(245,237,216,0.06); }
 .btn-chip.heading-active { color: #14110F; background: var(--sun2); border-color: var(--sun2); }
@@ -847,7 +856,9 @@ input[type="range"]:focus-visible {
   display: flex; align-items: center; gap: 8px;
   padding: 5px 2px; font-size: 11px; color: var(--text-secondary);
 }
-.prod-entry.recent { opacity: 0.5; }
+/* Recent work is quieter by position and status shape, not ancestor opacity.
+   Fading the whole row cut 11px text to ~3.2:1 on the console gradient. */
+.prod-entry.recent { opacity: 1; }
 .prod-entry .prod-label {
   flex: 1; min-width: 0;
   display: -webkit-box;
@@ -857,7 +868,7 @@ input[type="range"]:focus-visible {
   white-space: normal;
   line-height: 1.25;
 }
-.prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* Compact non-status segment labels for programme categories */
 .a-programme .segment-inline,
@@ -1581,18 +1592,18 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 /* Inner top accent: keep the real 1px rounded border visible. Placing this at
    top:0 made the accent replace the border, so the corner read as broken. */
 .mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:11px 11px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
-.mmr-console-grid{display:grid;grid-template-columns:1.4fr 1fr}
-.mmr-console-air{padding:14px 18px}
-.mmr-console-side{padding:14px 16px;border-left:1px solid var(--line)}
+.mmr-console-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);min-width:0}
+.mmr-console-air{padding:14px 18px;min-width:0;max-width:100%}
+.mmr-console-side{padding:14px 16px;border-left:1px solid var(--line);min-width:0;max-width:100%}
 .mmr-air-top{display:flex;align-items:center;gap:9px}
 .mmr-air-top .status-chip{margin:0}
-.mmr-air-sig{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--muted)}
-.mmr-air-title{font-family:var(--font-display);font-style:italic;font-size:24px;line-height:1.1;margin-top:6px;color:var(--cream);overflow-wrap:anywhere}
-.mmr-air-artist{font-size:12.5px;color:var(--muted);margin-top:2px;min-height:1em}
+.mmr-air-sig{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary)}
+.mmr-air-title{font-family:var(--font-display);font-style:italic;font-size:24px;line-height:1.1;margin-top:6px;color:var(--cream);min-width:0;max-width:100%;overflow-wrap:anywhere}
+.mmr-air-artist{font-size:12.5px;color:var(--text-secondary);margin-top:2px;min-height:1em}
 .mmr-air-progress{display:flex;align-items:center;gap:11px;margin-top:10px}
-.mmr-air-progress .progress-time{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);min-width:34px}
+.mmr-air-progress .progress-time{font-family:var(--font-mono);font-size:11.5px;color:var(--text-secondary);min-width:34px}
 .mmr-air-progress .on-air-progress-track{flex:1}
-.mmr-air-controls{display:flex;align-items:center;gap:9px;margin-top:10px}
+.mmr-air-controls{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:10px;min-width:0}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
 .mmr-console.is-idle .mmr-air-title{font-size:16px;font-style:normal;color:var(--muted);margin-top:4px}
 .mmr-console.is-idle .mmr-air-artist{display:none}
@@ -1600,13 +1611,13 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .btn-chip-danger{color:#E8A29B;border-color:rgba(184,44,32,0.45);}
 .btn-chip-danger:hover{background:rgba(184,44,32,0.18);border-color:rgba(184,44,32,0.7);color:var(--cream);}
 #playlistPoolControls{margin-top:4px;}
-.mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.mmr-air-cost{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--text-secondary)}
 .mmr-air-cost .lbl{text-transform:uppercase;letter-spacing:.08em}
 .mmr-air-cost b{color:var(--cream-dk)}
-.mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;line-height:1.35;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:9px;max-width:100%;overflow-wrap:anywhere}
+.mmr-side-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;line-height:1.35;text-transform:uppercase;color:var(--text-secondary);font-weight:700;margin-bottom:9px;max-width:100%;overflow-wrap:anywhere}
 .mmr-side-label.sun{color:var(--sun)}
-.mmr-console-triggers{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
-.mmr-console-triggers .a-trigger{min-height:44px;padding:10px 12px}
+.mmr-console-triggers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;min-width:0}
+.mmr-console-triggers .a-trigger{min-width:0;min-height:44px;padding:10px 12px}
 .mmr-console-triggers .a-trigger .ico-wrap{margin-bottom:4px}
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
@@ -1639,10 +1650,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0;padding-top:2px;line-height:1.22;letter-spacing:0;overflow:visible}
 .mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
 @media (max-width:900px){
-  .mmr-console-triggers{grid-template-columns:1fr 1fr}
+  .mmr-console-triggers{grid-template-columns:repeat(2,minmax(0,1fr))}
   .mmr-console-triggers .a-trigger{flex-direction:row;align-items:center;gap:10px;min-height:56px}
   .mmr-console-triggers .a-trigger .ico-wrap{flex:0 0 32px;margin-bottom:0}
-  .mmr-console-triggers .a-trigger .lb{line-height:1.2}
+  .mmr-console-triggers .a-trigger .lb{min-width:0;line-height:1.2;overflow-wrap:break-word}
 }
 @media (max-width:768px){
   .mmr-console-grid{grid-template-columns:1fr}
@@ -1724,7 +1735,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             </div>
           </div>
           <div class="mmr-air-controls">
-            <button type="button" class="btn-icon" title="Next track" onclick="doSkip(this)">
+            <button type="button" class="btn-icon" id="skipBtn" title="Next track" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
             <button type="button" id="prefUpNowBtn" class="btn-icon pref-btn" title="Play this song more often" aria-label="Like this song" aria-pressed="false" data-preference-target="now" data-preference-vote="up" style="display:none">
@@ -1739,7 +1750,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <button type="button" id="stopBtn" class="btn-icon" title="Stop" onclick="doStop(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx="0.5"/><rect x="9.5" y="3" width="3" height="10" rx="0.5"/></svg>
             </button>
-            <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)" style="display:none">
+            <button type="button" id="resumeBtn" class="btn-icon" title="Start" onclick="doResume(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
             </button>
             <span class="mmr-air-badge label on" id="onAirBadge">In onda</span>
@@ -1767,7 +1778,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             </button>
           </div>
           <div class="mmr-console-cooking" id="queue-production" style="display:none">
-            <div class="mmr-side-label sun">In produzione · live</div>
+            <div class="mmr-side-label sun" id="productionStateLabel">In produzione · building ahead</div>
             <div id="productionFeed"></div>
           </div>
         </div>
@@ -1887,7 +1898,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div class="search-row">
         <label for="searchInput" class="sr-only">Search music</label>
         <input type="text" class="search-input" id="searchInput" placeholder="Search rotation and the web..." autocomplete="off" aria-label="Search music">
-        <button type="button" class="btn btn-util" onclick="doSearch()">Search</button>
+        <button type="button" class="btn btn-util" data-stopped-exempt onclick="doSearch()">Search</button>
       </div>
       <div id="searchResults"></div>
       <div id="banlistPanel" style="display:none"></div>
@@ -1937,7 +1948,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            On: hosts speak 100% Italian and the listener page stays in Italian. Off: hosts speak about 70% English with real Italian moments, and the listener page is in English.
+            On: hosts speak 100% Italian and listener utility copy is Italian. Off: hosts speak about 70% English with real Italian moments; listener controls and labels are English while Italian headings and station flair remain.
           </div>
         </div>
       </div>
@@ -2130,7 +2141,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div id="setupKeysConfigured" style="display:none;padding:0.75rem 1rem;background:color-mix(in srgb, var(--ok) 10%, transparent);border:1px solid color-mix(in srgb, var(--ok) 30%, transparent);border-radius:8px;margin-bottom:0.75rem">
               <span style="color:var(--ok-text);font-weight:600" id="setupKeysLabel">&#10003; Provider keys configured</span>
               <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
-              <button type="button" class="btn btn-util setup-inline-action" onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
+              <button type="button" class="btn btn-util setup-inline-action" data-stopped-exempt onclick="_keysEditMode=true;document.getElementById('setupKeysForm').style.display='block'">Replace</button>
             </div>
             <div id="setupKeysForm">
               <div class="setup-subhead">AI hosts</div>
@@ -2149,7 +2160,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
                 </details>
               </div>
               <div class="setup-actions" style="margin-top:10px">
-                <button type="button" class="btn btn-trigger" id="setupSaveBtn" onclick="setupSaveKeys(this)">Save AI key</button>
+                <button type="button" class="btn btn-trigger" id="setupSaveBtn" data-stopped-exempt onclick="setupSaveKeys(this)">Save AI key</button>
               </div>
             </div>
             <div class="setup-home-preview-section" id="homeContextPreviewSection">
@@ -2157,15 +2168,15 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
               <div class="setup-note">After an AI host key is ready, filtered Home Assistant context can be sent to that provider. Review what future host prompts may use and mute any entity locally.</div>
               <div class="ha-preview" id="haContextPreview"><div class="empty">Home context preview will appear after the station has safe Home Assistant context.</div></div>
               <div class="setup-actions">
-                <button type="button" class="btn btn-util setup-home-preview-action" onclick="loadHomeContextPreview()">Refresh home preview</button>
+                <button type="button" class="btn btn-util setup-home-preview-action" data-stopped-exempt onclick="loadHomeContextPreview()">Refresh home preview</button>
               </div>
             </div>
             <div class="setup-actions">
-              <button type="button" class="btn btn-util setup-recheck-action" onclick="setupRecheck(this)">Re-check</button>
+              <button type="button" class="btn btn-util setup-recheck-action" data-stopped-exempt onclick="setupRecheck(this)">Re-check</button>
             </div>
             <div class="setup-snippet" id="setupSnippetWrap">
               <div class="setup-subhead" style="margin-top:0">Home Assistant secrets.env Snippet</div>
-              <button type="button" class="btn btn-util" onclick="copySetupSnippet()">Copy snippet</button>
+              <button type="button" class="btn btn-util" data-stopped-exempt onclick="copySetupSnippet()">Copy snippet</button>
               <pre class="setup-pre" id="setupSnippet"></pre>
             </div>
           </div>
@@ -2494,7 +2505,17 @@ function initOnAirSticky(){
 initOnAirSticky();
 
 // ── Transport ──
-async function doSkip(el){flash(el);const r=await api('POST','/api/skip');toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment')}
+async function doSkip(el){
+  flash(el);
+  try{
+    const r=await api('POST','/api/skip');
+    if(!(r&&r.ok)){
+      toast((r&&r.error)||wayOut('skip that segment'));
+      return;
+    }
+    toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
+  }catch(_){toast(offlineMsg());}
+}
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
   // the segment leaves the air the instant the skip lands.
@@ -2526,7 +2547,7 @@ async function doBanNowPlaying(el){
     toast(msg);
   }
 }
-async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast(wayOut());}catch(_){toast(offlineMsg());}}
+async function doTrigger(t,el){flash(el);try{const r=await api('POST','/api/trigger',{type:t});if(r&&r.ok)toast('Queued: '+segmentText(t)+' after the current track');else toast((r&&r.error)||wayOut());}catch(_){toast(offlineMsg());}}
 async function doQuickAction(action,el){
   flash(el);
   if(action==='less_banter'){
@@ -2537,7 +2558,7 @@ async function doQuickAction(action,el){
   }else if(action==='more_chaos'){
     try{
       const r=await api('POST','/api/trigger',{type:'banter'});
-      toast(r.ok?'Chaos incoming — banter queued':wayOut());
+      toast(r&&r.ok?'Chaos incoming — banter queued':(r&&r.error)||wayOut());
     }catch(_){toast(offlineMsg());}
   }else if(action==='too_many_ads'){
     const v=Math.min(10,parseInt(document.getElementById('pAds').value||'4')+2);
@@ -2656,6 +2677,7 @@ async function doResume(el){flash(el);await api('POST','/api/resume');toast('Ses
 function updateStopState(stopped){
   // Global toggle so CSS can dim animations, producer buttons, etc.
   document.body.setAttribute('data-stopped',stopped?'true':'false');
+  syncStoppedProducerControls(stopped);
   if(stopped){
     document.body.setAttribute('data-fader-down','false');
     _faderDownActive=false;
@@ -2683,6 +2705,22 @@ function updateStopState(stopped){
   const topBarEq=document.getElementById('topBarEq');
   if(topBarEq)topBarEq.classList.toggle('paused',stopped);
 }
+
+const STOPPED_PRODUCER_ACTION_SELECTOR='#skipBtn,.btn-trigger:not([data-stopped-exempt]),.btn-chip:not([data-stopped-exempt]),.btn-util:not([data-stopped-exempt]),.a-trigger';
+function syncStoppedProducerControls(stopped){
+  document.querySelectorAll(STOPPED_PRODUCER_ACTION_SELECTOR).forEach(control=>{
+    // `inert` blocks focus and activation without overwriting a control's own
+    // capability/loading disabled state. Dynamic renderers are synchronized by
+    // the observer below and again at the end of both polling lanes.
+    control.inert=stopped;
+    if(stopped||control.disabled)control.setAttribute('aria-disabled','true');
+    else control.removeAttribute('aria-disabled');
+  });
+}
+const _stoppedProducerControlObserver=new MutationObserver(()=>{
+  if(document.body.getAttribute('data-stopped')==='true')syncStoppedProducerControls(true);
+});
+_stoppedProducerControlObserver.observe(document.body,{childList:true,subtree:true});
 function fmtClock(sec){
   const safe=Math.max(0,Math.floor(Number(sec)||0));
   const m=Math.floor(safe/60);const s=String(safe%60).padStart(2,'0');
@@ -2811,6 +2849,16 @@ function updateNow(ns){
   if(topBarTitleText)topBarTitleText.textContent=title+' ';
   if(topBarArtist)topBarArtist.textContent=artistEl.textContent;
   document.getElementById('progFill').setAttribute('data-t',typeKey);
+  if(typeKey==='stopped'){
+    // A stopped segment is a status marker, not media that keeps advancing.
+    // updateStopState() clears the old timer before this render; do not start
+    // another one for the synthetic stopped record on every status poll.
+    if(_tick){clearInterval(_tick);_tick=null;}
+    _prevNowKey='';_nowStart=0;_nowDur=0;
+    document.getElementById('nowElapsed').textContent='—';
+    document.getElementById('progFill').style.width='0';
+    return;
+  }
   const dur=durationSec(ns);
   const label=ns.label||'';
   // Key record-change on type+label+start, not label alone: two different cued
@@ -2872,7 +2920,8 @@ function buildSubtitle(it,typeKey,parts){
 function renderProduction(st){
   const wrap=document.getElementById('queue-production');
   const feed=document.getElementById('productionFeed');
-  if(!wrap||!feed)return;
+  const stateLabel=document.getElementById('productionStateLabel');
+  if(!wrap||!feed||!stateLabel)return;
   const p=st&&st.production||{};
   const rows=[];
   if(p.current&&p.current.label){
@@ -2895,8 +2944,29 @@ function renderProduction(st){
     const badge=segmentInline(segmentTypeKey(r.kind||'music'));
     rows.push(`<div class="prod-entry recent">${statusInline(r.ok?'ready':'blocked','',r.label)}${badge}<span class="prod-label">${esc(r.label)}</span></div>`);
   });
+  const building=!!((p.current&&p.current.label)||fp);
+  const productionStateBase=building?'building ahead':'recent work';
+  const productionContext=st?.session_stopped===true
+    ? 'station paused'
+    : shouldFaderDown(st)
+      ? 'waiting for listeners'
+      : '';
+  const productionState=productionContext
+    ? `${productionStateBase} · ${productionContext}`
+    : productionStateBase;
+  stateLabel.textContent='In produzione · '+productionState;
   if(rows.length){feed.innerHTML=rows.join('');wrap.style.display='';}
   else{feed.innerHTML='';wrap.style.display='none';}
+}
+
+function renderProductionUnavailable(){
+  const wrap=document.getElementById('queue-production');
+  const feed=document.getElementById('productionFeed');
+  const stateLabel=document.getElementById('productionStateLabel');
+  if(!wrap||!feed||!stateLabel)return;
+  stateLabel.textContent='In produzione · reconnecting';
+  feed.innerHTML=`<div class="prod-entry">${statusInline('working','Reconnecting','Producer desk reconnecting')}<span class="prod-label">The producer desk will retry automatically.</span></div>`;
+  wrap.style.display='';
 }
 
 // Turn the real rendered-audio runway into a producer-facing promise. The
@@ -3310,7 +3380,7 @@ function renderGuidedSetupStrip(setup){
   const primaryLabel=primary.label||'Review setup';
   const primaryTarget=primary.target||(primaryKind==='open_listener'?'listen':'setup');
   const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')?'openListener()':'openSetupPanel()';
-  actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
+  actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" data-stopped-exempt onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
 }
 function shouldShowHomeContextPreview(setup){
   const home=setup?.guided_setup?.home_context||{};
@@ -3333,7 +3403,7 @@ function renderHomeContextPreview(data){
     const meta=[row.area,row.domain,row.state_summary,row.reason].filter(Boolean).join(' · ');
     const personalEligible=Boolean(row.personal_moment_eligible);
     const personalEnabled=Boolean(row.personal_moment_enabled);
-    const personalAction=personalEligible?`<button type="button" class="btn btn-util ha-preview-action" data-ha-entity-id="${esc(row.entity_id)}" data-ha-personal-next="${personalEnabled?'false':'true'}">${esc(personalEnabled?'Stop using as a personal moment':'Use as a personal on-air moment')}</button>`:'';
+    const personalAction=personalEligible?`<button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt data-ha-entity-id="${esc(row.entity_id)}" data-ha-personal-next="${personalEnabled?'false':'true'}">${esc(personalEnabled?'Stop using as a personal moment':'Use as a personal on-air moment')}</button>`:'';
     const personalHint=personalEligible?'<div class="ha-preview-meta">Personal room-presence moments are off by default.</div>':'';
     return `<div class="ha-preview-row" data-entity="${esc(row.entity_id)}">
       <div>
@@ -3342,7 +3412,7 @@ function renderHomeContextPreview(data){
         ${personalHint}
         <div class="ha-preview-id">${esc(row.entity_id)}</div>
       </div>
-      <div><button type="button" class="btn btn-util ha-preview-action" aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>${personalAction}</div>
+      <div><button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>${personalAction}</div>
     </div>`;
   }).join('');
 }
@@ -3594,6 +3664,7 @@ function _typeRecentSegments(segments,gen){
   if(gen!==_recentTypeGen)return;
   const seg=segments.shift();
   if(!seg)return;
+  seg.lineEl.hidden=false;
   seg.lineEl.classList.add('tt-typing');
   _typeChars(Array.from(seg.text),0,seg.textNode,()=>{
     if(gen!==_recentTypeGen)return;
@@ -3619,6 +3690,7 @@ function _recentLineEl(host,text,reduced,segments,tagHost){
   lineEl.appendChild(document.createTextNode(' '));
   const textNode=document.createTextNode(instant?text:'');
   lineEl.appendChild(textNode);
+  lineEl.hidden=!instant;
   if(!instant)segments.push({lineEl,textNode,text});
   return lineEl;
 }
@@ -4578,7 +4650,7 @@ function _renderArchivio(){
     return true;
   }).slice(0,40);
   if(!matched.length){
-    el.innerHTML='<div class="empty" style="padding:14px">No matches. <button type="button" class="btn btn-util" style="font-size:0.8em;padding:0.2rem 0.6rem" onclick="clearArchivioFilters()">Clear filters</button></div>';
+    el.innerHTML='<div class="empty" style="padding:14px">No matches. <button type="button" class="btn btn-util" data-stopped-exempt style="font-size:0.8em;padding:0.2rem 0.6rem" onclick="clearArchivioFilters()">Clear filters</button></div>';
     return;
   }
   el.innerHTML=matched.map((e,i)=>{
@@ -4622,7 +4694,7 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Super Italian ON — hosts go full Italian, listener page in Italian':'Super Italian OFF — hosts speak mostly English with real Italian moments (about 70/30), listener page in English');
+    if(r&&r.ok)toast(value?'Super Italian ON — hosts and listener utility copy go full Italian':'Super Italian OFF — hosts speak mostly English with real Italian moments (about 70/30); listener controls are English while Italian headlines remain');
     else{
       el.checked=!value;
       toast(wayOut());
@@ -4888,26 +4960,70 @@ function renderActiveTab(){
   else if(_activeTab==='scaletta')renderProgramme(_st);
   // diretta / conduttori / motore have no poll-driven list here — their content
   // is fed by the always-on calls (updateRecent, renderHosts one-shot, updateEngineRoom).
+  syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
+}
+const FAST_POLL_INTERVAL_MS=3000;
+const FAST_STATUS_DEADLINE_MS=2400;
+const FAST_AUX_DEADLINE_MS=1200;
+let _fastPollGeneration=0;
+async function fetchAdminJson(path,deadlineMs){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),deadlineMs);
+  try{
+    const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
+    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
+    const payload=await response.json();
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    return payload;
+  }finally{clearTimeout(deadline);}
 }
 async function refreshFast(){
+  const generation=++_fastPollGeneration;
+  const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
+  let nextStatus;
+  // Listener requests are additive. Start them in parallel, but never make
+  // authoritative /status wait for this auxiliary surface.
+  const listenerPromise=fetchAdminJson('/api/listener-requests',FAST_AUX_DEADLINE_MS)
+    .catch(()=>null);
+  const hostsPromise=!_hostsOk
+    ? fetchAdminJson('/api/hosts',FAST_AUX_DEADLINE_MS)
+        .catch(e=>{console.error('refreshFast hosts',e);return null;})
+    : Promise.resolve(null);
   try{
-    const playlistLimit=Math.max(_plRows.length||0,PLAYLIST_PAGE_SIZE);
-    const [sr,lrr]=await Promise.all([fetch(_base+`/status?playlist_limit=${playlistLimit}`,{headers:H()}),fetch(_base+'/api/listener-requests',{headers:H()})]);
-    _st=await sr.json();
+    nextStatus=await fetchAdminJson(`/status?playlist_limit=${playlistLimit}`,FAST_STATUS_DEADLINE_MS);
+  }catch(e){
+    if(generation!==_fastPollGeneration)return;
+    console.error('refreshFast status',e);
+    const _oa=document.getElementById('on-air');
+    if(_oa)_oa.classList.remove('is-idle');
+    renderProductionUnavailable();
+    return;
+  }
+
+  if(generation!==_fastPollGeneration)return;
+  _st=nextStatus;
+  try{
+    // Paint the authoritative production state before unrelated widgets. A
+    // later renderer failure must not leave yesterday's production row frozen.
+    // Isolate it in its own try: a malformed production shape must never starve
+    // the stopped-state honesty updaters below (updateStopState/updateNow), or
+    // the desk could keep showing live On-Air controls over a paused station.
+    try{
+      renderProduction(_st);
+    }catch(e){
+      console.error('refreshFast production',e);
+    }
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }
     notifyExternalAddNotices(_st.external_add_notices);
-    const lrData=lrr.ok?await lrr.json():{requests:[]};
     if(_st.session_stopped!==undefined)updateStopState(_st.session_stopped);
     updateFaderDownState(_st);
     updateNow(_st.now_streaming);
-    renderProduction(_st);
     updateHeadingBanner(_st);
     renderActiveTab();
     updateProgrammeRunway(_st);
     updateRecent(_st);
-    updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
     updateMoments(_st);
@@ -4915,8 +5031,16 @@ async function refreshFast(){
     updateSourceControls(_st,_caps);
     updateChaosState(_st.chaos_mode);
     if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
-    if(!_hostsOk){_hostsOk=true;const r=await fetch(_base+'/api/hosts',{headers:H()});renderHosts((await r.json()).hosts||[])}
-  }catch(e){console.error('refreshFast',e);const _oa=document.getElementById('on-air');if(_oa)_oa.classList.remove('is-idle');}
+  }catch(e){
+    // A client-side renderer failure is not evidence that the producer/status
+    // source is unavailable. Keep the status-derived production truth visible.
+    console.error('refreshFast render',e);
+  }
+
+  const [lrData,hostsData]=await Promise.all([listenerPromise,hostsPromise]);
+  if(generation!==_fastPollGeneration)return;
+  if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
+  if(hostsData){renderHosts(hostsData.hosts||[]);_hostsOk=true;}
 }
 async function refreshSlow(){
   try{
@@ -4927,6 +5051,7 @@ async function refreshSlow(){
     updateSourceControls(_st,_caps);
     renderSetup(setup);
     loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
+    syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
   }catch(e){console.error('refreshSlow',e)}
 }
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
@@ -4938,7 +5063,7 @@ loadQuality();
 loadChaosToggle();
 loadFestivalToggle();
 refreshBanCount();
-setInterval(refreshFast,3000);
+setInterval(refreshFast,FAST_POLL_INTERVAL_MS);
 setInterval(refreshSlow,30000);
 </script>
 </body>
