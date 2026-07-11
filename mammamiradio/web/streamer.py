@@ -14,7 +14,7 @@ import os
 import random as _random
 import re as _re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -58,10 +58,12 @@ from mammamiradio.core.setup_status import (
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
     load_entity_policy,
+    personal_moment_opt_in_entity_ids,
     set_entity_muted,
+    set_personal_moment_enabled,
     valid_entity_id,
 )
-from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
+from mammamiradio.home.ha_context import PRESENCE_SENSOR_DEVICE_CLASSES, get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
@@ -432,6 +434,38 @@ def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple
         q.put_nowait(seg)
     if dropped_ids:
         state.queued_segments = [s for s in state.queued_segments if s.get("id") not in dropped_ids]
+    return len(dropped_ids)
+
+
+def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -> int:
+    """Remove unstarted banter tied to a newly muted home entity.
+
+    The current segment is no longer in ``q`` and deliberately finishes. Every
+    removed queued segment travels through ``record_discard`` so its director
+    reservation is released by the same central lifecycle boundary.
+    """
+    items = _drain_segment_queue(q)
+    survivors: list = []
+    dropped_ids: set[str] = set()
+    for segment in items:
+        metadata = getattr(segment, "metadata", {}) or {}
+        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") == entity_id:
+            queue_id = metadata.get("queue_id")
+            if isinstance(queue_id, str):
+                dropped_ids.add(queue_id)
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.OPERATOR_PURGE,
+                already_counted_in_produced=True,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+            _unlink_ephemeral_best_effort(segment)
+            continue
+        survivors.append(segment)
+    for segment in survivors:
+        q.put_nowait(segment)
+    if dropped_ids:
+        state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
     return len(dropped_ids)
 
 
@@ -1175,11 +1209,25 @@ def _generation_waste_snapshot(state: StationState, models: ModelsSection | None
     }
 
 
+def _status_is_presence_eligible(status: Mapping[str, object]) -> bool:
+    """Return whether a status dict is a room-scoped presence-consent candidate.
+
+    Single source for the personal-moment eligibility predicate used by the
+    admin preview rows and the PATCH gate, so they cannot drift apart.
+    """
+    return bool(
+        status.get("domain") == "binary_sensor"
+        and status.get("device_class") in PRESENCE_SENSOR_DEVICE_CLASSES
+        and status.get("area")
+    )
+
+
 def _safe_home_entity_preview(state: StationState, config) -> dict:
     """Return admin-only, sanitized HA context candidates for onboarding."""
     policy = load_entity_policy(config.cache_dir)
     muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
     muted_ids = set(muted_map)
+    personal_moment_ids = personal_moment_opt_in_entity_ids(config.cache_dir)
     ctx = get_cached_home_context(config.cache_dir)
     rows: dict[str, dict] = {}
     if ctx is not None:
@@ -1189,6 +1237,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
             if not entity_id:
                 continue
             stale_after = max(float(config.homeassistant.poll_interval) * 2, 120.0)
+            personal_moment_eligible = _status_is_presence_eligible(status)
             rows[entity_id] = {
                 "entity_id": entity_id,
                 "label": status.get("label") or entity_id,
@@ -1199,6 +1248,11 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "muted": entity_id in muted_ids,
                 "sent_to_prompt": entity_id not in muted_ids,
                 "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+                "personal_moment_eligible": personal_moment_eligible,
+                "personal_moment_enabled": entity_id in personal_moment_ids,
+                "personal_moment_effective": personal_moment_eligible
+                and entity_id in personal_moment_ids
+                and entity_id not in muted_ids,
                 "last_updated": getattr(ctx, "timestamp", 0.0) or None,
                 "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
             }
@@ -1206,6 +1260,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
         entity_id = str(status.get("entity_id") or "")
         if not entity_id or entity_id in rows:
             continue
+        personal_moment_eligible = _status_is_presence_eligible(status)
         rows[entity_id] = {
             "entity_id": entity_id,
             "label": status.get("label") or entity_id,
@@ -1216,6 +1271,11 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
             "muted": entity_id in muted_ids,
             "sent_to_prompt": entity_id not in muted_ids,
             "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+            "personal_moment_eligible": personal_moment_eligible,
+            "personal_moment_enabled": entity_id in personal_moment_ids,
+            "personal_moment_effective": personal_moment_eligible
+            and entity_id in personal_moment_ids
+            and entity_id not in muted_ids,
             "last_updated": state.ha_context_last_updated or None,
             "stale": False,
         }
@@ -1234,6 +1294,9 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "muted": True,
                 "sent_to_prompt": False,
                 "row_state": "muted",
+                "personal_moment_eligible": False,
+                "personal_moment_enabled": False,
+                "personal_moment_effective": False,
                 "last_updated": entry.get("muted_at"),
                 "stale": False,
             },
@@ -1282,6 +1345,22 @@ def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[s
                 "area": str(status.get("area") or ""),
             }
     return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
+
+
+def _personal_moment_entity_is_eligible(state: StationState, config, entity_id: str) -> bool:
+    """Allow consent only for a current, room-scoped presence candidate."""
+    ctx = get_cached_home_context(config.cache_dir)
+    candidates = list(getattr(ctx, "scored", []) or []) if ctx is not None else []
+    for entity in candidates:
+        status = entity.to_status_dict()
+        if status.get("entity_id") != entity_id:
+            continue
+        return _status_is_presence_eligible(status)
+    for status in state.ha_scored_entities:
+        if status.get("entity_id") != entity_id:
+            continue
+        return _status_is_presence_eligible(status)
+    return False
 
 
 def _copy_home_context_to_state(state: StationState, context) -> None:
@@ -2765,16 +2844,20 @@ async def homeassistant_context_candidates(request: Request, _: None = Depends(r
 
 @router.patch("/api/homeassistant/entity-policy")
 async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
-    """Mute/unmute one Home Assistant entity for host context use."""
+    """Apply one idempotent Home Context privacy property mutation."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
     entity_id = body.get("entity_id")
-    muted = body.get("muted")
     if not isinstance(entity_id, str) or not valid_entity_id(entity_id):
         raise HTTPException(status_code=422, detail="entity_id must be a Home Assistant entity id")
-    if not isinstance(muted, bool):
-        raise HTTPException(status_code=422, detail="muted must be true or false")
+    action_fields = [field for field in ("muted", "personal_moment_enabled") if field in body]
+    if len(action_fields) != 1:
+        raise HTTPException(status_code=422, detail="provide exactly one of muted or personal_moment_enabled")
+    action = action_fields[0]
+    value = body.get(action)
+    if not isinstance(value, bool):
+        raise HTTPException(status_code=422, detail=f"{action} must be true or false")
 
     config = request.app.state.config
     # No preview-membership gate: some entities (e.g. radio_event-only
@@ -2784,15 +2867,28 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     # any syntactically valid entity_id (already checked above) is accepted.
     state = request.app.state.station_state
     row = _home_entity_metadata(state, config, entity_id)
+    if (
+        action == "personal_moment_enabled"
+        and value
+        and not _personal_moment_entity_is_eligible(state, config, entity_id)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That entity can't host a personal moment. Pick a room-presence sensor "
+                "that's showing activity right now, then turn it on."
+            ),
+        )
     loop = asyncio.get_running_loop()
     try:
+        mutation = set_entity_muted if action == "muted" else set_personal_moment_enabled
         policy = await loop.run_in_executor(
             None,
             functools.partial(
-                set_entity_muted,
+                mutation,
                 config.cache_dir,
                 entity_id,
-                muted,
+                value,
                 label=row.get("label") or entity_id,
                 domain=row.get("domain") or entity_id.split(".", 1)[0],
                 area=row.get("area") or "",
@@ -2804,19 +2900,52 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if muted:
+    purged_pending_banter_count = 0
+    # Both a mute and revoking a personal-moment opt-in tighten privacy for this
+    # entity: an unstarted queued break that references it must be pulled (the
+    # already-airing segment finishes untouched), and the director must advance
+    # so an in-flight render for the entity is rejected. Consent revocation
+    # previously did neither, so a queued presence break could still air.
+    privacy_tightened = (action == "muted" and value) or (action == "personal_moment_enabled" and not value)
+    if action == "muted" and value:
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
-    else:
+    elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
+    if privacy_tightened:
+        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, entity_id)
+    # The mutation already returned the authoritative just-written policy; read
+    # the revision off it instead of re-reading the file we just wrote.
+    current_policy_revision = int(policy.get("policy_revision", 0) or 0)
+    director = state.home_context_director
+    if director is not None:
+        invalidate = getattr(director, "invalidate_entity", None)
+        if callable(invalidate) and privacy_tightened:
+            invalidate(entity_id, policy_revision=current_policy_revision)
+    muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
+    personal_moment = entity_id in (
+        policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}
+    )
+    eligible = _personal_moment_entity_is_eligible(state, config, entity_id)
     return {
         "ok": True,
         "entity_id": entity_id,
         "muted": muted,
+        "personal_moment_enabled": personal_moment,
+        "personal_moment_eligible": eligible,
+        "personal_moment_effective": bool(personal_moment and eligible and not muted),
+        "policy_revision": current_policy_revision,
+        "purged_pending_banter_count": purged_pending_banter_count,
+        "current_segment_unchanged": True,
         "policy": {
             "schema_version": policy.get("schema_version"),
             "muted_count": len(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}),
+            "personal_moment_count": len(
+                policy.get("personal_moment_opt_ins", {})
+                if isinstance(policy.get("personal_moment_opt_ins"), dict)
+                else {}
+            ),
         },
     }
 

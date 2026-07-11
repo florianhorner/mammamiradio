@@ -3547,6 +3547,54 @@ async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_
 
 
 @pytest.mark.asyncio
+async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued_presence_banter(tmp_path):
+    """Revoking a presence opt-in must pull an unstarted queued break for that
+    entity, the same privacy contract as a mute — the airing segment is untouched."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.ha_scored_entities = [
+        {
+            "entity_id": "binary_sensor.living_presence",
+            "label": "Living presence",
+            "area": "Living room",
+            "domain": "binary_sensor",
+            "device_class": "occupancy",
+            "state": "on",
+            "summary": "presence",
+        }
+    ]
+    # A queued (not yet airing) presence break tied to that entity.
+    queued = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/presence-break.mp3"),
+        metadata={"queue_id": "q-presence-1", "home_fact_entity_id": "binary_sensor.living_presence"},
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"type": "banter", "label": "Presence break", "id": "q-presence-1"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        opt_in = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": True},
+        )
+        opt_out = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": False},
+        )
+
+    assert opt_in.status_code == 200
+    assert opt_in.json()["personal_moment_enabled"] is True
+    assert opt_out.status_code == 200
+    assert opt_out.json()["personal_moment_enabled"] is False
+    assert opt_out.json()["purged_pending_banter_count"] == 1
+    # The queued presence break was pulled, and its shadow row with it.
+    assert app.state.queue.qsize() == 0
+    assert state.queued_segments == []
+
+
+@pytest.mark.asyncio
 async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_path):
     """A gag observed before a mute must not survive it — entity_denylist only
     stops NEW events from becoming buckets; it does nothing about a bucket
@@ -4302,3 +4350,57 @@ async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
     assert resp.status_code == 200
     # The stale old-key 401 must NOT clobber the fresh "valid" verdict.
     assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_fact(tmp_path):
+    from mammamiradio.home.context_director import HomeContextDirector
+    from mammamiradio.home.ha_context import HomeContext, ScoredEntity
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    presence = ScoredEntity(
+        entity_id="binary_sensor.office_presence",
+        area="Office",
+        domain="binary_sensor",
+        score=0.9,
+        raw_state={"state": "on", "attributes": {"device_class": "presence"}},
+        label_it="Office presence",
+        label_en="Office presence",
+        summary_line="Office: active",
+    )
+    context = HomeContext(scored=[presence], timestamp=time.time())
+    state = app.state.station_state
+    state.home_context_director = HomeContextDirector()
+    state.home_context_director.observe([], policy_revision=0)
+    queued = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/context-fact.mp3"),
+        metadata={
+            "queue_id": "fact-queue",
+            "home_fact_entity_id": "binary_sensor.office_presence",
+            "home_fact_id": "opaque",
+        },
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"id": "fact-queue", "type": "banter", "label": "Host break"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.home.ha_context._ha_cache", context):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            enabled = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "binary_sensor.office_presence", "personal_moment_enabled": True},
+            )
+            muted = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "binary_sensor.office_presence", "muted": True},
+            )
+
+    assert enabled.status_code == 200
+    assert enabled.json()["personal_moment_effective"] is True
+    assert muted.status_code == 200
+    assert muted.json()["personal_moment_enabled"] is False
+    assert muted.json()["purged_pending_banter_count"] == 1
+    assert app.state.queue.empty()
+    assert state.queued_segments == []

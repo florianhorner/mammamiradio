@@ -61,7 +61,11 @@ from mammamiradio.core.models import (
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.home.catalog import schedule_label_generation
-from mammamiradio.home.entity_policy import muted_entity_ids
+from mammamiradio.home.context_director import DirectorObservation, PromptFact
+from mammamiradio.home.entity_policy import (
+    load_entity_policy,
+    muted_entity_ids,
+)
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
@@ -2034,6 +2038,41 @@ def _emit_segment_prepared(
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
 
 
+def _observe_home_context_director(state: StationState, config: StationConfig, context: HomeContext) -> None:
+    """Refresh the director's strict projection without adding HA polling."""
+    director = state.home_context_director
+    if director is None:
+        return
+    observations: list[DirectorObservation] = []
+    for entity in context.scored:
+        try:
+            observation = DirectorObservation.from_home_assistant_state(
+                entity.entity_id,
+                entity.raw_state,
+                score=entity.score,
+                area=entity.area,
+            )
+        except Exception:
+            observation = None
+        if observation is not None:
+            observations.append(observation)
+    try:
+        # One load: policy_revision/muted/personal_moment_opt_ins are all slices
+        # of the same normalized policy dict — three helper calls would re-lock
+        # and re-stat the same file per HA refresh.
+        policy = load_entity_policy(config.cache_dir)
+        muted = policy.get("muted", {})
+        opt_ins = policy.get("personal_moment_opt_ins", {})
+        director.observe(
+            observations,
+            policy_revision=int(policy.get("policy_revision", 0) or 0),
+            muted_entity_ids=set(muted) if isinstance(muted, dict) else set(),
+            personal_moment_opt_ins=set(opt_ins) if isinstance(opt_ins, dict) else set(),
+        )
+    except Exception:
+        logger.debug("Home context director observation failed", exc_info=True)
+
+
 def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
     if len(ha_cache.scored) < FIRST_HOME_CONTEXT_MIN_ENTITIES:
         return False
@@ -2233,6 +2272,26 @@ async def run_producer(
     state.last_enqueued_type = _seed_adjacency_type(queue, state, prev_seg_type)
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
+    def _home_fact_policy_is_current(segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        fact_id = metadata.get("home_fact_id")
+        if not fact_id:
+            return True
+        revision = metadata.get("home_fact_policy_revision")
+        entity_id = metadata.get("home_fact_entity_id")
+        # One load: the revision and the mute set both come from the same policy
+        # dict, so read them off a single normalized load instead of two.
+        policy = load_entity_policy(config.cache_dir)
+        muted = policy.get("muted", {})
+        muted_ids = set(muted) if isinstance(muted, dict) else set()
+        return (
+            isinstance(revision, int)
+            and not isinstance(revision, bool)
+            and revision == int(policy.get("policy_revision", 0) or 0)
+            and isinstance(entity_id, str)
+            and entity_id not in muted_ids
+        )
+
     async def _queue_segment(segment: Segment, *, shadow_entry: dict | None = None) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
         nonlocal prev_seg_type
@@ -2242,7 +2301,22 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        if not await _enqueue_with_egress(queue, state, config, segment, shadow_entry=shadow_entry):
+        if not _home_fact_policy_is_current(segment):
+            state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+            _unlink_if_tmp_render(segment, config.tmp_dir)
+            return False
+
+        def _home_fact_is_stale(_segment: Segment = segment) -> bool:
+            return not _home_fact_policy_is_current(_segment)
+
+        if not await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            shadow_entry=shadow_entry,
+            stale_check=_home_fact_is_stale,
+        ):
             return False
         prev_seg_type = _adjacency_type_for(segment)
         return True
@@ -2639,6 +2713,7 @@ async def run_producer(
             state.ha_registry_source = str(getattr(ha_cache, "registry_source", "") or "")
             state.ha_context_entity_count = len(ha_cache.scored)
             state.ha_context_char_count = len(ha_cache.summary or "")
+            _observe_home_context_director(state, config, ha_cache)
             ritual_matches = list(getattr(ha_cache, "ritual_recipe_matches", []) or [])
             state.ha_ritual_public_families = list(getattr(ha_cache, "ritual_public_families", []) or [])[:4]
             state.ha_ritual_context = ", ".join(state.ha_ritual_public_families)
@@ -3033,6 +3108,7 @@ async def run_producer(
                         "stale-handoff",
                     )
                 state.last_banter_ritual_moment_id = ""
+                state.last_banter_home_fact = None
 
                 def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
                     ritual_id = state.last_banter_ritual_moment_id
@@ -3057,6 +3133,26 @@ async def run_producer(
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+                home_context_director = state.home_context_director
+                # A pending reactive/first-moment directive carries its own home
+                # payload (and the FIRST CONNECTED HOME MOMENT directive asks the
+                # host to cite concrete home details), so it must keep the legacy
+                # ha_context/events/weather sections. Only director-owned casual
+                # breaks suppress them, and those are the only breaks that select a
+                # prompt_fact — so the flag and the selection share one condition.
+                use_directed_home_context = (
+                    chaos_subtype is None and home_context_director is not None and not state.ha_pending_directive
+                )
+                prompt_fact: PromptFact | None = None
+                # Only select when real banter will actually be generated: the
+                # canned/impossible no-LLM branch below never consumes a fact, and
+                # selecting there would advance rotation/counters for a cue that
+                # never airs.
+                if use_directed_home_context and home_context_director is not None and _sw.has_script_llm(config):
+                    try:
+                        prompt_fact = home_context_director.select(lane="casual")
+                    except Exception:
+                        logger.debug("Home context director selection failed", exc_info=True)
 
                 if chaos_subtype is None and not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
@@ -3163,6 +3259,8 @@ async def run_producer(
                                     config,
                                     is_new_listener=_is_new_listener,
                                     is_first_listener=_is_first_listener,
+                                    prompt_fact=prompt_fact,
+                                    use_directed_home_context=use_directed_home_context,
                                 )
                                 (
                                     (trans_host, trans_text, trans_track_ref),
@@ -3441,6 +3539,8 @@ async def run_producer(
                 ritual_moment_id = state.last_banter_ritual_moment_id or ""
                 gag_moment_id = state.ha_running_gag_moment_id or ""
                 attach_moment_ids = canned is None and not impossible_tts
+                home_fact = state.last_banter_home_fact if attach_moment_ids else None
+                home_fact_metadata: dict[str, str | int] = home_fact.segment_metadata() if home_fact is not None else {}
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -3468,6 +3568,7 @@ async def run_producer(
                         # would mint a false aired receipt.
                         "ritual_moment_id": ritual_moment_id if attach_moment_ids and ritual_moment_id else None,
                         "gag_moment_id": gag_moment_id if attach_moment_ids and gag_moment_id else None,
+                        **home_fact_metadata,
                         **release_beat_metadata,
                         **memory_extraction_metadata,
                     },
@@ -3477,6 +3578,7 @@ async def run_producer(
                 # metadata (or intentionally not, for canned fallbacks — the
                 # elected row then simply never airs and ages out honestly).
                 state.last_banter_ritual_moment_id = ""
+                state.last_banter_home_fact = None
 
                 def _banter_callback(
                     *,
@@ -4141,15 +4243,57 @@ async def run_producer(
                     state.operator_force_pending = None  # render abandoned — let the operator retry
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
+            if not _home_fact_policy_is_current(segment):
+                logger.info("Discarding stale banter after Home Context policy change")
+                state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-policy")
+                _abandon_release_beat_commit(state, banter_commit)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
             # Stable per-segment id: the shared queue publication helper stamps
             # this on both the audio and its Scaletta row before admission.
             shadow_entry = _queue_shadow_entry(segment)
+            # Reserve the ambient home fact (if any) BEFORE admission. A rejected
+            # reservation means the topic is already queued ahead or resting on
+            # cooldown, so airing this segment would double the same cue on-air —
+            # drop it here instead of after it is already in the queue. This reads
+            # only segment metadata, so it is a safe no-op on non-home segments.
+            _seg_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+            _home_fact_id = str(_seg_metadata.get("home_fact_id") or "")
+            _home_fact_director = state.home_context_director
+            _home_fact_queue_id = str(_seg_metadata.get("queue_id") or "")
+            if (
+                _home_fact_id
+                and _home_fact_director is not None
+                and not _home_fact_director.reserve_by_id(_home_fact_queue_id, _home_fact_id)
+            ):
+                logger.info("Discarding banter: home fact reservation rejected (topic already queued or resting)")
+                state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                _drop_segment_moment_receipts(
+                    state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-reserve-rejected"
+                )
+                _abandon_release_beat_commit(state, banter_commit)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
             if is_operator_forced:
                 # Air-next: front-insert past the buffered lookahead so the operator
                 # hears their pick at the next boundary, never minutes later.
+                def _front_insert_home_fact_is_stale(_segment: Segment = segment) -> bool:
+                    return not _home_fact_policy_is_current(_segment)
+
                 if not await _enqueue_with_egress(
-                    queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
+                    queue,
+                    state,
+                    config,
+                    segment,
+                    front_insert=True,
+                    shadow_entry=shadow_entry,
+                    stale_check=_front_insert_home_fact_is_stale,
                 ):
+                    if _home_fact_id and _home_fact_director is not None:
+                        _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
@@ -4158,6 +4302,8 @@ async def run_producer(
                 prev_seg_type = _adjacency_type_for(segment)
             else:
                 if not await _queue_segment(segment, shadow_entry=shadow_entry):
+                    if _home_fact_id and _home_fact_director is not None:
+                        _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_release_beat_commit(state, banter_commit)
                     await _sleep_post_failure_backoff(post_failure_backoff)
