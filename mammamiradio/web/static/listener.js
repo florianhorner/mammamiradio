@@ -148,21 +148,29 @@
   function _setLiveChip(el, stopped) {
     if (!el) return;
     const suffix = _liveChipSuffix(el);
-    const label = stopped ? _t('np_paused', 'Fermo') : _t('np_live', 'In Onda');
     el.classList.toggle('is-stopped', stopped);
     el.replaceChildren();
     const dot = document.createElement('span');
     dot.className = 'dot';
     el.appendChild(dot);
-    el.appendChild(document.createTextNode(' ' + label + suffix));
+    if (stopped) {
+      el.appendChild(document.createTextNode(' ' + _t('np_paused', 'Fermo') + suffix));
+    } else {
+      el.appendChild(document.createTextNode(' '));
+      const label = document.createElement('span');
+      label.lang = 'it';
+      label.textContent = 'In Onda';
+      el.appendChild(label);
+      el.appendChild(document.createTextNode(suffix));
+    }
     el.removeAttribute('aria-label');
   }
 
-  function _setNavPlayControl(stopped) {
-    const el = $('nav-cta');
+  function _setPlayControl(el, stopped, variant) {
     if (!el) return;
-    const suffix = _liveChipSuffix(el);
-    const hasIntent = !stopped && (state.isPlaying || state.playPending || state.wantsPlay);
+    // wantsPlay is the single intent source: startStream() sets it,
+    // setPlayingUi(true) restores it, and external pauses clear it.
+    const hasIntent = !stopped && state.wantsPlay;
     const label = stopped
       ? _t('listen_stopped', 'Station paused')
       : hasIntent
@@ -174,59 +182,47 @@
         ? _t('listen_pause_aria', 'Pause station')
         : _t('listen_now_aria', 'Listen now');
 
-    el.classList.toggle('is-stopped', stopped);
-    el.classList.toggle('playing', !stopped && state.isPlaying);
     el.disabled = stopped;
-    el.replaceChildren();
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    el.appendChild(dot);
-    const actionIcon = document.createElement('span');
-    actionIcon.setAttribute('aria-hidden', 'true');
-    actionIcon.textContent = stopped || hasIntent ? '\u2016' : '\u25b6';
-    el.appendChild(actionIcon);
-    el.appendChild(document.createTextNode(' ' + label + suffix));
     el.setAttribute('aria-label', ariaLabel);
     el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false');
+
+    if (variant === 'nav') {
+      const suffix = _liveChipSuffix(el);
+      el.classList.toggle('is-stopped', stopped);
+      el.classList.toggle('playing', !stopped && state.isPlaying);
+      el.replaceChildren();
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      el.appendChild(dot);
+      const actionIcon = document.createElement('span');
+      actionIcon.setAttribute('aria-hidden', 'true');
+      actionIcon.textContent = stopped || hasIntent ? '\u2016' : '\u25b6';
+      el.appendChild(actionIcon);
+      el.appendChild(document.createTextNode(' ' + label + suffix));
+      return;
+    }
+
+    if (variant === 'compact') {
+      el.classList.toggle('playing', !stopped && state.isPlaying);
+      el.innerHTML = hasIntent || stopped
+        ? '<span class="mmr-play-icon">&#9208;</span>'
+        : '<span class="mmr-play-icon">&#9654;</span>';
+      return;
+    }
+
+    if (variant === 'hero') el.textContent = label;
+  }
+
+  function _setNavPlayControl(stopped) {
+    _setPlayControl($('nav-cta'), stopped, 'nav');
   }
 
   function _setCompactPlayControl(stopped) {
-    if (!playBtnSmall) return;
-    const hasIntent = !stopped && (state.isPlaying || state.playPending || state.wantsPlay);
-    playBtnSmall.disabled = stopped;
-    playBtnSmall.classList.toggle('playing', !stopped && state.isPlaying);
-    playBtnSmall.innerHTML = hasIntent || stopped
-      ? '<span class="mmr-play-icon">&#9208;</span>'
-      : '<span class="mmr-play-icon">&#9654;</span>';
-    playBtnSmall.setAttribute(
-      'aria-label',
-      stopped
-        ? _t('listen_paused_aria', 'Station paused')
-        : hasIntent
-          ? _t('listen_pause_aria', 'Pause station')
-          : _t('listen_now_aria', 'Listen now'),
-    );
-    playBtnSmall.setAttribute('aria-pressed', hasIntent ? 'true' : 'false');
+    _setPlayControl(playBtnSmall, stopped, 'compact');
   }
 
   function _setHeroPlayControl(stopped) {
-    if (!heroPlay) return;
-    const hasIntent = !stopped && (state.isPlaying || state.playPending || state.wantsPlay);
-    heroPlay.disabled = stopped;
-    heroPlay.textContent = stopped
-      ? _t('listen_stopped', 'Station paused')
-      : hasIntent
-        ? _t('listen_pause', 'Pause')
-        : _t('listen_now', 'Listen Now');
-    heroPlay.setAttribute(
-      'aria-label',
-      stopped
-        ? _t('listen_paused_aria', 'Station paused')
-        : hasIntent
-          ? _t('listen_pause_aria', 'Pause station')
-          : _t('listen_now_aria', 'Listen now'),
-    );
-    heroPlay.setAttribute('aria-pressed', hasIntent ? 'true' : 'false');
+    _setPlayControl(heroPlay, stopped, 'hero');
   }
 
   function _setPlaybackControls(stopped) {
@@ -1059,7 +1055,14 @@
     // Audio element event wiring
     if (audio) {
       audio.addEventListener('play', () => setPlayingUi(true));
-      audio.addEventListener('pause', () => setPlayingUi(false));
+      audio.addEventListener('pause', () => {
+        if (!audio.ended && !audio.error) {
+          state.wantsPlay = false;
+          state.playPending = false;
+          _clearPlaybackRetry();
+        }
+        setPlayingUi(false);
+      });
       audio.addEventListener('ended', () => {
         state.playPending = false;
         setPlayingUi(false);

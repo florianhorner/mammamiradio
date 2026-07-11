@@ -239,11 +239,14 @@ def test_listener_live_chip_never_reinterprets_configured_frequency_as_html() ->
     like `<img onerror=...>` as markup. Use nodes/textContent only.
     """
     js = LISTENER_JS.read_text(encoding="utf-8")
-    block = js[js.index("function _setLiveChip") : js.index("function _setNavPlayControl")]
+    block = js[js.index("function _setLiveChip") : js.index("function _setPlayControl")]
     assert "innerHTML" not in block
     assert "replaceChildren()" in block
     assert "document.createElement('span')" in block
     assert "document.createTextNode" in block
+    assert "label.lang = 'it'" in block
+    assert "label.textContent = 'In Onda'" in block
+    assert "_t('np_live'" not in block, "the stage flair must stay Italian, not utility-localized."
 
 
 def test_listener_stopped_playback_controls_are_honestly_disabled() -> None:
@@ -256,7 +259,7 @@ def test_listener_stopped_playback_controls_are_honestly_disabled() -> None:
         assert "listen_paused_aria" in opening_tag.group(0)
 
     js = LISTENER_JS.read_text(encoding="utf-8")
-    block = js[js.index("function _setNavPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    block = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
     assert "_t('listen_stopped', 'Station paused')" in block
     assert "_t('listen_paused_aria', 'Station paused')" in block
     assert "el.disabled = stopped" in block
@@ -279,9 +282,9 @@ def test_listener_live_nav_cta_is_an_honest_play_pause_toggle() -> None:
     assert "listen_now" in button.group(1) and "listen_stopped" in button.group(1)
 
     js = LISTENER_JS.read_text(encoding="utf-8")
-    block = js[js.index("function _setNavPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    block = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
     for needle in (
-        "state.isPlaying || state.playPending || state.wantsPlay",
+        "const hasIntent = !stopped && state.wantsPlay",
         "_t('listen_now', 'Listen Now')",
         "_t('listen_pause', 'Pause')",
         "_t('listen_now_aria', 'Listen now')",
@@ -289,6 +292,13 @@ def test_listener_live_nav_cta_is_an_honest_play_pause_toggle() -> None:
         "el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false')",
     ):
         assert needle in block, f"nav playback control must keep its visible/action state via {needle!r}."
+    for needle in (
+        "function _setNavPlayControl",
+        "_setPlayControl($('nav-cta'), stopped, 'nav')",
+        "_setPlayControl(playBtnSmall, stopped, 'compact')",
+        "_setPlayControl(heroPlay, stopped, 'hero')",
+    ):
+        assert needle in block, f"all listener playback controls must share {needle!r}."
 
     playing_block = js[js.index("function setPlayingUi") : js.index("/* ── Media Session")]
     assert "_setPlaybackControls" in playing_block, "audio events must update every play toggle immediately."
@@ -296,13 +306,14 @@ def test_listener_live_nav_cta_is_an_honest_play_pause_toggle() -> None:
 
 def test_listener_hero_and_compact_controls_share_honest_toggle_state() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
-    controls = js[js.index("function _setCompactPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    controls = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
     for needle in (
-        "playBtnSmall.disabled = stopped",
-        "heroPlay.disabled = stopped",
+        "el.disabled = stopped",
         "_t('listen_pause', 'Pause')",
         "_t('listen_pause_aria', 'Pause station')",
-        "heroPlay.setAttribute('aria-pressed', hasIntent ? 'true' : 'false')",
+        "el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false')",
+        "variant === 'compact'",
+        "variant === 'hero'",
     ):
         assert needle in controls
 
@@ -410,6 +421,15 @@ def test_listener_playback_pending_and_retries_are_cancellable_and_deduplicated(
     events = js[js.index("// Audio element event wiring") : js.index("// Request form")]
     assert "setTimeout(startStream" not in events
     assert events.count("_scheduleStreamRetry(") == 2
+    pause = events[events.index("audio.addEventListener('pause'") : events.index("audio.addEventListener('ended'")]
+    for needle in (
+        "if (!audio.ended && !audio.error)",
+        "state.wantsPlay = false",
+        "state.playPending = false",
+        "_clearPlaybackRetry()",
+        "setPlayingUi(false)",
+    ):
+        assert needle in pause, f"external pause handling lost {needle!r}."
 
 
 def test_listener_decorative_italian_declares_element_language() -> None:

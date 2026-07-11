@@ -245,6 +245,15 @@ async (page) => {
   const streamIntentMs = streamRequests.at(-1).at - startedAt;
   assert(streamIntentMs < 2000, `stream request intent took ${streamIntentMs}ms (limit: <2000ms)`);
   assert(streamRequests.at(-1).url.endsWith('/stream'), 'play affordance used the wrong stream URL');
+  await page.waitForFunction(
+    () => document.getElementById('radio-audio').paused === false,
+    null,
+    { timeout: 6000 },
+  );
+  assert(
+    await page.locator('#radio-audio').evaluate((el) => el.paused === false),
+    'play click left the audio element paused',
+  );
 
   const activeControls = await page.evaluate(() => ({
     nav: {
@@ -269,6 +278,45 @@ async (page) => {
   assert(activeControls.nav.text.includes(copy.listen_pause), 'nav control did not show a visible pause action');
   assert(activeControls.hero.text === copy.listen_pause, 'hero control did not show a visible pause action');
 
+  // A device/browser pause must clear listener intent, so one tap means play
+  // again rather than an invisible second pause. The finite fixture is removed
+  // after the synthetic pause so the resumed live-stream request is observable.
+  const externalPauseStartCount = playCount();
+  await page.locator('#radio-audio').evaluate((el) => {
+    if (el.ended || el.error) throw new Error('external-pause fixture was not actively playable');
+    el.dispatchEvent(new Event('pause'));
+    el.pause();
+    el.removeAttribute('src');
+    el.load();
+  });
+  await page.waitForFunction(
+    () => ['nav-cta', 'np-play', 'hero-play'].every(
+      (id) => document.getElementById(id).getAttribute('aria-pressed') === 'false',
+    ),
+    null,
+    { timeout: 2000 },
+  );
+  const externallyPausedControls = await page.evaluate(() => ['nav-cta', 'np-play', 'hero-play'].map((id) => ({
+    id,
+    pressed: document.getElementById(id).getAttribute('aria-pressed'),
+    label: document.getElementById(id).getAttribute('aria-label'),
+    text: document.getElementById(id).textContent.trim(),
+  })));
+  externallyPausedControls.forEach((control) => {
+    assert(control.pressed === 'false', `${control.id} stayed active after an external pause`);
+    assert(control.label === copy.listen_now_aria, `${control.id} did not offer Listen Now after an external pause`);
+  });
+  assert(externallyPausedControls[0].text.includes(copy.listen_now), 'nav external pause did not restore listen copy');
+  assert(externallyPausedControls[2].text === copy.listen_now, 'hero external pause did not restore listen copy');
+  await page.locator('#nav-cta').click();
+  await waitForRouteCount(
+    playCount,
+    externalPauseStartCount + 1,
+    2000,
+    'one click after an external pause did not request the stream again',
+  );
+  assert(playCount() === externalPauseStartCount + 1, 'external pause recovery created duplicate stream requests');
+
   await page.locator('#hero-play').click();
   await page.waitForFunction(
     () => ['nav-cta', 'np-play', 'hero-play'].every(
@@ -278,6 +326,15 @@ async (page) => {
     { timeout: 2000 },
   );
   assert(await page.locator('#hero-play').textContent() === copy.listen_now, 'hero pause did not restore listen copy');
+  await page.waitForFunction(
+    () => document.getElementById('radio-audio').paused === true,
+    null,
+    { timeout: 2000 },
+  );
+  assert(
+    await page.locator('#radio-audio').evaluate((el) => el.paused === true),
+    'pause cancel left the audio element playing',
+  );
 
   // Error retries collapse to one timer, and an explicit pause cancels the
   // scheduled retry so sound cannot restart behind the listener's back.
@@ -293,18 +350,18 @@ async (page) => {
     await page.locator('#nav-cta').getAttribute('aria-pressed') === 'true',
     'failed stream did not retain a cancellable playback intent',
   );
-  await waitForRouteCount(playCount, errorStartCount + 2, 2500, 'bounded stream retry never fired');
+  await waitForRouteCount(playCount, errorStartCount + 2, 6000, 'bounded stream retry never fired');
   assert(playCount() === errorStartCount + 2, 'repeated errors scheduled duplicate retries');
   await page.locator('#nav-cta').click();
   const countAtPause = playCount();
-  await page.waitForTimeout(2200);
+  await page.waitForTimeout(3000);
   assert(playCount() === countAtPause, 'scheduled retry restarted audio after explicit pause');
 
   sessionStopped = true;
   await page.waitForFunction(
     () => ['nav-cta', 'np-play', 'hero-play'].every((id) => document.getElementById(id).disabled),
     null,
-    { timeout: 4000 },
+    { timeout: 10000 },
   );
   const stoppedControls = await page.evaluate(() => ['nav-cta', 'np-play', 'hero-play'].map((id) => ({
     id,
@@ -323,7 +380,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 12,
+    checks: 15,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
