@@ -2211,6 +2211,27 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
+async def test_setup_recovery_endpoints_remain_available_while_session_stopped():
+    """Paused transport must not lock operators out of setup and diagnostics."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._persist_and_apply_credentials", new=AsyncMock()) as persist:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            recheck = await client.post("/api/setup/recheck")
+            preview = await client.get("/api/homeassistant/context-candidates")
+            save_keys = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-test"})
+
+    assert recheck.status_code == 200
+    assert preview.status_code == 200
+    assert save_keys.status_code == 200
+    assert save_keys.json()["ok"] is True
+    persist.assert_awaited_once()
+    assert app.state.station_state.session_stopped is True
+
+
+@pytest.mark.asyncio
 async def test_setup_recheck_bypasses_golden_path_ttl_cache(monkeypatch):
     from mammamiradio.web import status_payload as status_payload_mod
 

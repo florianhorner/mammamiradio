@@ -1368,6 +1368,44 @@ class TestStoppedStateQuietsTheUI:
         )
         assert "pointer-events: none" in html, "admin.html must disable producer buttons under stopped state (Item 19)."
 
+    def test_stopped_state_exempts_setup_and_diagnostic_controls_only(self):
+        """Paused transport still leaves recovery and read-only desk actions usable."""
+        html = ADMIN_HTML.read_text()
+        selector = (
+            "#skipBtn,.btn-trigger:not([data-stopped-exempt]),"
+            ".btn-chip:not([data-stopped-exempt]),"
+            ".btn-util:not([data-stopped-exempt]),.a-trigger"
+        )
+
+        assert f"const STOPPED_PRODUCER_ACTION_SELECTOR='{selector}';" in html
+        for class_name in (".btn-trigger", ".btn-chip", ".btn-util"):
+            assert f'body[data-stopped="true"] {class_name}:not([data-stopped-exempt])' in html
+
+        # The only paused-state opt-outs are configuration/recovery controls or
+        # read-only diagnostics; live transport and Air Next remain inert.
+        for pattern in (
+            r'<button\b(?=[^>]*\bonclick="doSearch\(\)")(?=[^>]*\bdata-stopped-exempt\b)[^>]*>',
+            r"<button\b[^>]*setup-inline-action[^>]*\bdata-stopped-exempt\b",
+            r'<button\b[^>]*\bid="setupSaveBtn"[^>]*\bdata-stopped-exempt\b',
+            r"<button\b[^>]*setup-home-preview-action[^>]*\bdata-stopped-exempt\b",
+            r"<button\b[^>]*setup-recheck-action[^>]*\bdata-stopped-exempt\b",
+            r'<button\b(?=[^>]*\bonclick="copySetupSnippet\(\)")(?=[^>]*\bdata-stopped-exempt\b)[^>]*>',
+            r'setup-strip-action" data-stopped-exempt',
+            r'ha-preview-action" data-stopped-exempt',
+            r'btn btn-util" data-stopped-exempt style="font-size:0\.8em[^>]*clearArchivioFilters',
+        ):
+            assert re.search(pattern, html), f"missing stopped-state exemption: {pattern}"
+
+        assert ".a-trigger:not([data-stopped-exempt])" not in selector
+        assert "#skipBtn" in selector
+
+    def test_listener_request_deadline_retains_last_good_panel(self):
+        """An auxiliary timeout must not erase accepted listener requests."""
+        refresh = _admin_function_block("refreshFast")
+
+        assert ".catch(()=>null)" in refresh
+        assert "if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);" in refresh
+
     def test_admin_html_clears_tick_interval_on_stop(self):
         html = ADMIN_HTML.read_text()
         assert "clearInterval(_tick)" in html, (
