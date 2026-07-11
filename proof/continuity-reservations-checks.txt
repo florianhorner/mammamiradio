@@ -1,0 +1,19 @@
+# Proof: static + gate checks — PR #825
+# Captured 2026-07-11T22:18:08Z on 9750fa13
+
+## Full suite (from the ship run)
+4611 passed, 3 skipped, 21 deselected in 109.52s
+
+## mypy
+Success: no issues found in 83 source files
+
+## ruff
+All checks passed!
+255 files already formatted
+
+## release invariants
+  Passed: 10  Failed: 0
+All invariants passed.
+
+## coverage ratchet
+Required test coverage of 92.0% reached. Total coverage: 92.94% — all module floors held.
