@@ -3917,8 +3917,8 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
 
 
 @pytest.mark.asyncio
-async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_path):
-    """The mid-playback drain guard still inserts only the immediate clip."""
+async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
+    """A drain clip is immediately followed by cache music, never another clip."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -3929,6 +3929,7 @@ async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_pa
     canned_clip.write_bytes(b"fake audio" * 256)
     norm_file = tmp_path / "norm_drain_runway.mp3"
     norm_file.write_bytes(b"pre-normalized drain runway")
+    save_track_metadata(norm_file, title="Runway Song", artist="Cache Artist", duration_ms=180_000)
     queued: list[Segment] = []
 
     async def _capture(segment: Segment) -> bool:
@@ -3942,9 +3943,44 @@ async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_pa
         ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
 
     assert ok is True
+    assert [seg.path for seg in queued] == [canned_clip, norm_file]
+    assert [seg.type for seg in queued] == [SegmentType.BANTER, SegmentType.MUSIC]
+    assert queued[0].metadata.get("queue_drain_recovery") is True
+    assert queued[1].metadata.get("queue_drain_recovery") is True
+    assert queued[1].metadata.get("audio_source") == "norm_cache"
+    assert queued[1].metadata.get("title") == "Runway Song"
+    assert queued[1].metadata.get("artist") == "Cache Artist"
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path):
+    """A cold cache preserves the single-clip drain bridge fallback."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment) -> bool:
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
     assert [seg.path for seg in queued] == [canned_clip]
     assert queued[0].metadata.get("queue_drain_recovery") is True
-    assert all(event["source"] != "norm_cache" for event in state.bridge_events)
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
 
 
 @pytest.mark.asyncio
