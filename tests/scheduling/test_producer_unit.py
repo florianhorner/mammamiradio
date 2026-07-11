@@ -1002,13 +1002,18 @@ async def test_chart_refresh_waits_full_interval_after_startup():
     mock_refresh.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
-    """LRU sees out-of-band ready audio even though it is absent from the real queue."""
+def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
+    """The eviction protection set includes the out-of-band continuity slot.
+
+    Verifies the protection contract directly through the pure helper the
+    producer loop uses, rather than racing a wall clock against `run_producer`
+    reaching its eviction branch — that integration race was a CI-only flake
+    (evict "not called" / timeout). The loop's call site stays covered by the
+    full-loop producer tests.
+    """
+    from mammamiradio.scheduling.producer import _cache_eviction_protected_paths
+
     state = _make_state()
-    config = _make_config()
-    config.cache_dir = tmp_path
-    config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     queued_path = tmp_path / "norm_queued_192k.mp3"
     queued_path.write_bytes(b"queued")
@@ -1025,34 +1030,13 @@ async def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path)
         ephemeral=False,
     )
 
-    evicted = asyncio.Event()
+    protected = _cache_eviction_protected_paths(queue, state)
 
-    def _record_eviction(*_args, **_kwargs):
-        evicted.set()
-
-    async def _run_inline(func, /, *args, **kwargs):
-        # Run the (mocked) eviction inline instead of on the default executor so
-        # the assertion never races a saturated ThreadPoolExecutor. Iteration 1
-        # reaches this eviction call before any other producer to_thread use, so
-        # this only affects the call under test. Waiting on a wall clock for a
-        # free thread pool slot was a CI-only flake (evict "not called").
-        return func(*args, **kwargs)
-
-    with (
-        patch(f"{PRODUCER_MODULE}.evict_cache_lru", side_effect=_record_eviction) as evict,
-        patch(f"{PRODUCER_MODULE}.asyncio.to_thread", side_effect=_run_inline),
-    ):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            await asyncio.wait_for(evicted.wait(), timeout=10.0)
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-    evict.assert_called()
-    protected_paths = evict.call_args.args[2]
-    assert queued_path in protected_paths
-    assert slot_path in protected_paths
+    assert queued_path in protected
+    assert slot_path in protected
+    # No slot reserved -> only the real queue is protected.
+    state.continuity_slot = None
+    assert _cache_eviction_protected_paths(queue, state) == {queued_path}
 
 
 # ---------------------------------------------------------------------------

@@ -2419,6 +2419,19 @@ def _maybe_arm_first_home_context_moment(
         state.force_next = SegmentType.BANTER
 
 
+def _cache_eviction_protected_paths(queue: asyncio.Queue[Segment], state: StationState) -> set[Path]:
+    """Paths an LRU cache eviction pass must never remove.
+
+    Both the real playback queue and the capacity-exempt continuity slot hold
+    ready audio; evicting either would break delivery mid-stream. The slot is
+    absent from the real queue by design, so it is protected explicitly.
+    """
+    protected = {seg.path for seg in list(getattr(queue, "_queue", ())) if seg.path}
+    if state.continuity_slot is not None and state.continuity_slot.path:
+        protected.add(state.continuity_slot.path)
+    return protected
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -2713,13 +2726,10 @@ async def run_producer(
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
                 _last_cache_eviction = now
-                # Protect norm files currently in the playback queue from eviction.
-                # Evicting a queued file would break audio delivery mid-stream.
-                queued_paths = {seg.path for seg in list(queue._queue) if seg.path}  # type: ignore[attr-defined]
-                if state.continuity_slot is not None and state.continuity_slot.path:
-                    # The capacity-exempt slot is ready audio too; it is absent
-                    # from the real queue by design, so protect it explicitly.
-                    queued_paths.add(state.continuity_slot.path)
+                # Protect norm files currently in the playback queue — and the
+                # capacity-exempt continuity slot — from eviction. Evicting ready
+                # audio would break delivery mid-stream.
+                queued_paths = _cache_eviction_protected_paths(queue, state)
                 await asyncio.to_thread(
                     evict_cache_lru,
                     config.cache_dir,
