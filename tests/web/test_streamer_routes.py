@@ -4404,3 +4404,85 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
     assert muted.json()["purged_pending_banter_count"] == 1
     assert app.state.queue.empty()
     assert state.queued_segments == []
+
+
+@pytest.mark.asyncio
+async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_path):
+    """A fact reserved at admission but not yet physically enqueued (mid-egress
+    render) is released when its entity is muted. The physical-queue purge cannot
+    see it, so the endpoint must honor invalidate_entity's returned pending ids."""
+    from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    director = HomeContextDirector()
+    director.observe(
+        [
+            DirectorObservation(
+                entity_id="weather.forecast_home", domain="weather", state="sunny", score=9.0, temperature_c=24.0
+            )
+        ],
+        policy_revision=0,
+    )
+    fact = director.select()
+    assert fact is not None
+    # Reserved, but deliberately NOT put in app.state.queue — it is still rendering.
+    assert director.reserve("inflight-queue", fact)
+    state = app.state.station_state
+    state.home_context_director = director
+    assert director.admin_status()["reserved_count"] == 1
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        muted = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "weather.forecast_home", "muted": True},
+        )
+
+    assert muted.status_code == 200
+    # Released via invalidate_entity's return value, not the physical-queue purge.
+    assert director.admin_status()["reserved_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_personal_moment_enable_rejects_non_presence_entity(tmp_path):
+    """Enabling a personal moment on an entity that is not a live room-presence
+    sensor is refused with 422 and never persisted (fail-closed consent)."""
+    from mammamiradio.home.entity_policy import personal_moment_opt_in_entity_ids
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "switch.kitchen_light", "personal_moment_enabled": True},
+            )
+
+    assert resp.status_code == 422
+    assert "personal moment" in resp.json()["detail"]
+    assert personal_moment_opt_in_entity_ids(tmp_path) == set()
+
+
+@pytest.mark.asyncio
+async def test_entity_policy_requires_exactly_one_action(tmp_path):
+    """The PATCH contract accepts exactly one of muted / personal_moment_enabled;
+    both-present or neither-present is a 422."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        both = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.kitchen_light", "muted": True, "personal_moment_enabled": True},
+        )
+        neither = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.kitchen_light"},
+        )
+
+    assert both.status_code == 422
+    assert neither.status_code == 422

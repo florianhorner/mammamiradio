@@ -55,3 +55,48 @@ def test_discard_releases_only_unstarted_fact_reservation():
     status = director.admin_status()
     assert status["reserved_count"] == 0
     assert status["cooling_count"] == 0
+
+
+class _RaisingDirector:
+    """Stand-in whose lifecycle hooks always raise.
+
+    A director bug must never become an audio bug (CLAUDE.md audio-delivery
+    rule / leadership principle #2). These guards in StationState exist only to
+    absorb such a failure; this stub exercises them.
+    """
+
+    def activate(self, *args, **kwargs):
+        raise RuntimeError("director activate boom")
+
+    def release(self, *args, **kwargs):
+        raise RuntimeError("director release boom")
+
+
+def test_on_stream_segment_survives_raising_director():
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/banter.mp3"),
+        metadata={"queue_id": "queue-1", "home_fact_id": "fact-1", "title": "Break"},
+    )
+    state = StationState(home_context_director=_RaisingDirector())
+    before = state.playback_epoch
+
+    # Must not raise; the segment still becomes the streaming one.
+    state.on_stream_segment(segment)
+
+    assert state.playback_epoch == before + 1
+    assert state.now_streaming is not None
+
+
+def test_record_discard_survives_raising_director():
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/banter.mp3"),
+        metadata={"queue_id": "queue-1", "home_fact_id": "fact-1"},
+    )
+    state = StationState(home_context_director=_RaisingDirector())
+
+    # Must not raise; discard accounting still records the waste.
+    state.record_discard(segment, reason="test")
+
+    assert state.discard_by_reason.get("test", 0) >= 1

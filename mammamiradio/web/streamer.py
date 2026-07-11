@@ -2922,7 +2922,14 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     if director is not None:
         invalidate = getattr(director, "invalidate_entity", None)
         if callable(invalidate) and privacy_tightened:
-            invalidate(entity_id, policy_revision=current_policy_revision)
+            # invalidate_entity reports the unstarted reservations the caller must
+            # release. The queue purge above already released the physically
+            # queued breaks (via record_discard); these remaining ids cover the
+            # in-flight race — a fact reserved at admission but not yet enqueued —
+            # which the physical-queue scan cannot see. release() is a no-op on
+            # any id already cleared, so this cannot double-release.
+            for pending_queue_id in invalidate(entity_id, policy_revision=current_policy_revision):
+                director.release(pending_queue_id, fact_id=None)
     muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
     personal_moment = entity_id in (
         policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}

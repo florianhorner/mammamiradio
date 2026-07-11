@@ -397,6 +397,31 @@ def test_policy_revision_rejects_mute_race_and_invalidation_reports_only_unstart
     assert director.reserve("queue-again", fact) is False
 
 
+def test_activate_rejected_on_stale_revision_still_clears_reservation(director):
+    """activate() runs once at stream start and its result is discarded by the
+    caller — an aired segment never reaches release(). So a stale-revision
+    rejection must still pop the reservation and topic lock, or the whole
+    ambient.temperature family leaks out of select() for the rest of the session
+    the moment an operator toggles any unrelated entity."""
+    director.observe([weather()], policy_revision=0)
+    fact = director.select()
+    assert fact is not None
+    assert director.reserve("queue-1", fact)
+    assert director.admin_status()["reserved_count"] == 1
+
+    # An unrelated policy mutation bumps the global revision while the segment
+    # still sits in the lookahead queue.
+    director.observe([weather()], policy_revision=1)
+    assert director.activate("queue-1", fact_id=fact.fact_id) is False
+
+    # Rejected, but not leaked: reservation and topic lock are cleared, and
+    # because no cooldown started the topic is immediately selectable again.
+    assert director.admin_status()["reserved_count"] == 0
+    again = director.select()
+    assert again is not None
+    assert again.topic_key == "ambient.temperature"
+
+
 def test_non_casual_lanes_bypass_selection_and_coffee_joke_never_copies_arbitrary_text(director):
     joke = DirectorObservation(
         entity_id="input_select.kaffee_dad_jokes",

@@ -466,9 +466,16 @@ class HomeContextDirector:
     def activate(self, queue_id: str, *, fact_id: str | None = None) -> bool:
         """Start listener-visible cooldown when a matching segment streams."""
 
-        reservation = self._reservations.get(queue_id)
+        # Pop the reservation and topic lock BEFORE evaluating the rejection
+        # branches. activate() runs once at stream start and its return value is
+        # discarded by the caller (best-effort bookkeeping, never an audio gate),
+        # and an aired segment never reaches a release() path — so returning
+        # early here would leak the reservation and permanently exclude the topic
+        # family for the rest of the session. Mirror release()'s pop-then-account.
+        reservation = self._reservations.pop(queue_id, None)
         if reservation is None:
             return bool(fact_id and self._settled_queue_ids.get(queue_id) == fact_id)
+        self._reserved_topics.pop(reservation.topic_key, None)
         if fact_id is not None and reservation.fact_id != fact_id:
             self._record("activation_rejected")
             return False
@@ -477,8 +484,6 @@ class HomeContextDirector:
             self._record("activation_rejected")
             return False
 
-        self._reservations.pop(queue_id, None)
-        self._reserved_topics.pop(reservation.topic_key, None)
         self._cooldowns[reservation.topic_key] = _Cooldown(
             activated_at=self._now(),
             source=reservation.candidate.source,
