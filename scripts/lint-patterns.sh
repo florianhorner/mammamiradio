@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Shared editorial pattern source for changelog and PR-body lints.
+# Shared editorial pattern source for changelog, PR-body, and public-doc lints.
 #
 # Sourced by:
 #   - scripts/check-changelog-lint.sh   (CHANGELOG.md, ha-addon/.../CHANGELOG.md)
 #   - scripts/check-pr-body-lint.sh     (PR body, via local hook + CI)
+#   - scripts/check-docs-safety.sh      (public install and operator guides)
 #
 # Each pattern is a POSIX extended regex (grep -E). Patterns are word-anchored or
 # specific multi-word phrases to minimize false positives on legitimate text.
@@ -62,4 +63,20 @@ LINT_PATTERNS=(
   '\bsoak verification\b'         # "soak verification on edge addon after merge"
   '\bdual-voice review\b'
   '🤖 Generated with'             # Claude Code / Conductor / Codex footers
+)
+
+# Home Assistant renamed the user-facing add-on store surface to Apps. Keep
+# developer/API "add-on" language where it remains accurate; ban only retired UI paths.
+# shellcheck disable=SC2034  # consumed by scripts/check-docs-safety.sh
+DOCS_RETIRED_INSTALL_PATTERNS=(
+  'Settings[[:space:]]*(→|>|&gt;)[[:space:]]*Add-ons'
+  '[Aa]dd-on [Ss]tore'
+)
+
+# Edge is a deliberate, manually cut channel. A merge to main may build an
+# image, but Home Assistant sees no update until `make edge-release` advances
+# the metadata pin. Keep this exact overclaim out of public channel copy.
+# shellcheck disable=SC2016,SC2034  # literal backticks; consumed by scripts/check-docs-safety.sh
+DOCS_RELEASE_TRUTH_PATTERNS=(
+  '[Uu]pdates on every change merged to[[:space:]]+`?main`?'
 )

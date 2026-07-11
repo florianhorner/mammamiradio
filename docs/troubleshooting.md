@@ -1,19 +1,34 @@
 # Troubleshooting
 
-This app has a lot of moving parts. Most failures reduce to three things: Python env, `ffmpeg`, or missing API keys.
+Start with the way you run Mamma Mi Radio. Home Assistant app operators and local/Docker operators have different safe first steps.
 
-## First checks
+## Home Assistant app
 
-Use the expected project environment:
+1. Go to **Settings → Apps → Mamma Mi Radio → Log** and keep the lines around the first warning or error. A healthy start reaches `Producer started`.
+2. Open the Web UI. If you expose port 8000, check `/healthz` and `/readyz`; a station ready for listeners returns `"ready": true`.
+3. Follow the matching symptom below. If the problem needs a code change or add-on recovery, use the [supported add-on workflow](../ha-addon/mammamiradio/DOCS.md#failure-modes-and-recovery). Do not use the Python virtual-environment commands in the next section against a running Home Assistant app.
+
+## Local source or Docker
+
+For a source checkout, use the project environment and install both the app and developer tools:
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install -e . -r requirements-dev.txt
 ./start.sh
 ```
 
-If you run tests or the app from the system Python and see missing modules like `dotenv`, you are not in the repo environment.
+For Docker, keep the first evidence simple:
+
+```bash
+docker compose ps
+docker compose logs --tail=200
+```
+
+If a source run or test reports a missing module such as `dotenv`, activate `.venv` and repeat the install command above. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
+
+## Shared readiness checks
 
 If the dashboard is in the first-run setup flow, trust the banner. The station classifies itself as `Demo Radio`, `Full AI Radio`, or `Connected Home` based on AI host keys and whether a prompt-safe Home Assistant context slice is available.
 
@@ -24,11 +39,11 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` just answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence.
+`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence.
 
 ## The app starts but there is no real music
 
-The station walks a fallback chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → local `music/` MP3s → bundled demo assets → built-in `DEMO_TRACKS`. The first tier that yields tracks wins. If you hear silence or placeholder tones:
+The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → packaged demo music when present → built-in demo-track metadata. A source checkout also checks its repo-local `music/` directory before the demo tiers; the stock Docker Compose and Home Assistant packages do not mount that development path. The current package contains recovery audio but no bundled song library, and built-in demo-track metadata still needs a working download path. The first tier that yields playable tracks wins. If you hear only recovery audio or placeholder tones:
 
 - Check that `ffmpeg` is installed
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
@@ -42,11 +57,15 @@ This means the station is living on continuity audio while the producer is still
 
 If the clip still repeats, check whether `cache/` has any `norm_*.mp3` files, and whether the ones that exist are eligible to air: files rejected by the audio quality gate and songs on the operator ban list are skipped by the rescue picker even though they sit on disk (a missing or corrupt metadata sidecar does NOT disqualify a file — it airs with a cleaned-up filename as the title). A fresh install with no cache and no bundled demo music may legitimately repeat the packaged clip because repeated station audio is still better than dead air.
 
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain (charts → Jamendo → local `music/` → bundled demo → `DEMO_TRACKS`). Operators with MP3s in `music/` will hit tier 4 even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
+The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain. Source-checkout developers with MP3s in the repo-local `music/` directory can use them even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
+
+## Air Next or Next track says the station is paused
+
+Air Next only queues an operator pick, and Next track only cuts the current programme, while the station is running. Press **Start** or **Resume** first, then use the control again; a paused station does not keep a hidden pick or skip waiting for later.
 
 ## A chart entry sounded like a podcast or audiobook
 
-Apple Music's Italian chart occasionally surfaces non-music entries (BBC comedy, news briefings, audiobooks). These used to reach the queue and play as flat voice audio that broke the radio illusion. The WS5 ingest filter now rejects them before they enter the candidate pool.
+Apple Music's Italian chart occasionally surfaces non-music entries (BBC comedy, news briefings, audiobooks). The source filter rejects them before they enter the candidate pool.
 
 Expected log signature on chart load:
 
@@ -61,7 +80,7 @@ If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py
 
 If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
 
-WS5 purges the file and adds the cache key to an in-process denylist for the remainder of the session. The producer's main-loop, prefetch, and prewarm paths short-circuit on denylisted keys before calling `download_track` again.
+The station purges the file and avoids that cache key for the remainder of the session. The producer's main-loop, prefetch, and prewarm paths skip it before trying another download.
 
 The music quality gate (mostly silence, short normalization output) has a different escape valve — the 3-consecutive-rejection circuit breaker — and does NOT denylist source tracks. A quality-gate rejection drops the cached normalization so it's recomputed next time, but the source track can still be re-picked (the gate failure is usually a normalization artifact, not source corruption).
 
