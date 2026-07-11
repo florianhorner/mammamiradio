@@ -21,6 +21,7 @@ from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
+    from mammamiradio.home.context_director import HomeContextDirector, PromptFact
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.home.moment_receipts import MomentStore
     from mammamiradio.hosts.persona import PersonaStore
@@ -590,6 +591,13 @@ class StationState:
     ha_context_entity_count: int = 0
     ha_context_char_count: int = 0
     ha_first_home_context_moment_fired: bool = False
+    # Session-only ambient Home Assistant fact rotation. The director is owned
+    # by main.py and deliberately resets when the add-on restarts.
+    home_context_director: HomeContextDirector | None = None
+    # Handoff from the scriptwriter to the producer's queue-admission seam.
+    # It is cleared on every new banter attempt so a failed render cannot attach
+    # an older fact to unrelated speech.
+    last_banter_home_fact: PromptFact | None = None
     # Community-inspired Impossible Moments recipe telemetry. Public surfaces
     # may expose only the coarse family labels; recipe internals stay admin-only.
     ha_ritual_context: str = ""
@@ -865,6 +873,21 @@ class StationState:
         waste readout in admin Runtime Status.
         """
         try:
+            # Isolated from the accounting body below: a director bug must not
+            # skip the waste telemetry for this discard (mirrors the guard in
+            # on_stream_segment around activate()).
+            director = self.home_context_director
+            if director is not None:
+                metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+                director.release(
+                    str(metadata.get("queue_id") or ""),
+                    fact_id=str(metadata.get("home_fact_id") or "") or None,
+                )
+        except Exception:
+            logging.getLogger("mammamiradio.home_context_director").debug(
+                "Home context director release failed", exc_info=True
+            )
+        try:
             ts = timestamp if timestamp is not None else time.time()
             duration = float(segment.duration_sec or 0.0)
             seg_type = segment.type.value
@@ -1028,6 +1051,18 @@ class StationState:
     def on_stream_segment(self, segment: Segment) -> None:
         """Called by the streamer when it starts sending a segment to the listener."""
         now = time.time()
+        try:
+            director = self.home_context_director
+            metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+            if director is not None:
+                director.activate(
+                    str(metadata.get("queue_id") or ""),
+                    fact_id=str(metadata.get("home_fact_id") or "") or None,
+                )
+        except Exception:
+            logging.getLogger("mammamiradio.home_context_director").debug(
+                "Home context director activation failed", exc_info=True
+            )
         self.playback_epoch += 1
         seg_type = segment.type.value
         label = segment.metadata.get("title", segment.metadata.get("brand", seg_type))
