@@ -51,7 +51,7 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 3. Hear Demo Radio with no provider keys; the dashboard shows your station's current tier (Demo Radio, Full AI Radio, or Connected Home) and a guide for what to set up next
 4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
 5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from **Motore → Setup → AI hosts** to unlock live AI hosts
-6. Review **Home context preview** and mute any entity the hosts should never use. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
+6. Review **Home context preview** and mute any entity the hosts should never use. Casual host breaks use one rotating safe cue at most; room-presence remains off unless you explicitly allow it as a personal on-air moment. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
 7. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 

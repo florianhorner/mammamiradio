@@ -151,6 +151,12 @@ Check:
 
 Even when configured correctly, HA references are opportunistic. A saved token alone stays Full AI Radio until a prompt-safe context slice exists, and the prompt only encourages one casual reference when it fits.
 
+## A host repeated a home detail
+
+Open **Motore → HA context**. The fact-free **Home context rotation** row reports whether the director is waiting, has a safe cue queued, or is resting recently aired topics. Casual banter uses one allowlisted cue at most and starts a 30-minute rest when that break streams; weather flashes, rituals, and reactive directives are separate on-air lanes.
+
+To exclude a source, mute it in the Home context preview. A mute leaves current audio alone but removes any unstarted host break that was already queued with that source. Room-presence is never routine context: it must be enabled explicitly with **Use as a personal on-air moment**, and muting it clears that permission. Turning that permission back off (or muting) also removes any unstarted presence break already queued for that sensor; audio already on air is left alone.
+
 ## Admin access
 
 **HA add-on:** Direct LAN access to `http://<ha-ip>:8000/admin` works without any token as long as you have not configured a custom `admin_token` in the add-on options. Port 8000 serves the listener page (`/`), the admin panel (`/admin`), and the audio stream (`/stream`). From outside your home network, `/admin` returns 403.

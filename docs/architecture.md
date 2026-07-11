@@ -502,6 +502,8 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - home mood uses the heuristic ladder by default; an experimental LLM scene-namer can be enabled with `MAMMAMIRADIO_HA_MOOD_LLM=true`, caches names for `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`, and falls back to the ladder whenever disabled, unavailable, slow, or invalid
 - 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
+- `home/context_director.py` turns the casual ambient slice into one selected, opaque `PromptFact`: an explicit allowlist covers weather, climate, vacuum, sun, and curated coffee; room-presence needs a per-entity opt-in. It groups weather/climate temperatures into one topic, reserves a fact only after queue admission, starts its 30-minute cooldown at stream start, and releases only an unstarted discarded reservation. Reactive directives, rituals, and weather flashes remain separate programming lanes.
+- the director's `home_fact_*` metadata is internal. `/status` receives only count-based `home_context_director` diagnostics; `/public-status`, queue projections, now-playing metadata, and stream logs remove it recursively.
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
 - the weather news flash grounds itself in the real Home Assistant forecast when available, then spins it into absurd local color; with no forecast (HA disconnected or unsupported) it falls back to the fully fictional meteo prompt, so the segment never goes silent. `NEWS_FLASH` shares the same HA-context refresh gate as banter/ad, so the flash reads a freshly refreshed forecast (bounded by the weather cache TTL plus one poll interval) rather than the startup snapshot. The arc follows the station language: Italian stations use `state.ha_weather_arc`, every other language uses `state.ha_weather_arc_en` — never the Italian arc — and the stock fallback line is localized too
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
@@ -589,7 +591,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; includes additive `entities` rows while preserving legacy arrays, and is never exposed on `/public-status` |
-| `/api/homeassistant/entity-policy` | PATCH | Admin | Idempotently mute/unmute one Home Assistant entity for host context use |
+| `/api/homeassistant/entity-policy` | PATCH | Admin | Apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response includes effective consent, policy revision, and the count of matching queued host breaks removed by a mute or a personal-moment consent revocation |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |

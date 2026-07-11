@@ -121,6 +121,14 @@ scripts/validate-addon.sh
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
 
+For Home Context Director changes, first run the credential-free contract path:
+
+```bash
+pytest tests/home/test_context_director.py tests/home/test_entity_policy.py tests/core/test_home_context_director_lifecycle.py tests/web/test_context_director_public_metadata.py
+```
+
+It covers safe selection, policy migration, queue settlement, and public metadata exclusion without a live Home Assistant or provider key.
+
 ## Lint, format, and type check
 
 ```bash

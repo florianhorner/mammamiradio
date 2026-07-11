@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Home context now rotates instead of repeating itself.** A casual host break gets at most one safe ambient cue, and a topic rests for 30 minutes after it starts airing. Room-presence moments stay off until explicitly enabled for that sensor; the add-on never adds extra Home Assistant polling, and its public status never exposes the internal cue bookkeeping.
+
 ### Fixed
 
 - **Scaletta now shows every piece of audio that is actually ready to air.** Startup prewarms and continuity bridges were already waiting in the live playback queue but could be invisible in the rundown, leaving "0 ready" beside several minutes of program. Each admitted segment now appears in the real forward schedule with its own removal target, and the desk says when the hosts are minutes ahead instead of making the operator translate a raw buffer number.
