@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the add-on is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
+
 ### Fixed
 
+- **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. A song you just banned or removed cannot slip back in through that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
 - **Scaletta now shows every piece of audio that is actually ready to air.** Startup prewarms and continuity bridges were already waiting in the live playback queue but could be invisible in the rundown, leaving "0 ready" beside several minutes of program. Each admitted segment now appears in the real forward schedule with its own removal target, and the desk says when the hosts are minutes ahead instead of making the operator translate a raw buffer number.
 - **AI Quality now selects real creative tiers.** Premium uses the richest creative models, Balanced uses the middle tier, and Economy uses the lightest tier; quick transitions and post-air work stay on the fast models in every setting. A live dial change still waits for the current segment to finish and affects only future generated work.
 - **Recovery no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume, idle wake-up, or an active-playback drain, the add-on now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the add-on's audio workers are busy, and its length is remembered so replays never wait on a re-measure.
