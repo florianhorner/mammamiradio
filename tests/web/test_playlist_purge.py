@@ -90,8 +90,9 @@ async def test_purge_empties_pool_and_drains_queue(tmp_path):
     assert state.playlist == []
     assert state.playlist_source is None
     assert state.pinned_track is None
-    assert state.queued_segments == []
-    assert app.state.queue.empty()
+    assert len(state.queued_segments) == app.state.queue.qsize() == 1
+    assert state.queued_segments[0]["reason"] == "Protected continuity audio."
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert state.playlist_revision > rev_before
     assert state.force_next == SegmentType.BANTER
     assert not app.state.skip_event.is_set()
@@ -117,9 +118,10 @@ async def test_purge_reports_not_persisted_but_still_clears_pool_and_queue(tmp_p
     assert body["purged"] == 1
     assert state.playlist == []
     assert state.playlist_source is None
-    assert state.queued_segments == []
+    assert len(state.queued_segments) == app.state.queue.qsize() == 1
+    assert state.queued_segments[0]["reason"] == "Protected continuity audio."
     assert state.force_next == SegmentType.BANTER
-    assert app.state.queue.empty()
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert not app.state.skip_event.is_set()
 
 

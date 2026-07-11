@@ -12,6 +12,7 @@ from mammamiradio.core.models import (
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
     ChaosSubtype,
+    GenerationWasteReason,
     Heading,
     ListenerProfile,
     Segment,
@@ -74,6 +75,83 @@ def test_segment_log_capped_at_50():
     for i in range(60):
         state.after_music(_track(i))
     assert len(state.segment_log) == 50
+
+
+def test_render_timings_are_bounded_newest_first_and_sanitized():
+    state = StationState()
+    for index in range(22):
+        state.record_render_timing(
+            kind="banter",
+            outcome="produced" if index == 21 else "discarded",
+            total_elapsed_ms=12.7 + index,
+            stages_ms={"script": 5.6, "unknown": 99.0},
+            reason="stale_playlist",
+            timestamp=float(index),
+        )
+
+    assert len(state.render_timings) == 20
+    assert state.render_timings[0]["timestamp"] == 21.0
+    assert state.render_timings[0]["stages_ms"] == {"script": 6}
+    assert "reason" not in state.render_timings[0]
+    assert "reason" in state.render_timings[-1]
+
+
+def test_new_render_attempt_records_an_abandoned_previous_attempt():
+    state = StationState()
+    state.begin_render_timing("banter", started=10.0)
+    state.add_render_stage_timing("script", 15.0)
+    state.begin_render_timing("music", started=20.0)
+
+    assert state.render_timings[0]["kind"] == "banter"
+    assert state.render_timings[0]["outcome"] == "failed"
+    assert state.render_timings[0]["reason"] == "abandoned"
+    assert state.render_timings[0]["stages_ms"] == {"script": 15}
+
+
+def test_render_timing_emits_structured_safe_log(caplog):
+    state = StationState()
+
+    with caplog.at_level("INFO", logger="mammamiradio.render_timing"):
+        state.record_render_timing(
+            kind="banter",
+            outcome="discarded",
+            total_elapsed_ms=262_000,
+            stages_ms={"tts": 121_000, "mix": 96_000},
+            reason=GenerationWasteReason.STALE_PLAYLIST,
+        )
+
+    message = caplog.messages[-1]
+    assert "render_timing kind=banter outcome=discarded" in message
+    assert "total_elapsed_ms=262000" in message
+    assert "reason=stale_playlist" in message
+
+
+def test_generation_display_can_delegate_stage_timing_to_parallel_workers():
+    state = StationState()
+    state.begin_render_timing("ad")
+
+    state.set_gen("writing", "ad", "Writing an ad break", track_timing=False)
+    state.add_render_stage_timing("script", 12.0)
+    state.end_gen()
+    state.finish_render_timing("produced")
+
+    assert state.gen_recent[0]["phase"] == "writing"
+    assert state.render_timings[0]["stages_ms"] == {"script": 12}
+
+
+def test_malformed_render_diagnostics_never_escape_into_audio_path():
+    state = StationState()
+
+    # Inactive and invalid observations are no-ops, including malformed values.
+    state.add_render_stage_timing("tts", object())  # type: ignore[arg-type]
+    state.finish_render_timing("produced")
+    state.record_render_timing(kind="banter", outcome="unknown", total_elapsed_ms=1.0)
+
+    state.begin_render_timing("banter", started=10.0)
+    state.add_render_stage_timing("tts", object())  # type: ignore[arg-type]
+    state.record_render_timing(kind="banter", outcome="produced", total_elapsed_ms=object())  # type: ignore[arg-type]
+
+    assert list(state.render_timings) == []
 
 
 def test_add_joke_capped_at_5():

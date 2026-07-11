@@ -87,6 +87,15 @@ def test_module_import_applies_http_logging_configuration(monkeypatch):
             logging.getLogger(logger_name).setLevel(level)
 
 
+def test_immediate_audio_index_skips_non_files_and_unknown_durations(tmp_path):
+    from mammamiradio.main import _build_immediate_audio_index
+
+    (tmp_path / "norm_directory.mp3").mkdir()
+    (tmp_path / "norm_zero_duration.mp3").write_bytes(b"")
+
+    assert _build_immediate_audio_index(tmp_path, bitrate_kbps=None) == {}
+
+
 @pytest.mark.asyncio
 async def test_startup_creates_state_and_tasks():
     """startup() loads config, fetches playlist, sets app.state, creates tasks."""
@@ -867,6 +876,13 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
     mock_config.allow_ytdlp = True
     mock_config.audio.bitrate = 192
 
+    mock_config.cache_dir.mkdir(parents=True)
+    warm_norm = mock_config.cache_dir / "norm_warm_restart_192k.mp3"
+    warm_norm.write_bytes(b"warm normalized audio")
+    (mock_config.cache_dir / "norm_warm_restart_192k.mp3.json").write_text(
+        '{"title":"Warm Restart","artist":"Cache Artist","duration_ms":180000}'
+    )
+
     ps = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
 
@@ -900,6 +916,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         assert app.state.clip_ring_buffer.maxlen == expected_maxlen
         assert expected_maxlen > 240
         assert app.state.last_shareworthy_clip is None
+        assert app.state.station_state.immediate_audio_index == {warm_norm: 180.0}
 
 
 @pytest.mark.asyncio

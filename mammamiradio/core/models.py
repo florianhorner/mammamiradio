@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import math
 import random
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
     from mammamiradio.hosts.persona import PersonaStore
     from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
     from mammamiradio.release_campaign import ReleaseCampaign
+
+
+logger = logging.getLogger("mammamiradio.render_timing")
 
 
 PartyMode = Literal["festival"]
@@ -55,6 +59,7 @@ class GenerationWasteReason:
 
     STALE_SOURCE = "stale_source"
     STALE_PLAYLIST = "stale_playlist"
+    STALE_CONTINUITY = "stale_continuity"
     STALE_CHAOS = "stale_chaos"
     QUALITY_GATE_REJECT = "quality_gate_reject"
     SESSION_STOPPED = "session_stopped"
@@ -539,6 +544,16 @@ class StationState:
     now_streaming: dict = field(default_factory=dict)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
     queued_segments: list[dict] = field(default_factory=list)
+    # Every live control-plane change that can invalidate queued/in-flight audio
+    # bumps this generation. Producer commits compare it before admission.
+    continuity_epoch: int = 0
+    # Capacity-exempt immediate fallback. Playback consumes this only after the
+    # real queue drains, so a full queue cannot prevent a safety reservation.
+    continuity_slot: Segment | None = None
+    # Paths admitted or normalized by the current process, with their known
+    # playable duration. The control-plane guard uses this index instead of
+    # probing or walking the cache during an operator action.
+    immediate_audio_index: dict[Path, float] = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Recent generated banter clips that have actually started streaming.
@@ -747,6 +762,15 @@ class StationState:
     discard_by_reason: dict[str, int] = field(default_factory=dict)
     discard_by_type: dict[str, int] = field(default_factory=dict)
     discard_events: deque[dict] = field(default_factory=lambda: deque(maxlen=100))
+    # Recent producer-stage timing, retained only for authenticated admin status.
+    # This is diagnostics, never scheduling input: a broken timer must not affect
+    # audio admission or playback.
+    render_timings: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
+    _render_timing_started: float = 0.0
+    _render_timing_kind: str = ""
+    _render_timing_stages: dict[str, float] = field(default_factory=dict)
+    _render_stage_started: float = 0.0
+    _render_stage_name: str = ""
     # Most recent observable state change for the v1 integration contract.
     # Updated by on_stream_segment, /api/stop, and /api/resume so the
     # changed_at field and weak ETag in /api/integrations/v1/now-playing
@@ -766,13 +790,29 @@ class StationState:
     gen_recent: deque[dict] = field(default_factory=lambda: deque(maxlen=3))
     # each entry: {"phase": str, "kind": str, "label": str, "ok": bool}
 
-    def set_gen(self, phase: str, kind: str, label: str) -> None:
+    def set_gen(self, phase: str, kind: str, label: str, *, track_timing: bool = True) -> None:
         """Mark the producer as actively building a segment (drives 'In produzione').
 
         Best-effort display state only — never gates the audio path.
         """
+        now = time.monotonic()
+        self._finish_render_stage(now)
+        if not self._render_timing_started:
+            self.begin_render_timing(kind, started=now)
         self.gen_phase, self.gen_kind, self.gen_label = phase, kind, label
-        self.gen_started = time.monotonic()
+        self.gen_started = now
+        self._render_stage_name = (
+            {
+                "finding": "source",
+                "writing": "script",
+                "voicing": "tts",
+                "mastering": "mix",
+                "checking": "quality",
+            }.get(phase, "")
+            if track_timing
+            else ""
+        )
+        self._render_stage_started = now if self._render_stage_name else 0.0
 
     def end_gen(self, ok: bool = True) -> None:
         """Clear the current production phase, pushing it onto the recent trail.
@@ -780,12 +820,62 @@ class StationState:
         ok=False records a blocked (✗) outcome for operator honesty. A crash that
         skips end_gen does not wedge anything: the next set_gen overwrites state.
         """
+        now = time.monotonic()
+        self._finish_render_stage(now)
         if self.gen_phase:
             self.gen_recent.appendleft(
                 {"phase": self.gen_phase, "kind": self.gen_kind, "label": self.gen_label, "ok": ok}
             )
         self.gen_phase = self.gen_kind = self.gen_label = ""
         self.gen_started = 0.0
+
+    def begin_render_timing(self, kind: str, *, started: float | None = None) -> None:
+        """Begin one producer attempt; later stage timings remain best-effort."""
+        # A recoverable branch can return to the producer loop without a single
+        # shared ``finally``. Preserve that terminal evidence rather than
+        # silently overwriting it when the next attempt starts.
+        if self._render_timing_started:
+            self.finish_render_timing("failed", reason="abandoned")
+        now = time.monotonic() if started is None else started
+        self._render_timing_started = now
+        self._render_timing_kind = str(kind)
+        self._render_timing_stages.clear()
+        self._render_stage_started = 0.0
+        self._render_stage_name = ""
+
+    def add_render_stage_timing(self, stage: str, elapsed_ms: float) -> None:
+        """Accumulate an independently measured diagnostic stage duration."""
+        if not self._render_timing_started:
+            return
+        try:
+            self._render_timing_stages[stage] = self._render_timing_stages.get(stage, 0.0) + max(0.0, elapsed_ms)
+        except Exception:
+            logger.debug("Render timing stage measurement failed", exc_info=True)
+
+    def _finish_render_stage(self, now: float | None = None) -> None:
+        if not self._render_stage_name or not self._render_stage_started:
+            return
+        current = time.monotonic() if now is None else now
+        self.add_render_stage_timing(self._render_stage_name, (current - self._render_stage_started) * 1000)
+        self._render_stage_started = 0.0
+        self._render_stage_name = ""
+
+    def finish_render_timing(self, outcome: str, *, reason: str = "", started: float | None = None) -> None:
+        """Close the current producer attempt without allowing diagnostics to raise."""
+        if not self._render_timing_started:
+            return
+        now = time.monotonic() if started is None else started
+        self._finish_render_stage(now)
+        self.record_render_timing(
+            kind=self._render_timing_kind,
+            outcome=outcome,
+            total_elapsed_ms=(now - self._render_timing_started) * 1000,
+            stages_ms=self._render_timing_stages,
+            reason=reason,
+        )
+        self._render_timing_started = 0.0
+        self._render_timing_kind = ""
+        self._render_timing_stages.clear()
 
     def record_llm_usage(self, category: CostCategory, model: str, input_tokens: int, output_tokens: int) -> None:
         """Record one billable LLM usage event in aggregate and category counters.
@@ -853,7 +943,7 @@ class StationState:
         self,
         segment: Segment,
         reason: str,
-        timestamp: float | None = None,
+        timestamp: str | float | None = None,
         *,
         already_counted_in_produced: bool = False,
     ) -> None:
@@ -892,6 +982,57 @@ class StationState:
                     pass
         except Exception:
             pass
+
+    def record_render_timing(
+        self,
+        *,
+        kind: str,
+        outcome: str,
+        total_elapsed_ms: float,
+        stages_ms: dict[str, float] | None = None,
+        reason: str = "",
+        timestamp: float | None = None,
+    ) -> None:
+        """Record one bounded, best-effort producer timing result.
+
+        Stage durations are independently measured and may overlap, so consumers
+        must not infer that their sum equals wall-clock elapsed time.  This helper
+        deliberately swallows malformed diagnostics to keep the audio path safe.
+        """
+        try:
+            if outcome not in {"produced", "discarded", "failed"}:
+                return
+            allowed = {"source", "normalize", "script", "tts", "mix", "quality", "egress", "admission"}
+            stages: dict[str, int] = {}
+            for name, value in (stages_ms or {}).items():
+                if name not in allowed:
+                    continue
+                elapsed = max(0, round(float(value)))
+                stages[name] = elapsed
+            entry = {
+                "timestamp": (
+                    datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+                    if timestamp is None
+                    else timestamp
+                ),
+                "kind": str(kind),
+                "outcome": outcome,
+                "total_elapsed_ms": max(0, round(float(total_elapsed_ms))),
+                "stages_ms": stages,
+            }
+            if outcome != "produced" and reason:
+                entry["reason"] = str(reason)
+            self.render_timings.appendleft(entry)
+            logger.info(
+                "render_timing kind=%s outcome=%s total_elapsed_ms=%s stages_ms=%s reason=%s",
+                entry["kind"],
+                entry["outcome"],
+                entry["total_elapsed_ms"],
+                entry["stages_ms"],
+                entry.get("reason", ""),
+            )
+        except Exception:
+            logger.debug("Render timing event failed", exc_info=True)
 
     def update_runtime_provider(
         self,

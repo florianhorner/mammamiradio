@@ -1002,6 +1002,45 @@ async def test_chart_refresh_waits_full_interval_after_startup():
     mock_refresh.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
+    """LRU sees out-of-band ready audio even though it is absent from the real queue."""
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    queued_path = tmp_path / "norm_queued_192k.mp3"
+    queued_path.write_bytes(b"queued")
+    slot_path = tmp_path / "norm_slot_192k.mp3"
+    slot_path.write_bytes(b"slot")
+    queue.put_nowait(
+        Segment(type=SegmentType.MUSIC, path=queued_path, duration_sec=300.0, metadata={"title": "Queued"})
+    )
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=slot_path,
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+
+    with patch(f"{PRODUCER_MODULE}.evict_cache_lru") as evict:
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 1.0
+            while not evict.called and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    evict.assert_called()
+    protected_paths = evict.call_args.args[2]
+    assert queued_path in protected_paths
+    assert slot_path in protected_paths
+
+
 # ---------------------------------------------------------------------------
 # Shareware trial: canned clip limit
 # ---------------------------------------------------------------------------
@@ -4313,14 +4352,7 @@ async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
@@ -4337,13 +4369,13 @@ async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_
             except asyncio.CancelledError:
                 pass
 
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("resume_bridge") is True
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.ephemeral is False
+    assert seg.path.name == "emergency_tone.mp3"
     assert seg.duration_sec == 2.0
     assert seg.metadata["duration_ms"] == 2000
     assert state.bridge_fires_total >= 1
@@ -4517,14 +4549,7 @@ async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_no
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.15)
@@ -4541,13 +4566,13 @@ async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_no
             except asyncio.CancelledError:
                 pass
 
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert seg.duration_sec == 2.0
     assert seg.metadata["duration_ms"] == 2000
     assert state.bridge_fires_total >= 1
@@ -4920,16 +4945,17 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
     state.queued_segments = [{"id": "buffered", "type": "music"}]
 
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
-    with patch(f"{PRODUCER_MODULE}.generate_tone") as mock_tone:
-        assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
+    assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert queue.empty()  # buffered tail purged
     assert state.last_enqueued_type is None
     # The song file still exists, but nothing bleeds under the urgent banter.
     assert _adjacent_music_source(state) is None
-    # The interrupt bridge tone is emergency audio — it must take the rescue
-    # admission lane so it never queues behind routine ffmpeg work (#685-687).
-    assert mock_tone.call_args.kwargs.get("rescue") is True
+    # The interrupt bridge is immediately playable packaged audio, so it cannot
+    # queue behind routine FFmpeg work.
+    assert state.interrupt_slot is not None
+    assert state.interrupt_slot.name == "emergency_tone.mp3"
+    assert state.interrupt_slot_ephemeral is False
 
 
 @pytest.mark.asyncio
@@ -4943,18 +4969,79 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     packaged = demo_root / "recovery" / "continuity_1.mp3"
     packaged.parent.mkdir(parents=True)
     packaged.write_bytes(b"\x00" * 2048)
+    (packaged.parent / "emergency_tone.mp3").write_bytes(b"\x00" * 2048)
     state = _make_state()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     queue.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
-    with (
-        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
-        patch(f"{PRODUCER_MODULE}.generate_tone") as mock_tone,
-    ):
+    with patch.object(producer, "_DEMO_ASSETS_DIR", demo_root):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert packaged.exists()
     assert queue.empty()
-    assert mock_tone.call_args.kwargs.get("rescue") is True
+    assert state.interrupt_slot == packaged.parent / "emergency_tone.mp3"
+
+
+def test_remember_rendered_music_populates_immediate_audio_index(tmp_path):
+    """The live data source feeding the instant-audio continuity reservation must populate.
+
+    Every continuity test injects ``immediate_audio_index`` directly, so a
+    regression in the sole production writer for normally-rendered music would
+    silently degrade the reservation to clip/emergency-tone only with nothing
+    failing. Pin the writer, not just the consumer.
+    """
+    from mammamiradio.scheduling.producer import RenderedMusicTrack, _remember_rendered_music
+
+    state = StationState(playlist=[])
+    cache_path = tmp_path / "norm_rendered_128k.mp3"
+    cache_path.write_bytes(b"cached")
+    track = Track(title="Rendered Song", artist="Rendered Artist", duration_ms=200_000, spotify_id="r1")
+    rendered = RenderedMusicTrack(track=track, path=cache_path, cache_path=cache_path, cache_hit=True)
+
+    _remember_rendered_music(rendered, state)
+
+    assert state.immediate_audio_index[cache_path] == pytest.approx(200.0)
+
+
+def test_remember_enqueued_indexes_rescue_music_and_skips_breaks(tmp_path):
+    """Rescue/recycled music tails populate the index; tones, errors, missing paths do not."""
+    from mammamiradio.scheduling.producer import _remember_enqueued
+
+    state = StationState(playlist=[])
+    music_path = tmp_path / "norm_rescue_128k.mp3"
+    music_path.write_bytes(b"cached")
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=music_path,
+        duration_sec=180.0,
+        metadata={"rescue": True, "artist": "A", "title": "T"},
+    )
+    _remember_enqueued(state, music, music_path)
+    assert state.immediate_audio_index[music_path] == pytest.approx(180.0)
+
+    # An emergency-tone continuity break is not indexable music (audio_source guard).
+    tone_path = tmp_path / "emergency_tone.mp3"
+    tone_path.write_bytes(b"tone")
+    tone = Segment(
+        type=SegmentType.MUSIC,
+        path=tone_path,
+        duration_sec=2.0,
+        metadata={"audio_source": "emergency_tone", "rescue": True},
+    )
+    _remember_enqueued(state, tone, tone_path)
+    assert tone_path not in state.immediate_audio_index
+
+    # A missing source path cannot be reserved later, so it is never indexed.
+    missing = tmp_path / "norm_missing_128k.mp3"
+    missing_music = Segment(type=SegmentType.MUSIC, path=missing, duration_sec=180.0, metadata={"rescue": True})
+    _remember_enqueued(state, missing_music, missing)
+    assert missing not in state.immediate_audio_index
+
+    # A non-music tail never enters the music-only index.
+    banter_path = tmp_path / "norm_banter_128k.mp3"
+    banter_path.write_bytes(b"cached")
+    banter = Segment(type=SegmentType.BANTER, path=banter_path, duration_sec=12.0, metadata={})
+    _remember_enqueued(state, banter, banter_path)
+    assert banter_path not in state.immediate_audio_index

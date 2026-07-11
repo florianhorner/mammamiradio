@@ -298,6 +298,31 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   `memory_extractor` only after the send loop reaches EOF with bytes sent. Purged,
   skipped, stale, failed, or partial banter never writes persona or song-cue memory.
 
+### Protected continuity reservations
+
+Program-replacing controls — source switches, playlist purges, panic, and
+Chaos/Festival cutovers — rebuild the real playback queue and its Scaletta shadow
+in one synchronous operation. They reserve only audio already safe to play:
+the packaged continuity clip first, then eligible normalized-cache music, then
+the packaged `emergency_tone.mp3` when the clip and cache are unavailable. A
+normalized-cache candidate passes the same final blocklist rule as every other
+music admission, so a banned song cannot re-enter through this instant-audio
+path.
+
+A replacement control supersedes an earlier reservation: it clears ordinary and
+protected queued audio, clears any out-of-band `continuity_slot`, and creates a
+fresh reservation for the new action. The resulting queue and shadow projection
+must therefore describe exactly the same final order. Each rebuild advances
+`continuity_epoch`; producer work and startup prewarm capture that epoch and
+discard their result if it changed before queue admission, including after
+egress. This prevents an older render from refilling a runway deliberately held
+for a newer control action.
+
+After a continuity rebuild, tail adjacency is recomputed from the resulting
+queue rather than retained from discarded work. Recovery audio and the emergency
+tone are continuity breaks, so a following spoken segment cannot inherit a bed
+or crossfade from music that the control action removed.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by
@@ -583,7 +608,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, and `bridge_health` rescue-bridge telemetry — see operations.md "Reading queue-rescue health"), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -653,6 +678,11 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 ### Source switch concurrency
 
 `source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+
+Source replacement also follows the protected-continuity reservation contract
+above: existing reservations and fallback slots cannot survive a later source
+switch, and `continuity_epoch` prevents a render begun before the cutover from
+being admitted after it.
 
 ## Failure model
 
