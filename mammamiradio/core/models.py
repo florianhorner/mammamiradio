@@ -877,12 +877,13 @@ class StationState:
             # skip the waste telemetry for this discard (mirrors the guard in
             # on_stream_segment around activate()).
             director = self.home_context_director
-            if director is not None:
-                metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-                director.release(
-                    str(metadata.get("queue_id") or ""),
-                    fact_id=str(metadata.get("home_fact_id") or "") or None,
-                )
+            metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+            home_fact_id = str(metadata.get("home_fact_id") or "")
+            # Only a segment carrying a home fact ever holds a reservation. Gate on
+            # its id so an ordinary segment's queue_id can never match and release
+            # an unrelated fact via the fact_id=None wildcard.
+            if director is not None and home_fact_id:
+                director.release(str(metadata.get("queue_id") or ""), fact_id=home_fact_id)
         except Exception:
             logging.getLogger("mammamiradio.home_context_director").debug(
                 "Home context director release failed", exc_info=True
@@ -1054,11 +1055,11 @@ class StationState:
         try:
             director = self.home_context_director
             metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-            if director is not None:
-                director.activate(
-                    str(metadata.get("queue_id") or ""),
-                    fact_id=str(metadata.get("home_fact_id") or "") or None,
-                )
+            home_fact_id = str(metadata.get("home_fact_id") or "")
+            # Only a home-fact segment holds a reservation; gate on its id so an
+            # ordinary segment can never activate an unrelated fact's cooldown.
+            if director is not None and home_fact_id:
+                director.activate(str(metadata.get("queue_id") or ""), fact_id=home_fact_id)
         except Exception:
             logging.getLogger("mammamiradio.home_context_director").debug(
                 "Home context director activation failed", exc_info=True

@@ -3378,7 +3378,10 @@ async function setHaPersonalMoment(entityId, enabled, el){
   flash(el);
   const resp=await api('PATCH','/api/homeassistant/entity-policy',{entity_id:entityId,personal_moment_enabled:Boolean(enabled)});
   if(!resp.ok){toast(wayOut('update personal on-air moment'));return}
-  toast(Boolean(enabled)?'Personal on-air moment enabled':'Personal on-air moment disabled');
+  // Disabling tightens privacy server-side and can purge a queued break, just
+  // like a mute — surface that count so the toast matches setHaEntityMuted.
+  const purged=Number(resp.purged_pending_banter_count||0);
+  toast(Boolean(enabled)?'Personal on-air moment enabled':('Personal on-air moment disabled'+(purged?`; removed ${purged} queued host break(s)`:'')));
   await loadHomeContextPreview();
   await refreshFast();
 }

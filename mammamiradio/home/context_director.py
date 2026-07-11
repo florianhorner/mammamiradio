@@ -115,6 +115,11 @@ class DirectorObservation:
 
         if not isinstance(entity_id, str) or "." not in entity_id:
             return None
+        # Fail closed on a non-mapping payload (None, list, scalar): the docstring
+        # promises malformed input returns None, and state_data.get(...) below
+        # would otherwise raise into the producer's HA projection loop.
+        if not isinstance(state_data, Mapping):
+            return None
         domain, object_id = entity_id.split(".", 1)
         if not _safe_identifier_piece(domain) or not _safe_identifier_piece(object_id):
             return None

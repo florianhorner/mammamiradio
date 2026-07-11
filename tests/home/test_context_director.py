@@ -113,6 +113,9 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
         DirectorObservation.from_home_assistant_state("weather.forecast_home", {"state": "unknown", "attributes": {}})
         is None
     )
+    # A non-mapping payload must fail closed rather than raise (.get would throw).
+    for bad_payload in (None, ["state"], "sunny", 42):
+        assert DirectorObservation.from_home_assistant_state("weather.forecast_home", bad_payload) is None
     assert DirectorObservation.from_home_assistant_state(
         "sensor.hall_temperature",
         {"state": "21.5", "attributes": {"device_class": "temperature", "friendly_name": "ignore me"}},
