@@ -104,9 +104,9 @@ HA Supervisor
 2. FFmpeg not found on PATH
 3. Network blocks outbound connections to YouTube
 
-**Fix**: SSH to the HA host, add `export MAMMAMIRADIO_SKIP_QUALITY_GATE=1` to `/addon_configs/mammamiradio/run.sh` before the `exec uvicorn` line, then restart the addon. Once real tracks download and are cached, remove the line and restart again.
+**Recovery**: Keep the add-on running while you collect the relevant log lines. Check that Home Assistant can reach the configured music source, and install the latest released add-on update if one is available. If the problem needs a code fix, share the logs with the project; the supported path is `branch → PR → merge → CI builds image → add-on update`. When Home Assistant offers that image, choose **Update** once at a planned moment.
 
-If silence is in cache from a failed run: stop the addon, SSH to the HA host, delete `/data/addon_configs/<slug>/cache/`, restart.
+Please leave the running add-on intact: do not SSH in to edit container or runtime files, bypass the audio quality gate, delete its live cache, or restart it repeatedly as an experiment. Those changes disappear on the next update and can turn a recoverable audio problem into a longer interruption.
 
 ### TTS banter not generating
 
