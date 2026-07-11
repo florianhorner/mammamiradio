@@ -1025,16 +1025,26 @@ async def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path)
         ephemeral=False,
     )
 
-    with patch(f"{PRODUCER_MODULE}.evict_cache_lru") as evict:
+    evicted = asyncio.Event()
+
+    def _record_eviction(*_args, **_kwargs):
+        evicted.set()
+
+    async def _run_inline(func, /, *args, **kwargs):
+        # Run the (mocked) eviction inline instead of on the default executor so
+        # the assertion never races a saturated ThreadPoolExecutor. Iteration 1
+        # reaches this eviction call before any other producer to_thread use, so
+        # this only affects the call under test. Waiting on a wall clock for a
+        # free thread pool slot was a CI-only flake (evict "not called").
+        return func(*args, **kwargs)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru", side_effect=_record_eviction) as evict,
+        patch(f"{PRODUCER_MODULE}.asyncio.to_thread", side_effect=_run_inline),
+    ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            # Generous ceiling: the loop exits the instant evict is called, so a
-            # larger bound costs nothing on a healthy run. Under coverage
-            # instrumentation the producer's first pass to the eviction call can
-            # exceed 1s, which made this a wall-clock flake in the CI quality job.
-            deadline = asyncio.get_running_loop().time() + 5.0
-            while not evict.called and asyncio.get_running_loop().time() < deadline:
-                await asyncio.sleep(0.01)
+            await asyncio.wait_for(evicted.wait(), timeout=10.0)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
