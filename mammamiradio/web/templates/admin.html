@@ -4977,7 +4977,14 @@ async function refreshFast(){
   try{
     // Paint the authoritative production state before unrelated widgets. A
     // later renderer failure must not leave yesterday's production row frozen.
-    renderProduction(_st);
+    // Isolate it in its own try: a malformed production shape must never starve
+    // the stopped-state honesty updaters below (updateStopState/updateNow), or
+    // the desk could keep showing live On-Air controls over a paused station.
+    try{
+      renderProduction(_st);
+    }catch(e){
+      console.error('refreshFast production',e);
+    }
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
     }

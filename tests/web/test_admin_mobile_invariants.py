@@ -259,6 +259,29 @@ def test_production_fetch_failure_replaces_stale_work_with_retry_state() -> None
     assert "renderProductionUnavailable();" in refresh_fast
 
 
+def test_production_render_cannot_starve_stopped_state_updaters() -> None:
+    """A renderProduction() throw must not skip the stopped-state honesty updaters.
+
+    renderProduction is painted first but is the least critical widget; if it can
+    throw its way into refreshFast's outer catch, updateStopState/updateNow are
+    skipped and the desk keeps showing live On-Air controls over a paused station
+    (leadership #1). It must be isolated in its own try so it can never starve them.
+    """
+    text = _read_admin_html()
+    refresh_fast = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    # renderProduction must be wrapped in its own try that precedes the honesty
+    # updaters, so its failure is isolated from updateStopState/updateNow.
+    render_idx = refresh_fast.index("renderProduction(_st);")
+    guarded_prefix = refresh_fast[:render_idx]
+    assert guarded_prefix.rstrip().endswith("try{"), (
+        "renderProduction(_st) must sit inside its own try{} so a malformed production "
+        "shape cannot starve the stopped-state honesty updaters below it."
+    )
+    stop_idx = refresh_fast.index("updateStopState(_st.session_stopped)")
+    assert render_idx < stop_idx, "renderProduction must still paint before updateStopState."
+
+
 def test_server_seeded_stopped_state_controls_first_paint() -> None:
     """A paused server render must be truthful before the first status request completes."""
     text = _read_admin_html()
