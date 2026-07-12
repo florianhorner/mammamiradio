@@ -1,7 +1,7 @@
 """Stock fallback copy for the AI hosts: chaos stock lines and ad-break bumpers.
 
-Extracted verbatim from ``hosts/scriptwriter.py`` (god-module split). Pure data —
-the canned lines hosts fall back to for chaos beats and ad breaks. Self-contained
+Extracted from ``hosts/scriptwriter.py`` (god-module split). Holds the canned
+lines and small selectors hosts use for chaos beats and ad breaks. Self-contained
 apart from the ChaosSubtype enum. Reloaded ahead of the scriptwriter facade by
 /api/hot-reload so edits here take effect without a stream gap.
 """
@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from mammamiradio.core.models import ChaosSubtype
 
+# Keep the Italian map under its long-standing public name.  Scriptwriter uses
+# ``chaos_stock_lines`` below so this copy is selected only when the station is
+# actually speaking Italian in Super Italian Mode.
 CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
     ChaosSubtype.FOURTH_WALL: [
         "Aspetta. Hai sentito anche tu il momento in cui siamo diventati una frase dentro una macchina?",
@@ -38,6 +41,70 @@ CHAOS_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
         "Dai, muoviti. Ora. Senza aspettare.",
     ],
 }
+
+# Normal Mode is English-led even when the station's configured language is
+# Italian.  The subtype anchors are intentionally distinct, so a degraded
+# Chaos break still lands as the beat the operator selected rather than generic
+# emergency banter.
+CHAOS_NORMAL_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
+    ChaosSubtype.FOURTH_WALL: [
+        "Hold on. Did we just hear the fourth wall breathe?",
+        "Don't look at it. If we name the machinery, it gets ideas.",
+        "Good. Music, before the studio notices us.",
+    ],
+    ChaosSubtype.ABANDONED_STORM: [
+        "I was about to make one clean point—",
+        "No, the storm got there first, and now every sentence is sideways—",
+        "Music. Immediately. Before the weather finishes the argument.",
+    ],
+    ChaosSubtype.IMPOSSIBLE_RECALL: [
+        "That song from earlier is back in the room, wearing wet shoes.",
+        "Don't say its name too loudly or it comes through the window.",
+        "Too late. Keep it moving.",
+    ],
+    ChaosSubtype.ICON_MOMENT: [
+        "That is exactly the rule of the icon: never explain it, just point at the ceiling.",
+        "Finally, someone said it on the radio.",
+        "Music now, out of respect for the ceiling.",
+    ],
+    ChaosSubtype.URGENT_INTERRUPT: [
+        "How many times do we have to say it?",
+        "The timer is done. Done. This is not a suggestion.",
+        "Move. Now. No waiting around.",
+    ],
+}
+
+_CHAOS_SOLO_RECOVERY_LINES: dict[bool, list[str]] = {
+    False: [
+        "The chaos is real, but we can land this.",
+        "Music. We keep moving.",
+    ],
+    True: [
+        "Il caos è reale, ma chiudiamo il punto.",
+        "Musica. Continuiamo.",
+    ],
+}
+
+
+def chaos_stock_lines(
+    *,
+    super_italian_mode: bool,
+    station_language: str,
+) -> dict[ChaosSubtype, list[str]]:
+    """Select Chaos recovery copy for the station's active spoken mode."""
+    if super_italian_mode and station_language == "it":
+        return CHAOS_STOCK_LINES
+    return CHAOS_NORMAL_STOCK_LINES
+
+
+def chaos_solo_recovery_lines(
+    *,
+    super_italian_mode: bool,
+    station_language: str,
+) -> list[str]:
+    """Select the complete one-host recovery exchange for the spoken mode."""
+    return _CHAOS_SOLO_RECOVERY_LINES[super_italian_mode and station_language == "it"]
+
 
 AD_BREAK_INTROS = [
     "E ora... un messaggio dai nostri sponsor!",

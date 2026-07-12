@@ -12,7 +12,8 @@ import pytest
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, PlayedEntry, StationState, Track
 from mammamiradio.hosts import scriptwriter
-from mammamiradio.hosts.scriptwriter import CHAOS_MODE_BLOCK, CHAOS_STOCK_LINES, write_banter
+from mammamiradio.hosts.fallbacks import CHAOS_NORMAL_STOCK_LINES
+from mammamiradio.hosts.scriptwriter import CHAOS_MODE_BLOCK, write_banter
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -106,7 +107,7 @@ async def test_both_llms_down_uses_chaos_stock_line(config, state):
 
     texts = [text for _host, text in lines]
     assert commit is None
-    assert texts == CHAOS_STOCK_LINES[ChaosSubtype.ICON_MOMENT]
+    assert texts == CHAOS_NORMAL_STOCK_LINES[ChaosSubtype.ICON_MOMENT]
     assert texts != ["E torniamo alla musica!"]
     assert state.chaos_script_fallbacks == 1
     assert state.chaos_last_degraded_reason == "script_fallback"
@@ -117,7 +118,7 @@ async def test_chaos_stock_line_preserves_every_subtype_line(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
 
-    for subtype, expected_lines in CHAOS_STOCK_LINES.items():
+    for subtype, expected_lines in CHAOS_NORMAL_STOCK_LINES.items():
         lines, commit = await write_banter(state, config, chaos_subtype=subtype)
 
         assert commit is None
@@ -132,7 +133,7 @@ async def test_script_llm_failure_uses_chaos_stock_line(config, state):
     ):
         lines, _ = await write_banter(state, config, chaos_subtype=ChaosSubtype.ABANDONED_STORM)
 
-    assert [text for _host, text in lines] == CHAOS_STOCK_LINES[ChaosSubtype.ABANDONED_STORM]
+    assert [text for _host, text in lines] == CHAOS_NORMAL_STOCK_LINES[ChaosSubtype.ABANDONED_STORM]
     assert state.chaos_last_degraded_reason == "script_fallback"
 
 
