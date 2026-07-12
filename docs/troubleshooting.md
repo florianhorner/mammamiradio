@@ -104,6 +104,11 @@ The fix marks the request `song_pinned` at whichever site pins first (set synchr
 
 That usually means script generation failed and the app fell back to stock copy.
 
+Chaos recovery copy follows the spoken mode too: Normal Mode uses English-led
+stock, while Italian stock is used only when Super Italian Mode is enabled and
+the station language is Italian. The one-host recovery line follows the same
+rule.
+
 ## A host transition stopped after only a few words
 
 Song-end transitions are validated before they reach TTS. Missing, malformed, shorter-than-three-word, or visibly cut-off text (for example `And now...`) is replaced immediately with complete stock copy; the station does not buy another model retry for this handoff. Normal Mode uses an English-led line such as `Stay close, amici — a quick word from our sponsors.` and Super Italian Mode uses the matching Italian line. Those fallbacks deliberately carry no just-played-track reference, so a queue reorder cannot make a generic handoff claim the wrong song.

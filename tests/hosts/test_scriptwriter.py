@@ -297,6 +297,11 @@ def test_transition_stock_fallbacks_cover_all_segments_and_modes():
         ("And now", False),
         ("Hold that—", False),
         ("Hold that–", False),
+        ("Hold that-", False),
+        ("Hold that--", False),
+        ("Hold that thought--", False),
+        ('Hold that-")]', False),
+        ('Hold that-- " )', False),
         ("Hold that...", False),
         ("Hold that…", False),
         ("That landing has teeth, amici.", True),
@@ -4632,6 +4637,27 @@ def test_stock_banter_and_chaos_exchanges_satisfy_turn_taking_contract(config):
         assert _banter_turn_taking_ok(_chaos_stock_exchange(config, subtype))
 
 
+@pytest.mark.parametrize("cutoff", ["-", "--", '-")]', '-- " )'])
+def test_banter_turn_taking_treats_ascii_hyphens_as_cutoffs(config, cutoff):
+    """ASCII cutoff markers remain stranded unless a different host answers them."""
+    marco, giulia = _regular_hosts(config)[:2]
+
+    # Unanswered cutoff ending → stranded → rejected.
+    assert not _banter_turn_taking_ok(
+        [
+            (marco, "Questa canzone aveva davvero carattere."),
+            (giulia, f"No, ma aspetta{cutoff}"),
+        ]
+    )
+    # The same cut-in is valid when another host answers immediately.
+    assert _banter_turn_taking_ok(
+        [
+            (marco, f"No, ma aspetta{cutoff}"),
+            (giulia, "Il punto è che hai perso il ritmo."),
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_write_banter_preserves_paired_different_host_cutoff(config, state):
     """Marco may trail off when Giulia immediately answers him."""
@@ -4667,6 +4693,33 @@ async def test_write_banter_terminal_cutoff_uses_stock_exchange(config, state):
         "lines": [
             {"host": marco.name, "text": "Questa canzone aveva davvero carattere."},
             {"host": giulia.name, "text": "No, aspetta—"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cutoff", ["-", "--", '-")]', '-- " )'])
+async def test_write_banter_normal_mode_ascii_terminal_cutoff_uses_stock_exchange(config, state, cutoff):
+    """Normal Mode rejects an orphaned ASCII cut-off after all output guards."""
+    config.super_italian_mode = False
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "That track had a real point of view tonight."},
+            {"host": giulia.name, "text": f"No, wait{cutoff}"},
         ],
         "new_joke": None,
     }
@@ -4818,6 +4871,22 @@ async def test_write_transition_no_key_super_italian_returns_italian_fallback(co
         host, text, _ = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
+
+
+@pytest.mark.asyncio
+async def test_super_italian_non_italian_stock_fallbacks_use_english(config, state):
+    """Italian stock is reserved for a Super Italian station that speaks Italian."""
+    config.super_italian_mode = True
+    config.station.language = "de"
+    config.anthropic_api_key = ""
+    brand = AdBrand(name="FallbackBrand", tagline="Italian slogan", category="tech")
+
+    _host, transition, _ = await write_transition(state, config, next_segment="ad")
+
+    assert scriptwriter_module._spoken_fallback_language(config) == "en"
+    assert transition == "Stay close, amici — a quick word from our sponsors."
+    assert scriptwriter_module._news_flash_fallback(config) == "And in breaking news: everything's fine. More or less."
+    assert scriptwriter_module._ad_fallback_text(brand, config) == "FallbackBrand. Because you deserve it."
 
 
 @pytest.mark.asyncio

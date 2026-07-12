@@ -52,6 +52,8 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
+    chaos_solo_recovery_lines,
+    chaos_stock_lines,
 )
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
@@ -1250,7 +1252,7 @@ async def _load_song_cues_for_current_track(
 # stays as a module-local alias to preserve existing call sites and tests.
 _fix_wrong_station_names = sanitize_spoken_station_name
 
-_BANTER_UNFINISHED_MARKERS = ("—", "–", "...", "…")
+_BANTER_UNFINISHED_MARKERS = ("—", "–", "--", "-", "...", "…")
 _BANTER_TRAILING_DIALOGUE_CLOSERS = "\"'”’)]}»"
 _BANTER_COMPLETE_ENDINGS = (".", "!", "?")
 
@@ -1258,7 +1260,7 @@ _BANTER_COMPLETE_ENDINGS = (".", "!", "?")
 def _banter_line_needs_immediate_reply(text: str) -> bool:
     """Return whether a spoken banter line is an interruption, not a finished thought."""
     stripped = text.strip()
-    spoken_end = stripped.rstrip(_BANTER_TRAILING_DIALOGUE_CLOSERS)
+    spoken_end = stripped.rstrip(_BANTER_TRAILING_DIALOGUE_CLOSERS + " \t\r\n")
     if spoken_end.endswith(_BANTER_UNFINISHED_MARKERS):
         return True
     return len(stripped.split()) <= 2 and not spoken_end.endswith(_BANTER_COMPLETE_ENDINGS)
@@ -1326,13 +1328,20 @@ def _chaos_stock_exchange(
     h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
     h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
     speakers = cycle([h0, h1])
-    exchange = [(next(speakers), line) for line in CHAOS_STOCK_LINES[subtype]]
+    stock_lines = chaos_stock_lines(
+        super_italian_mode=config.super_italian_mode,
+        station_language=config.station.language,
+    )
+    exchange = [(next(speakers), line) for line in stock_lines[subtype]]
     if _banter_turn_taking_ok(exchange):
         return exchange
     logger.warning("Chaos stock exchange needs two distinct hosts; using complete solo-host fallback")
     return [
-        (h0, "Il caos è reale, ma chiudiamo il punto."),
-        (h0, "Musica. Continuiamo."),
+        (h0, line)
+        for line in chaos_solo_recovery_lines(
+            super_italian_mode=config.super_italian_mode,
+            station_language=config.station.language,
+        )
     ]
 
 
@@ -2159,6 +2168,7 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
     persona_ctx = ""
     persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
+    milestone: int | None = None
     if persona_store:
         try:
             from mammamiradio.hosts.persona import _ARC_DIRECTIVES
@@ -2180,10 +2190,6 @@ Phase: {phase} (session #{persona.session_count})
 Directive: {directive}{milestone_line}
 </arc_phase>
 """
-            # Consume the milestone so it only fires once
-            if milestone:
-                await persona_store.consume_milestone()
-
             if persona_ctx:
                 persona_block = f"""
 <listener_memory>
@@ -2555,6 +2561,11 @@ Return JSON:
         result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
         if not _banter_turn_taking_ok(result):
             raise ValueError("banter response contained an orphaned host cut-off")
+        # A milestone belongs to an accepted generated exchange, not merely a
+        # prompt attempt. Every response-shape, language, sanitation,
+        # de-duplication, and turn-taking guard above must pass first.
+        if milestone is not None and persona_store is not None:
+            await persona_store.consume_milestone()
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
         state.last_banter_home_fact = prompt_fact
@@ -2766,12 +2777,17 @@ def _news_flash_fallback(config: StationConfig) -> str:
 
 def _spoken_fallback_language(config: StationConfig) -> str:
     """Return the stock spoken-copy language for the active host mode."""
-    return "it" if config.super_italian_mode else "en"
+    return "it" if config.super_italian_mode and config.station.language == "it" else "en"
 
 
 def _transition_fallbacks(config: StationConfig) -> dict[str, str]:
     """Compatibility facade for callers that inspect all transition stock copy."""
-    return _transition_stock_fallbacks(super_italian=config.super_italian_mode)
+    return _transition_stock_fallbacks(super_italian=_spoken_fallback_language(config) == "it")
+
+
+def _transition_fallback_text(config: StationConfig, next_segment: str) -> str:
+    """Return complete transition stock copy for the station's active spoken mode."""
+    return _transition_stock_copy(next_segment, super_italian=_spoken_fallback_language(config) == "it")
 
 
 def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
@@ -2908,7 +2924,7 @@ async def write_transition(
     """
     if not has_script_llm(config):
         host = random.choice(_regular_hosts(config))
-        return (host, _transition_stock_copy(next_segment, super_italian=config.super_italian_mode), None)
+        return (host, _transition_fallback_text(config, next_segment), None)
 
     if song_cues is None:
         song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
@@ -2990,17 +3006,17 @@ Return JSON:
         raw_text = data.get("text")
         if not isinstance(raw_text, str) or not _transition_text_usable(raw_text):
             logger.warning("Transition response was unusable; using deterministic stock copy")
-            return (host, _transition_stock_copy(next_segment, super_italian=config.super_italian_mode), None)
+            return (host, _transition_fallback_text(config, next_segment), None)
         text = _massage_transition_text(raw_text, next_segment, recent_texts)
         if not _transition_text_usable(text):
             logger.warning("Massaged transition response was unusable; using deterministic stock copy")
-            return (host, _transition_stock_copy(next_segment, super_italian=config.super_italian_mode), None)
+            return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
         return (host, text, played_track_ref)
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
-        return (host, _transition_stock_copy(next_segment, super_italian=config.super_italian_mode), None)
+        return (host, _transition_fallback_text(config, next_segment), None)
 
 
 async def write_ad(

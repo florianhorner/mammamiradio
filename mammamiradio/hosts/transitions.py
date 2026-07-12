@@ -44,7 +44,7 @@ _TRANSITION_STOCK_COPY: dict[bool, dict[str, str]] = {
         "news_flash": "Attenzione, amici — è arrivato un aggiornamento in redazione.",
     },
 }
-_TERMINAL_CUTOFF_MARKERS = ("—", "–", "...", "…")
+_TERMINAL_CUTOFF_MARKERS = ("—", "–", "--", "-", "...", "…")
 _TRAILING_DIALOGUE_CLOSERS = "\"'”’)]}»"
 
 
@@ -59,7 +59,10 @@ def _transition_text_usable(text: object) -> bool:
     stripped = text.strip()
     if len(stripped.split()) < 3:
         return False
-    spoken_end = stripped.rstrip(_TRAILING_DIALOGUE_CLOSERS)
+    # A model can wrap a cut-off thought in dialogue punctuation, sometimes with
+    # whitespace between the closer and the unfinished marker.  Strip both as a
+    # single trailing set so ``-\" )`` is rejected just like ``-\")``.
+    spoken_end = stripped.rstrip(_TRAILING_DIALOGUE_CLOSERS + " \t\r\n")
     return not spoken_end.endswith(_TERMINAL_CUTOFF_MARKERS)
 
 
