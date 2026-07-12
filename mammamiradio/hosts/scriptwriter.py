@@ -52,6 +52,8 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     AD_BREAK_INTROS,
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
+    chaos_solo_recovery_lines,
+    chaos_stock_lines,
 )
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
@@ -67,7 +69,13 @@ from mammamiradio.hosts.prompt_world import (
     language_mode_rule,
 )
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
-from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
+from mammamiradio.hosts.transitions import (
+    _massage_transition_text,
+    _transition_stem,
+    _transition_stock_copy,
+    _transition_stock_fallbacks,
+    _transition_text_usable,
+)
 from mammamiradio.playlist.playlist import write_persisted_heading
 
 if TYPE_CHECKING:
@@ -1244,6 +1252,73 @@ async def _load_song_cues_for_current_track(
 # stays as a module-local alias to preserve existing call sites and tests.
 _fix_wrong_station_names = sanitize_spoken_station_name
 
+_BANTER_UNFINISHED_MARKERS = ("—", "–", "--", "-", "...", "…")
+_BANTER_TRAILING_DIALOGUE_CLOSERS = "\"'”’)]}»"
+_BANTER_COMPLETE_ENDINGS = (".", "!", "?")
+
+
+def _banter_line_needs_immediate_reply(text: str) -> bool:
+    """Return whether a spoken banter line is an interruption, not a finished thought."""
+    stripped = text.strip()
+    spoken_end = stripped.rstrip(_BANTER_TRAILING_DIALOGUE_CLOSERS + " \t\r\n")
+    if spoken_end.endswith(_BANTER_UNFINISHED_MARKERS):
+        return True
+    return len(stripped.split()) <= 2 and not spoken_end.endswith(_BANTER_COMPLETE_ENDINGS)
+
+
+def _banter_turn_taking_ok(lines: list[tuple[HostPersonality, str]]) -> bool:
+    """Ensure every cut-off is answered immediately by a different host.
+
+    This runs after parsing, guest filtering, and de-duplication, so it checks the
+    exact sequence that would reach TTS rather than the model's raw JSON.
+    """
+    if not lines:
+        return False
+    for index, (host, text) in enumerate(lines):
+        if not _banter_line_needs_immediate_reply(text):
+            continue
+        if index + 1 >= len(lines):
+            return False
+        next_host, _next_text = lines[index + 1]
+        if _normalize_host_tag(host.name) == _normalize_host_tag(next_host.name):
+            return False
+    return True
+
+
+def _banter_fallback_pools(config: StationConfig) -> list[list[tuple[HostPersonality, str]]]:
+    """Return the complete stock exchanges used after generated banter is rejected."""
+    hosts = _regular_hosts(config)
+    h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
+    h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
+    same_speaker = _normalize_host_tag(h0.name) == _normalize_host_tag(h1.name)
+    interruption_reply = "No, dai. Andiamo avanti." if same_speaker else "No, dai. Dai, aspetta—"
+    normal_interruption_reply = "No, wait. Let me finish." if same_speaker else "No, wait—"
+    if config.super_italian_mode and config.station.language == "it":
+        return [
+            [
+                (h0, "Comunque, mica male questa."),
+                (h1, interruption_reply),
+                (h0, "Musica. Adesso. Fidiamoci."),
+            ],
+            [
+                (h1, "Senti, non ne parliamo."),
+                (h0, "Giusto. Andiamo avanti."),
+                (h1, "Come sempre, come da sempre."),
+            ],
+            [
+                (h0, "Cos'era quello? No, niente. Niente."),
+                (h1, "Il corridoio. Lascia stare."),
+                (h0, "Sì. Lasciamo stare. Musica."),
+            ],
+        ]
+    return [
+        [
+            (h0, "Anyway. Not bad."),
+            (h1, normal_interruption_reply),
+            (h0, "Music. Now. Trust the process."),
+        ],
+    ]
+
 
 def _chaos_stock_exchange(
     config: StationConfig,
@@ -1253,7 +1328,21 @@ def _chaos_stock_exchange(
     h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
     h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
     speakers = cycle([h0, h1])
-    return [(next(speakers), line) for line in CHAOS_STOCK_LINES[subtype]]
+    stock_lines = chaos_stock_lines(
+        super_italian_mode=config.super_italian_mode,
+        station_language=config.station.language,
+    )
+    exchange = [(next(speakers), line) for line in stock_lines[subtype]]
+    if _banter_turn_taking_ok(exchange):
+        return exchange
+    logger.warning("Chaos stock exchange needs two distinct hosts; using complete solo-host fallback")
+    return [
+        (h0, line)
+        for line in chaos_solo_recovery_lines(
+            super_italian_mode=config.super_italian_mode,
+            station_language=config.station.language,
+        )
+    ]
 
 
 def _impossible_recall_target(state: StationState) -> str:
@@ -1628,11 +1717,11 @@ def _personality_modifier(
         if _is_high_chaos_pair_leader(name, axes, cast("HostPersonality", other_host)):
             parts.append(
                 "You are the runaway train. Manic energy — talk fast, steamroll the conversation, "
-                "start three thoughts before finishing one, fill every silence. Lead the chaos."
+                "start three thoughts in quick succession, fill every silence. Lead the chaos."
             )
             parts.append(
-                "On chaos: interrupt constantly, collide mid-sentence, never let the other finish a "
-                "point you disagree with. Verbal pile-up energy."
+                "On chaos: interrupt constantly and collide mid-sentence, but every cut-in must get an "
+                "immediate answer or counter from the other host. Verbal pile-up energy, never a stranded ending."
             )
         else:
             parts.append(
@@ -1654,8 +1743,8 @@ def _personality_modifier(
             parts.append("Stay on topic. Structured, logical flow. No random tangents.")
         elif axes.chaos > 50 + threshold:
             parts.append(
-                "Go on wild tangents. Cut people off. Half-finished thoughts, false starts, verbal collisions, "
-                "and abrupt pivots like you're talking over the room."
+                "Go on wild tangents. Cut people off, use false starts, verbal collisions, and abrupt pivots "
+                "like you're talking over the room — then let the next host answer or counter the interruption."
             )
 
     # Warmth
@@ -1839,9 +1928,10 @@ Rules:
   character's full list before repeating. If you feel the urge to say "dunque" — stop.
   Reach one level deeper: "Senti un po'...", "Come dire...", "Vediamo..." are all richer.
   "oddio" is valid as genuine shock, not as a thinking pause.
-- Hosts interrupt each other, trail off, change topic mid-sentence. Real radio is messy.
+- Hosts interrupt each other and change topic mid-sentence. Real radio is messy, but every intentional
+  cut-in gets an immediate answer or counter from a different host.
 - When chaos is high, make the dialogue feel crowded: cut-offs, corrections, stepping on each
-  other's point, and sentences that restart halfway through.
+  other's point, and sentences that restart halfway through — never leave the final line stranded.
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
@@ -1858,7 +1948,7 @@ Rules:
   "beh, forse..." — actual opposition. "No, ma che stai dicendo?" levels. They never
   just agree and move on. Even when one is right, the other defends the wrong take.
 - Giulia CUTS MARCO OFF at least once per exchange. Mid-sentence. He was wrong anyway.
-  She corrects him without mercy, then continues her own thought as if he hadn't spoken.
+  Her next line answers or counters his point without mercy, then continues her own thought.
 - RUNNING BITS: hosts reference absurd recurring jokes without explaining them.
   "Come quella volta col risotto." / "Lasciamo perdere la storia del formaggio." /
   "Non ne parliamo, lo sai già." The listener is never told what happened. That's the joke.
@@ -1877,8 +1967,8 @@ Rules:
   calmly, never winking. Never reference it again in the same session.
 - START MID-CONVERSATION: sometimes begin as if the listener tuned in halfway through
   an argument or a laugh. No setup. Just drop in.
-- UNFINISHED THOUGHTS: hosts abandon sentences. "Lo so, ma comunque—" then the other
-  one is already talking. Normal.
+- ANSWERED INTERRUPTIONS: a host may cut off with "Lo so, ma comunque—" only when a different
+  host immediately answers or counters it. The final line of every exchange is a complete thought.
 - ABSURDIST TANGENT: at least once per exchange, someone says something that has no
   business being said on radio. Then continues as if nothing happened. The other host doesn't react.
 - PHYSICAL COMEDY: reference the studio physically. Someone knocks something over.
@@ -2078,6 +2168,7 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
     persona_ctx = ""
     persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
+    milestone: int | None = None
     if persona_store:
         try:
             from mammamiradio.hosts.persona import _ARC_DIRECTIVES
@@ -2099,10 +2190,6 @@ Phase: {phase} (session #{persona.session_count})
 Directive: {directive}{milestone_line}
 </arc_phase>
 """
-            # Consume the milestone so it only fires once
-            if milestone:
-                await persona_store.consume_milestone()
-
             if persona_ctx:
                 persona_block = f"""
 <listener_memory>
@@ -2125,7 +2212,8 @@ First-time listeners get curiosity and intrigue. Returning listeners get inside 
 CHAOS DIRECTION:
 - This break should feel argumentative and unstable.
 - At least one host cuts the other off mid-thought.
-- Use interruptions, corrections, abandoned sentences, and "no, aspetta" energy.
+- Use interruptions, corrections, and "no, aspetta" energy; every cut-in gets an immediate
+  answer or counter from the other host, and the final line stays complete.
 - The most volatile hosts right now: {", ".join(chaos_hosts)}.
 """
 
@@ -2471,6 +2559,13 @@ Return JSON:
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
+        if not _banter_turn_taking_ok(result):
+            raise ValueError("banter response contained an orphaned host cut-off")
+        # A milestone belongs to an accepted generated exchange, not merely a
+        # prompt attempt. Every response-shape, language, sanitation,
+        # de-duplication, and turn-taking guard above must pass first.
+        if milestone is not None and persona_store is not None:
+            await persona_store.consume_milestone()
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
         state.last_banter_home_fact = prompt_fact
@@ -2573,37 +2668,7 @@ Return JSON:
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
-        hosts = _regular_hosts(config)
-        h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
-        h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
-        if config.super_italian_mode and config.station.language == "it":
-            # Pre-written short exchanges — sound like real radio, not a shutdown line
-            _fallback_pools = [
-                [
-                    (h0, "Comunque, mica male questa."),
-                    (h1, "No, dai. Dai, aspetta—"),
-                    (h0, "Musica. Adesso. Fidiamoci."),
-                ],
-                [
-                    (h1, "Senti, non ne parliamo."),
-                    (h0, "Giusto. Andiamo avanti."),
-                    (h1, "Come sempre, come da sempre."),
-                ],
-                [
-                    (h0, "Cos'era quello? No, niente. Niente."),
-                    (h1, "Il corridoio. Lascia stare."),
-                    (h0, "Sì. Lasciamo stare. Musica."),
-                ],
-            ]
-        else:
-            _fallback_pools = [
-                [
-                    (h0, "Anyway. Not bad."),
-                    (h1, "No, wait—"),
-                    (h0, "Music. Now. Trust the process."),
-                ],
-            ]
-        return random.choice(_fallback_pools), None
+        return random.choice(_banter_fallback_pools(config)), None
 
 
 NEWS_FLASH_CATEGORIES = {
@@ -2712,13 +2777,17 @@ def _news_flash_fallback(config: StationConfig) -> str:
 
 def _spoken_fallback_language(config: StationConfig) -> str:
     """Return the stock spoken-copy language for the active host mode."""
-    return "it" if config.super_italian_mode else "en"
+    return "it" if config.super_italian_mode and config.station.language == "it" else "en"
 
 
 def _transition_fallbacks(config: StationConfig) -> dict[str, str]:
-    if _spoken_fallback_language(config) == "it":
-        return {"banter": "Allora...", "ad": "E adesso...", "news_flash": "Attenzione..."}
-    return {"banter": "All right...", "ad": "And now...", "news_flash": "Attention..."}
+    """Compatibility facade for callers that inspect all transition stock copy."""
+    return _transition_stock_fallbacks(super_italian=_spoken_fallback_language(config) == "it")
+
+
+def _transition_fallback_text(config: StationConfig, next_segment: str) -> str:
+    """Return complete transition stock copy for the station's active spoken mode."""
+    return _transition_stock_copy(next_segment, super_italian=_spoken_fallback_language(config) == "it")
 
 
 def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
@@ -2855,8 +2924,7 @@ async def write_transition(
     """
     if not has_script_llm(config):
         host = random.choice(_regular_hosts(config))
-        fallback = _transition_fallbacks(config)
-        return (host, fallback.get(next_segment, fallback["banter"]), None)
+        return (host, _transition_fallback_text(config, next_segment), None)
 
     if song_cues is None:
         song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
@@ -2935,15 +3003,20 @@ Return JSON:
             caller="transition",
             role=role,
         )
-        text = _massage_transition_text(data.get("text", "Allora..."), next_segment, recent_texts)
+        raw_text = data.get("text")
+        if not isinstance(raw_text, str) or not _transition_text_usable(raw_text):
+            logger.warning("Transition response was unusable; using deterministic stock copy")
+            return (host, _transition_fallback_text(config, next_segment), None)
+        text = _massage_transition_text(raw_text, next_segment, recent_texts)
+        if not _transition_text_usable(text):
+            logger.warning("Massaged transition response was unusable; using deterministic stock copy")
+            return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
         return (host, text, played_track_ref)
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
-        fallback = _transition_fallbacks(config)
-        text = _massage_transition_text(fallback.get(next_segment, fallback["banter"]), next_segment, recent_texts)
-        return (host, text, None)
+        return (host, _transition_fallback_text(config, next_segment), None)
 
 
 async def write_ad(
