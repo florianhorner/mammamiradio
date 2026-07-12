@@ -215,8 +215,8 @@ def test_get_last_music_file_prefers_state(tmp_path: Path):
         producer._last_music_file = saved
 
 
-def test_get_last_music_file_falls_back_to_module(tmp_path: Path):
-    """When state has no entry, module-level cache is the fallback."""
+def test_get_last_music_file_does_not_cross_station_state(tmp_path: Path):
+    """A fresh station must not inherit another station's cached song."""
     from mammamiradio.core.models import StationState
     from mammamiradio.scheduling import producer
 
@@ -227,7 +227,7 @@ def test_get_last_music_file_falls_back_to_module(tmp_path: Path):
     saved = producer._last_music_file
     try:
         producer._last_music_file = legacy
-        assert producer._get_last_music_file(state) == legacy
+        assert producer._get_last_music_file(state) is None
     finally:
         producer._last_music_file = saved
 
