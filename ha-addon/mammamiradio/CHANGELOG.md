@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.18.0
+
+## 2.17.0 - 2026-07-12
+
 ### Fixed
 
 - **Scaletta now shows every piece of audio that is actually ready to air.** Startup prewarms and continuity bridges were already waiting in the live playback queue but could be invisible in the rundown, leaving "0 ready" beside several minutes of program. Each admitted segment now appears in the real forward schedule with its own removal target, and the desk says when the hosts are minutes ahead instead of making the operator translate a raw buffer number.
@@ -13,8 +17,6 @@
 - **Optional speech now waits for enough real music runway.** Natural banter, ads, news flashes, station IDs, and time checks yield to music while the ready-audio buffer is below the runway floor and the queue can still build, keeping Home Assistant Green-class installs from spending a scarce buffer on optional speech.
 - **Time checks and sweepers now get the same branded transition as every other host segment — both when the music hands off to them and when they hand back.** They previously used a bare synthesized whoosh with no musical motif in either direction — they were the moments on air that sounded noticeably different from the rest of the add-on's imaging. Already-cached synthesized stings are invalidated automatically, so the fix applies without an operator needing to clear anything.
 - **Host banter no longer implies an already-played song is coming up.** A line referencing a track that already aired could read as forward-looking ("and after that... Baby Bird") even though the schedule itself was correct, making the add-on sound like it lost track of its own playlist. Hosts now always frame a played track in the past.
-
-## 2.17.0 - 2026-07-07
 
 ### Added
 

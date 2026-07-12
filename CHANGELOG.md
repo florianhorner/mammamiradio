@@ -6,10 +6,14 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-07-12
+
 ### Added
 
 - **The station breathes a little more now.** The listener page eases in on load instead of snapping into place, the play button pulses gently while on air, and a track that turns over rolls the new title into view rather than swapping it instantly. Sending a dedication now feels like posting a real letter — the stamp presses down and the card lifts away before your note is confirmed. In the admin producer desk, the last aired banter now types itself into the "last break" log as it airs, Super Italian Mode gets a proper on/off switch to match the other station toggles, and applying a host personality preset gives its sliders a quick settling glow. Every bit of this respects "reduce motion" system settings and never changes when audio actually plays — it's purely how the station feels to look at.
 - **Your house can now interrupt the station — and now you can see it.** When something happens at home — the coffee machine waking up, the fridge raided one time too many, a leak sensor crying for help — the AI hosts already react on air. Now those moments leave a visible trace. The listener page shows a small "Live from your home" strip on the Casa card: the last few home moments the hosts actually reacted to, as plain labels like "Morning launch · 2 min ago" — never device names or details. The admin panel gets a full "Home moments" trail that answers both "why did the host just say that?" and "why did nothing happen?": each moment shows whether it made it to air, is on air right now, was cut short by a skip, played to an empty room, or stepped aside because another moment was already lined up. A moment only counts as "made it to air" once it truly streamed to a listener — backup clips and rescue audio never claim credit for the house. The trail survives restarts and updates, keeps only the recent past, and can never interrupt the music: if its bookkeeping ever hiccups, the show plays on and the trail catches up on its own.
+- **A clearer setup guide shows exactly what's next.** The admin panel now tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention instead of one all-or-nothing "not set up yet" flag. Stations that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
+- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds even through a Home Assistant hiccup or a station restart.
 
 ### Fixed
 
@@ -34,13 +38,6 @@ The current version source of truth is `pyproject.toml`.
 - **Release-beat manifest checks now match what the station can actually read.** The release validator and runtime campaign loader share one schema, so runtime fields such as airing limits, campaign spacing, titles, and host guidance are accepted by the gate and validated before they can ship in a packaged release beat.
 - **AI model selection now lives in one file.** Which AI models the station uses, how tasks route to them, the OpenAI voice model, and per-model cost estimates now live in a new `model_registry.toml` next to `radio.toml`, instead of inside `radio.toml` itself. Swapping a model is a one-line config change with no code edit. Self-hosted and source installs must keep `model_registry.toml` beside `radio.toml` (the Docker image and Home Assistant add-on bundle it automatically); if it is missing, the station still boots and plays music but uses stock host copy and standard voices until it is restored. A `[models]` block left in an older `radio.toml` still works for now but is deprecated.
 - **Startup and restart-handoff cleanup now consistently refuse to follow shortcut files (symlinks) into or out of the cache.** The scratch-file, restart-handoff, and cache-admission cleanup paths shared duplicated path-safety checks with small inconsistencies between them; they now share one containment helper, so a stray or malformed cache entry is skipped everywhere the same way instead of behaving slightly differently depending on which cleanup pass touched it first.
-
-## [2.17.0] - 2026-07-07
-
-### Added
-
-- **A clearer setup guide shows exactly what's next.** The admin panel now tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention instead of one all-or-nothing "not set up yet" flag. Stations that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
-- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds even through a Home Assistant hiccup or a station restart.
 
 ### Changed
 
