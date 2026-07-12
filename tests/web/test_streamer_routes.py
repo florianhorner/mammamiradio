@@ -4752,8 +4752,25 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
         )
 
     assert muted.status_code == 200
+    assert muted.json()["purged_pending_banter_count"] == 0
     # Released via invalidate_entity's return value, not the physical-queue purge.
-    assert director.admin_status()["reserved_count"] == 0
+    status = director.admin_status()
+    assert status["reserved_count"] == 0
+    assert status["cooling_count"] == 0
+    assert status["session_counters"]["activated"] == 0
+    assert status["session_counters"]["released"] == 1
+    assert director._issued_facts[fact.fact_id].state == "released"
+    settled = director._settled_queue_ids["inflight-queue"]
+    assert settled.terminal_state == "released"
+    assert settled.revision_current is False
+
+    # If a stale callback arrives after the route released this unstarted work,
+    # it must remain a no-op for listener cooldown accounting.
+    before = director.admin_status()
+    assert director.activate("inflight-queue", fact_id=fact.fact_id) is False
+    after = director.admin_status()
+    assert after["cooling_count"] == 0
+    assert after["session_counters"] == before["session_counters"]
 
 
 @pytest.mark.asyncio
