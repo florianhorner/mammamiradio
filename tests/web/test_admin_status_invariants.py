@@ -222,6 +222,16 @@ def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
     assert "rescueRow," in block
 
 
+def test_runtime_status_card_projects_capacity_exempt_continuity() -> None:
+    """The safety slot is visible to admins without joining the real queue shadow."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const continuity=rs.continuity_slot" in block
+    assert "statusRow('Protected continuity'" in block
+    assert "No out-of-band safety audio reserved" in block
+    assert "continuityRow," in block
+
+
 def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> None:
     """#397: the Runtime Status card adds a Generated waste row driven by
     rs.generation_waste, flipping to the colorblind-safe 'degraded' state when

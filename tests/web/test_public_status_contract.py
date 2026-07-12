@@ -25,6 +25,28 @@ from tests.web.test_streamer_routes import _make_test_app
 
 
 @pytest.mark.asyncio
+async def test_render_timings_are_admin_only():
+    app = _make_test_app()
+    app.state.station_state.record_render_timing(
+        kind="banter",
+        outcome="discarded",
+        reason="stale_playlist",
+        total_elapsed_ms=262000,
+        stages_ms={"script": 18000, "tts": 121000},
+        timestamp=1.0,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert "render_timings" not in public
+    timings = admin["runtime_status"]["render_timings"]
+    assert timings["retention"] == 20
+    assert timings["recent"][0]["stages_ms"] == {"script": 18000, "tts": 121000}
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_brand_block():
     """Public listener payload must include the brand-fiction layer."""
     app = _make_test_app()

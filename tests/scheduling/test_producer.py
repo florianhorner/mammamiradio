@@ -500,6 +500,36 @@ async def test_render_music_track_uses_actual_duration_for_accepted_youtube_side
 
 
 @pytest.mark.asyncio
+async def test_render_music_track_removes_partial_cache_on_non_required_copy_failure(tmp_path):
+    """A failed cache copy must not leave a partial norm_cached on the default
+    (cache_write_required=False) render path — a corrupt file could otherwise be
+    selected by _remember_rendered_music for recovery/continuity playback."""
+    from mammamiradio.scheduling.producer import _normalized_cache_path, _render_music_track
+
+    track = Track(title="Song", artist="Artist", duration_ms=200_000, spotify_id="cache1")
+    config = _make_config(tmp_path)
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
+
+    def _partial_copy(src, dst):
+        Path(dst).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=raw_path),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=lambda _src, dst, *_a, **_k: dst.write_bytes(b"norm")),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_partial_copy),
+    ):
+        result = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+    # The non-required path does not raise, but the partial cache file must be gone.
+    assert result is not None
+    assert not norm_cached.exists()
+
+
+@pytest.mark.asyncio
 async def test_render_music_track_uses_metadata_when_probe_fails(tmp_path):
     from mammamiradio.scheduling.producer import _render_music_track
 

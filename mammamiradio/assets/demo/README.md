@@ -8,7 +8,12 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
 ## Structure
 
 - `sfx/studio/` — committed MP3 SFX used by the producer's "humanity events" (cough, paper rustle, chair creak, pen tap). These must live inside the package tree so `mammamiradio/scheduling/producer.py` and packaging find them together.
-- `recovery/` — committed continuity MP3s used before any generated technical fallback when producer recovery or queue-drain recovery needs instant audio.
+- `recovery/` — committed, package-included continuity MP3s used before any
+  generated technical fallback when producer recovery or queue-drain recovery
+  needs instant audio. `continuity_1.mp3` is the normal immediate clip;
+  `emergency_tone.mp3` is the required 2-second cold-cache/no-clip final rung.
+  Keep both under this package tree so they are available without rendering in
+  standalone and Home Assistant add-on builds.
 - `welcome/` — placeholder for onboarding clips (currently a README stub).
 - `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder.
 

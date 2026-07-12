@@ -9,6 +9,8 @@ from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR, is_packaged_asset
 
 def test_default_assets_dir_protects_the_packaged_tree():
     assert is_packaged_asset(DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3") is True
+    assert is_packaged_asset(DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3") is True
+    assert (DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3").is_file()
 
 
 def test_default_assets_dir_rejects_outside_paths(tmp_path):

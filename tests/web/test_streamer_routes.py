@@ -865,6 +865,47 @@ async def test_packaged_recovery_segment_probe_not_blocked_by_norm_slots(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp_path):
+    """The out-of-band row disappears at the same moment playback claims its audio."""
+    from mammamiradio.web.streamer import _continuity_slot_status
+
+    app = _make_test_app()
+    app.state.stream_hub.subscribe()
+    slot_path = tmp_path / "protected_slot.mp3"
+    slot_path.write_bytes(b"protected-audio" * 1024)
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={
+            "title": "Protected continuity",
+            "continuity_reservation": True,
+            "continuity_reservation_id": "playback-slot",
+        },
+        ephemeral=False,
+    )
+    state = app.state.station_state
+    state.continuity_slot = slot
+    started = asyncio.Event()
+    original_on_stream_segment = state.on_stream_segment
+
+    def _on_stream_segment(segment):
+        original_on_stream_segment(segment)
+        started.set()
+
+    state.on_stream_segment = _on_stream_segment
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert state.now_streaming["metadata"]["continuity_reservation_id"] == "playback-slot"
+        assert state.continuity_slot is None
+        assert _continuity_slot_status(state) is None
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
     """A packaged clip's duration is probed once (as rescue) then reused, so
     rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
@@ -1093,7 +1134,10 @@ async def test_run_playback_loop_stop_during_queue_wait_skips_fallback(tmp_path)
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 1.0
+            # Exits the instant the loop reaches its queue wait, so a generous
+            # ceiling costs nothing on a healthy run and avoids a wall-clock
+            # flake under coverage instrumentation in CI.
+            deadline = time.monotonic() + 5.0
             while calls == 0:
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not enter queue wait")
@@ -2815,8 +2859,9 @@ async def test_panic_cut_while_streaming():
     assert state.force_next == SegmentType.MUSIC
     # session_stopped must NOT be set — stream stays live
     assert state.session_stopped is False
-    # shadow queue must be cleared
-    assert len(state.queued_segments) == 0
+    # Stale rows are replaced by an audible protected reservation.
+    assert len(state.queued_segments) == app.state.queue.qsize() == 1
+    assert state.queued_segments[0]["reason"] == "Protected continuity audio."
 
 
 @pytest.mark.asyncio

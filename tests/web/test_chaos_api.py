@@ -85,8 +85,8 @@ async def test_post_chaos_enable_sets_pending_bumps_epoch_and_purges_queue(tmp_p
     assert state.chaos_mode_active is True
     assert state.chaos_pending in {ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM}
     assert state.chaos_cutover_epoch == 1
-    assert app.state.queue.empty()
-    assert state.queued_segments == []
+    assert app.state.queue.qsize() == len(state.queued_segments) == 1
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert all(not old_file.exists() for old_file in old_files)
     assert os.environ["MAMMAMIRADIO_CHAOS_MODE"] == "true"
     save_dotenv.assert_called_once_with({"MAMMAMIRADIO_CHAOS_MODE": "true"})

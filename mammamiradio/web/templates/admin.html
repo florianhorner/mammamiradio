@@ -3326,13 +3326,44 @@ function updateRuntimeStatus(st){
       }
       wasteRow=statusRow('Generated waste',wasteState,wasteLabel,wasteDetail);
     }
+    // Recent render timings stay admin-only. Show the last terminal attempt in
+    // human terms so an operator can see where a slow build spent its time.
+    const timings=rs.render_timings;
+    let timingRow;
+    if(!timings || !Array.isArray(timings.recent) || !timings.recent.length){
+      timingRow=statusRow('Last render','idle','—','No completed render timing yet');
+    }else{
+      const latest=timings.recent[0]||{};
+      const stageLabels={source:'Finding music',normalize:'Preparing audio',script:'Writing',tts:'Voices',mix:'Mixing',quality:'Checking',egress:'On-air finish',admission:'Cueing'};
+      const stages=latest.stages_ms&&typeof latest.stages_ms==='object'?latest.stages_ms:{};
+      const ranked=Object.entries(stages).filter(([,ms])=>Number.isFinite(Number(ms))).sort((a,b)=>Number(b[1])-Number(a[1]));
+      const slowest=ranked.length?`${stageLabels[ranked[0][0]]||'Not available'} ${Math.max(0,Math.round(Number(ranked[0][1])/1000))}s`:'Not available';
+      const outcome=latest.outcome==='produced'?'Ready':latest.outcome==='discarded'?'Set aside':'Did not finish';
+      const timingState=latest.outcome==='produced'?'ready':'degraded';
+      const total=Math.max(0,Math.round(Number(latest.total_elapsed_ms||0)/1000));
+      timingRow=statusRow('Last render',timingState,outcome,`${total}s total · slowest: ${slowest}`);
+    }
+    // A capacity-exempt continuity slot is real ready audio but deliberately
+    // absent from the queue/Scaletta mirror. Give operators an honest, admin-only
+    // row without polluting the public upcoming contract or shadow invariant.
+    const continuity=rs.continuity_slot;
+    let continuityRow;
+    if(!continuity){
+      continuityRow=statusRow('Protected continuity','idle','Standby','No out-of-band safety audio reserved');
+    }else{
+      const sourceLabels={norm_cache:'Cached music',emergency_tone:'Emergency tone',packaged_recovery:'Packaged recovery'};
+      const seconds=Math.max(0,Math.round(Number(continuity.duration_sec||0)));
+      continuityRow=statusRow('Protected continuity','ready','Reserved',`${seconds}s ready · ${sourceLabels[continuity.audio_source]||'Immediate audio'}`);
+    }
     card.innerHTML=[
       statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
       runtimeProviderRow('Audio source',providers.audio_source),
       runtimeProviderRow('Script provider',providers.script_provider),
       runtimeProviderRow('TTS provider',providers.tts_provider),
+      continuityRow,
       rescueRow,
       wasteRow,
+      timingRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
     ].join('');
   }catch(e){

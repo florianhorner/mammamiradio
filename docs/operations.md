@@ -225,6 +225,28 @@ low-waste copy. Admin-only — absent from `/public-status`. Counts are
 session-local and reset on restart. Observability only; does not change
 scheduling or generation depth.
 
+### Reading recent render timings
+
+`runtime_status.render_timings` is a bounded, admin-only diagnostic trail for
+completed producer attempts. It is absent from `/public-status` and never feeds
+scheduling, queue admission, or playback. `retention` is the maximum retained
+entry count (currently 20); `recent` is newest first. Each entry contains:
+
+- `timestamp` — UTC completion time.
+- `kind` — the attempted segment type.
+- `outcome` — `produced`, `discarded`, or `failed`; non-produced attempts may
+  additionally include `reason` (for example, a stale cutover or a quality-gate
+  rejection).
+- `total_elapsed_ms` — rounded wall-clock time for the attempt.
+- `stages_ms` — rounded durations for any observed `source`, `normalize`,
+  `script`, `tts`, `mix`, `quality`, `egress`, and `admission` stages.
+
+Stage measurements are independently observed and can overlap, so their sum is
+not a substitute for `total_elapsed_ms`. Every terminal producer branch closes
+the current entry immediately, including a quality rejection, so the next
+attempt cannot recast it as an unrelated delayed `abandoned` failure. This is
+session-local observability only and resets on restart.
+
 ### Reading producer headroom
 
 `runtime_status.producer_headroom` shows how full the lookahead queue is relative
@@ -234,10 +256,17 @@ bridge. The fields:
 - `queue_depth` — segments currently queued (`-1` if the queue is not yet attached).
 - `queue_capacity` — the queue's hard cap.
 - `lookahead_target` — the runway target, `max(4, pacing.lookahead_segments)`
-  (default `lookahead_segments = 4`).
+  (default `lookahead_segments = 4`); retained as queue-shape context, not the
+  headroom decision.
 - `buffered_audio_sec` — total seconds of audio already queued in the real
-  playback queue, summed from segment durations.
-- `headroom_ok` — `true` once `queue_depth >= lookahead_target`.
+  playback queue, summed from segment durations (plus an active protected
+  continuity slot when one exists).
+- `runway_floor_sec` — minimum ready-audio runway used by the continuity guard.
+- `continuity_slot_sec` — seconds held in the capacity-exempt protected
+  continuity slot (`0` when none is reserved); already included in
+  `buffered_audio_sec`, surfaced separately so an operator can see how much of
+  the runway is out-of-band safety audio rather than queued program.
+- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec`.
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
 The fields are operator-facing observability. The same real-queue seconds

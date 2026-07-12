@@ -49,9 +49,10 @@ from mammamiradio.core.models import (
     SegmentType,
 )
 from mammamiradio.hosts.moderation import is_blocked
+from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.web.auth import _HASSIO_NETWORK, require_admin_access
 from mammamiradio.web.json_body import read_json_object
-from mammamiradio.web.streamer import _register_background_task
+from mammamiradio.web.streamer import _register_background_task, _reserve_continuity_runway
 
 logger = logging.getLogger("mammamiradio.listener_requests")
 
@@ -213,6 +214,19 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
         else:
             kept_requests.append(r)
     state.pending_requests = kept_requests
+    removed_tracks = [r.get("song_track_obj") for r in removed_requests if r.get("song_track_obj") is not None]
+    playlist_will_change = any(any(candidate is track for candidate in state.playlist) for track in removed_tracks)
+    pin_will_change = any(state.pinned_track is track for track in removed_tracks)
+    if playlist_will_change or pin_will_change:
+        # This is a playlist-revision writer just like shuffle/move/add. Keep
+        # the reservation and mutation in one no-await stretch so an in-flight
+        # render cannot observe the edit without the continuity epoch changing.
+        _reserve_continuity_runway(
+            request.app.state,
+            state,
+            request.app.state.config,
+            excluded_track_keys={normalized_track_key(track) for track in removed_tracks},
+        )
     for r in removed_requests:
         track = r.get("song_track_obj")
         if track is None:

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from mammamiradio.audio.normalizer import norm_cache_duration_sec
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
@@ -79,6 +80,23 @@ logger = logging.getLogger("mammamiradio")
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
 _prewarm_task: asyncio.Task | None = None
+
+
+def _build_immediate_audio_index(cache_dir: Path, *, bitrate_kbps: int | float | None) -> dict[Path, float]:
+    """Index warm normalized audio without probing it during a control action.
+
+    ``norm_cache_duration_sec`` is intentionally sidecar/file-size based, so a
+    restart can discover its immediately playable runway synchronously without
+    launching FFmpeg on constrained hardware.
+    """
+    indexed: dict[Path, float] = {}
+    for path in sorted(cache_dir.glob("norm_*.mp3")):
+        if not path.is_file():
+            continue
+        duration_sec = norm_cache_duration_sec(path, bitrate_kbps=bitrate_kbps)
+        if duration_sec > 0:
+            indexed[path] = duration_sec
+    return indexed
 
 
 def _read_persisted_chaos_mode(config) -> bool:
@@ -457,6 +475,10 @@ async def startup():
         home_context_director=HomeContextDirector(),
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
+        immediate_audio_index=_build_immediate_audio_index(
+            config.cache_dir,
+            bitrate_kbps=config.audio.bitrate,
+        ),
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 

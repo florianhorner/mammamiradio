@@ -35,6 +35,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.web.streamer import (
+    _CONTINUITY_CACHE_SCAN_LIMIT,
     _FALLBACK_REASON_LABELS,
     BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
     BRIDGE_HEALTH_THRESHOLD,
@@ -45,9 +46,11 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     _apply_loaded_source,
     _bridge_health_snapshot,
+    _continuity_reservation_segments,
     _estimate_api_cost,
     _generation_waste_snapshot,
     _purge_queue_and_shadow,
+    _reserve_continuity_runway,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
     _sync_runtime_state,
@@ -1026,8 +1029,8 @@ def test_switch_playlist_does_not_clear_shadow():
     assert len(state.queued_segments) == 1
 
 
-def test_apply_loaded_source_clears_shadow_and_real_queue():
-    """_apply_loaded_source atomically clears both the shadow list and the real queue."""
+def test_apply_loaded_source_rebuilds_shadow_and_real_queue_with_continuity_audio():
+    """A source swap atomically replaces stale rows with protected audible runway."""
     from mammamiradio.core.models import PlaylistSource
 
     app = _make_app(shadow=[_seg("Old A"), _seg("Old B")], queue_items=2)
@@ -1041,8 +1044,9 @@ def test_apply_loaded_source_clears_shadow_and_real_queue():
     req = _fake_request(app)
     _apply_loaded_source(req, new_tracks, resolved_source)
 
-    assert app.state.station_state.queued_segments == []
-    assert app.state.queue.empty()
+    assert app.state.queue.qsize() == len(app.state.station_state.queued_segments) == 1
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
+    assert app.state.station_state.queued_segments[0]["reason"] == "Protected continuity audio."
 
 
 # ---------------------------------------------------------------------------
@@ -1215,16 +1219,18 @@ def test_runtime_status_snapshot_includes_producer_headroom():
         {"type": "music"},
     ]
 
-    req = _fake_request(app)
-    runtime_health = _runtime_health_snapshot(req)
-    rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        req = _fake_request(app)
+        runtime_health = _runtime_health_snapshot(req)
+        rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
 
     headroom = rs["producer_headroom"]
     assert headroom["queue_capacity"] == 6
     assert headroom["lookahead_target"] == 4
     assert headroom["buffered_audio_sec"] == 360.0
-    assert headroom["headroom_ok"] is False
-    assert headroom["reason"] == "building runway"
+    assert headroom["runway_floor_sec"] > 0
+    assert headroom["headroom_ok"] is True
+    assert headroom["reason"] == "ready runway"
 
 
 def test_runtime_status_snapshot_producer_headroom_ready_runway():
@@ -1249,6 +1255,465 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
     assert headroom["buffered_audio_sec"] == 720.0
     assert headroom["headroom_ok"] is True
     assert headroom["reason"] == "ready runway"
+
+
+def test_continuity_reservation_evicts_only_the_ordinary_tail():
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=3)
+    originals = [_queue_segment(f"Track {index}", duration_sec=4.0) for index in range(3)]
+    for segment in originals:
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"id": f"row-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(originals)
+    ]
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    queued = list(app.state.queue._queue)
+    assert evicted == 1
+    assert queued[:2] == originals[:2]
+    assert queued[-1].metadata["continuity_reservation"] is True
+    assert len(app.state.station_state.queued_segments) == app.state.queue.qsize()
+    assert app.state.station_state.continuity_epoch == 1
+
+
+def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip():
+    """Count pressure cannot make listener runway shorter than it was before the guard."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=3)
+    originals = [_queue_segment(f"Long {index}", duration_sec=70.0) for index in range(3)]
+    for segment in originals:
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"id": f"long-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(originals)
+    ]
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    assert evicted == 0
+    assert list(app.state.queue._queue) == originals
+    assert app.state.station_state.continuity_slot is not None
+    assert sum(segment.duration_sec for segment in app.state.queue._queue) == 210.0
+    assert app.state.station_state.continuity_epoch == 1
+
+
+def test_continuity_reservation_uses_capacity_exempt_slot_for_ready_air_next():
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=1)
+    air_next = _queue_segment("Operator break", duration_sec=1.0)
+    air_next.metadata["air_next"] = True
+    app.state.queue.put_nowait(air_next)
+    app.state.station_state.queued_segments = [{"id": "operator", "label": "Operator break"}]
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    assert evicted == 0
+    assert list(app.state.queue._queue) == [air_next]
+    assert app.state.station_state.continuity_slot is not None
+    assert app.state.station_state.continuity_slot.metadata["continuity_reservation"] is True
+
+
+def test_repeated_continuity_guard_reuses_maximal_slot_without_epoch_churn(tmp_path):
+    """A full air-next queue cannot admit more runway; keep its existing slot."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=1)
+    air_next = _queue_segment("Operator break", duration_sec=1.0)
+    air_next.metadata["air_next"] = True
+    app.state.queue.put_nowait(air_next)
+    app.state.station_state.queued_segments = [{"id": "operator", "label": "Operator break"}]
+    slot = _queue_segment("Protected continuity", duration_sec=4.44)
+    slot.path = tmp_path / "protected_slot.mp3"
+    slot.path.write_bytes(b"protected")
+    slot.metadata.update(
+        {
+            "continuity_reservation": True,
+            "continuity_reservation_id": "existing-slot",
+        }
+    )
+    app.state.station_state.continuity_slot = slot
+    app.state.station_state.continuity_epoch = 7
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    assert evicted == 0
+    assert list(app.state.queue._queue) == [air_next]
+    assert app.state.station_state.continuity_slot is slot
+    assert app.state.station_state.continuity_epoch == 7
+
+
+def test_insufficient_protected_queue_is_upgraded_when_warm_cache_appears(tmp_path):
+    """Only the capacity-exempt air-next slot is maximal; weak queued protection can improve."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=2)
+    old = [_queue_segment(f"Old protection {index}", duration_sec=5.0) for index in range(2)]
+    for segment in old:
+        segment.metadata["continuity_reservation"] = True
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"id": f"old-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(old)
+    ]
+    cached = tmp_path / "norm_new_runway_128k.mp3"
+    cached.write_bytes(b"cached")
+    app.state.station_state.immediate_audio_index = {cached: 240.0}
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch(
+            "mammamiradio.web.streamer.load_track_metadata",
+            return_value={"title": "New runway", "artist": "Cache Artist"},
+        ),
+    ):
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    queued = list(app.state.queue._queue)
+    assert old[0] not in queued and old[1] not in queued
+    assert cached in {segment.path for segment in queued}
+    assert sum(segment.duration_sec for segment in queued) >= 240.0
+    assert app.state.station_state.continuity_epoch == 1
+
+
+def test_continuity_reservation_is_bounded_by_queue_capacity(tmp_path):
+    """A large candidate set must never evict all real audio then collapse to one slot."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=3)
+    originals = [_queue_segment(f"Short {index}", duration_sec=1.0) for index in range(3)]
+    for segment in originals:
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"id": f"short-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(originals)
+    ]
+    cached = []
+    for index in range(3):
+        path = tmp_path / f"norm_capacity_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        cached.append(path)
+    app.state.station_state.immediate_audio_index = {path: 80.0 for path in cached}
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer.load_track_metadata", return_value={}),
+    ):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    queued = list(app.state.queue._queue)
+    assert evicted == 3
+    assert len(queued) == app.state.queue.maxsize == 3
+    assert all(segment.metadata.get("continuity_reservation") is True for segment in queued)
+    assert app.state.station_state.continuity_slot is None
+    assert len(app.state.station_state.queued_segments) == len(queued)
+
+
+def test_continuity_reservation_stops_cache_sidecar_reads_at_target(tmp_path):
+    """A live-control hot path reads only the cache candidates it can actually reserve."""
+    app = _make_app()
+    cached = []
+    for index in range(100):
+        path = tmp_path / f"norm_hot_path_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        cached.append(path)
+    app.state.station_state.immediate_audio_index = {path: 180.0 for path in cached}
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer.load_track_metadata", return_value={}) as metadata_reads,
+    ):
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    assert metadata_reads.call_count == 2
+    assert app.state.queue.qsize() == 3  # packaged clip + the two candidates needed for 240s
+
+
+def test_continuity_reservation_bounds_and_prunes_blocklisted_cache_scan(tmp_path):
+    """A large durable-ban prefix cannot put unbounded sidecar I/O before a live control."""
+    state = StationState(blocklist={("blocked artist", "blocked song"): {"display": "Blocked"}})
+    cached = []
+    for index in range(100):
+        path = tmp_path / f"norm_blocked_hot_path_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        cached.append(path)
+    state.immediate_audio_index = {path: 180.0 for path in cached}
+
+    with patch(
+        "mammamiradio.web.streamer.load_track_metadata",
+        return_value={"artist": "Blocked Artist", "title": "Blocked Song"},
+    ) as metadata_reads:
+        selected = _continuity_reservation_segments(state, None, 240.0, max_segments=6)
+
+    assert len(selected) == 1  # packaged continuity remains immediately available
+    assert metadata_reads.call_count == _CONTINUITY_CACHE_SCAN_LIMIT
+    assert len(state.immediate_audio_index) == 100 - _CONTINUITY_CACHE_SCAN_LIMIT
+
+
+def test_continuity_reservation_bounds_and_prunes_stale_cache_prefix(tmp_path):
+    """Deleted index debris is scanned in bounded batches and removed for the next control."""
+    stale = [tmp_path / f"norm_stale_hot_path_{index}_128k.mp3" for index in range(100)]
+    live = tmp_path / "norm_live_after_stale_prefix_128k.mp3"
+    live.write_bytes(b"cached")
+    state = StationState(immediate_audio_index={**{path: 180.0 for path in stale}, live: 180.0})
+
+    with (
+        patch(
+            "mammamiradio.web.streamer._indexed_audio_path_is_file",
+            side_effect=lambda path: path.is_file(),
+        ) as existence_checks,
+        patch("mammamiradio.web.streamer.load_track_metadata", return_value={}) as metadata_reads,
+    ):
+        selected = _continuity_reservation_segments(state, None, 240.0, max_segments=6)
+
+    assert len(selected) == 1
+    assert existence_checks.call_count == _CONTINUITY_CACHE_SCAN_LIMIT
+    metadata_reads.assert_not_called()
+    assert len(state.immediate_audio_index) == 101 - _CONTINUITY_CACHE_SCAN_LIMIT
+    assert live in state.immediate_audio_index
+
+
+def test_continuity_reservation_honors_excluded_track_keys_not_on_blocklist(tmp_path):
+    """A just-removed song that was never banned still cannot re-enter the instant-audio path.
+
+    `excluded_track_keys` is a distinct branch from the durable blocklist: it is
+    how `dismiss_listener_request` (and the by-key ban path) keep a track that is
+    *not* in `state.blocklist` out of the reservation. Nothing else guards it, so
+    it needs its own coverage. A session exclusion is not a durable ban, so the
+    index entry survives for a later control action once the key is no longer
+    excluded.
+    """
+    state = StationState()
+    dismissed = tmp_path / "norm_dismissed_128k.mp3"
+    dismissed.write_bytes(b"cached")
+    state.immediate_audio_index = {dismissed: 240.0}
+
+    with patch(
+        "mammamiradio.web.streamer.load_track_metadata",
+        return_value={"artist": "Dismissed Artist", "title": "Dismissed Song"},
+    ):
+        selected = _continuity_reservation_segments(
+            state,
+            None,
+            240.0,
+            max_segments=6,
+            excluded_track_keys={("dismissed artist", "dismissed song")},
+        )
+
+    assert all(segment.path != dismissed for segment in selected)
+    assert dismissed in state.immediate_audio_index
+
+
+def test_continuity_reservation_honors_excluded_paths(tmp_path):
+    """A removed queue segment's own file cannot be reintroduced as continuity runway."""
+    state = StationState()
+    removed = tmp_path / "norm_removed_128k.mp3"
+    removed.write_bytes(b"cached")
+    state.immediate_audio_index = {removed: 240.0}
+
+    with patch("mammamiradio.web.streamer.load_track_metadata", return_value={"artist": "A", "title": "T"}):
+        selected = _continuity_reservation_segments(
+            state,
+            None,
+            240.0,
+            max_segments=6,
+            excluded_paths={removed},
+        )
+
+    assert all(segment.path != removed for segment in selected)
+
+
+def test_continuity_reservation_keeps_maximal_prefix_beside_air_next(tmp_path):
+    """Mixed capacity keeps every feasible protected member instead of collapsing to one slot."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=3)
+    air_next = _queue_segment("Operator break", duration_sec=1.0)
+    air_next.metadata["air_next"] = True
+    ordinary = [_queue_segment(f"Ordinary {index}", duration_sec=1.0) for index in range(2)]
+    for segment in [air_next, *ordinary]:
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"id": f"row-{index}", "label": segment.metadata["title"]}
+        for index, segment in enumerate([air_next, *ordinary])
+    ]
+    cached = []
+    for index in range(3):
+        path = tmp_path / f"norm_mixed_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        cached.append(path)
+    app.state.station_state.immediate_audio_index = {path: 80.0 for path in cached}
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer.load_track_metadata", return_value={}),
+    ):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+        first_epoch = app.state.station_state.continuity_epoch
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    queued = list(app.state.queue._queue)
+    assert evicted == 2
+    assert queued[0] is air_next
+    assert len(queued) == app.state.queue.maxsize
+    assert all(segment.metadata.get("continuity_reservation") for segment in queued[1:])
+    assert app.state.station_state.continuity_slot is None
+    assert app.state.station_state.continuity_epoch == first_epoch == 1
+
+
+def test_runtime_status_projects_and_counts_capacity_exempt_continuity(tmp_path):
+    app = _make_app()
+    slot = _queue_segment("Protected continuity", duration_sec=240.0)
+    slot.path = tmp_path / "norm_protected_status_128k.mp3"
+    slot.path.write_bytes(b"protected")
+    slot.metadata.update(
+        {
+            "continuity_reservation": True,
+            "continuity_reservation_id": "status-slot",
+            "audio_source": "norm_cache",
+        }
+    )
+    app.state.station_state.continuity_slot = slot
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        req = _fake_request(app)
+        runtime_health = _runtime_health_snapshot(req)
+        rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    assert rs["continuity_slot"] == {
+        "label": "Protected continuity",
+        "duration_sec": 240.0,
+        "audio_source": "norm_cache",
+        "reservation_id": "status-slot",
+    }
+    assert rs["producer_headroom"]["buffered_audio_sec"] == 240.0
+    assert rs["producer_headroom"]["continuity_slot_sec"] == 240.0
+    assert rs["producer_headroom"]["headroom_ok"] is True
+
+
+def test_runtime_status_clears_missing_capacity_exempt_continuity(tmp_path):
+    """A deleted cache slot is not advertised or counted as ready audio."""
+    app = _make_app()
+    app.state.station_state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "norm_missing_slot_128k.mp3",
+        duration_sec=240.0,
+        metadata={"continuity_reservation": True, "audio_source": "norm_cache"},
+        ephemeral=False,
+    )
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        req = _fake_request(app)
+        runtime_health = _runtime_health_snapshot(req)
+        rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    assert rs["continuity_slot"] is None
+    assert rs["producer_headroom"]["continuity_slot_sec"] == 0.0
+    assert rs["producer_headroom"]["headroom_ok"] is False
+    assert app.state.station_state.continuity_slot is None
+
+
+def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot():
+    """A second destructive control must not retain an earlier safety reservation."""
+    app = _make_app()
+    old_reservation = _queue_segment("Old protected runway", duration_sec=4.44)
+    old_reservation.metadata["continuity_reservation"] = True
+    old_reservation.metadata["continuity_reservation_id"] = "old-runway"
+    app.state.queue.put_nowait(old_reservation)
+    stale_slot = _queue_segment("Old capacity-exempt runway", duration_sec=4.44)
+    stale_slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = stale_slot
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _reserve_continuity_runway(
+        app.state,
+        app.state.station_state,
+        app.state.config,
+        replace_queue=True,
+    )
+
+    queued = list(app.state.queue._queue)
+    assert dropped == 1
+    assert queued and queued[0] is not old_reservation
+    assert queued[0].metadata["continuity_reservation"] is True
+    assert app.state.station_state.continuity_slot is None
+    assert app.state.station_state.last_enqueued_type == SegmentType.BANTER
+
+
+def test_continuity_reservation_never_requeues_a_blocklisted_cached_track(tmp_path):
+    """Direct queue rebuilds still honor the final music blocklist gate."""
+    app = _make_app()
+    banned = tmp_path / "norm_banned_128k.mp3"
+    banned.write_bytes(b"cached")
+    app.state.station_state.immediate_audio_index = {banned: 240.0}
+    app.state.station_state.blocklist = {("blocked artist", "blocked song"): {"display": "Blocked track"}}
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch(
+            "mammamiradio.web.streamer.load_track_metadata",
+            return_value={"artist": "Blocked Artist", "title": "Blocked Song"},
+        ),
+    ):
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config, replace_queue=True)
+
+    assert all(segment.path != banned for segment in app.state.queue._queue)
+
+
+def test_replace_continuity_reservation_clears_adjacency_when_no_audio_is_available(tmp_path):
+    """An assetless replacement still invalidates the removed queue tail."""
+    app = _make_app()
+    old_song = _queue_segment("Old song", duration_sec=180.0)
+    app.state.queue.put_nowait(old_song)
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+    missing_demo_root = tmp_path / "missing-demo-assets"
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", missing_demo_root):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 1
+    assert app.state.queue.empty()
+    assert app.state.station_state.last_enqueued_type is None
+    assert app.state.station_state.continuity_epoch == 1
+
+
+def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_target(tmp_path):
+    app = _make_app()
+    first = tmp_path / "norm_first_128k.mp3"
+    second = tmp_path / "norm_second_128k.mp3"
+    first.write_bytes(b"cached")
+    second.write_bytes(b"cached")
+    app.state.station_state.immediate_audio_index = {first: 120.0, second: 120.0}
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config, replace_queue=True)
+
+    queued = list(app.state.queue._queue)
+    assert [segment.path for segment in queued][1:] == [first, second]
+    assert sum(segment.duration_sec for segment in queued) >= 240
+    assert app.state.station_state.last_enqueued_type == SegmentType.MUSIC
+    assert app.state.station_state.last_music_file == second
+
+
+def test_continuity_reservation_precommits_packaged_tone_when_clip_and_cache_are_unavailable(tmp_path):
+    app = _make_app()
+    demo_root = tmp_path / "assets" / "demo"
+    tone = demo_root / "recovery" / "emergency_tone.mp3"
+    tone.parent.mkdir(parents=True)
+    tone.write_bytes(b"tone")
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root),
+    ):
+        _reserve_continuity_runway(app.state, app.state.station_state, app.state.config, replace_queue=True)
+
+    segment = app.state.queue.get_nowait()
+    assert segment.path == tone
+    assert segment.metadata["audio_source"] == "emergency_tone"
+    assert segment.metadata["continuity_reservation"] is True
 
 
 def test_generation_waste_snapshot_empty_is_not_degraded():
