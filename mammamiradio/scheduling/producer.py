@@ -936,7 +936,11 @@ def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason:
         _mark_moment_dropped(state, str(metadata.get(key) or ""), reason, f"{context}:{key}")
 
 
-# Tracks the most recent music file to avoid repeated glob scans on every banter.
+# Legacy process-local cache used only by ``_latest_music_file`` as a tmp-directory
+# scan shortcut. The post-admission writers ``_remember_rendered_music`` and
+# ``_remember_enqueued`` intentionally keep it synchronized with
+# ``StationState.last_music_file``. Recovery and speech-bed selection must read only
+# the state-scoped value so a replacement station cannot inherit another's audio.
 _last_music_file: Path | None = None
 
 _MUSIC_TYPES = {SegmentType.MUSIC}
@@ -1183,14 +1187,13 @@ def _latest_music_file(tmp_dir: Path) -> Path | None:
 def _get_last_music_file(state: StationState) -> Path | None:
     """Return a playable last-known-good music file for recovery paths.
 
-    Prefers the state-attached path (test-isolatable, per-session); falls back to
-    module-level cache when state hasn't tracked one yet.
+    The candidate belongs to this station state. Falling back to the process-level
+    cache would let a freshly constructed station recycle audio admitted by a
+    previous state, including after a cutover or test/runtime reinitialization.
     """
     candidate = state.last_music_file
     if candidate and candidate.exists():
         return candidate
-    if _last_music_file and _last_music_file.exists():
-        return _last_music_file
     return None
 
 

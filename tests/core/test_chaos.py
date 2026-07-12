@@ -10,11 +10,20 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, HostPersonality, Segment, SegmentType, StationState, Track
+from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import CHAOS_AUDIO_FAILURE_LIMIT, RenderedMusicTrack, run_producer
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 SCRIPTWRITER_MODULE = "mammamiradio.hosts.scriptwriter"
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+
+
+@pytest.fixture(autouse=True)
+def _clean_last_music_cache():
+    """Keep each station scenario isolated from the legacy module cache."""
+    producer._last_music_file = None
+    yield
+    producer._last_music_file = None
 
 
 def _config(tmp_path: Path):
@@ -99,12 +108,21 @@ async def test_chaos_cutover_discards_in_flight_music_then_queues_strike(tmp_pat
     music_started = asyncio.Event()
     music_can_finish = asyncio.Event()
     music_path = config.cache_dir / "inflight.mp3"
+    admitted_path = config.cache_dir / "post_cutover.mp3"
     music_path.write_bytes(b"fake")
+    admitted_path.write_bytes(b"replacement")
+    render_calls = 0
 
     async def _render_music(track, *_args, **_kwargs):
-        music_started.set()
-        await music_can_finish.wait()
-        return RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
+        nonlocal render_calls
+        render_calls += 1
+        if render_calls == 1:
+            music_started.set()
+            await music_can_finish.wait()
+            path = music_path
+        else:
+            path = admitted_path
+        return RenderedMusicTrack(track=track, path=path, cache_path=path, cache_hit=True)
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -130,6 +148,7 @@ async def test_chaos_cutover_discards_in_flight_music_then_queues_strike(tmp_pat
             state.chaos_cutover_epoch += 1
             music_can_finish.set()
             await _wait_for_queue(queue)
+            await asyncio.wait_for(_wait_for_last_music(state, admitted_path), timeout=1.0)
         finally:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -140,11 +159,83 @@ async def test_chaos_cutover_discards_in_flight_music_then_queues_strike(tmp_pat
     assert seg.type == SegmentType.BANTER
     assert seg.metadata["chaos_subtype"] == ChaosSubtype.ABANDONED_STORM.value
     assert state.stream_log[-1].metadata["chaos_subtype"] == ChaosSubtype.ABANDONED_STORM.value
+    queued_after_cutover = list(queue._queue)
+    assert all(item.path != music_path for item in queued_after_cutover)
+    assert any(item.path == admitted_path for item in queued_after_cutover)
     # The discarded in-flight music never reached the listener, so the play-time
     # log stays empty. played_tracks is queue-time history and is intentionally
     # left untouched by chaos mode (plan decision 4A).
     assert list(state.played_track_log) == []
     assert music_path.exists()
+    assert music_path not in state.immediate_audio_index
+    assert state.last_music_file == admitted_path
+    assert producer._last_music_file == admitted_path
+    assert admitted_path in state.immediate_audio_index
+
+    # Recovery selection happens after the cutover station has admitted valid
+    # replacement music. A newly constructed station must still start without a
+    # last-known-good candidate instead of inheriting the process cache.
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True},
+    )
+    fresh_state = _state()
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_recovery_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+    ):
+        selected = await producer._producer_error_recovery_segment(fresh_state, config)
+
+    assert selected is recovery
+
+
+async def _wait_for_last_music(state: StationState, expected: Path) -> None:
+    while state.last_music_file != expected:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_persisted_stop_does_not_inherit_prior_station_music(tmp_path):
+    """A restarted, operator-stopped station starts without another station's recovery candidate."""
+    config = _config(tmp_path)
+    stopped_flag = config.cache_dir / "session_stopped.flag"
+    stopped_flag.write_text("stopped")
+    prior_music = config.cache_dir / "prior_station.mp3"
+    prior_music.write_bytes(b"prior")
+    producer._last_music_file = prior_music
+
+    restarted_state = _state()
+    restarted_state.session_stopped = stopped_flag.exists()
+    assert restarted_state.session_stopped is True
+    assert restarted_state.last_music_file is None
+
+    # The operator resumes, but the first production attempt fails. Recovery
+    # must use station continuity instead of audio cached by the prior state.
+    restarted_state.session_stopped = False
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "post_restart_recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True},
+    )
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_recovery_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+    ):
+        selected = await producer._producer_error_recovery_segment(restarted_state, config)
+
+    assert selected is recovery
+    assert restarted_state.last_music_file is None
 
 
 @pytest.mark.asyncio

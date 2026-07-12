@@ -215,8 +215,8 @@ def test_get_last_music_file_prefers_state(tmp_path: Path):
         producer._last_music_file = saved
 
 
-def test_get_last_music_file_falls_back_to_module(tmp_path: Path):
-    """When state has no entry, module-level cache is the fallback."""
+def test_get_last_music_file_does_not_cross_station_state(tmp_path: Path):
+    """A fresh station must not inherit another station's cached song."""
     from mammamiradio.core.models import StationState
     from mammamiradio.scheduling import producer
 
@@ -227,7 +227,32 @@ def test_get_last_music_file_falls_back_to_module(tmp_path: Path):
     saved = producer._last_music_file
     try:
         producer._last_music_file = legacy
-        assert producer._get_last_music_file(state) == legacy
+        assert producer._get_last_music_file(state) is None
+    finally:
+        producer._last_music_file = saved
+
+
+def test_remember_rendered_music_syncs_state_and_scan_cache(tmp_path: Path):
+    """Post-admission music writes the state owner and legacy scan cache together."""
+    from mammamiradio.core.models import StationState, Track
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import RenderedMusicTrack
+
+    music = tmp_path / "admitted.mp3"
+    music.write_bytes(b"x")
+    rendered = RenderedMusicTrack(
+        track=Track(title="Admitted", artist="Artist", duration_ms=120_000, spotify_id="admitted"),
+        path=music,
+        cache_path=music,
+        cache_hit=True,
+    )
+    state = StationState()
+    saved = producer._last_music_file
+    try:
+        producer._last_music_file = None
+        producer._remember_rendered_music(rendered, state)
+        assert state.last_music_file == music
+        assert producer._last_music_file == music
     finally:
         producer._last_music_file = saved
 
