@@ -2304,6 +2304,49 @@ function _statusSpan(cls,state,label,title=''){
   const safeState=statusState(state);
   return `<span class="${cls} ${safeState}" aria-label="${esc(label)}: status ${esc(safeState)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
 }
+function formatHomeSnapshotAge(ageS){
+  if(ageS==null||!Number.isFinite(ageS)||ageS<0)return'age unavailable';
+  if(ageS<60)return Math.floor(ageS)+'s old';
+  if(ageS<3600)return Math.floor(ageS/60)+'m old';
+  if(ageS<86400)return Math.floor(ageS/3600)+'h old';
+  return Math.floor(ageS/86400)+'d old';
+}
+function formatHomeSnapshotTimestamp(ts){
+  if(!ts)return'—';
+  const d=new Date(Number(ts)*1000);
+  if(Number.isNaN(d.getTime()))return'—';
+  return d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'});
+}
+function homeSnapshotPresentation(refresh){
+  const r=refresh||{};
+  const age=formatHomeSnapshotAge(r.age_seconds);
+  if(r.adoption_pending){
+    return{state:'working',label:'update ready',detail:'Home Assistant replied; the new snapshot will be adopted before the next host segment.'};
+  }
+  if(r.freshness==='stale'){
+    return{state:'degraded',label:'stale',detail:'The old snapshot is withheld; hosts are waiting for its replacement.'};
+  }
+  if(r.in_flight){
+    if(r.last_success_at)return{state:'working',label:'catching up',detail:'Hosts are using a snapshot from '+age+'.'};
+    return{state:'working',label:'catching up',detail:'Hosts are waiting for the first update.'};
+  }
+  if(r.freshness==='fresh')return{state:'ready',label:'current',detail:'Hosts are using the latest home snapshot.'};
+  return{state:'idle',label:'waiting for its first update',detail:'The station will keep trying when it next needs home context.'};
+}
+function homeRefreshResultLine(refresh){
+  const r=refresh||{};
+  const copy={
+    success:'received a new snapshot',
+    failed:'did not produce a new snapshot',
+    background_timeout:'took too long to finish',
+    stale:'arrived too late to use',
+  };
+  if(!copy[r.last_result])return'';
+  const parts=[copy[r.last_result]];
+  if(Number.isFinite(r.last_result_duration_ms))parts.push(Math.round(r.last_result_duration_ms)+'ms');
+  if(r.last_result_used_background)parts.push('continued after the audio deadline');
+  return parts.join(' · ');
+}
 function statusChip(state,label,title=''){return _statusSpan('status-chip',state,label,title)}
 function statusInline(state,label,title=''){return _statusSpan('status-inline',state,label,title)}
 function segmentInline(type){
@@ -4951,13 +4994,25 @@ function updateEngineRoom(st,caps){
   if(hd){
     haCard.style.display='';
     const lines=[];
+    const refresh=hd.refresh||{};
+    const snapshot=homeSnapshotPresentation(refresh);
+    lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
+    if(refresh.last_success_at){
+      lines.push('Last success: '+formatHomeSnapshotTimestamp(refresh.last_success_at)+' · '+formatHomeSnapshotAge(refresh.age_seconds));
+    }
+    if(refresh.last_attempt_at)lines.push('Last attempt: '+formatHomeSnapshotTimestamp(refresh.last_attempt_at));
+    if(refresh.in_flight&&refresh.active_foreground_timed_out){
+      lines.push('The replacement is still catching up; the show kept moving.');
+    }
+    const latestRefresh=homeRefreshResultLine(refresh);
+    if(latestRefresh&&!refresh.adoption_pending)lines.push('Latest refresh: '+latestRefresh);
     if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
     if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
     if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
     if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
     lines.push('Recent events: '+(hd.recent_event_count||0));
     lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
-    if(hd.context_last_updated)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+    if(hd.context_last_updated&&!refresh.last_success_at)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
     const director=hd.home_context_director;
     if(director){
       const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';

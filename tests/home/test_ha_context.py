@@ -33,9 +33,12 @@ from mammamiradio.home.ha_context import (
     _build_weather_arc_en,
     _fetch_ha_registry_areas,
     _fetch_ha_registry_snapshot,
+    _fetch_home_context_outcome,
     _filter_state,
     _format_state,
     _ha_websocket_url,
+    _HomeContextFetchOutcome,
+    _publish_home_context_outcome,
     _sanitize_state_value,
     _score_entity,
     _segment_type_icon,
@@ -48,6 +51,7 @@ from mammamiradio.home.ha_context import (
     fetch_weather_forecast,
     get_cached_home_context,
     push_state_to_ha,
+    revalidate_home_context_mutes,
 )
 
 # ---------------------------------------------------------------------------
@@ -1304,6 +1308,294 @@ async def test_fetch_returns_empty_on_failure_no_cache():
 
     assert result.summary == ""
     assert result.raw_states == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcome_defers_cache_and_event_baseline_publication():
+    """A background task must not publish its result before the producer adopts it."""
+    import mammamiradio.home.ha_context as ha_mod
+
+    stale_cache = HomeContext(summary="old", timestamp=time.time() - 120.0)
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+    prior_radio_baseline = {"switch.old": {"state": "off"}}
+    prior_ritual_baseline = {"binary_sensor.old": {"state": "off"}}
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch("mammamiradio.home.ha_context._radio_event_state_cache", prior_radio_baseline),
+        patch("mammamiradio.home.ha_context._ritual_recipe_state_cache", prior_ritual_baseline),
+    ):
+        result = await _fetch_home_context_outcome(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=stale_cache,
+        )
+
+        assert isinstance(result, _HomeContextFetchOutcome)
+        assert result.kind == "fresh"
+        assert result.snapshot_timestamp == result.context.timestamp
+        assert result.attempt_finished_at >= result.attempt_started_at
+        assert result.duration_seconds >= 0.0
+        assert result.is_adoptable_from(stale_cache.timestamp)
+        assert ha_mod._ha_cache is None
+        assert ha_mod._radio_event_state_cache == prior_radio_baseline
+        assert ha_mod._ritual_recipe_state_cache == prior_ritual_baseline
+
+        assert _publish_home_context_outcome(result) is True
+        assert ha_mod._ha_cache is result.context
+        assert ha_mod._radio_event_state_cache == result.radio_event_state_baseline
+        assert ha_mod._ritual_recipe_state_cache == result.ritual_recipe_state_baseline
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcome_marks_cached_and_failed_fallbacks_non_adoptable():
+    cache = HomeContext(summary="cached", timestamp=time.time())
+
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        cached = await _fetch_home_context_outcome(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=cache,
+        )
+
+    assert cached.kind == "cached"
+    assert cached.context is cache
+    assert not cached.is_adoptable_from(0.0)
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = RuntimeError("connection refused")
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        failed = await _fetch_home_context_outcome(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=cache,
+        )
+
+    assert failed.kind == "failed"
+    assert failed.context is cache
+    assert not failed.is_adoptable_from(0.0)
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcome_starts_optional_enrichment_with_delayed_states_and_keeps_result():
+    """Optional work overlaps states and cannot discard a valid late reply."""
+    import mammamiradio.home.ha_context as ha_mod
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    state_started = asyncio.Event()
+    registry_started = asyncio.Event()
+    weather_started = asyncio.Event()
+    release_states = asyncio.Event()
+    registry_finished = asyncio.Event()
+    weather_finished = asyncio.Event()
+
+    async def _delayed_states(*_args, **_kwargs):
+        state_started.set()
+        await registry_started.wait()
+        await weather_started.wait()
+        await release_states.wait()
+        return mock_resp
+
+    async def _timed_out_registry(*_args, **_kwargs):
+        registry_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            registry_finished.set()
+
+    async def _failed_weather(*_args, **_kwargs):
+        weather_started.set()
+        try:
+            raise RuntimeError("weather unavailable")
+        finally:
+            weather_finished.set()
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = _delayed_states
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._fetch_ha_registry_snapshot", side_effect=_timed_out_registry),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", side_effect=_failed_weather),
+        patch("mammamiradio.home.ha_context._HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT", 0.01),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        fetch_task = asyncio.create_task(_fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0))
+        await state_started.wait()
+        await registry_started.wait()
+        await weather_started.wait()
+        release_states.set()
+        result = await fetch_task
+
+    assert result.kind == "fresh"
+    assert result.context.registry_source == "empty_fallback"
+    assert result.context.weather_arc == ""
+    assert registry_finished.is_set()
+    assert weather_finished.is_set()
+    assert mock_client.get.await_args.kwargs["timeout"] == ha_mod._HA_CONTEXT_TOTAL_FETCH_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcome_cancels_optional_enrichment_after_state_failure():
+    """A failed state call awaits the optional tasks it started beside it."""
+    state_started = asyncio.Event()
+    registry_started = asyncio.Event()
+    weather_started = asyncio.Event()
+    registry_finished = asyncio.Event()
+    weather_finished = asyncio.Event()
+
+    async def _failed_states(*_args, **_kwargs):
+        state_started.set()
+        await registry_started.wait()
+        await weather_started.wait()
+        raise RuntimeError("states unavailable")
+
+    async def _pending_enrichment(started: asyncio.Event, finished: asyncio.Event, *_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    async def _pending_registry(*args, **kwargs):
+        return await _pending_enrichment(registry_started, registry_finished, *args, **kwargs)
+
+    async def _pending_weather(*args, **kwargs):
+        return await _pending_enrichment(weather_started, weather_finished, *args, **kwargs)
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = _failed_states
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            side_effect=_pending_registry,
+        ),
+        patch(
+            "mammamiradio.home.ha_context.fetch_weather_forecast",
+            side_effect=_pending_weather,
+        ),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await _fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0)
+
+    assert result.kind == "failed"
+    assert state_started.is_set()
+    assert registry_finished.is_set()
+    assert weather_finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_fetch_outcome_cancellation_awaits_optional_enrichment():
+    """Producer shutdown cancellation leaves no optional enrichment running."""
+    state_started = asyncio.Event()
+    registry_started = asyncio.Event()
+    weather_started = asyncio.Event()
+    registry_finished = asyncio.Event()
+    weather_finished = asyncio.Event()
+
+    async def _pending_states(*_args, **_kwargs):
+        state_started.set()
+        await registry_started.wait()
+        await weather_started.wait()
+        await asyncio.Event().wait()
+
+    async def _pending_enrichment(started: asyncio.Event, finished: asyncio.Event, *_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    async def _pending_registry(*args, **kwargs):
+        return await _pending_enrichment(registry_started, registry_finished, *args, **kwargs)
+
+    async def _pending_weather(*args, **kwargs):
+        return await _pending_enrichment(weather_started, weather_finished, *args, **kwargs)
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = _pending_states
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            side_effect=_pending_registry,
+        ),
+        patch(
+            "mammamiradio.home.ha_context.fetch_weather_forecast",
+            side_effect=_pending_weather,
+        ),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        fetch_task = asyncio.create_task(_fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0))
+        await state_started.wait()
+        await registry_started.wait()
+        await weather_started.wait()
+        fetch_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await fetch_task
+
+    assert registry_finished.is_set()
+    assert weather_finished.is_set()
+
+
+def test_revalidate_home_context_mutes_preserves_unmuted_fresh_one_shots(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    muted_id = "switch.muted"
+    live_id = "switch.live"
+    set_entity_muted(tmp_path, muted_id, True, label="Muted switch")
+    muted_radio = SimpleNamespace(event=SimpleNamespace(entity_id=muted_id))
+    live_radio = SimpleNamespace(event=SimpleNamespace(entity_id=live_id))
+    muted_ritual = SimpleNamespace(
+        entity_id=muted_id,
+        recipe=SimpleNamespace(public_family_label="Muted ritual"),
+    )
+    live_ritual = SimpleNamespace(
+        entity_id=live_id,
+        recipe=SimpleNamespace(public_family_label="Live ritual"),
+    )
+    context = HomeContext(
+        raw_states={
+            muted_id: {"state": "on", "attributes": {}},
+            live_id: {"state": "on", "attributes": {}},
+        },
+        radio_events=[muted_radio, live_radio],
+        ritual_recipe_matches=[muted_ritual, live_ritual],
+        ritual_public_families=["Muted ritual", "Live ritual"],
+        timestamp=time.time(),
+    )
+
+    filtered = revalidate_home_context_mutes(context, tmp_path)
+
+    assert filtered is not context
+    assert muted_id not in filtered.raw_states
+    assert filtered.radio_events == [live_radio]
+    assert filtered.ritual_recipe_matches == [live_ritual]
+    assert filtered.ritual_public_families == ["Live ritual"]
+    assert context.radio_events == [muted_radio, live_radio]
+    assert context.ritual_recipe_matches == [muted_ritual, live_ritual]
 
 
 # ---------------------------------------------------------------------------

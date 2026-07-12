@@ -161,7 +161,7 @@ url = ""
 context_enabled = true       # set false to keep HA entity pushes while disabling full prompt-context polling
 poll_interval = 300          # seconds between full home-state refreshes
 timer_poll_interval = 5      # seconds between lightweight timer-entity checks
-context_refresh_timeout = 2.0  # seconds a refresh may take before the producer airs on last-known home context (audio > HA freshness)
+context_refresh_timeout = 2.0  # warm foreground wait; cold first refresh gets 20s, with one retained request capped at 30s total
 mood_llm_enabled = false       # experimental: background AI scene-namer for home mood; heuristic mood stays the instant fallback
 mood_ttl_seconds = 90.0        # minimum seconds between background scene refresh attempts; the last scene keeps airing while a refresh runs (bounded staleness)
 

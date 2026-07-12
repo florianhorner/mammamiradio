@@ -47,7 +47,7 @@ from mammamiradio.audio.normalizer import (
     save_track_metadata,
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import RadioEventRule, StationConfig
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
@@ -70,11 +70,15 @@ from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
     HomeContext,
+    _fetch_home_context_outcome,
+    _HomeContextFetchOutcome,
+    _publish_home_context_outcome,
     apply_entity_mute_policy,
     check_reactive_triggers,
     fetch_home_context,
     get_cached_home_context,
     push_state_to_ha,
+    revalidate_home_context_mutes,
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
@@ -97,6 +101,9 @@ from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_rest
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
+# Kept as a module-level compatibility seam for existing downstream test
+# fixtures.  The producer's live path uses _fetch_home_context_outcome above.
+_LEGACY_FETCH_HOME_CONTEXT = fetch_home_context
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
 CHAOS_AUDIO_FAILURE_LIMIT = 5
@@ -148,6 +155,127 @@ FIRST_HOME_CONTEXT_MIN_ENTITIES = 3
 # budget — still bounded so a fully-hung HA can't block production forever — and
 # apply the tight steady-state budget to every refresh after.
 _HA_CONTEXT_COLD_LOAD_TIMEOUT = 20.0
+# The foreground deadline protects the audio path.  It intentionally does not
+# cancel the owned HA request: a late result can still improve the *next* safe
+# prompt boundary, but never a segment already being rendered or queued.
+_HA_CONTEXT_BACKGROUND_TIMEOUT = 30.0
+_HA_CONTEXT_MIN_STALE_SECONDS = 120.0
+
+
+def _legacy_mock_home_context(value: object) -> HomeContext:
+    """Normalize older producer-fixture returns into the typed outcome contract.
+
+    Production always calls ``_fetch_home_context_outcome``.  This small
+    compatibility seam keeps third-party/test fixtures that historically
+    replaced the producer-local ``fetch_home_context`` dependency from turning
+    into an untyped background task; it is inactive unless that dependency was
+    explicitly rebound.
+    """
+    if isinstance(value, HomeContext):
+        return value
+
+    def _text(name: str) -> str:
+        candidate = getattr(value, name, "")
+        return candidate if isinstance(candidate, str) else ""
+
+    def _mapping(name: str) -> dict:
+        candidate = getattr(value, name, {})
+        return dict(candidate) if isinstance(candidate, dict) else {}
+
+    def _list(name: str) -> list:
+        candidate = getattr(value, name, [])
+        return list(candidate) if isinstance(candidate, list | tuple) else []
+
+    raw_events = getattr(value, "events", ())
+    events = (
+        deque(raw_events, maxlen=getattr(raw_events, "maxlen", None) or 20)
+        if isinstance(raw_events, deque | list | tuple)
+        else deque(maxlen=20)
+    )
+    raw_timestamp = getattr(value, "timestamp", 0.0)
+    timestamp = (
+        float(raw_timestamp) if isinstance(raw_timestamp, int | float) and not isinstance(raw_timestamp, bool) else 0.0
+    )
+    raw_catalog_hit_rate = getattr(value, "catalog_hit_rate", 0.0)
+    catalog_hit_rate = (
+        float(raw_catalog_hit_rate)
+        if isinstance(raw_catalog_hit_rate, int | float) and not isinstance(raw_catalog_hit_rate, bool)
+        else 0.0
+    )
+    return HomeContext(
+        raw_states=_mapping("raw_states"),
+        summary=_text("summary"),
+        events=events,
+        radio_events=_list("radio_events"),
+        ritual_recipe_matches=_list("ritual_recipe_matches"),
+        ritual_public_families=_list("ritual_public_families"),
+        ritual_recipe_audit=_list("ritual_recipe_audit"),
+        events_summary=_text("events_summary"),
+        timestamp=timestamp,
+        mood=_text("mood"),
+        weather_arc=_text("weather_arc"),
+        mood_en=_text("mood_en"),
+        weather_arc_en=_text("weather_arc_en"),
+        events_summary_en=_text("events_summary_en"),
+        last_event_label_en=_text("last_event_label_en"),
+        scored=_list("scored"),
+        catalog_hit_rate=catalog_hit_rate,
+        label_stats=_mapping("label_stats"),
+        registry_source=_text("registry_source"),
+        denylist_hits=_mapping("denylist_hits"),
+    )
+
+
+def _uses_injected_legacy_fetch() -> bool:
+    """Whether an embedding replaced the historical producer fetch seam."""
+    return fetch_home_context is not _LEGACY_FETCH_HOME_CONTEXT
+
+
+async def _fetch_producer_context_outcome(
+    *,
+    ha_url: str,
+    ha_token: str,
+    poll_interval: float,
+    cache: HomeContext | None,
+    cache_dir: Path,
+    radio_event_rules: list[RadioEventRule] | None,
+) -> _HomeContextFetchOutcome:
+    """Fetch the typed mailbox outcome, preserving the legacy injected seam."""
+    if not _uses_injected_legacy_fetch():
+        return await _fetch_home_context_outcome(
+            ha_url=ha_url,
+            ha_token=ha_token,
+            poll_interval=poll_interval,
+            _cache=cache,
+            cache_dir=cache_dir,
+            radio_event_rules=radio_event_rules,
+        )
+
+    started_at = time.time()
+    started_monotonic = time.monotonic()
+    context = _legacy_mock_home_context(
+        await fetch_home_context(
+            ha_url=ha_url,
+            ha_token=ha_token,
+            poll_interval=poll_interval,
+            _cache=cache,
+            cache_dir=cache_dir,
+            radio_event_rules=radio_event_rules,
+        )
+    )
+    # Fixture contexts sometimes omit a timestamp.  It is still a completed
+    # injected fetch, so give the synthetic source snapshot an adoption stamp.
+    snapshot_timestamp = max(context.timestamp, time.time())
+    if context.timestamp <= 0:
+        context = replace(context, timestamp=snapshot_timestamp)
+    return _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=snapshot_timestamp,
+        attempt_started_at=started_at,
+        attempt_finished_at=time.time(),
+        duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+    )
 
 
 @dataclass(frozen=True)
@@ -2097,6 +2225,7 @@ async def _fire_interrupt(
     *,
     enforce_global_cooldown: bool = False,
     bridge_tmp_dir: Path | None = None,
+    directive_source: str = "ha",
 ) -> bool:
     """Immediately interrupt the stream with bridge audio + pissed banter.
 
@@ -2191,6 +2320,7 @@ async def _fire_interrupt(
     # Reactive-trigger interrupts carry no receipt; the ritual caller overwrites
     # this with its row id right after a successful fire.
     state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = directive_source
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
     state.chaos_cutover_epoch += 1
@@ -2308,42 +2438,410 @@ def _has_real_home_context(ctx: HomeContext | None) -> bool:
     return _has_refresh_budget_context(ctx)
 
 
-async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
-    """Refresh HA context within a wall-clock budget; never block production.
+class _HAContextRefreshCoordinator:
+    """Producer-owned single-flight mailbox for HA prompt context.
 
-    Returns the freshest HomeContext available: a completed refresh, else the
-    last-known context (the passed cache, then the module cache), else an empty
-    ``HomeContext()``. Audio continuity wins over HA freshness (INSTANT AUDIO),
-    so a slow or hung HA degrades to stale/empty context instead of stalling the
-    producer loop. The cold first load (no *real* context anywhere yet) gets the
-    longer warm-up budget so the registry/weather snapshot can populate; every
-    steady-state refresh gets the tight ``context_refresh_timeout``.
+    The foreground deadline is deliberately a *wait* deadline rather than a
+    request deadline.  When it expires, production continues with the last
+    prompt-safe snapshot while the one retained request may finish in the
+    background.  Only this coordinator reads its result and mutates producer
+    refresh telemetry, so a late task can never update a prompt or event
+    baseline in the middle of a render.
     """
-    have_context = _has_refresh_budget_context(ha_cache) or _has_refresh_budget_context(get_cached_home_context())
-    budget = (
-        config.homeassistant.context_refresh_timeout
-        if have_context
-        else max(config.homeassistant.context_refresh_timeout, _HA_CONTEXT_COLD_LOAD_TIMEOUT)
-    )
-    try:
-        return await asyncio.wait_for(
-            fetch_home_context(
-                ha_url=config.homeassistant.url,
-                ha_token=config.ha_token,
-                poll_interval=float(config.homeassistant.poll_interval),
-                _cache=ha_cache,
-                cache_dir=config.cache_dir,
-                radio_event_rules=config.radio_events,
-            ),
-            timeout=budget,
+
+    def __init__(self, config: StationConfig, state: StationState) -> None:
+        self._config = config
+        self._state = state
+        # An explicitly injected legacy fetch owns its synthetic snapshot; do
+        # not let a previous module cache turn that test/integration response
+        # into an accidental stale-gap resynchronization.
+        self._context = None if _uses_injected_legacy_fetch() else get_cached_home_context(config.cache_dir)
+        self._task: asyncio.Task[_HomeContextFetchOutcome] | None = None
+        self._attempt_baseline_timestamp = 0.0
+        self._attempt_started_at = 0.0
+        self._attempt_started_monotonic = 0.0
+        self._attempt_finished_monotonic = 0.0
+        self._attempt_started_after_stale_gap = False
+        self._foreground_timed_out = False
+        self._home_event_handoffs_allowed = True
+        self._next_retry_not_before = 0.0
+        self._closed = False
+        self._state.ha_context_refresh_stale_after_seconds = self.stale_threshold_seconds
+        self._state.ha_context_refresh_configured = bool(
+            config.homeassistant.enabled
+            and config.homeassistant.context_enabled
+            and config.ha_token
+            and config.homeassistant.url
         )
-    except TimeoutError:
-        logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
-        stale = ha_cache or get_cached_home_context() or HomeContext()
-        # fetch_home_context() mute-filters on every return path; this fallback
-        # bypasses it entirely by reusing a context built before this call, so
-        # the live mute policy has to be re-applied here explicitly.
-        return apply_entity_mute_policy(stale, config.cache_dir)
+        # Status serialization may inspect this private mailbox read-only to
+        # distinguish a still-running request from a completed reply awaiting
+        # adoption. No completion callback writes StationState.
+        self._state.ha_context_refresh_mailbox = self
+        self._sync_freshness()
+
+    @property
+    def current_context(self) -> HomeContext | None:
+        """The most recently adopted source snapshot (diagnostic only)."""
+        return self._context
+
+    @property
+    def home_event_handoffs_allowed(self) -> bool:
+        """Whether the ledger may offer home-event material to a prompt."""
+        return self._home_event_handoffs_allowed
+
+    @property
+    def in_flight_task(self) -> asyncio.Task[_HomeContextFetchOutcome] | None:
+        """Test-visible retained task; production code never exposes this."""
+        return self._task
+
+    def read_refresh_mailbox_status(self) -> dict[str, object]:
+        """Return read-only terminal detail for the authenticated status view.
+
+        A completed task can be waiting for the next safe producer boundary.
+        The admin serializer needs to distinguish an adoptable fresh reply from
+        a failed/expired request during that small window, without a completion
+        callback mutating ``StationState``.  Calling ``Task.result()`` here is
+        safe because the task is already done and the producer will still drain
+        the same result at its next preparation boundary.
+        """
+        task = self._task
+        if task is None:
+            return {
+                "in_flight": False,
+                "adoption_pending": False,
+                "last_result": None,
+                "last_result_duration_ms": None,
+                "last_result_used_background": False,
+            }
+        if not task.done():
+            return {
+                "in_flight": True,
+                "adoption_pending": False,
+                "last_result": None,
+                "last_result_duration_ms": None,
+                "last_result_used_background": False,
+            }
+
+        finished_at = self._attempt_finished_monotonic or time.monotonic()
+        duration_ms = round(max(0.0, finished_at - self._attempt_started_monotonic) * 1000)
+        used_background = self._foreground_timed_out
+        try:
+            outcome = task.result()
+        except asyncio.CancelledError:
+            result = "failed"
+        except TimeoutError:
+            result = "background_timeout"
+        except Exception:
+            result = "failed"
+        else:
+            duration_ms = round(max(0.0, outcome.duration_seconds) * 1000)
+            if not outcome.is_adoptable_from(self._attempt_baseline_timestamp):
+                result = "failed"
+            elif self._is_stale(outcome.context):
+                # A reply can finish fresh enough for the request but wait in
+                # the mailbox until it is too old for prompt use. It is not
+                # ready to adopt merely because the task completed.
+                result = "stale"
+            else:
+                return {
+                    "in_flight": False,
+                    "adoption_pending": True,
+                    "last_result": "success",
+                    "last_result_duration_ms": duration_ms,
+                    "last_result_used_background": used_background,
+                }
+        return {
+            "in_flight": False,
+            "adoption_pending": False,
+            "last_result": result,
+            "last_result_duration_ms": duration_ms,
+            "last_result_used_background": used_background,
+        }
+
+    @property
+    def stale_threshold_seconds(self) -> float:
+        return max(2.0 * float(self._config.homeassistant.poll_interval), _HA_CONTEXT_MIN_STALE_SECONDS)
+
+    @property
+    def _poll_interval_seconds(self) -> float:
+        return max(0.01, float(self._config.homeassistant.poll_interval))
+
+    def _is_stale(self, context: HomeContext | None = None) -> bool:
+        snapshot = self._context if context is None else context
+        return bool(
+            snapshot is not None and snapshot.timestamp > 0 and snapshot.age_seconds > self.stale_threshold_seconds
+        )
+
+    def _sync_freshness(self) -> None:
+        # No task callback writes state.  This method is called only by the
+        # producer at a safe preparation boundary (or explicit shutdown).
+        self._state.ha_context_refresh_stale = self._is_stale()
+
+    def _suppress_stale_handoffs(self) -> None:
+        """Drop not-yet-rendered HA event material once its source is over-age."""
+        if self._state.ha_pending_directive_source == "ha":
+            _mark_moment_dropped(
+                self._state,
+                self._state.ha_pending_directive_moment_id,
+                "stale_context",
+                "stale-home-directive",
+            )
+            self._state.ha_pending_directive = ""
+            self._state.ha_pending_directive_moment_id = ""
+            self._state.ha_pending_directive_source = ""
+
+        # EveningLedger is exclusively home-event material. Do not let an old
+        # bucket bypass the blank stale prompt view as a running gag.
+        if self._state.ha_running_gag or self._state.ha_running_gag_key or self._state.ha_running_gag_moment_id:
+            _mark_moment_dropped(
+                self._state,
+                self._state.ha_running_gag_moment_id,
+                "stale_context",
+                "stale-home-gag",
+            )
+            self._state.ha_running_gag = ""
+            self._state.ha_running_gag_key = ""
+            self._state.ha_running_gag_moment_id = ""
+
+    def suppress_stale_handoffs(self) -> None:
+        """Clear prompt artifacts that cannot safely outlive a stale snapshot."""
+        self._suppress_stale_handoffs()
+
+    def _fallback_prompt_context(self) -> HomeContext:
+        """Return a safe context without consuming any one-shot handoffs."""
+        self._sync_freshness()
+        if self._context is None:
+            return HomeContext()
+        if self._is_stale():
+            # Retain the real source timestamp for operator diagnostics, but
+            # withhold every ambient detail from future prompt construction.
+            self._suppress_stale_handoffs()
+            return HomeContext(timestamp=self._context.timestamp)
+        # Cache fallback is a repeatable prompt view: it re-applies live mutes
+        # and deliberately clears radio/ritual one-shots.
+        return apply_entity_mute_policy(self._context, self._config.cache_dir)
+
+    @staticmethod
+    def _without_delayed_one_shots(context: HomeContext) -> HomeContext:
+        """Keep ambient state after a stale gap, never replay delayed events."""
+        return replace(
+            context,
+            events=deque(maxlen=context.events.maxlen),
+            radio_events=[],
+            ritual_recipe_matches=[],
+            ritual_public_families=[],
+            ritual_recipe_audit=[],
+            events_summary="",
+            events_summary_en="",
+            last_event_label_en="",
+        )
+
+    def _start_attempt(self) -> None:
+        if self._closed or self._task is not None:
+            return
+
+        self._attempt_baseline_timestamp = self._context.timestamp if self._context is not None else 0.0
+        self._attempt_started_at = time.time()
+        self._attempt_started_monotonic = time.monotonic()
+        self._attempt_finished_monotonic = 0.0
+        self._attempt_started_after_stale_gap = self._is_stale()
+        self._foreground_timed_out = False
+
+        async def _bounded_fetch() -> _HomeContextFetchOutcome:
+            # This is the sole total-request timeout.  The foreground wait uses
+            # shield() below, so it cannot cancel this request at two seconds.
+            # Keep the actual request as its own task so expiry and producer
+            # shutdown both explicitly cancel *and await* it.  ``wait_for``
+            # alone would cancel implicitly, which makes the ownership and
+            # cleanup boundary needlessly opaque.
+            request = asyncio.create_task(
+                _fetch_producer_context_outcome(
+                    ha_url=self._config.homeassistant.url,
+                    ha_token=self._config.ha_token,
+                    poll_interval=self._poll_interval_seconds,
+                    cache=self._context,
+                    cache_dir=self._config.cache_dir,
+                    radio_event_rules=self._config.radio_events,
+                ),
+                name="ha-context-fetch",
+            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(request),
+                    timeout=_HA_CONTEXT_BACKGROUND_TIMEOUT,
+                )
+            finally:
+                # A foreground timeout never reaches here: it awaits the
+                # coordinator task through shield(). This finalizer is solely
+                # for the total cap or producer shutdown, and leaves no late
+                # request able to write after the retained runner is gone.
+                if not request.done():
+                    request.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await request
+                # Private timing only: no task callback writes StationState.
+                self._attempt_finished_monotonic = time.monotonic()
+
+        self._task = asyncio.create_task(_bounded_fetch(), name="ha-context-refresh")
+        self._state.ha_context_refresh_in_flight = True
+        self._state.ha_context_refresh_last_attempt_at = self._attempt_started_at
+        self._state.ha_context_refresh_active_foreground_timed_out = False
+
+    def _record_terminal_result(self, result: str, duration_seconds: float, *, used_background: bool) -> None:
+        self._state.ha_context_refresh_in_flight = False
+        self._state.ha_context_refresh_active_foreground_timed_out = False
+        self._state.ha_context_refresh_last_result = result
+        self._state.ha_context_refresh_last_result_duration_ms = round(max(0.0, duration_seconds) * 1000)
+        self._state.ha_context_refresh_last_result_used_background = used_background
+        self._sync_freshness()
+
+    async def _drain_completed_result(self) -> tuple[HomeContext, bool] | None:
+        """Adopt a completed fresh result only at this safe producer boundary."""
+        task = self._task
+        if task is None or not task.done():
+            return None
+
+        self._task = None
+        used_background = self._foreground_timed_out
+        finished_at = self._attempt_finished_monotonic or time.monotonic()
+        duration_seconds = max(0.0, finished_at - self._attempt_started_monotonic)
+        self._next_retry_not_before = self._attempt_started_at + self._poll_interval_seconds
+
+        try:
+            outcome = task.result()
+        except asyncio.CancelledError:
+            self._record_terminal_result("failed", duration_seconds, used_background=used_background)
+            return None
+        except TimeoutError:
+            self._record_terminal_result("background_timeout", duration_seconds, used_background=used_background)
+            logger.warning(
+                "HA context refresh exceeded %.1fs total cap — keeping the last safe snapshot",
+                _HA_CONTEXT_BACKGROUND_TIMEOUT,
+            )
+            return None
+        except Exception:
+            self._record_terminal_result("failed", duration_seconds, used_background=used_background)
+            logger.warning("HA context refresh task failed (non-fatal)", exc_info=True)
+            return None
+
+        duration_seconds = outcome.duration_seconds
+        if not outcome.is_adoptable_from(self._attempt_baseline_timestamp):
+            # Cached/failed outcomes and snapshots no newer than the request's
+            # starting baseline must not overwrite a safe adopted snapshot.
+            self._record_terminal_result("failed", duration_seconds, used_background=used_background)
+            return None
+
+        # A request that *started* while the prior snapshot was safe keeps its
+        # legitimate one-shots when it is adopted promptly, even if the prior
+        # snapshot crossed the threshold in flight. A reply that itself has
+        # aged past the threshold while waiting in the mailbox is different:
+        # it must never become prompt input.
+        was_stale_gap = self._attempt_started_after_stale_gap
+        adopted = revalidate_home_context_mutes(outcome.context, self._config.cache_dir)
+        stale_at_adoption = self._is_stale(adopted)
+        if was_stale_gap or stale_at_adoption:
+            self._suppress_stale_handoffs()
+            # The next normal poll re-establishes event continuity. Until then,
+            # do not let a pre-gap EveningLedger bucket leak as a new prompt gag.
+            self._home_event_handoffs_allowed = False
+            adopted = self._without_delayed_one_shots(adopted)
+        else:
+            self._home_event_handoffs_allowed = True
+
+        # Publish both the accepted snapshot and its event-matcher baselines as
+        # one producer-owned handoff.  No background-task callback can do this.
+        if not _uses_injected_legacy_fetch():
+            _publish_home_context_outcome(replace(outcome, context=adopted))
+        self._context = adopted
+        self._record_terminal_result(
+            "stale" if stale_at_adoption else "success",
+            duration_seconds,
+            used_background=used_background,
+        )
+        if stale_at_adoption:
+            return self._fallback_prompt_context(), False
+        return adopted, not was_stale_gap
+
+    def _refresh_is_due(self) -> bool:
+        if self._context is None:
+            return True
+        return self._context.age_seconds >= self._poll_interval_seconds
+
+    def _foreground_budget_seconds(self) -> float:
+        have_context = _has_refresh_budget_context(self._context)
+        if have_context:
+            return float(self._config.homeassistant.context_refresh_timeout)
+        return max(float(self._config.homeassistant.context_refresh_timeout), _HA_CONTEXT_COLD_LOAD_TIMEOUT)
+
+    async def prepare_for_segment(self) -> tuple[HomeContext, bool]:
+        """Return prompt context and whether this boundary owns fresh one-shots.
+
+        Call only immediately before prompt construction for BANTER, AD, or
+        NEWS_FLASH.  ``True`` means the returned context was freshly adopted
+        at this boundary and its event/directive handoffs may be consumed once.
+        """
+        if self._closed:
+            return self._fallback_prompt_context(), False
+
+        adopted = await self._drain_completed_result()
+        if adopted is not None:
+            return adopted
+
+        now = time.time()
+        # A rebound legacy dependency is an explicit injected fetch (used by
+        # older embedding/test callers), so honor it even if a prior module
+        # cache is still within its poll interval.
+        refresh_due = self._refresh_is_due() or _uses_injected_legacy_fetch()
+        if self._task is None and refresh_due and now >= self._next_retry_not_before:
+            self._start_attempt()
+
+        task = self._task
+        if task is None:
+            return self._fallback_prompt_context(), False
+
+        # After the foreground wait has already expired, later eligible
+        # segments must never each pay another two-second wait. They reuse the
+        # last safe view until this same task finishes and is drained above.
+        if self._foreground_timed_out:
+            if task.done():
+                adopted = await self._drain_completed_result()
+                if adopted is not None:
+                    return adopted
+            return self._fallback_prompt_context(), False
+
+        try:
+            # Shield is the key recovery seam: the foreground deadline returns
+            # audio production to the caller without cancelling the owned task.
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._foreground_budget_seconds())
+        except TimeoutError:
+            self._foreground_timed_out = True
+            self._state.ha_context_refresh_active_foreground_timed_out = True
+            self._sync_freshness()
+            logger.warning(
+                "HA context foreground wait exceeded %.1fs — continuing audio while the refresh catches up",
+                self._foreground_budget_seconds(),
+            )
+            return self._fallback_prompt_context(), False
+
+        adopted = await self._drain_completed_result()
+        if adopted is not None:
+            return adopted
+        return self._fallback_prompt_context(), False
+
+    async def close(self) -> None:
+        """Explicitly cancel and await the retained request during producer exit."""
+        self._closed = True
+        task = self._task
+        self._task = None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._state.ha_context_refresh_in_flight = False
+        self._state.ha_context_refresh_active_foreground_timed_out = False
+        if self._state.ha_context_refresh_mailbox is self:
+            self._state.ha_context_refresh_mailbox = None
 
 
 def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatch]) -> list[HomeEvent]:
@@ -2361,6 +2859,7 @@ def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatc
         # Radio-event directives have no Moment Receipt in v1 — clear any stale
         # ritual id so it cannot attach to the wrong banter.
         state.ha_pending_directive_moment_id = ""
+        state.ha_pending_directive_source = "ha"
         commit_radio_event_directive(match)
     return gag_events
 
@@ -2439,6 +2938,7 @@ def _apply_ritual_recipe_matches(
         # The receipt id travels WITH the directive: the scriptwriter hands it
         # off to the segment build, and confirmed-air flips it to aired.
         state.ha_pending_directive_moment_id = _record_ritual_moment(state, match, lane=lane)
+        state.ha_pending_directive_source = "ha"
         commit_ritual_recipe_match(match)
     return gag_events, interrupt
 
@@ -2463,6 +2963,7 @@ def _maybe_arm_first_home_context_moment(
 
     state.ha_pending_directive = FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
     state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
+    state.ha_pending_directive_source = "ha"
     if seg_type != SegmentType.BANTER:
         state.force_next = SegmentType.BANTER
 
@@ -2485,6 +2986,31 @@ async def run_producer(
     state: StationState,
     config: StationConfig,
     skip_event: asyncio.Event | None = None,
+) -> None:
+    """Run production with explicit ownership of any late HA refresh request."""
+    context_coordinator = _HAContextRefreshCoordinator(config, state)
+    try:
+        await _run_producer_inner(
+            queue,
+            state,
+            config,
+            skip_event,
+            context_coordinator=context_coordinator,
+        )
+    finally:
+        # This finally covers cancellation anywhere in the producer loop, not
+        # just the HA preparation await.  A late task therefore cannot write
+        # state after producer shutdown.
+        await context_coordinator.close()
+
+
+async def _run_producer_inner(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+    skip_event: asyncio.Event | None = None,
+    *,
+    context_coordinator: _HAContextRefreshCoordinator,
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     prev_seg_type = _initial_previous_segment_type(queue, state)
@@ -2568,8 +3094,9 @@ async def run_producer(
         prev_seg_type = _adjacency_type_for(segment)
         return True
 
-    # Home Assistant context cache
-    ha_cache: HomeContext | None = None
+    # The coordinator owns the adopted snapshot and the one in-flight request.
+    # This local only feeds the existing prompt/status projection below.
+    ha_cache: HomeContext | None = context_coordinator.current_context
 
     _music_qg_rejections = 0  # consecutive music quality gate rejections (circuit breaker)
     _loop = asyncio.get_running_loop()
@@ -2688,6 +3215,7 @@ async def run_producer(
                                         skip_event,
                                         enforce_global_cooldown=True,
                                         bridge_tmp_dir=config.tmp_dir,
+                                        directive_source="timer",
                                     )
                         except asyncio.CancelledError:
                             raise
@@ -2966,10 +3494,11 @@ async def run_producer(
                 SegmentType.NEWS_FLASH,
             )
         ):
-            # Refresh within a wall-clock budget so a slow/hung HA never blocks
-            # segment production (INSTANT AUDIO). The state-copy below then runs on
-            # whatever HomeContext we end up with — fresh, stale, or empty.
-            ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
+            # A foreground timeout is a wait timeout, not request cancellation.
+            # The coordinator keeps exactly one request alive for up to 30s and
+            # drains an accepted late result here, immediately before prompt
+            # construction.  It never touches already-rendering/queued audio.
+            ha_cache, fresh_one_shot_handoff = await context_coordinator.prepare_for_segment()
             # Fail-soft: the scene namer is a mood garnish, and this block runs
             # OUTSIDE the segment-render try below — an exception here would
             # kill the producer task itself (INSTANT AUDIO). Same posture as
@@ -3045,8 +3574,10 @@ async def run_producer(
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
                 state.ha_last_event_label_en = ""
-            # Phase 4: reactive triggers — interrupt takes priority over ambient directives
-            if not state.ha_pending_directive:
+            # Phase 4: reactive triggers — interrupt takes priority over ambient
+            # directives.  A cached prompt view can retain recent events for
+            # display, so only a just-adopted fresh handoff may consume them.
+            if fresh_one_shot_handoff and not state.ha_pending_directive:
                 result = check_reactive_triggers(
                     ha_cache.events,
                     ha_cache.raw_states,
@@ -3064,8 +3595,13 @@ async def run_producer(
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
                     state.ha_pending_directive_moment_id = ""  # not a ritual moment
-            radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
-            ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
+                    state.ha_pending_directive_source = "ha"
+            radio_gag_events: list[HomeEvent] = []
+            ritual_gag_events: list[HomeEvent] = []
+            ritual_interrupt: _PendingRitualInterrupt | None = None
+            if fresh_one_shot_handoff:
+                radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
+                ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
             if ritual_interrupt is not None:
                 fired = await _fire_interrupt(
                     state,
@@ -3102,7 +3638,9 @@ async def run_producer(
             # (watermark-deduped) and, for banter only, surface one eligible
             # running-gag. Ads stay gag-free in v0. The ledger persists across
             # the addon's frequent restarts.
-            if state.evening_ledger is not None:
+            if state.evening_ledger is not None and (
+                not state.ha_context_refresh_stale and context_coordinator.home_event_handoffs_allowed
+            ):
                 _now = time.time()
                 state.evening_ledger.observe([*ha_cache.events, *radio_gag_events, *ritual_gag_events], now=_now)
                 if seg_type == SegmentType.BANTER:
@@ -3141,6 +3679,10 @@ async def run_producer(
                     state.ha_running_gag_key = ""
                     state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
+            elif state.evening_ledger is not None:
+                # A stale/resync prompt must not bypass its blank context via a
+                # previously observed home-event running gag.
+                context_coordinator.suppress_stale_handoffs()
         # Flush Moment Receipts once per cycle at loop level, NOT inside the HA
         # block: streamer-side finalizes (airing → true outcome) set the dirty
         # flag from the playback loop, and must still reach disk when HA context
@@ -4763,6 +5305,7 @@ async def run_producer(
                     )
                 state.ha_pending_directive = ""
                 state.ha_pending_directive_moment_id = ""
+                state.ha_pending_directive_source = ""
                 # The safety-belt force_next was set when the interrupt fired.
                 # chaos_pending already produced the banter; clearing here
                 # prevents the producer from queueing an extra banter next cycle.
