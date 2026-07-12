@@ -1,0 +1,13 @@
+# Proof: test suite — PR #829 (protected continuity reservations + render timings)
+# Captured 2026-07-12T12:15:06Z on fa54d5d1 (pending review-fix commit)
+
+## Full suite WITH coverage (exact CI quality-gate path)
+All module floors held; total 93% (producer 89% / floor 83%).
+
+## Review-round changes (CodeRabbit findings addressed)
+- _fire_interrupt aborts (returns False, preserves queue) when neither alert.mp3 nor emergency_tone exists, instead of cutting to dead air.
+- _render_music_track removes a partial norm_cached on any copy2 failure (not only the cache-required path).
+- begin_render_timing closes an abandoned attempt at the new attempt's start, not the wall clock.
+- CHANGELOG ban/removal claim scoped to reserve-rebuild time.
+- Test hardening: air-next shadow invariant assertion; _SFX_DIR isolation on emergency-tone interrupt tests; try/finally release in skip-race test.
+- New tests: interrupt-abort-when-no-bridge; render partial-cache cleanup on non-required path; render-timing abandoned elapsed.

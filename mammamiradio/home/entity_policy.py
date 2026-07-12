@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -15,7 +16,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 POLICY_FILENAME = "ha_entity_policy.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_LEGACY_SCHEMA_VERSION = 1
 _ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 _LOCK = threading.RLock()
 
@@ -51,9 +53,42 @@ def _clean_entry(entity_id: str, entry: object) -> dict[str, Any] | None:
     }
 
 
+def _clean_personal_moment_entry(entity_id: str, entry: object) -> dict[str, Any] | None:
+    """Return a safe, metadata-only opt-in entry or ``None``.
+
+    Membership in ``personal_moment_opt_ins`` is the permission.  Treating a
+    malformed entry as a permission would make a damaged local policy fail
+    open, so only the explicit dictionary shape is accepted.
+    """
+    if not valid_entity_id(entity_id) or not isinstance(entry, dict):
+        return None
+    enabled_at = entry.get("enabled_at")
+    if not isinstance(enabled_at, int | float) or isinstance(enabled_at, bool) or not math.isfinite(float(enabled_at)):
+        return None
+    domain = _clean_text(entry.get("domain"), max_len=32) or entity_id.split(".", 1)[0]
+    return {
+        "enabled_at": float(enabled_at),
+        "label": _clean_text(entry.get("label"), max_len=120),
+        "domain": domain,
+        "area": _clean_text(entry.get("area"), max_len=80),
+    }
+
+
+def _clean_policy_revision(value: object) -> int:
+    """Return a safe non-negative revision from untrusted on-disk JSON."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def empty_policy() -> dict[str, Any]:
     """Return an empty policy payload."""
-    return {"schema_version": SCHEMA_VERSION, "muted": {}}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "policy_revision": 0,
+        "muted": {},
+        "personal_moment_opt_ins": {},
+    }
 
 
 # Last known-good policy per resolved path, in-memory only. A transient read
@@ -74,7 +109,13 @@ def _store_good_policy(path: Path, stat: os.stat_result | None, policy: dict[str
 
 
 def load_entity_policy(cache_dir: Path) -> dict[str, Any]:
-    """Load entity policy; malformed/missing files degrade to an empty policy."""
+    """Load policy with v1 mute compatibility and fail-closed personal consent.
+
+    The returned shape is always the current schema for callers.  Reads never
+    rewrite a v1 file; the next mutation upgrades it atomically.  Unknown or
+    malformed schema versions retain any recognizable mutes but never grant a
+    personal-moment permission.
+    """
     path = policy_path(cache_dir)
     key = str(path)
     with _LOCK:
@@ -110,7 +151,24 @@ def load_entity_policy(cache_dir: Path) -> dict[str, Any]:
             clean = _clean_entry(entity_id, entry)
             if clean is not None:
                 muted[entity_id] = clean
-        policy = {"schema_version": SCHEMA_VERSION, "muted": muted}
+        raw_schema_version = data.get("schema_version", _LEGACY_SCHEMA_VERSION)
+        is_current_schema = type(raw_schema_version) is int and raw_schema_version == SCHEMA_VERSION
+        personal_moment_opt_ins: dict[str, dict[str, Any]] = {}
+        if is_current_schema:
+            personal_raw = data.get("personal_moment_opt_ins")
+            if isinstance(personal_raw, dict):
+                for entity_id, entry in personal_raw.items():
+                    if not isinstance(entity_id, str) or entity_id in muted:
+                        continue
+                    clean = _clean_personal_moment_entry(entity_id, entry)
+                    if clean is not None:
+                        personal_moment_opt_ins[entity_id] = clean
+        policy = {
+            "schema_version": SCHEMA_VERSION,
+            "policy_revision": _clean_policy_revision(data.get("policy_revision")) if is_current_schema else 0,
+            "muted": muted,
+            "personal_moment_opt_ins": personal_moment_opt_ins,
+        }
         return _store_good_policy(path, stat, policy)
 
 
@@ -121,6 +179,29 @@ def muted_entity_ids(cache_dir: Path | None) -> set[str]:
     policy = load_entity_policy(Path(cache_dir))
     muted = policy.get("muted", {})
     return set(muted.keys()) if isinstance(muted, dict) else set()
+
+
+def personal_moment_opt_in_entity_ids(cache_dir: Path | None) -> set[str]:
+    """Return locally consented personal-moment ids, excluding muted entities."""
+    if cache_dir is None:
+        return set()
+    policy = load_entity_policy(Path(cache_dir))
+    opt_ins = policy.get("personal_moment_opt_ins", {})
+    return set(opt_ins.keys()) if isinstance(opt_ins, dict) else set()
+
+
+def personal_moment_enabled(cache_dir: Path | None, entity_id: str) -> bool:
+    """Return whether one entity has an effective personal-moment opt-in."""
+    if cache_dir is None or not valid_entity_id(entity_id):
+        return False
+    return entity_id in personal_moment_opt_in_entity_ids(cache_dir)
+
+
+def policy_revision(cache_dir: Path | None) -> int:
+    """Return the monotonic revision used to invalidate stale prompt work."""
+    if cache_dir is None:
+        return 0
+    return _clean_policy_revision(load_entity_policy(Path(cache_dir)).get("policy_revision"))
 
 
 def _write_policy(cache_dir: Path, policy: dict[str, Any]) -> None:
@@ -140,6 +221,41 @@ def _write_policy(cache_dir: Path, policy: dict[str, Any]) -> None:
         raise
 
 
+def _policy_parts(policy: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int]:
+    """Copy the normalized mutable parts of a policy payload."""
+    muted = policy.get("muted", {})
+    personal_opt_ins = policy.get("personal_moment_opt_ins", {})
+    return (
+        dict(muted) if isinstance(muted, dict) else {},
+        dict(personal_opt_ins) if isinstance(personal_opt_ins, dict) else {},
+        _clean_policy_revision(policy.get("policy_revision")),
+    )
+
+
+def _save_policy(
+    cache_dir: Path,
+    *,
+    muted: dict[str, dict[str, Any]],
+    personal_moment_opt_ins: dict[str, dict[str, Any]],
+    previous_revision: int,
+    changed: bool,
+) -> dict[str, Any]:
+    """Persist a normalized v2 policy and refresh the in-process read cache."""
+    next_policy = {
+        "schema_version": SCHEMA_VERSION,
+        "policy_revision": previous_revision + int(changed),
+        "muted": muted,
+        "personal_moment_opt_ins": personal_moment_opt_ins,
+    }
+    _write_policy(cache_dir, next_policy)
+    path = policy_path(cache_dir)
+    try:
+        stat = path.stat()
+    except OSError:
+        stat = None
+    return _store_good_policy(path, stat, next_policy)
+
+
 def set_entity_muted(
     cache_dir: Path,
     entity_id: str,
@@ -150,26 +266,84 @@ def set_entity_muted(
     area: object = "",
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Persist an idempotent mute/unmute update and return the saved policy."""
+    """Persist an idempotent mute/unmute update and return the saved policy.
+
+    A mute revokes any personal-moment opt-in for the same entity.  This is
+    intentional: an explicit later opt-in is required after unmuting.
+    """
     if not valid_entity_id(entity_id):
         raise ValueError("invalid entity_id")
     with _LOCK:
         policy = load_entity_policy(cache_dir)
-        muted_map = dict(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
+        muted_map, personal_opt_ins, revision = _policy_parts(policy)
+        changed = False
         if muted:
-            muted_map[entity_id] = {
-                "muted_at": float(time.time() if now is None else now),
-                "label": _clean_text(label, max_len=120),
-                "domain": _clean_text(domain, max_len=32) or entity_id.split(".", 1)[0],
-                "area": _clean_text(area, max_len=80),
-            }
+            if entity_id not in muted_map:
+                muted_map[entity_id] = {
+                    "muted_at": float(time.time() if now is None else now),
+                    "label": _clean_text(label, max_len=120),
+                    "domain": _clean_text(domain, max_len=32) or entity_id.split(".", 1)[0],
+                    "area": _clean_text(area, max_len=80),
+                }
+                changed = True
+            if entity_id in personal_opt_ins:
+                personal_opt_ins.pop(entity_id, None)
+                changed = True
         else:
-            muted_map.pop(entity_id, None)
-        next_policy = {"schema_version": SCHEMA_VERSION, "muted": muted_map}
-        _write_policy(cache_dir, next_policy)
-        try:
-            stat = policy_path(cache_dir).stat()
-        except OSError:
-            stat = None
-        _store_good_policy(policy_path(cache_dir), stat, next_policy)
-        return next_policy
+            if entity_id in muted_map:
+                muted_map.pop(entity_id, None)
+                changed = True
+        return _save_policy(
+            cache_dir,
+            muted=muted_map,
+            personal_moment_opt_ins=personal_opt_ins,
+            previous_revision=revision,
+            changed=changed,
+        )
+
+
+def set_personal_moment_enabled(
+    cache_dir: Path,
+    entity_id: str,
+    enabled: bool,
+    *,
+    label: object = "",
+    domain: object = "",
+    area: object = "",
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Persist an idempotent personal-moment consent update.
+
+    Eligibility is deliberately checked by the authoritative live HA preview
+    before this helper is called.  The policy layer still rejects a muted
+    entity, so a stale UI or racing request cannot resurrect consent.
+    """
+    if not valid_entity_id(entity_id):
+        raise ValueError("invalid entity_id")
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    with _LOCK:
+        policy = load_entity_policy(cache_dir)
+        muted_map, personal_opt_ins, revision = _policy_parts(policy)
+        if enabled and entity_id in muted_map:
+            raise ValueError("muted entity cannot be enabled as a personal moment")
+        changed = False
+        if enabled:
+            if entity_id not in personal_opt_ins:
+                personal_opt_ins[entity_id] = {
+                    "enabled_at": float(time.time() if now is None else now),
+                    "label": _clean_text(label, max_len=120),
+                    "domain": _clean_text(domain, max_len=32) or entity_id.split(".", 1)[0],
+                    "area": _clean_text(area, max_len=80),
+                }
+                changed = True
+        elif entity_id in personal_opt_ins:
+            personal_opt_ins.pop(entity_id, None)
+            changed = True
+        return _save_policy(
+            cache_dir,
+            muted=muted_map,
+            personal_moment_opt_ins=personal_opt_ins,
+            previous_revision=revision,
+            changed=changed,
+        )

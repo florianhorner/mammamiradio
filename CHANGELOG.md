@@ -6,6 +6,15 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the station is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
+- **Home references now rotate like radio, not a dashboard.** Casual host breaks receive at most one privacy-safe ambient cue, and the station holds that topic out until it has actually aired and rested. Weather, climate, vacuum, sun, and curated coffee cues can vary naturally without extra Home Assistant polling; room-presence moments stay off until explicitly enabled for that sensor. The control room shows a fact-free rotation state, and private director bookkeeping never reaches listener or public-status payloads.
+
+### Fixed
+
+- **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. Songs already banned or removed when the reserve is rebuilt are excluded from that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
+
 ## [2.17.0] - 2026-07-12
 
 First listen, then home context. v2.17 makes the station easier to start and gives you a clearer view of the Home Assistant layer the hosts may use.

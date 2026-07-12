@@ -587,11 +587,10 @@ def test_get_system_prompt_rebuilds_when_hosts_change():
 def _make_app_with_queue(items: list[str]):
     """Build a test app with pre-seeded asyncio.Queue and queued_segments shadow."""
     import asyncio
-    from unittest.mock import MagicMock
 
     from fastapi import FastAPI
 
-    from mammamiradio.core.models import Segment
+    from mammamiradio.core.models import Segment, SegmentType
     from mammamiradio.web.streamer import LiveStreamHub, router
 
     app = FastAPI()
@@ -600,12 +599,15 @@ def _make_app_with_queue(items: list[str]):
     state = _make_state()
     q: asyncio.Queue = asyncio.Queue()
 
-    for label in items:
-        seg = MagicMock(spec=Segment)
-        seg.path = MagicMock()
-        seg.path.read_bytes = MagicMock(return_value=b"")
+    for index, label in enumerate(items):
+        queue_id = f"queue-{index}"
+        seg = Segment(
+            type=SegmentType.MUSIC,
+            path=Path(f"/tmp/mammamiradio-test-{queue_id}.mp3"),
+            metadata={"title": label, "queue_id": queue_id},
+        )
         q.put_nowait(seg)
-        state.queued_segments.append({"type": "music", "label": label})
+        state.queued_segments.append({"id": queue_id, "type": "music", "label": label})
 
     app.state.queue = q
     app.state.skip_event = asyncio.Event()

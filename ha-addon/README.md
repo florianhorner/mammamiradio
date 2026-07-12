@@ -55,7 +55,7 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 3. Confirm the log shows `Producer started` and `/readyz` returns `"ready": true`. No provider key is required, but a full music rotation still needs live-chart access or Jamendo
 4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
 5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from **Motore → Setup → AI hosts** to unlock live AI hosts
-6. Review **Home context preview** and mute any entity the hosts should never use. The Home Assistant integration and **Host home context** are separate: turn host context off to stop prompt-context polling while keeping entity publishing and timer interrupts
+6. Review **Home context preview** and mute any entity the hosts should never use. Casual host breaks use one rotating safe cue at most; room-presence remains off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** are separate: turn host context off to stop prompt-context polling while keeping entity publishing and timer interrupts. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
 7. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 

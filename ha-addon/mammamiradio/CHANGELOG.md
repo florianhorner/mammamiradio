@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the add-on is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
+- **Home context now rotates instead of repeating itself.** A casual host break gets at most one safe ambient cue, and a topic rests for 30 minutes after it starts airing. Room-presence moments stay off until explicitly enabled for that sensor; the add-on never adds extra Home Assistant polling, and its public status never exposes the internal cue bookkeeping.
+
+### Fixed
+
+- **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. Songs already banned or removed when the reserve is rebuilt are excluded from that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
+
 ## 2.18.0
 
 ## 2.17.0 - 2026-07-12

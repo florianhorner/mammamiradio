@@ -14,7 +14,7 @@ import os
 import random as _random
 import re as _re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -58,10 +58,12 @@ from mammamiradio.core.setup_status import (
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
     load_entity_policy,
+    personal_moment_opt_in_entity_ids,
     set_entity_muted,
+    set_personal_moment_enabled,
     valid_entity_id,
 )
-from mammamiradio.home.ha_context import get_cached_home_context, push_state_to_ha
+from mammamiradio.home.ha_context import PRESENCE_SENSOR_DEVICE_CLASSES, get_cached_home_context, push_state_to_ha
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
@@ -374,6 +376,393 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     return len(items)
 
 
+_CONTINUITY_RESERVATION_FLAG = "continuity_reservation"
+_CONTINUITY_CACHE_SCAN_LIMIT = 24
+
+
+def _indexed_audio_path_is_file(path: Path) -> bool:
+    """Best-effort cache-index liveness check for the bounded control hot path."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _continuity_reservation_segments(
+    state: StationState,
+    config,
+    target_seconds: float,
+    *,
+    max_segments: int | None = None,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+) -> list[Segment]:
+    """Build no-wait packaged/cache fallback segments for a control action.
+
+    This deliberately avoids ffprobe, network, synthesis, and FFmpeg.  A control
+    can only reserve audio that is already safe to play now.
+    """
+    selected: list[Segment] = []
+    covered = 0.0
+    excluded_paths = excluded_paths or set()
+    persistent_blocked_keys = set(state.blocklist)
+    blocked_keys = persistent_blocked_keys | (excluded_track_keys or set())
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    reservation_id = uuid4().hex
+
+    def _can_add() -> bool:
+        return max_segments is None or len(selected) < max_segments
+
+    def _target_met() -> bool:
+        return bool(selected) and covered >= target_seconds
+
+    def _add(segment: Segment) -> None:
+        nonlocal covered
+        selected.append(segment)
+        covered += segment.duration_sec
+
+    if _can_add() and recovery.is_file() and recovery not in excluded_paths:
+        _add(
+            Segment(
+                type=SegmentType.BANTER,
+                path=recovery,
+                duration_sec=4.44,
+                metadata={
+                    "type": "banter",
+                    "title": "Station continuity",
+                    "canned": True,
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
+
+    # Stop as soon as the target/capacity contract is satisfied. A control hot
+    # path must not stat and read sidecars for the whole warm cache merely to
+    # choose the first one or two immediately playable tracks.
+    scanned = 0
+    prune_paths: list[Path] = []
+    for cached, duration in state.immediate_audio_index.items():
+        if not _can_add() or _target_met():
+            break
+        if scanned >= _CONTINUITY_CACHE_SCAN_LIMIT:
+            logger.info(
+                "Continuity cache scan stopped at the %d-entry live-control limit",
+                _CONTINUITY_CACHE_SCAN_LIMIT,
+            )
+            break
+        scanned += 1
+        if not cached.name.startswith("norm_") or cached == state.last_music_file or cached in excluded_paths:
+            continue
+        if duration <= 0 or not _indexed_audio_path_is_file(cached):
+            # The index is an optimization, not durable state. Removing entries
+            # that cannot possibly play now keeps subsequent controls bounded and
+            # lets them advance to still-live cache candidates.
+            prune_paths.append(cached)
+            continue
+        metadata = load_track_metadata(cached) or {}
+        cache_key = (
+            str(metadata.get("artist") or "").strip().lower(),
+            str(metadata.get("title") or "").strip().lower(),
+        )
+        if cache_key in blocked_keys:
+            logger.info("Skipping blocklisted cached continuity track (%s - %s)", cache_key[0], cache_key[1])
+            if cache_key in persistent_blocked_keys:
+                # A durable ban makes this path unusable for the session. It can
+                # be re-indexed by a later render or the next startup after unban.
+                prune_paths.append(cached)
+            continue
+        _add(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=cached,
+                duration_sec=duration,
+                metadata={
+                    "title": str(metadata.get("title") or "Cached music"),
+                    "title_only": str(metadata.get("title") or "Cached music"),
+                    "artist": str(metadata.get("artist") or ""),
+                    "duration_ms": round(duration * 1000),
+                    "audio_source": "norm_cache",
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
+
+    for path in prune_paths:
+        state.immediate_audio_index.pop(path, None)
+
+    # This asset is deliberately separate from the normal continuity copy: it is
+    # the cold-cache, no-clip final fallback and is available without a render.
+    if not selected and _can_add() and emergency_tone.is_file() and emergency_tone not in excluded_paths:
+        _add(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=emergency_tone,
+                duration_sec=2.0,
+                metadata={
+                    "title": "Station continuity",
+                    "artist": "",
+                    "duration_ms": 2000,
+                    "audio_source": "emergency_tone",
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
+
+    return selected
+
+
+def _continuity_slot_seconds(state: StationState) -> float:
+    """Return ready seconds held in the capacity-exempt continuity slot."""
+    slot = state.continuity_slot
+    if slot is None:
+        return 0.0
+    try:
+        slot_exists = slot.path.is_file()
+    except OSError:
+        slot_exists = False
+    if not slot_exists:
+        logger.warning("Protected continuity slot disappeared before playback; clearing it")
+        state.continuity_slot = None
+        return 0.0
+    return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
+
+
+def _continuity_slot_status(state: StationState) -> dict | None:
+    """Admin-only projection of the capacity-exempt safety reservation."""
+    duration_sec = _continuity_slot_seconds(state)
+    slot = state.continuity_slot
+    if slot is None:
+        return None
+    metadata = slot.metadata if isinstance(slot.metadata, dict) else {}
+    return {
+        "label": str(metadata.get("title") or "Protected continuity"),
+        "duration_sec": duration_sec,
+        "audio_source": str(metadata.get("audio_source") or "packaged_recovery"),
+        "reservation_id": str(metadata.get("continuity_reservation_id") or ""),
+    }
+
+
+def _rebuild_queue_shadow(q, state: StationState, items: list[Segment]) -> None:
+    """Synchronously replace real queue, operator projection, and tail adjacency."""
+    from mammamiradio.scheduling.producer import _queue_shadow_entry, _remember_enqueued
+
+    prior_rows = {str(row.get("id")): row for row in state.queued_segments if row.get("id")}
+    while not q.empty():
+        try:
+            q.get_nowait()
+            q.task_done()
+        except asyncio.QueueEmpty:
+            break
+    rows: list[dict] = []
+    for segment in items:
+        q.put_nowait(segment)
+        queue_id = str(segment.metadata.get("queue_id") or "")
+        rows.append(prior_rows.get(queue_id) or _queue_shadow_entry(segment))
+    state.queued_segments = rows
+    # The next generated segment's music-bed eligibility follows the ACTUAL queue
+    # tail, never the item that was removed by a live control. Reuse the enqueue
+    # funnel's tail bookkeeping so a cached rescue tail also supplies its own
+    # clean bed source rather than an earlier, removed song.
+    if items:
+        _remember_enqueued(state, items[-1], items[-1].path)
+    else:
+        state.last_enqueued_type = None
+
+
+def _reserve_continuity_runway(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    replace_queue: bool = False,
+    discard_reason: str | None = None,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+) -> int:
+    """Reserve immediately playable runway before a live control mutates audio.
+
+    The function has no await points.  It may discard only ordinary far-future
+    queue items to make room; an existing protected reservation is reused.  A
+    full queue with no ordinary tail retains its own audio and stores the short
+    packaged clip in a capacity-exempt fallback slot.
+    """
+    from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
+
+    q = app_state.queue
+    excluded_paths = excluded_paths or set()
+    excluded_track_keys = excluded_track_keys or set()
+    # A replace action supersedes every prior safety promise too. A stale
+    # capacity-exempt slot is intentionally invisible to the real queue, so it
+    # must be cleared before the old queue can be replaced.
+    if replace_queue:
+        state.continuity_slot = None
+
+    existing = list(getattr(q, "_queue", ()))
+    current_queue = list(existing)
+    protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
+    ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
+
+    slot = state.continuity_slot
+    slot_metadata = slot.metadata if slot is not None and isinstance(slot.metadata, dict) else {}
+    slot_key = (
+        str(slot_metadata.get("artist") or "").strip().lower(),
+        str(slot_metadata.get("title_only") or slot_metadata.get("title") or "").strip().lower(),
+    )
+    slot_is_excluded = bool(
+        slot is not None
+        and (slot.path in excluded_paths or slot_key in state.blocklist or slot_key in excluded_track_keys)
+    )
+    if slot_is_excluded:
+        state.continuity_slot = None
+        slot = None
+
+    # Measure ordinary runway separately from the active protected set. This
+    # prevents double-counting an existing reservation: the target is what the
+    # protected queue members + capacity-exempt slot must cover together.
+    ordinary_ready = (
+        0.0
+        if replace_queue
+        else buffered_audio_seconds(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in ordinary)
+    )
+    target = max(0.0, RUNWAY_FLOOR_SECONDS - ordinary_ready)
+    protected_ready = (
+        0.0
+        if replace_queue
+        else buffered_audio_seconds(
+            [
+                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in protected),
+                _continuity_slot_seconds(state),
+            ]
+        )
+    )
+    if not replace_queue and protected_ready >= target:
+        return 0
+
+    max_segments = q.maxsize if q.maxsize > 0 else None
+    reservation = _continuity_reservation_segments(
+        state,
+        config,
+        target,
+        max_segments=max_segments,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+    )
+    if not reservation:
+        logger.warning("No packaged or cache continuity audio available for live control")
+        if replace_queue:
+            purged = _purge_queue_and_shadow(q, state, reason=discard_reason)
+            state.last_enqueued_type = None
+            state.continuity_epoch += 1
+            return purged
+        return 0
+
+    if not replace_queue and protected_ready > 0:
+        if q.maxsize > 0:
+            non_evictable_count = sum(bool(segment.metadata.get("air_next")) for segment in ordinary)
+            real_protected_capacity = max(0, q.maxsize - non_evictable_count)
+            fresh_capacity = real_protected_capacity or 1  # one capacity-exempt slot
+        else:
+            fresh_capacity = len(reservation)
+        fresh_ready = buffered_audio_seconds(
+            float(segment.duration_sec or 0.0) for segment in reservation[:fresh_capacity]
+        )
+        if protected_ready >= fresh_ready:
+            # The active set is already the best runway currently feasible
+            # without evicting a ready air-next item. Rebuilding an equivalent
+            # partial set would only churn the continuity epoch.
+            return 0
+
+    dropped: list[Segment] = []
+    planned_slot: Segment | None = None
+    if replace_queue:
+        dropped = existing
+        existing = []
+    else:
+        existing = ordinary
+    combined = existing + reservation
+    while q.maxsize and len(combined) > q.maxsize:
+        index = next(
+            (
+                idx
+                for idx in range(len(existing) - 1, -1, -1)
+                if not existing[idx].metadata.get(_CONTINUITY_RESERVATION_FLAG)
+                and not existing[idx].metadata.get("air_next")
+            ),
+            None,
+        )
+        if index is None:
+            break
+        dropped.append(existing.pop(index))
+        combined = existing + reservation
+
+    if q.maxsize and len(combined) > q.maxsize:
+        available_slots = max(0, q.maxsize - len(existing))
+        if available_slots:
+            # Some protected runway fits beside non-evictable air-next audio.
+            # Keep that maximal prefix instead of discarding the whole set just
+            # because every selected candidate cannot fit.
+            reservation = reservation[:available_slots]
+            combined = existing + reservation
+        else:
+            # Queue capacity is occupied entirely by air-next work. The current
+            # queue remains audible; keep one packaged clip out-of-band for the
+            # later empty transition instead of rejecting the operator action.
+            planned_slot = reservation[0]
+            reservation = []
+            combined = existing
+
+    if not replace_queue:
+        current_ready = buffered_audio_seconds(
+            [
+                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in current_queue),
+                _continuity_slot_seconds(state),
+            ]
+        )
+        planned_ready = buffered_audio_seconds(
+            [
+                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in combined),
+                float(getattr(planned_slot, "duration_sec", 0.0) or 0.0),
+            ]
+        )
+        if planned_ready <= current_ready:
+            # Count-bound eviction must never trade a long, ready ordinary tail
+            # for a shorter safety clip. Preserve the real queue and add the
+            # minimal candidate out-of-band instead; this is the maximal runway
+            # available without weakening what listeners can already hear.
+            if state.continuity_slot is None:
+                fallback_slot = planned_slot or reservation[0]
+                if protected:
+                    active_reservation_id = str(protected[0].metadata.get("continuity_reservation_id") or "")
+                    if active_reservation_id:
+                        fallback_slot.metadata["continuity_reservation_id"] = active_reservation_id
+                state.continuity_slot = fallback_slot
+                state.continuity_epoch += 1
+            return 0
+        state.continuity_slot = planned_slot
+
+    for segment in dropped:
+        if discard_reason is not None:
+            state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
+            _drop_segment_moment_receipts(state, segment, discard_reason)
+        _unlink_ephemeral_best_effort(segment)
+    _rebuild_queue_shadow(q, state, combined)
+    state.continuity_epoch += 1
+    return len(dropped)
+
+
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
 # leans on the rescue path (demo assets / forced banter) — the emergency surface,
 # not routine. A bulk ban that would cross the floor is rejected with a warm
@@ -432,6 +821,38 @@ def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple
         q.put_nowait(seg)
     if dropped_ids:
         state.queued_segments = [s for s in state.queued_segments if s.get("id") not in dropped_ids]
+    return len(dropped_ids)
+
+
+def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -> int:
+    """Remove unstarted banter tied to a newly muted home entity.
+
+    The current segment is no longer in ``q`` and deliberately finishes. Every
+    removed queued segment travels through ``record_discard`` so its director
+    reservation is released by the same central lifecycle boundary.
+    """
+    items = _drain_segment_queue(q)
+    survivors: list = []
+    dropped_ids: set[str] = set()
+    for segment in items:
+        metadata = getattr(segment, "metadata", {}) or {}
+        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") == entity_id:
+            queue_id = metadata.get("queue_id")
+            if isinstance(queue_id, str):
+                dropped_ids.add(queue_id)
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.OPERATOR_PURGE,
+                already_counted_in_produced=True,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+            _unlink_ephemeral_best_effort(segment)
+            continue
+        survivors.append(segment)
+    for segment in survivors:
+        q.put_nowait(segment)
+    if dropped_ids:
+        state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
     return len(dropped_ids)
 
 
@@ -1053,23 +1474,36 @@ def _runtime_status_snapshot(
         "no_failover_message": "No failover in current session." if not failover_events else "",
         "bridge_health": bridge_health,
         "generation_waste": generation_waste,
+        # Capacity-exempt continuity is intentionally not part of the real queue
+        # shadow. Expose it separately to authenticated operators only.
+        "continuity_slot": _continuity_slot_status(state),
         "producer_headroom": _producer_headroom_snapshot(request, runtime_health),
+        "render_timings": {"retention": state.render_timings.maxlen or 20, "recent": list(state.render_timings)},
     }
 
 
 def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
     """Best-effort producer runway status for Pi-sized render latency."""
+    # Import at read time so tests and runtime tuning that patch the producer's
+    # shared floor keep this admin diagnostic truthful instead of freezing a copy.
+    from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
+
     config = request.app.state.config
     target_segments = max(4, int(config.pacing.lookahead_segments))
     queue_depth = int(runtime_health.get("queue_depth", 0))
-    buffered_audio_sec = _queued_audio_seconds(getattr(request.app.state, "queue", None))
+    slot_audio_sec = _continuity_slot_seconds(request.app.state.station_state)
+    buffered_audio_sec = buffered_audio_seconds(
+        [_queued_audio_seconds(getattr(request.app.state, "queue", None)), slot_audio_sec]
+    )
     queue_capacity = int(runtime_health.get("queue_capacity", -1))
-    headroom_ok = queue_depth >= target_segments
+    headroom_ok = buffered_audio_sec >= RUNWAY_FLOOR_SECONDS
     return {
         "queue_depth": queue_depth,
         "queue_capacity": queue_capacity,
         "lookahead_target": target_segments,
         "buffered_audio_sec": buffered_audio_sec,
+        "continuity_slot_sec": slot_audio_sec,
+        "runway_floor_sec": RUNWAY_FLOOR_SECONDS,
         "headroom_ok": headroom_ok,
         "reason": "ready runway" if headroom_ok else "building runway",
     }
@@ -1175,11 +1609,25 @@ def _generation_waste_snapshot(state: StationState, models: ModelsSection | None
     }
 
 
+def _status_is_presence_eligible(status: Mapping[str, object]) -> bool:
+    """Return whether a status dict is a room-scoped presence-consent candidate.
+
+    Single source for the personal-moment eligibility predicate used by the
+    admin preview rows and the PATCH gate, so they cannot drift apart.
+    """
+    return bool(
+        status.get("domain") == "binary_sensor"
+        and status.get("device_class") in PRESENCE_SENSOR_DEVICE_CLASSES
+        and status.get("area")
+    )
+
+
 def _safe_home_entity_preview(state: StationState, config) -> dict:
     """Return admin-only, sanitized HA context candidates for onboarding."""
     policy = load_entity_policy(config.cache_dir)
     muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
     muted_ids = set(muted_map)
+    personal_moment_ids = personal_moment_opt_in_entity_ids(config.cache_dir)
     ctx = get_cached_home_context(config.cache_dir)
     rows: dict[str, dict] = {}
     if ctx is not None:
@@ -1189,6 +1637,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
             if not entity_id:
                 continue
             stale_after = max(float(config.homeassistant.poll_interval) * 2, 120.0)
+            personal_moment_eligible = _status_is_presence_eligible(status)
             rows[entity_id] = {
                 "entity_id": entity_id,
                 "label": status.get("label") or entity_id,
@@ -1199,6 +1648,11 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "muted": entity_id in muted_ids,
                 "sent_to_prompt": entity_id not in muted_ids,
                 "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+                "personal_moment_eligible": personal_moment_eligible,
+                "personal_moment_enabled": entity_id in personal_moment_ids,
+                "personal_moment_effective": personal_moment_eligible
+                and entity_id in personal_moment_ids
+                and entity_id not in muted_ids,
                 "last_updated": getattr(ctx, "timestamp", 0.0) or None,
                 "stale": bool(getattr(ctx, "age_seconds", 0.0) > stale_after),
             }
@@ -1206,6 +1660,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
         entity_id = str(status.get("entity_id") or "")
         if not entity_id or entity_id in rows:
             continue
+        personal_moment_eligible = _status_is_presence_eligible(status)
         rows[entity_id] = {
             "entity_id": entity_id,
             "label": status.get("label") or entity_id,
@@ -1216,6 +1671,11 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
             "muted": entity_id in muted_ids,
             "sent_to_prompt": entity_id not in muted_ids,
             "row_state": "muted" if entity_id in muted_ids else "used_by_hosts",
+            "personal_moment_eligible": personal_moment_eligible,
+            "personal_moment_enabled": entity_id in personal_moment_ids,
+            "personal_moment_effective": personal_moment_eligible
+            and entity_id in personal_moment_ids
+            and entity_id not in muted_ids,
             "last_updated": state.ha_context_last_updated or None,
             "stale": False,
         }
@@ -1234,6 +1694,9 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
                 "muted": True,
                 "sent_to_prompt": False,
                 "row_state": "muted",
+                "personal_moment_eligible": False,
+                "personal_moment_enabled": False,
+                "personal_moment_effective": False,
                 "last_updated": entry.get("muted_at"),
                 "stale": False,
             },
@@ -1282,6 +1745,22 @@ def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[s
                 "area": str(status.get("area") or ""),
             }
     return {"label": entity_id, "domain": entity_id.split(".", 1)[0], "area": ""}
+
+
+def _personal_moment_entity_is_eligible(state: StationState, config, entity_id: str) -> bool:
+    """Allow consent only for a current, room-scoped presence candidate."""
+    ctx = get_cached_home_context(config.cache_dir)
+    candidates = list(getattr(ctx, "scored", []) or []) if ctx is not None else []
+    for entity in candidates:
+        status = entity.to_status_dict()
+        if status.get("entity_id") != entity_id:
+            continue
+        return _status_is_presence_eligible(status)
+    for status in state.ha_scored_entities:
+        if status.get("entity_id") != entity_id:
+            continue
+        return _status_is_presence_eligible(status)
+    return False
 
 
 def _copy_home_context_to_state(state: StationState, context) -> None:
@@ -1474,11 +1953,21 @@ def _apply_loaded_source(
     # Doorway: a banned song must not return when the operator switches sources.
     tracks = filter_blocklisted(tracks, state.blocklist)
 
+    # The queue replacement and its reservation happen before the source
+    # revision changes, so an in-flight render cannot win the tiny gap between
+    # a destructive purge and safety audio admission.
+    purged = _reserve_continuity_runway(
+        request.app.state,
+        state,
+        request.app.state.config,
+        replace_queue=True,
+        discard_reason=GenerationWasteReason.SOURCE_SWITCH,
+    )
     state.switch_playlist(tracks, resolved_source)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
-    # Immediate cutover: purge queued segments and skip current playback
-    purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.SOURCE_SWITCH)
+    # Immediate cutover: the protected queue is now in its final state; cut the
+    # current playback only after it exists.
     skipped = False
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -1703,6 +2192,15 @@ async def run_playback_loop(app) -> None:
         segment: Segment
         if _bridge_segment is not None:
             segment = _bridge_segment
+        elif segment_queue.empty() and _continuity_slot_seconds(state) > 0:
+            # The guard could not reserve capacity without displacing a ready
+            # air-next item. It is intentionally consumed only after the normal
+            # queue (and any interrupt bridge) has no audio left.
+            segment = state.continuity_slot
+            assert segment is not None  # narrowed by the ready-slot check above
+            state.continuity_slot = None
+            state.queue_empty_since = None
+            gap_clips_served = 0
         else:
             if segment_queue.empty() and state.queue_empty_since is None:
                 # Mark the exact moment playback ran out of audio. The
@@ -2778,16 +3276,20 @@ async def homeassistant_context_candidates(request: Request, _: None = Depends(r
 
 @router.patch("/api/homeassistant/entity-policy")
 async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
-    """Mute/unmute one Home Assistant entity for host context use."""
+    """Apply one idempotent Home Context privacy property mutation."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
     entity_id = body.get("entity_id")
-    muted = body.get("muted")
     if not isinstance(entity_id, str) or not valid_entity_id(entity_id):
         raise HTTPException(status_code=422, detail="entity_id must be a Home Assistant entity id")
-    if not isinstance(muted, bool):
-        raise HTTPException(status_code=422, detail="muted must be true or false")
+    action_fields = [field for field in ("muted", "personal_moment_enabled") if field in body]
+    if len(action_fields) != 1:
+        raise HTTPException(status_code=422, detail="provide exactly one of muted or personal_moment_enabled")
+    action = action_fields[0]
+    value = body.get(action)
+    if not isinstance(value, bool):
+        raise HTTPException(status_code=422, detail=f"{action} must be true or false")
 
     config = request.app.state.config
     # No preview-membership gate: some entities (e.g. radio_event-only
@@ -2797,15 +3299,28 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     # any syntactically valid entity_id (already checked above) is accepted.
     state = request.app.state.station_state
     row = _home_entity_metadata(state, config, entity_id)
+    if (
+        action == "personal_moment_enabled"
+        and value
+        and not _personal_moment_entity_is_eligible(state, config, entity_id)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That entity can't host a personal moment. Pick a room-presence sensor "
+                "that's showing activity right now, then turn it on."
+            ),
+        )
     loop = asyncio.get_running_loop()
     try:
+        mutation = set_entity_muted if action == "muted" else set_personal_moment_enabled
         policy = await loop.run_in_executor(
             None,
             functools.partial(
-                set_entity_muted,
+                mutation,
                 config.cache_dir,
                 entity_id,
-                muted,
+                value,
                 label=row.get("label") or entity_id,
                 domain=row.get("domain") or entity_id.split(".", 1)[0],
                 area=row.get("area") or "",
@@ -2817,19 +3332,59 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if muted:
+    purged_pending_banter_count = 0
+    # Both a mute and revoking a personal-moment opt-in tighten privacy for this
+    # entity: an unstarted queued break that references it must be pulled (the
+    # already-airing segment finishes untouched), and the director must advance
+    # so an in-flight render for the entity is rejected. Consent revocation
+    # previously did neither, so a queued presence break could still air.
+    privacy_tightened = (action == "muted" and value) or (action == "personal_moment_enabled" and not value)
+    if action == "muted" and value:
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
-    else:
+    elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
+    if privacy_tightened:
+        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, entity_id)
+    # The mutation already returned the authoritative just-written policy; read
+    # the revision off it instead of re-reading the file we just wrote.
+    current_policy_revision = int(policy.get("policy_revision", 0) or 0)
+    director = state.home_context_director
+    if director is not None:
+        invalidate = getattr(director, "invalidate_entity", None)
+        if callable(invalidate) and privacy_tightened:
+            # invalidate_entity reports the unstarted reservations the caller must
+            # release. The queue purge above already released the physically
+            # queued breaks (via record_discard); these remaining ids cover the
+            # in-flight race — a fact reserved at admission but not yet enqueued —
+            # which the physical-queue scan cannot see. release() is a no-op on
+            # any id already cleared, so this cannot double-release.
+            for pending_queue_id in invalidate(entity_id, policy_revision=current_policy_revision):
+                director.release(pending_queue_id, fact_id=None)
+    muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
+    personal_moment = entity_id in (
+        policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}
+    )
+    eligible = _personal_moment_entity_is_eligible(state, config, entity_id)
     return {
         "ok": True,
         "entity_id": entity_id,
         "muted": muted,
+        "personal_moment_enabled": personal_moment,
+        "personal_moment_eligible": eligible,
+        "personal_moment_effective": bool(personal_moment and eligible and not muted),
+        "policy_revision": current_policy_revision,
+        "purged_pending_banter_count": purged_pending_banter_count,
+        "current_segment_unchanged": True,
         "policy": {
             "schema_version": policy.get("schema_version"),
             "muted_count": len(policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}),
+            "personal_moment_count": len(
+                policy.get("personal_moment_opt_ins", {})
+                if isinstance(policy.get("personal_moment_opt_ins"), dict)
+                else {}
+            ),
         },
     }
 
@@ -2838,6 +3393,7 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
 async def shuffle_playlist(request: Request, _: None = Depends(require_admin_access)):
     """Shuffle upcoming tracks."""
     state = request.app.state.station_state
+    _reserve_continuity_runway(request.app.state, state, request.app.state.config)
     _random.shuffle(state.playlist)
     state.playlist_revision += 1
     return {"ok": True, "message": "Playlist shuffled"}
@@ -2856,6 +3412,7 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
     was forced.
     """
+    _reserve_continuity_runway(app_state, state, config, discard_reason=GenerationWasteReason.OPERATOR_PURGE)
     now_seg = state.now_streaming or {}
     skipped_music_metadata: dict | None = None
     skipped_music_listen_sec = 0.0
@@ -2922,8 +3479,12 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
 @router.post("/api/purge")
 async def purge_queue(request: Request, _: None = Depends(require_admin_access)):
     """Drain all pre-produced segments from the queue."""
-    purged = _purge_queue_and_shadow(
-        request.app.state.queue, request.app.state.station_state, reason=GenerationWasteReason.OPERATOR_PURGE
+    purged = _reserve_continuity_runway(
+        request.app.state,
+        request.app.state.station_state,
+        request.app.state.config,
+        replace_queue=True,
+        discard_reason=GenerationWasteReason.OPERATOR_PURGE,
     )
     return {"ok": True, "purged": purged}
 
@@ -2942,7 +3503,13 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
             "ok": False,
             "error": "The station is paused. Press Start before using Panic Cut.",
         }
-    purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PANIC)
+    purged = _reserve_continuity_runway(
+        request.app.state,
+        state,
+        request.app.state.config,
+        replace_queue=True,
+        discard_reason=GenerationWasteReason.OPERATOR_PANIC,
+    )
     if state.now_streaming:
         request.app.state.skip_event.set()
     # force_next is set AFTER skip_event to avoid the producer consuming it
@@ -3004,7 +3571,9 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     target_id = shadow_entry.get("id")
 
     # Synchronous drain + repush — no await points until the shadow list is
-    # back in sync, so the producer/streamer cannot interleave.
+    # back in sync and continuity has been reserved against the FINAL queue, so
+    # the producer/streamer cannot interleave and the removed item cannot be
+    # counted as runway or selected again from the immediate-audio index.
     items: list = []
     while not q.empty():
         try:
@@ -3038,10 +3607,16 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
         _drop_segment_moment_receipts(state, removed_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
         _unlink_ephemeral_best_effort(removed_segment)
 
-    for item in items:
-        q.put_nowait(item)
-
     state.queued_segments.pop(index)
+    _rebuild_queue_shadow(q, state, items)
+    excluded_paths = {removed_segment.path} if removed_segment is not None else set()
+    _reserve_continuity_runway(
+        request.app.state,
+        state,
+        request.app.state.config,
+        discard_reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
+        excluded_paths=excluded_paths,
+    )
 
     logger.info("Queue item removed by admin: %s (id=%s)", removed_label, target_id or "n/a")
     return {"ok": True, "removed": removed_label}
@@ -3063,6 +3638,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         state.interrupt_slot.unlink(missing_ok=True)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
+    state.continuity_slot = None
     state.force_next = None
     state.operator_force_pending = None
     # Skip current segment
@@ -3115,6 +3691,12 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
             "ok": False,
             "error": "Give the tape decks a few seconds to cue your last pick, then tap again.",
         }
+    _reserve_continuity_runway(
+        request.app.state,
+        state,
+        request.app.state.config,
+        discard_reason=GenerationWasteReason.OPERATOR_PURGE,
+    )
     state.force_next = valid[seg_type]
     # Attribute this force to the operator so the admin panel can surface it as a
     # deliberate trigger (internal forces never set this — see StationState).
@@ -3410,7 +3992,6 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
 
     state = request.app.state.station_state
     config = request.app.state.config
-    queue = request.app.state.queue
     value = raw_value
     env_value = "true" if value else "false"
     loop = asyncio.get_running_loop()
@@ -3436,12 +4017,18 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
         old_value = state.chaos_mode_active
         if value:
             first_strike = _random.choice([ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM])
+            purged = _reserve_continuity_runway(
+                request.app.state,
+                state,
+                config,
+                replace_queue=True,
+                discard_reason=GenerationWasteReason.STALE_CHAOS,
+            )
             state.chaos_mode_active = True
             state.chaos_pending = first_strike
             state.chaos_cutover_epoch += 1
             state.chaos_audio_failures = 0
             state.chaos_last_degraded_reason = ""
-            purged = _purge_queue_and_shadow(queue, state, reason=GenerationWasteReason.STALE_CHAOS)
         else:
             state.chaos_mode_active = False
             state.chaos_pending = None
@@ -3815,7 +4402,6 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
 
     target_mode: PartyMode | None = "festival" if action == "enable" else None
     loop = asyncio.get_running_loop()
-    segment_queue = request.app.state.queue
 
     async with _party_lock:
         if config.party_mode == target_mode:
@@ -3840,8 +4426,14 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         config.party_mode = target_mode
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val
         if action == "enable":
+            _reserve_continuity_runway(
+                request.app.state,
+                state,
+                config,
+                replace_queue=True,
+                discard_reason=GenerationWasteReason.OPERATOR_PURGE,
+            )
             state.playlist_revision += 1
-            _purge_queue_and_shadow(segment_queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
             state.force_next = SegmentType.BANTER
 
     logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")
@@ -3884,10 +4476,16 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
     config = request.app.state.config
     source_switch_lock = request.app.state.source_switch_lock
     async with source_switch_lock:
+        purged = _reserve_continuity_runway(
+            request.app.state,
+            state,
+            config,
+            replace_queue=True,
+            discard_reason=GenerationWasteReason.OPERATOR_PURGE,
+        )
         state.switch_playlist([], None)
         state.force_next = SegmentType.BANTER
         persisted = _delete_persisted_source(config.cache_dir)
-        purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
     logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
     return {"ok": True, "purged": purged, "persisted": persisted}
 
@@ -3911,6 +4509,13 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
     if 0 <= idx < len(state.playlist):
         track = state.playlist[idx]
         result = _apply_ban(state, config, [track], queue=request.app.state.queue)
+        _reserve_continuity_runway(
+            request.app.state,
+            state,
+            config,
+            discard_reason=GenerationWasteReason.OPERATOR_BAN,
+            excluded_track_keys={normalized_track_key(track)},
+        )
         display = result["banned"][0] if result.get("banned") else track.display
         return {"ok": True, "removed": display, "banned": True, "persisted": result.get("persisted", True)}
     return {"ok": False, "error": "Invalid index"}
@@ -3965,7 +4570,15 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
             "Unban a few or add more music first.",
         }
 
-    return _apply_ban(state, config, tracks, queue=request.app.state.queue)
+    result = _apply_ban(state, config, tracks, queue=request.app.state.queue)
+    _reserve_continuity_runway(
+        request.app.state,
+        state,
+        config,
+        discard_reason=GenerationWasteReason.OPERATOR_BAN,
+        excluded_track_keys=banned_keys,
+    )
+    return result
 
 
 @router.post("/api/track/ban-now-playing")
@@ -4001,9 +4614,16 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
             "ok": False,
             "error": "I can’t tell which song this is to ban it. Ban it from the rotation list instead.",
         }
-    # Ban FIRST (this purges any queued copies of the same song), THEN skip — so the
-    # bridge decision inside _request_skip sees the post-purge queue depth.
+    # Ban and purge FIRST, then synchronously reserve against the final queue —
+    # the blocked song must never satisfy runway math or re-enter from norm cache.
     result = _apply_ban(state, config, [track], queue=request.app.state.queue)
+    _reserve_continuity_runway(
+        request.app.state,
+        state,
+        config,
+        discard_reason=GenerationWasteReason.OPERATOR_BAN,
+        excluded_track_keys={normalized_track_key(track)},
+    )
     bridged = await _request_skip(request.app.state, state, config, source="ban_now_playing")
     return {
         "ok": True,
@@ -4104,6 +4724,7 @@ async def move_track(request: Request, _: None = Depends(require_admin_access)):
     state = request.app.state.station_state
     pl = state.playlist
     if 0 <= src < len(pl) and 0 <= dst < len(pl):
+        _reserve_continuity_runway(request.app.state, state, request.app.state.config)
         track = pl.pop(src)
         pl.insert(dst, track)
         state.playlist_revision += 1
@@ -4370,6 +4991,7 @@ async def _commit_external_download(
         if not rejected_download_reason:
             if normalized_track_key(track) in state.blocklist:
                 return "banned"
+            _reserve_continuity_runway(app_state, state, config)
             state.playlist.append(track)
             state.playlist_revision += 1
             # Don't clobber a pin that's still pending — claim the play-next slot only
@@ -4659,6 +5281,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
 
     state = request.app.state.station_state
     position = body.get("position", "end")
+    _reserve_continuity_runway(request.app.state, state, request.app.state.config)
     if position == "next":
         state.playlist.insert(0, track)
     else:
@@ -4831,6 +5454,7 @@ async def _set_direction_text(request: Request, text: str):
         for track in download_tracks:
             track.heading_id = heading.id
         if retagged_existing:
+            _reserve_continuity_runway(request.app.state, state, config)
             state.playlist_revision += 1
         _set_active_heading(state, heading)
         originating_source_revision = state.source_revision
@@ -5075,6 +5699,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                     "message": "Couldn't pull that vibe right now - give it a moment and try again.",
                 }
 
+            _reserve_continuity_runway(request.app.state, state, config)
             state.playlist_revision += 1
             _set_active_heading(state, heading)
 
@@ -5120,6 +5745,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
         )
         for track in new_tracks:
             track.heading_id = heading.id
+        _reserve_continuity_runway(request.app.state, state, config)
         state.playlist.extend(new_tracks)
         state.playlist_revision += 1
         _set_active_heading(state, heading)
@@ -5216,6 +5842,8 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
                 continue
             seen.add(track.cache_key)
             new_tracks.append(track)
+        if new_tracks:
+            _reserve_continuity_runway(request.app.state, state, config)
         if position == "next":
             state.playlist[0:0] = new_tracks
         else:
@@ -5282,6 +5910,7 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
 
     if 0 <= idx < len(pl):
         track = pl[idx]
+        _reserve_continuity_runway(request.app.state, state, request.app.state.config)
         # Pin the track so select_next_track returns it immediately on the next
         # music pick, regardless of weighted-random ordering.
         state.pinned_track = track

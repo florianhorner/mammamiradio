@@ -126,6 +126,83 @@ def test_front_insert_drops_furthest_future_tail_on_full_queue():
     assert state.queued_segments[0]["id"] == "banter"
 
 
+def test_front_insert_keeps_protected_tail_before_dropping_ordinary_audio():
+    q: asyncio.Queue = asyncio.Queue(maxsize=3)
+    state = StationState()
+    ordinary_a, ordinary_b = _seg("ordinary-a"), _seg("ordinary-b")
+    protected = _seg("continuity", seg_type=SegmentType.BANTER)
+    protected.metadata["continuity_reservation"] = True
+    for item in (ordinary_a, ordinary_b, protected):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("ordinary-a", "music"), _shadow("ordinary-b", "music"), _shadow("continuity")]
+
+    forced = _seg("forced", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, forced, _shadow("forced")) is True
+
+    assert list(q._queue) == [forced, ordinary_a, protected]
+    assert protected.metadata["continuity_reservation"] is True
+
+
+def test_front_insert_evicts_ordinary_audio_before_an_existing_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    ordinary = _seg("ordinary")
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    for item in (ordinary, existing_air_next):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("ordinary", "music"), _shadow("existing-air-next")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
+
+    assert list(q._queue) == [newer, existing_air_next]
+    assert existing_air_next.metadata["air_next"] is True
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
+def test_front_insert_moves_protected_audio_to_slot_before_evicting_existing_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    protected = _seg("continuity", seg_type=SegmentType.BANTER)
+    protected.metadata["continuity_reservation"] = True
+    for item in (existing_air_next, protected):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("existing-air-next"), _shadow("continuity")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
+
+    assert list(q._queue) == [newer, existing_air_next]
+    # Pin the atomic real-queue/shadow invariant: the moved continuity row must
+    # leave the shadow too, in the same order as the real queue.
+    assert [row["label"] for row in state.queued_segments] == [
+        "newer-air-next",
+        "existing-air-next",
+    ]
+    assert state.continuity_slot is protected
+    assert state.discarded_segments_total == 0
+
+
+def test_front_insert_rejects_newcomer_when_every_slot_is_already_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
+    state = StationState(operator_force_pending=SegmentType.BANTER)
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    q.put_nowait(existing_air_next)
+    state.queued_segments = [_shadow("existing-air-next")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is False
+
+    assert list(q._queue) == [existing_air_next]
+    assert state.queued_segments == [_shadow("existing-air-next")]
+    assert state.operator_force_pending is None
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
 def test_front_insert_unlinks_dropped_ephemeral_tail(tmp_path):
     """A dropped tail render that is ephemeral is unlinked (no temp leak); a
     non-ephemeral one is left on disk to be re-queued later."""

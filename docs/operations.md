@@ -139,7 +139,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 - `POST /api/hot-reload` — reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction.
 - `POST /api/homeassistant/labels/regenerate` — force a background refresh of generated device labels; returns `{"scheduled": true}`, `{"scheduled": false, "reason": ...}` when HA context or an Anthropic key is unavailable, or 409 if a refresh is already running.
 - `GET /api/homeassistant/context-candidates` — admin-only sanitized Home Assistant preview; includes additive `entities` rows plus legacy `sent_now`, `candidates`, and `muted` arrays.
-- `PATCH /api/homeassistant/entity-policy` — idempotently mute/unmute one Home Assistant entity for future host/context use.
+- `PATCH /api/homeassistant/entity-policy` — apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response returns effective consent, policy revision, and the count of queued host breaks removed by a mute or a personal-moment consent revocation.
 
 ### Diagnosing provider fallbacks
 
@@ -225,6 +225,28 @@ low-waste copy. Admin-only — absent from `/public-status`. Counts are
 session-local and reset on restart. Observability only; does not change
 scheduling or generation depth.
 
+### Reading recent render timings
+
+`runtime_status.render_timings` is a bounded, admin-only diagnostic trail for
+completed producer attempts. It is absent from `/public-status` and never feeds
+scheduling, queue admission, or playback. `retention` is the maximum retained
+entry count (currently 20); `recent` is newest first. Each entry contains:
+
+- `timestamp` — UTC completion time.
+- `kind` — the attempted segment type.
+- `outcome` — `produced`, `discarded`, or `failed`; non-produced attempts may
+  additionally include `reason` (for example, a stale cutover or a quality-gate
+  rejection).
+- `total_elapsed_ms` — rounded wall-clock time for the attempt.
+- `stages_ms` — rounded durations for any observed `source`, `normalize`,
+  `script`, `tts`, `mix`, `quality`, `egress`, and `admission` stages.
+
+Stage measurements are independently observed and can overlap, so their sum is
+not a substitute for `total_elapsed_ms`. Every terminal producer branch closes
+the current entry immediately, including a quality rejection, so the next
+attempt cannot recast it as an unrelated delayed `abandoned` failure. This is
+session-local observability only and resets on restart.
+
 ### Reading producer headroom
 
 `runtime_status.producer_headroom` shows how full the lookahead queue is relative
@@ -234,10 +256,17 @@ bridge. The fields:
 - `queue_depth` — segments currently queued (`-1` if the queue is not yet attached).
 - `queue_capacity` — the queue's hard cap.
 - `lookahead_target` — the runway target, `max(4, pacing.lookahead_segments)`
-  (default `lookahead_segments = 4`).
+  (default `lookahead_segments = 4`); retained as queue-shape context, not the
+  headroom decision.
 - `buffered_audio_sec` — total seconds of audio already queued in the real
-  playback queue, summed from segment durations.
-- `headroom_ok` — `true` once `queue_depth >= lookahead_target`.
+  playback queue, summed from segment durations (plus an active protected
+  continuity slot when one exists).
+- `runway_floor_sec` — minimum ready-audio runway used by the continuity guard.
+- `continuity_slot_sec` — seconds held in the capacity-exempt protected
+  continuity slot (`0` when none is reserved); already included in
+  `buffered_audio_sec`, surfaced separately so an operator can see how much of
+  the runway is out-of-band safety audio rather than queued program.
+- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec`.
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
 The fields are operator-facing observability. The same real-queue seconds
@@ -372,7 +401,7 @@ The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-in
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow starts with Demo Radio playback, then asks for one AI host key, then exposes the Home context preview. The stream URL can be played on any HA media player.
 
-When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter, ad, and news-flash generation (so the weather flash grounds in a freshly refreshed forecast), with a default full-state refresh interval of 300 seconds. The add-on exposes **Host home context** (`ha_context_enabled`) so operators can keep HA entity publishing and timer interrupts while disabling the full `/api/states` prompt-context poll. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The admin Home context preview shows a sanitized slice of what hosts may use; Mute for future host use stores a local policy under `cache/state/ha_entity_policy.json` and removes that entity from future prompts, public Casa moments, reactive/timer triggers, label generation candidates, and running-gag inputs. It does not purge already-rendered or queued audio. This holds even when a HA refresh times out and the producer airs on a last-known context (`apply_entity_mute_policy` re-applies the live policy to that stale copy, since it bypasses `fetch_home_context`'s own filtering), and muting also purges any running-gag material already tallied for that entity before the mute, so a moment observed pre-mute cannot still be offered as a callback afterward. The remaining entities are scored and capped before prompt assembly. That same filtered interaction slice can also be included in the post-air memory extractor after generated banter streams cleanly, so future host memory is based on the final station script instead of queued drafts. The practical privacy/performance levers are muting specific entities, turning Host home context off when house state should not enter prompts, increasing `ha_context_poll_interval`, or running without script-provider credentials to avoid durable AI memory extraction. When label generation is active (HA enabled and an Anthropic key configured), the display names and room assignments for non-sensitive, unmuted entities are also sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. Home mood naming stays on the local heuristic ladder unless `MAMMAMIRADIO_HA_MOOD_LLM=true`; that experimental LLM path uses only the budgeted HA context slice, refreshes the generated scene name at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (keeping the last scene on air while a refresh runs, with bounded staleness), and falls back to the ladder on disabled config, missing keys, timeout, rejection, invalid output, or while the station's Anthropic circuit breaker is tripped. The admin Engine Room shows diagnostics and privacy filter counts; `/public-status` exposes only listener-safe Casa moments.
+When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter, ad, and news-flash generation (so the weather flash grounds in a freshly refreshed forecast), with a default full-state refresh interval of 300 seconds. The add-on exposes **Host home context** (`ha_context_enabled`) so operators can keep HA entity publishing and timer interrupts while disabling the full `/api/states` prompt-context poll. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so arrival greetings and the empty-home mood keep working without leaking location. The admin Home context preview shows a sanitized slice of what hosts may use; Mute for future host use stores a local policy under `cache/state/ha_entity_policy.json` and removes that entity from future prompts, public Casa moments, reactive/timer triggers, label generation candidates, and running-gag inputs. It never interrupts audio already on air; when a muted entity — or one whose room-presence personal-moment permission is turned back off — supplied a selected Home Context Director fact, its matching unstarted host break is removed from the queue. The director gives casual banter one allowlisted ambient fact at most, holds its topic for 30 minutes after stream start, and can use a room-presence binary sensor only after the explicit preview permission; no extra HA polling is performed. This holds even when a HA refresh times out and the producer airs on a last-known context (`apply_entity_mute_policy` re-applies the live policy to that stale copy, since it bypasses `fetch_home_context`'s own filtering), and muting also purges any running-gag material already tallied for that entity before the mute, so a moment observed pre-mute cannot still be offered as a callback afterward. The remaining entities are scored and capped before prompt assembly. That same filtered interaction slice can also be included in the post-air memory extractor after generated banter streams cleanly, so future host memory is based on the final station script instead of queued drafts. The practical privacy/performance levers are muting specific entities, turning Host home context off when house state should not enter prompts, increasing `ha_context_poll_interval`, or running without script-provider credentials to avoid durable AI memory extraction. When label generation is active (HA enabled and an Anthropic key configured), the display names and room assignments for non-sensitive, unmuted entities are also sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. Home mood naming stays on the local heuristic ladder unless `MAMMAMIRADIO_HA_MOOD_LLM=true`; that experimental LLM path uses only the budgeted HA context slice, refreshes the generated scene name at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (keeping the last scene on air while a refresh runs, with bounded staleness), and falls back to the ladder on disabled config, missing keys, timeout, rejection, invalid output, or while the station's Anthropic circuit breaker is tripped. The admin Engine Room shows fact-free director diagnostics and privacy filter counts; `/public-status` exposes only listener-safe Casa moments.
 
 ## Home Assistant entities
 

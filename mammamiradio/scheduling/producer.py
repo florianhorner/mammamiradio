@@ -13,7 +13,7 @@ import re
 import shutil
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -61,7 +61,11 @@ from mammamiradio.core.models import (
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.home.catalog import schedule_label_generation
-from mammamiradio.home.entity_policy import muted_entity_ids
+from mammamiradio.home.context_director import DirectorObservation, PromptFact
+from mammamiradio.home.entity_policy import (
+    load_entity_policy,
+    muted_entity_ids,
+)
 from mammamiradio.home.ha_context import (
     ENTITY_LABELS,
     GOLD_ENTITIES,
@@ -108,6 +112,21 @@ RECOVERY_SWEEPER_LINES = (
     "Un attimo in cabina. La musica torna tra pochissimo.",
     "Respiriamo un secondo e ripartiamo. Sempre qui su {station}.",
 )
+
+
+@contextlib.contextmanager
+def _timed_render_stage(state: StationState | None, stage: str) -> Iterator[None]:
+    """Measure one real producer boundary without letting diagnostics affect audio."""
+    if state is None:
+        yield
+        return
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        state.add_render_stage_timing(stage, (time.monotonic() - started) * 1000)
+
+
 _RUNWAY_GOVERNED_TYPES = {
     SegmentType.BANTER,
     SegmentType.AD,
@@ -302,6 +321,7 @@ async def _render_music_track(
     cache_write_required: bool = False,
     background: bool = False,
     playlist: list[Track] | None = None,
+    timing_state: StationState | None = None,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
     audio_path = await download_track(track, config.cache_dir, music_dir=Path("music"), background=background)
@@ -345,41 +365,60 @@ async def _render_music_track(
         if actual_duration_ms is not None:
             track.duration_ms = actual_duration_ms
 
-    norm_cached = _normalized_cache_path(track, config)
-    if norm_cached.exists():
-        logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
-        # A cache hit skips normalize() + its reconcile pass, so a file produced
-        # before reconciliation existed would air at its old level. Reconcile it on
-        # hit (off the event loop) so every song lands at the target; skipped once
-        # the sidecar marks it done, so steady-state cache hits stay instant.
-        reconcile_fn = partial(reconcile_cached_music, norm_cached, background=background)
-        await loop.run_in_executor(None, reconcile_fn)
-        await loop.run_in_executor(
-            None,
-            partial(refresh_track_metadata, norm_cached, track.title, track.artist, duration_ms=track.duration_ms),
-        )
-        return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
+    # The producer's existing ``finding`` phase owns source/download timing.
+    # Close it before normalization so a slow Pi encode cannot be misreported as
+    # source latency. Direct helper callers omit timing_state and stay unchanged.
+    if timing_state is not None:
+        timing_state.end_gen(ok=True)
 
-    norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
-    _norm_fn = partial(normalize, audio_path, norm_path, config, loudnorm=True, music_eq=True, background=background)
-    await loop.run_in_executor(None, _norm_fn)
-    try:
-        await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
-    except OSError as exc:
-        logger.warning(
-            "Normalization cache write failed%s %s -> %s: %s",
-            f" ({context})" if context else "",
+    with _timed_render_stage(timing_state, "normalize"):
+        norm_cached = _normalized_cache_path(track, config)
+        if norm_cached.exists():
+            logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
+            # A cache hit skips normalize() + its reconcile pass, so a file produced
+            # before reconciliation existed would air at its old level. Reconcile it on
+            # hit (off the event loop) so every song lands at the target; skipped once
+            # the sidecar marks it done, so steady-state cache hits stay instant.
+            reconcile_fn = partial(reconcile_cached_music, norm_cached, background=background)
+            await loop.run_in_executor(None, reconcile_fn)
+            await loop.run_in_executor(
+                None,
+                partial(refresh_track_metadata, norm_cached, track.title, track.artist, duration_ms=track.duration_ms),
+            )
+            return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
+
+        norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
+        _norm_fn = partial(
+            normalize,
+            audio_path,
             norm_path,
-            norm_cached,
-            exc,
+            config,
+            loudnorm=True,
+            music_eq=True,
+            background=background,
         )
-        if cache_write_required:
-            norm_cached.unlink(missing_ok=True)
-            norm_path.unlink(missing_ok=True)
-            raise
-    else:
-        save_track_metadata(norm_cached, track.title, track.artist, duration_ms=track.duration_ms)
-    return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
+        await loop.run_in_executor(None, _norm_fn)
+        try:
+            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+        except OSError as exc:
+            logger.warning(
+                "Normalization cache write failed%s %s -> %s: %s",
+                f" ({context})" if context else "",
+                norm_path,
+                norm_cached,
+                exc,
+            )
+            # copy2 can leave a partial norm_cached behind. Remove it on every
+            # failure so a corrupt file can never be selected for recovery or
+            # continuity playback, not only on the cache-required path.
+            with contextlib.suppress(OSError):
+                norm_cached.unlink(missing_ok=True)
+            if cache_write_required:
+                norm_path.unlink(missing_ok=True)
+                raise
+        else:
+            save_track_metadata(norm_cached, track.title, track.artist, duration_ms=track.duration_ms)
+        return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
 _RECOVERY_CLIP_SUBDIRS = ("recovery", "banter", "welcome")
@@ -457,15 +496,14 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
-    tone_path = config.tmp_dir / f"{bridge_type}_tone_{uuid4().hex[:8]}.mp3"
-    logger.error(
-        "%s bridge: no canned clips or norm cache available — inserting emergency tone", bridge_type.capitalize()
-    )
-    try:
-        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
-    except Exception:
-        logger.exception("Emergency tone bridge generation failed")
+    tone_path = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    if not tone_path.is_file():
+        logger.error("%s bridge: packaged emergency tone is missing", bridge_type.capitalize())
         return False
+    logger.error(
+        "%s bridge: no canned clips or norm cache available — inserting packaged emergency tone",
+        bridge_type.capitalize(),
+    )
     ok = await queue_segment(
         Segment(
             type=SegmentType.MUSIC,
@@ -479,7 +517,7 @@ async def _queue_continuity_bridge(
                 "rescue": True,
                 "audio_source": "emergency_tone",
             },
-            ephemeral=True,
+            ephemeral=False,
         )
     )
     if ok:
@@ -618,12 +656,12 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     except Exception as sweeper_err:
         logger.warning("Recovery sweeper failed — inserting emergency tone: %s", sweeper_err)
 
-    tone_path = config.tmp_dir / f"recovery_tone_{uuid4().hex[:8]}.mp3"
-    logger.error("No packaged recovery clips, norm cache, or recovery sweeper available — inserting emergency tone")
-    try:
-        await asyncio.to_thread(generate_tone, tone_path, 440, 2.0, rescue=True)
-    except Exception:
-        logger.exception("Emergency tone recovery failed")
+    tone_path = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    logger.error(
+        "No packaged recovery clips, norm cache, or recovery sweeper available — inserting packaged emergency tone"
+    )
+    if not tone_path.is_file():
+        logger.error("Packaged emergency tone recovery asset is missing")
         return None
     return Segment(
         type=SegmentType.MUSIC,
@@ -637,7 +675,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             "rescue": True,
             "audio_source": "emergency_tone",
         },
-        ephemeral=True,
+        ephemeral=False,
     )
 
 
@@ -795,6 +833,9 @@ def _remember_rendered_music(rendered: RenderedMusicTrack, state: StationState) 
     path = rendered.cache_path if rendered.cache_path.exists() else rendered.path
     _set_last_music_file(path)
     state.last_music_file = path
+    duration_sec = max(0.0, float(rendered.track.duration_ms or 0) / 1000)
+    if duration_sec > 0:
+        state.immediate_audio_index[path] = duration_sec
 
 
 def _adjacency_type_for(segment: Segment) -> SegmentType | None:
@@ -863,6 +904,8 @@ def _remember_enqueued(state: StationState, segment: Segment, source_path: Path)
     ):
         state.last_music_file = source_path
         _set_last_music_file(source_path)
+    if adj == SegmentType.MUSIC and source_path.exists() and segment.duration_sec > 0:
+        state.immediate_audio_index[source_path] = float(segment.duration_sec)
 
 
 def _release_campaign_should_force_first_banter(state: StationState) -> bool:
@@ -1138,6 +1181,23 @@ def _front_insert_queue_and_shadow(
             queue.task_done()
         except asyncio.QueueEmpty:
             break
+    rows_by_segment = {
+        id(item): state.queued_segments[index] for index, item in enumerate(items) if index < len(state.queued_segments)
+    }
+    # A second air-next render should normally be impossible because the operator
+    # one-at-a-time guard stays armed until admission. Keep the queue safe even if
+    # a race or an internal caller violates that assumption: when every occupied
+    # slot is already air-next, reject the newcomer instead of deleting an earlier
+    # operator promise merely to make room for the newer one.
+    if queue.maxsize and len(items) >= queue.maxsize and items and all(item.metadata.get("air_next") for item in items):
+        for item in items:
+            queue.put_nowait(item)
+        state.record_discard(segment, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW)
+        if segment.ephemeral and not _is_packaged_asset(segment.path):
+            segment.path.unlink(missing_ok=True)
+        state.operator_force_pending = None
+        logger.info("Air-next: rejected %s because every queue slot is already air-next", segment.type.value)
+        return False
     # A queue-head speech segment that carries a "just finished playing X" claim
     # (baked into its audio, crossfaded over X's fade) has that claim unconditionally
     # broken the moment anything gets wedged ahead of it — X is no longer what plays
@@ -1150,14 +1210,55 @@ def _front_insert_queue_and_shadow(
     items.insert(0, segment)
     dropped: list[Segment] = []
     while queue.maxsize and len(items) > queue.maxsize:
-        dropped.append(items.pop())  # furthest-future first
+        # A continuity reservation is the listener-safety tail. A ready
+        # operator pick remains air-next, but it may not silently evict the
+        # only recovery runway merely because the count-bound queue is full.
+        evict_index = next(
+            (
+                index
+                for index in range(len(items) - 1, 0, -1)
+                if not items[index].metadata.get("continuity_reservation") and not items[index].metadata.get("air_next")
+            ),
+            None,
+        )
+        if evict_index is not None:
+            dropped.append(items.pop(evict_index))
+            continue
+        # There is no ordinary tail to evict. Preserve one protected clip in
+        # the capacity-exempt slot; playback serves it only after real queue
+        # audio, so it cannot displace the operator's ready air-next segment.
+        protected_index = next(
+            (index for index in range(len(items) - 1, 0, -1) if items[index].metadata.get("continuity_reservation")),
+            None,
+        )
+        if protected_index is None:
+            # Only already-admitted air-next entries remain. Never evict one to
+            # make a newer request fit; reject the new head and preserve the
+            # established queue order. The all-air-next fast path above handles
+            # the normal shape, while this branch keeps the invariant defensive
+            # if a future queue layout reaches it.
+            items.pop(0)
+            state.record_discard(segment, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW)
+            if segment.ephemeral and not _is_packaged_asset(segment.path):
+                segment.path.unlink(missing_ok=True)
+            state.operator_force_pending = None
+            for item in items:
+                queue.put_nowait(item)
+            state.queued_segments = [rows_by_segment.get(id(item)) or _queue_shadow_entry(item) for item in items]
+            logger.info("Air-next: rejected %s rather than evict an earlier air-next", segment.type.value)
+            return False
+        else:
+            state.continuity_slot = items.pop(protected_index)
     for item in items:
         queue.put_nowait(item)
-    # Shadow mirrors the real queue: prepend the new entry, then drop the same
-    # number of tail entries (never the new front one) so the one-directional drift
-    # guard never has to "correct" a shadow > queue overshoot and log a false alarm
-    # on every air-next.
-    state.queued_segments.insert(0, shadow_entry)
+    # Rebuild the operator projection from the final real queue. This is a little
+    # more deliberate than tail slicing because protected entries may survive an
+    # air-next insertion while a different ordinary tail is dropped.
+    if shadow_entry.get("id"):
+        segment.metadata["queue_id"] = str(shadow_entry["id"])
+    segment.metadata["air_next"] = True
+    prior_rows = {str(row.get("id")): row for row in state.queued_segments if row.get("id")}
+    prior_rows[str(shadow_entry.get("id"))] = shadow_entry
     if stale_head is not None:
         state.record_discard(
             stale_head, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF, already_counted_in_produced=True
@@ -1167,17 +1268,19 @@ def _front_insert_queue_and_shadow(
         )
         if getattr(stale_head, "ephemeral", False) and not _is_packaged_asset(stale_head.path):
             stale_head.path.unlink(missing_ok=True)
-        # The stale head's shadow entry sits right after the new front entry (index 0).
-        if len(state.queued_segments) > 1:
-            del state.queued_segments[1]
     for seg in dropped:
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, seg, GenerationWasteReason.AIR_NEXT_OVERFLOW, "air-next-overflow")
         if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
             seg.path.unlink(missing_ok=True)
-    if dropped and len(state.queued_segments) > 1:
-        drop_n = min(len(dropped), len(state.queued_segments) - 1)
-        del state.queued_segments[len(state.queued_segments) - drop_n :]
+    state.queued_segments = [
+        shadow_entry
+        if item is segment
+        else rows_by_segment.get(id(item))
+        or prior_rows.get(str(item.metadata.get("queue_id")))
+        or _queue_shadow_entry(item)
+        for item in items
+    ]
     # Recompute the tail-adjacency basis from the ACTUAL new queue tail. Air-next puts the
     # segment at the HEAD, but it only leaves tail adjacency unchanged when buffered music
     # still sits behind it. When the queue was empty (the inserted speech segment becomes the
@@ -1338,6 +1441,73 @@ async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
     return segment
 
 
+StaleCheck = Callable[[], bool | str | None]
+
+
+def _stale_check_reason(stale_check: StaleCheck | None) -> str | None:
+    """Return the caller's concrete stale reason, with boolean compatibility."""
+    if stale_check is None:
+        return None
+    verdict = stale_check()
+    if not verdict:
+        return None
+    if isinstance(verdict, str):
+        return verdict
+    return GenerationWasteReason.EGRESS_STALE
+
+
+def _enqueue_rejection_reason(
+    state: StationState,
+    segment: Segment,
+    stale_check: StaleCheck | None,
+) -> str | None:
+    """Classify the current enqueue rejection without storing mutable side state."""
+    if state.session_stopped:
+        return GenerationWasteReason.SESSION_STOPPED
+    if segment.type == SegmentType.MUSIC and state.blocklist:
+        metadata = segment.metadata or {}
+        key = (
+            str(metadata.get("artist", "")).strip().lower(),
+            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+        )
+        if key in state.blocklist:
+            return GenerationWasteReason.BLOCKLIST_GATE
+    return _stale_check_reason(stale_check)
+
+
+def _discard_rejected_admission(state: StationState, segment: Segment, reason: str, *, phase: str) -> None:
+    """Record and clean one segment rejected by an enqueue gate."""
+    logger.info("Discarding %s: %s (%s)", segment.type.value, reason, phase)
+    state.record_discard(segment, reason=reason)
+    if segment.ephemeral and not _is_packaged_asset(segment.path):
+        segment.path.unlink(missing_ok=True)
+
+
+def _remove_exact_queued_segment(queue: asyncio.Queue[Segment], target: Segment) -> bool:
+    """Synchronously remove one identity-matching item while preserving queue order.
+
+    ``asyncio.Queue.put`` may block for capacity. Once it resumes, a live action
+    can already have invalidated the render. Draining, filtering, and rebuilding
+    here has no await point, so playback cannot observe the stale admission and
+    the unfinished-task counter remains balanced.
+    """
+    items: list[Segment] = []
+    removed = False
+    while not queue.empty():
+        try:
+            item = queue.get_nowait()
+            queue.task_done()
+        except asyncio.QueueEmpty:
+            break
+        if item is target and not removed:
+            removed = True
+        else:
+            items.append(item)
+    for item in items:
+        queue.put_nowait(item)
+    return removed
+
+
 async def _enqueue_with_egress(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -1346,7 +1516,7 @@ async def _enqueue_with_egress(
     *,
     front_insert: bool = False,
     shadow_entry: dict | None = None,
-    stale_check: Callable[[], bool] | None = None,
+    stale_check: StaleCheck | None = None,
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
@@ -1358,26 +1528,12 @@ async def _enqueue_with_egress(
     entry point. FX run BEFORE the front-insert critical section so it stays a
     no-await drain→prepend→repush.
     """
-    # Final blocklist gate: a banned song must never reach the playback queue, no
-    # matter which selection-path race put it here — a ban landing mid-render (the
-    # stale-generation check can miss the exact track being rendered), a listener
-    # request committed just before the ban that later re-pins, or a rescue segment
-    # a targeted purge missed. The ingest doorways stop banned songs ENTERING the
-    # pool; this is the last gate before AIR. Music only — banter/ads/bridges carry
-    # no song identity, and a non-song bridge title ("Resume bridge") can't match a
-    # real ban key. Checked before _apply_egress so we never orphan a coloured render.
-    if segment.type == SegmentType.MUSIC and state.blocklist:
-        _meta = segment.metadata or {}
-        _key = (
-            str(_meta.get("artist", "")).strip().lower(),
-            str(_meta.get("title_only") or _meta.get("title") or "").strip().lower(),
-        )
-        if _key in state.blocklist:
-            logger.info("Blocklist gate: dropped a banned song at the enqueue funnel (%s - %s)", _key[0], _key[1])
-            state.record_discard(segment, reason=GenerationWasteReason.BLOCKLIST_GATE)
-            if segment.ephemeral and not _is_packaged_asset(segment.path):
-                segment.path.unlink(missing_ok=True)
-            return False
+    # Final pre-egress gate: stop, blocklist, and captured cutover state are all
+    # reclassified by the same pure helper used after each subsequent await.
+    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+    if rejection_reason is not None:
+        _discard_rejected_admission(state, segment, rejection_reason, phase="pre-egress enqueue gate")
+        return False
 
     # Validate the front-insert contract BEFORE any egress work so a programming error
     # never leaves a coloured egress tmp render orphaned on disk.
@@ -1386,27 +1542,44 @@ async def _enqueue_with_egress(
     if not front_insert and shadow_entry is None:
         shadow_entry = _queue_shadow_entry(segment)
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
+    egress_started = time.monotonic()
     segment = await _apply_egress(segment, config)
+    state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
     # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
     # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
     # would purge the queue before this put. A caller that captured a generation up front
     # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
     # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
     # keep their documented pre-egress-only behavior.
-    if stale_check is not None and stale_check():
-        logger.info("Discarding %s: source changed during egress (post-egress stale gate)", segment.type.value)
-        state.record_discard(segment, reason=GenerationWasteReason.EGRESS_STALE)
-        if segment.ephemeral and not _is_packaged_asset(segment.path):
-            segment.path.unlink(missing_ok=True)
+    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+    if rejection_reason is not None:
+        _discard_rejected_admission(state, segment, rejection_reason, phase="post-egress enqueue gate")
         return False
+    admission_started = time.monotonic()
     if front_insert:
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
-        return _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+        admitted = _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+        state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+        return admitted
     await queue.put(segment)
+    # ``queue.put`` is an await when capacity is full. Revalidate after that wait,
+    # then synchronously retract the exact admitted object before publishing its
+    # shadow row or any queue-commit side effect. This closes the cutover race in
+    # which a purge/source/chaos action lands after the post-egress check.
+    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+    if rejection_reason is not None:
+        removed = _remove_exact_queued_segment(queue, segment)
+        if removed:
+            _discard_rejected_admission(state, segment, rejection_reason, phase="post-capacity enqueue gate")
+        else:  # Defensive: impossible without a new await/consumer interleaving above.
+            logger.error("Stale %s escaped atomic queue retraction", segment.type.value)
+        state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+        return False
     assert shadow_entry is not None
     state.queued_segments.append(shadow_entry)
     _remember_enqueued(state, segment, pre_egress_path)
     _schedule_restart_handoff_spool(state, config, segment)
+    state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
     return True
 
 
@@ -1428,25 +1601,26 @@ async def _apply_talk_bed(
     loop = asyncio.get_running_loop()
     last_track = source_track if config.imaging.use_music_queue_for_beds else None
     bed_path = config.tmp_dir / f"{prefix}_bed_{uuid4().hex[:8]}.mp3"
-    duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
-    imaging_lib = _make_imaging_lib(config)
-    bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
-    try:
-        await loop.run_in_executor(None, imaging_lib.pick_talk_bed, duration, bed_path, last_track)
-        await loop.run_in_executor(
-            None,
-            mix_voice_with_bed,
-            audio_path,
-            bed_path,
-            bedded_path,
-            config.imaging.bed_volume_db,
-        )
-    except Exception:
-        bedded_path.unlink(missing_ok=True)
-        bed_path.unlink(missing_ok=True)
-        raise
-    finally:
-        bed_path.unlink(missing_ok=True)
+    with _timed_render_stage(state, "mix"):
+        duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+        imaging_lib = _make_imaging_lib(config)
+        bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
+        try:
+            await loop.run_in_executor(None, imaging_lib.pick_talk_bed, duration, bed_path, last_track)
+            await loop.run_in_executor(
+                None,
+                mix_voice_with_bed,
+                audio_path,
+                bed_path,
+                bedded_path,
+                config.imaging.bed_volume_db,
+            )
+        except Exception:
+            bedded_path.unlink(missing_ok=True)
+            bed_path.unlink(missing_ok=True)
+            raise
+        finally:
+            bed_path.unlink(missing_ok=True)
     audio_path.unlink(missing_ok=True)
     return bedded_path
 
@@ -1503,16 +1677,18 @@ async def _synthesize_impossible_moment(
     """
     host = random.choice(_sw._regular_hosts(config))
     imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
-    await synthesize(
-        line,
-        host.voice,
-        imp_path,
-        engine=host.engine,
-        edge_fallback_voice=host.edge_fallback_voice,
-        state=state,
-    )
+    with _timed_render_stage(state, "tts"):
+        await synthesize(
+            line,
+            host.voice,
+            imp_path,
+            engine=host.engine,
+            edge_fallback_voice=host.edge_fallback_voice,
+            state=state,
+        )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
-    audio_path = await _try_crossfade(imp_path, config, xfade_out, music_path)
+    with _timed_render_stage(state, "mix"):
+        audio_path = await _try_crossfade(imp_path, config, xfade_out, music_path)
     state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
     return audio_path
 
@@ -1628,17 +1804,19 @@ async def _render_sweeper_audio(
     """Render a short station-imaging sweeper with the configured voice and sting."""
     sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
     audio_path = config.tmp_dir / f"{prefix}_{uuid4().hex[:8]}.mp3"
-    await synthesize(
-        text,
-        sweeper_voice,
-        audio_path,
-        engine=sweeper_engine,
-        edge_fallback_voice=sweeper_fallback,
-        state=state,
-    )
+    with _timed_render_stage(state, "tts"):
+        await synthesize(
+            text,
+            sweeper_voice,
+            audio_path,
+            engine=sweeper_engine,
+            edge_fallback_voice=sweeper_fallback,
+            state=state,
+        )
     if validate_dry:
         try:
-            await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
+            with _timed_render_stage(state, "quality"):
+                await asyncio.to_thread(validate_segment_audio, audio_path, SegmentType.SWEEPER)
         except (AudioQualityError, AudioToolError):
             audio_path.unlink(missing_ok=True)
             raise
@@ -1647,9 +1825,10 @@ async def _render_sweeper_audio(
     mixed_path = config.tmp_dir / f"{prefix}_mixed_{uuid4().hex[:8]}.mp3"
     dry_sweeper_path = audio_path
     try:
-        imaging_lib = _make_imaging_lib(config)
-        await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
-        await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
+        with _timed_render_stage(state, "mix"):
+            imaging_lib = _make_imaging_lib(config)
+            await loop.run_in_executor(None, imaging_lib.pick_sweeper_sting, sting_path)
+            await loop.run_in_executor(None, mix_voice_with_sting, audio_path, sting_path, mixed_path)
     except Exception:
         mixed_path.unlink(missing_ok=True)
         dry_sweeper_path.unlink(missing_ok=True)
@@ -1782,6 +1961,19 @@ async def prewarm_first_segment(
     # keep the instant-audio pre-roll rather than throw it away.
     generation_source_revision = state.source_revision
     generation_chaos_epoch = state.chaos_cutover_epoch
+    generation_continuity_epoch = state.continuity_epoch
+
+    def _prewarm_stale_reason() -> str | None:
+        if state.session_stopped:
+            return GenerationWasteReason.SESSION_STOPPED
+        if state.source_revision != generation_source_revision:
+            return GenerationWasteReason.STALE_SOURCE
+        if state.chaos_cutover_epoch != generation_chaos_epoch:
+            return GenerationWasteReason.STALE_CHAOS
+        if state.continuity_epoch != generation_continuity_epoch:
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
     try:
         track = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1841,6 +2033,18 @@ async def prewarm_first_segment(
             if not rendered.cache_hit:
                 norm_path.unlink(missing_ok=True)
             return False
+        if generation_continuity_epoch != state.continuity_epoch:
+            logger.info("Discarding stale prewarm segment after a live continuity reservation")
+            prewarm_segment = Segment(
+                type=SegmentType.MUSIC,
+                path=norm_path,
+                duration_sec=(track.duration_ms or 0) / 1000.0,
+                ephemeral=not rendered.cache_hit,
+            )
+            state.record_discard(prewarm_segment, reason=GenerationWasteReason.STALE_CONTINUITY)
+            if not rendered.cache_hit:
+                norm_path.unlink(missing_ok=True)
+            return False
         rationale = generate_track_rationale(track, source=state.playlist_source, listener=state.listener)
         crate = classify_track_crate(track, state.playlist_source)
         segment = Segment(
@@ -1863,7 +2067,8 @@ async def prewarm_first_segment(
         )
         segment.duration_sec = await loop.run_in_executor(None, _probe_segment_duration, norm_path)
         # Post-egress stale check: the egress encode (FM broadcast chain) runs inside the
-        # funnel before queue.put, and a source switch / chaos cutover landing during it
+        # funnel before queue.put, and a source switch, chaos cutover, or continuity
+        # reservation landing during it
         # would purge the queue first — then this put would land a stale pre-roll. Re-check
         # at the last moment so a switch during egress discards the pre-roll instead (#665).
         if not await _enqueue_with_egress(
@@ -1871,10 +2076,7 @@ async def prewarm_first_segment(
             state,
             config,
             segment,
-            stale_check=lambda: (
-                state.source_revision != generation_source_revision
-                or state.chaos_cutover_epoch != generation_chaos_epoch
-            ),
+            stale_check=_prewarm_stale_reason,
         ):
             return False
         _arm_accepted_heading_announcement(state, track)
@@ -1898,7 +2100,7 @@ async def _fire_interrupt(
 ) -> bool:
     """Immediately interrupt the stream with bridge audio + pissed banter.
 
-    Uses alert.mp3 or a generated tone as a bridge clip (plays in ≤2s), drains
+    Uses alert.mp3 or a packaged emergency tone as a bridge clip, drains
     the lookahead queue so no buffered music plays between bridge and banter,
     injects the directive, and fires skip_event to cut the current segment.
 
@@ -1906,6 +2108,9 @@ async def _fire_interrupt(
     cooldown gate. Per-entity cooldowns are enforced upstream by
     check_reactive_triggers.
     """
+    # Retained as a call-site-compatible diagnostic hook; bridge generation no
+    # longer writes a temporary file because the fallback is bundled.
+    _ = bridge_tmp_dir
     now = time.time()
     if enforce_global_cooldown:
         elapsed = now - state.last_interrupt_ts
@@ -1926,6 +2131,28 @@ async def _fire_interrupt(
         state.interrupt_slot.unlink(missing_ok=True)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
+    # A hard interrupt supersedes every prior continuity reservation. Clear the
+    # out-of-band slot before committing the interrupt bridge so playback cannot
+    # serve stale control audio between that bridge and the urgent banter.
+    state.continuity_slot = None
+
+    # Commit an immediate bridge before touching the ready queue. This contains
+    # no await and therefore cannot expose a drained queue to playback. The
+    # packaged tone is intentionally used rather than waiting for FFmpeg tone
+    # generation on a loaded Home Assistant Green.
+    alert_sfx = _SFX_DIR / "alert.mp3"
+    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    if alert_sfx.exists():
+        state.interrupt_slot = alert_sfx
+    elif emergency_tone.is_file():
+        state.interrupt_slot = emergency_tone
+    else:
+        # No bridge audio at all: hard-cutting here would drain the queue and
+        # fire skip_event with nothing to air, opening dead air until banter
+        # renders. Preserve whatever is already queued and abort the interrupt
+        # instead of breaking the illusion (INSTANT AUDIO).
+        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
+        return False
 
     # Drain the lookahead queue so no buffered music leaks between bridge and banter.
     purged = 0
@@ -1942,14 +2169,14 @@ async def _fire_interrupt(
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
+    state.continuity_epoch += 1
     # An urgent interrupt is a hard continuity break: the buffered tail is gone and the
     # current segment is cut below. Clear music adjacency so the urgent banter doesn't bed
     # a purged/cut song (the same stale-bleed class as the front-insert tail drop, #641).
     state.last_enqueued_type = None
 
-    # Inject directive + pissed tone, then cut the current segment FIRST so the
-    # interrupt feels immediate. Bridge-tone generation (below) can take seconds
-    # on a loaded Pi — it must never block the skip.
+    # Inject directive + cut the current segment. The bridge was already
+    # committed above, so this remains immediate even under render pressure.
     # An interrupt clobbers whatever directive was pending. If that directive
     # carried an elected Moment Receipt (same-poll directive+interrupt election,
     # or a timer-poll interrupt landing on a waiting ritual directive), demote
@@ -1969,24 +2196,6 @@ async def _fire_interrupt(
     state.chaos_cutover_epoch += 1
     if skip_event is not None:
         skip_event.set()
-
-    # Bridge audio: canned alert jingle for immediate playback. Best-effort —
-    # the playback loop picks up interrupt_slot on its next iteration, so a
-    # late or missing bridge just means the banter starts a beat sooner.
-    alert_sfx = _SFX_DIR / "alert.mp3"
-    if alert_sfx.exists():
-        state.interrupt_slot = alert_sfx
-    else:
-        tmp_dir = bridge_tmp_dir or Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/tmp"))
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        bridge_path = tmp_dir / f"interrupt_bridge_{uuid4().hex[:8]}.mp3"
-        try:
-            await asyncio.to_thread(generate_tone, bridge_path, 1046.5, 0.75, rescue=True)
-            state.interrupt_slot = bridge_path
-            state.interrupt_slot_ephemeral = True
-        except Exception:
-            bridge_path.unlink(missing_ok=True)
-            logger.warning("Interrupt bridge generation failed; continuing without bridge", exc_info=True)
 
     logger.info(
         "Interrupt fired: directive=%r urgency=%r bridge=%s",
@@ -2033,6 +2242,41 @@ def _emit_segment_prepared(
         )
     except Exception as exc:  # pragma: no cover - provenance must never break audio
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
+
+
+def _observe_home_context_director(state: StationState, config: StationConfig, context: HomeContext) -> None:
+    """Refresh the director's strict projection without adding HA polling."""
+    director = state.home_context_director
+    if director is None:
+        return
+    observations: list[DirectorObservation] = []
+    for entity in context.scored:
+        try:
+            observation = DirectorObservation.from_home_assistant_state(
+                entity.entity_id,
+                entity.raw_state,
+                score=entity.score,
+                area=entity.area,
+            )
+        except Exception:
+            observation = None
+        if observation is not None:
+            observations.append(observation)
+    try:
+        # One load: policy_revision/muted/personal_moment_opt_ins are all slices
+        # of the same normalized policy dict — three helper calls would re-lock
+        # and re-stat the same file per HA refresh.
+        policy = load_entity_policy(config.cache_dir)
+        muted = policy.get("muted", {})
+        opt_ins = policy.get("personal_moment_opt_ins", {})
+        director.observe(
+            observations,
+            policy_revision=int(policy.get("policy_revision", 0) or 0),
+            muted_entity_ids=set(muted) if isinstance(muted, dict) else set(),
+            personal_moment_opt_ins=set(opt_ins) if isinstance(opt_ins, dict) else set(),
+        )
+    except Exception:
+        logger.debug("Home context director observation failed", exc_info=True)
 
 
 def _home_context_ready_for_first_moment(ha_cache: HomeContext) -> bool:
@@ -2223,6 +2467,19 @@ def _maybe_arm_first_home_context_moment(
         state.force_next = SegmentType.BANTER
 
 
+def _cache_eviction_protected_paths(queue: asyncio.Queue[Segment], state: StationState) -> set[Path]:
+    """Paths an LRU cache eviction pass must never remove.
+
+    Both the real playback queue and the capacity-exempt continuity slot hold
+    ready audio; evicting either would break delivery mid-stream. The slot is
+    absent from the real queue by design, so it is protected explicitly.
+    """
+    protected = {seg.path for seg in list(getattr(queue, "_queue", ())) if seg.path}
+    if state.continuity_slot is not None and state.continuity_slot.path:
+        protected.add(state.continuity_slot.path)
+    return protected
+
+
 async def run_producer(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -2232,9 +2489,50 @@ async def run_producer(
     """Keep the lookahead queue filled with rendered segments for live playback."""
     prev_seg_type = _initial_previous_segment_type(queue, state)
     state.last_enqueued_type = _seed_adjacency_type(queue, state, prev_seg_type)
+    observed_continuity_epoch = state.continuity_epoch
     logger.info("Producer started. Playlist: %d tracks", len(state.playlist))
 
-    async def _queue_segment(segment: Segment, *, shadow_entry: dict | None = None) -> bool:
+    producer_task = asyncio.current_task()
+    if producer_task is not None:
+
+        def _close_timing_on_producer_exit(task: asyncio.Task) -> None:
+            # Cancellation or an unexpected task exit can land inside any awaited
+            # render stage. Close the in-memory diagnostic after task completion
+            # so idle time is never charged to a later attempt.
+            if not state._render_timing_started:
+                return
+            reason = "cancelled" if task.cancelled() else "producer_error" if task.exception() else "producer_exit"
+            state.end_gen(ok=False)
+            state.finish_render_timing("failed", reason=reason)
+
+        producer_task.add_done_callback(_close_timing_on_producer_exit)
+
+    def _home_fact_policy_is_current(segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        fact_id = metadata.get("home_fact_id")
+        if not fact_id:
+            return True
+        revision = metadata.get("home_fact_policy_revision")
+        entity_id = metadata.get("home_fact_entity_id")
+        # One load: the revision and the mute set both come from the same policy
+        # dict, so read them off a single normalized load instead of two.
+        policy = load_entity_policy(config.cache_dir)
+        muted = policy.get("muted", {})
+        muted_ids = set(muted) if isinstance(muted, dict) else set()
+        return (
+            isinstance(revision, int)
+            and not isinstance(revision, bool)
+            and revision == int(policy.get("policy_revision", 0) or 0)
+            and isinstance(entity_id, str)
+            and entity_id not in muted_ids
+        )
+
+    async def _queue_segment(
+        segment: Segment,
+        *,
+        shadow_entry: dict | None = None,
+        stale_check: StaleCheck | None = None,
+    ) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
         nonlocal prev_seg_type
         if state.session_stopped:
@@ -2243,7 +2541,29 @@ async def run_producer(
                 segment.path.unlink(missing_ok=True)
             logger.info("Discarding %s because the session is stopped", segment.type.value)
             return False
-        if not await _enqueue_with_egress(queue, state, config, segment, shadow_entry=shadow_entry):
+        if not _home_fact_policy_is_current(segment):
+            state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+            _unlink_if_tmp_render(segment, config.tmp_dir)
+            return False
+
+        def _home_fact_is_stale(_segment: Segment = segment) -> bool:
+            return not _home_fact_policy_is_current(_segment)
+
+        def _combined_stale_check() -> bool:
+            # Discard if EITHER the caller's staleness gate (continuity epoch,
+            # source/playlist/chaos) OR the home-fact policy check fires.
+            if stale_check is not None and stale_check():
+                return True
+            return _home_fact_is_stale()
+
+        if not await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            shadow_entry=shadow_entry,
+            stale_check=_combined_stale_check,
+        ):
             return False
         prev_seg_type = _adjacency_type_for(segment)
         return True
@@ -2382,6 +2702,14 @@ async def run_producer(
                 producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
     while True:
+        if observed_continuity_epoch != state.continuity_epoch:
+            # A streamer control rebuilt the queue outside this coroutine. Re-read
+            # its final tail before producing again so a removed song cannot lend
+            # a talk bed or transition sting to the next speech segment.
+            queued = list(getattr(queue, "_queue", ()))
+            prev_seg_type = _adjacency_type_for(queued[-1]) if queued else None
+            state.last_enqueued_type = prev_seg_type
+            observed_continuity_epoch = state.continuity_epoch
         if state.session_stopped:
             if not _was_stopped and config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
                 _track_ha_task(
@@ -2481,9 +2809,10 @@ async def run_producer(
             now = asyncio.get_running_loop().time()
             if now - _last_cache_eviction >= _cache_eviction_interval:
                 _last_cache_eviction = now
-                # Protect norm files currently in the playback queue from eviction.
-                # Evicting a queued file would break audio delivery mid-stream.
-                queued_paths = {seg.path for seg in list(queue._queue) if seg.path}  # type: ignore[attr-defined]
+                # Protect norm files currently in the playback queue — and the
+                # capacity-exempt continuity slot — from eviction. Evicting ready
+                # audio would break delivery mid-stream.
+                queued_paths = _cache_eviction_protected_paths(queue, state)
                 await asyncio.to_thread(
                     evict_cache_lru,
                     config.cache_dir,
@@ -2573,6 +2902,29 @@ async def run_producer(
         # switch (stale_source) apart from a same-source playlist edit
         # (stale_playlist) for honest waste telemetry (#397).
         generation_source_revision = state.source_revision
+        # Live controls reserve continuity before their destructive queue change.
+        # A completed render from before that change must never refill the queue
+        # after the reservation has made its safety promise.
+        generation_continuity_epoch = state.continuity_epoch
+
+        def _enqueue_stale_reason(
+            captured_revision: int = generation_revision,
+            captured_source_revision: int = generation_source_revision,
+            captured_chaos_epoch: int = generation_chaos_epoch,
+            captured_continuity_epoch: int = generation_continuity_epoch,
+        ) -> str | None:
+            if state.session_stopped:
+                return GenerationWasteReason.SESSION_STOPPED
+            if captured_source_revision != state.source_revision:
+                return GenerationWasteReason.STALE_SOURCE
+            if captured_revision != state.playlist_revision:
+                return GenerationWasteReason.STALE_PLAYLIST
+            if captured_chaos_epoch != state.chaos_cutover_epoch:
+                return GenerationWasteReason.STALE_CHAOS
+            if captured_continuity_epoch != state.continuity_epoch:
+                return GenerationWasteReason.STALE_CONTINUITY
+            return None
+
         success_callback: Callable[[], None] | None = None
         banter_commit = None
         post_failure_backoff: float | None = None
@@ -2591,7 +2943,8 @@ async def run_producer(
         # Render-latency deep-dive: total wall time to build this segment, logged
         # at INFO on the Queued line below. Per-stage ffmpeg breakdown is at DEBUG
         # in audio/normalizer.py (set LOG_LEVEL=DEBUG for a soak).
-        _t_render = time.perf_counter()
+        _t_render = time.monotonic()
+        state.begin_render_timing(seg_type.value, started=_t_render)
 
         # Refresh Home Assistant context for banter/ad/news-flash segments.
         # NEWS_FLASH is included so the meteo flash grounds itself in a freshly
@@ -2640,6 +2993,7 @@ async def run_producer(
             state.ha_registry_source = str(getattr(ha_cache, "registry_source", "") or "")
             state.ha_context_entity_count = len(ha_cache.scored)
             state.ha_context_char_count = len(ha_cache.summary or "")
+            _observe_home_context_director(state, config, ha_cache)
             ritual_matches = list(getattr(ha_cache, "ritual_recipe_matches", []) or [])
             state.ha_ritual_public_families = list(getattr(ha_cache, "ritual_public_families", []) or [])[:4]
             state.ha_ritual_context = ", ".join(state.ha_ritual_public_families)
@@ -2800,6 +3154,7 @@ async def run_producer(
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
+            state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
             continue
 
         try:
@@ -2808,6 +3163,7 @@ async def run_producer(
                 playlist_idx: int = -1
                 if track is None:
                     # All recent candidates denylisted — yield to event loop and retry.
+                    state.finish_render_timing("discarded", reason=GenerationWasteReason.BLOCKLIST_GATE)
                     await asyncio.sleep(0.1)
                     continue
                 logger.info("Producing MUSIC: %s", track.display)
@@ -2826,11 +3182,13 @@ async def run_producer(
                         temp_prefix="music",
                         context="music",
                         playlist=state.playlist,
+                        timing_state=state,
                     )
                     _gen_ok = rendered is not None
                 finally:
                     state.end_gen(ok=_gen_ok)
                 if rendered is None:
+                    state.finish_render_timing("failed", reason="render_unavailable")
                     continue
                 norm_path = rendered.path
                 norm_cached = rendered.cache_path
@@ -2846,7 +3204,10 @@ async def run_producer(
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     _music_loop = asyncio.get_running_loop()
                     try:
-                        await _music_loop.run_in_executor(None, validate_segment_audio, norm_path, SegmentType.MUSIC)
+                        with _timed_render_stage(state, "quality"):
+                            await _music_loop.run_in_executor(
+                                None, validate_segment_audio, norm_path, SegmentType.MUSIC
+                            )
                         _music_qg_rejections = 0
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping music quality check: %s", exc)
@@ -2883,6 +3244,9 @@ async def run_producer(
                                             ephemeral=False,
                                         )
                                     )
+                                    state.finish_render_timing(
+                                        "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                    )
                                     continue
                                 # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
@@ -2910,6 +3274,9 @@ async def run_producer(
                                             ephemeral=False,
                                         )
                                     )
+                                    state.finish_render_timing(
+                                        "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                    )
                                     continue
                                 # No recovery clip, no last-known-good.  Drop this track and let
                                 # the streamer's rescue path handle the gap — queueing a
@@ -2922,6 +3289,9 @@ async def run_producer(
                                 )
                                 if not norm_is_cached:
                                     norm_path.unlink(missing_ok=True)
+                                state.finish_render_timing(
+                                    "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                )
                                 continue
                             else:
                                 # Short/quiet track — likely a real file that just barely
@@ -2952,6 +3322,7 @@ async def run_producer(
                             )
                             if not norm_is_cached:
                                 norm_path.unlink(missing_ok=True)
+                            state.finish_render_timing("discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT)
                             continue
 
                 # Generate "Why this track?" rationale for listener UI
@@ -2969,7 +3340,8 @@ async def run_producer(
                     if bleed_src.exists():
                         bleed_out = config.tmp_dir / f"bleed_{uuid4().hex[:8]}.mp3"
                         try:
-                            await loop.run_in_executor(None, mix_quiet_bleed, norm_path, bleed_src, bleed_out)
+                            with _timed_render_stage(state, "mix"):
+                                await loop.run_in_executor(None, mix_quiet_bleed, norm_path, bleed_src, bleed_out)
                             if not norm_is_cached:
                                 norm_path.unlink(missing_ok=True)
                             norm_path = bleed_out
@@ -3034,6 +3406,7 @@ async def run_producer(
                         "stale-handoff",
                     )
                 state.last_banter_ritual_moment_id = ""
+                state.last_banter_home_fact = None
 
                 def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
                     ritual_id = state.last_banter_ritual_moment_id
@@ -3058,6 +3431,26 @@ async def run_producer(
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
+                home_context_director = state.home_context_director
+                # A pending reactive/first-moment directive carries its own home
+                # payload (and the FIRST CONNECTED HOME MOMENT directive asks the
+                # host to cite concrete home details), so it must keep the legacy
+                # ha_context/events/weather sections. Only director-owned casual
+                # breaks suppress them, and those are the only breaks that select a
+                # prompt_fact — so the flag and the selection share one condition.
+                use_directed_home_context = (
+                    chaos_subtype is None and home_context_director is not None and not state.ha_pending_directive
+                )
+                prompt_fact: PromptFact | None = None
+                # Only select when real banter will actually be generated: the
+                # canned/impossible no-LLM branch below never consumes a fact, and
+                # selecting there would advance rotation/counters for a cue that
+                # never airs.
+                if use_directed_home_context and home_context_director is not None and _sw.has_script_llm(config):
+                    try:
+                        prompt_fact = home_context_director.select(lane="casual")
+                    except Exception:
+                        logger.debug("Home context director selection failed", exc_info=True)
 
                 if chaos_subtype is None and not _sw.has_script_llm(config):
                     # No LLM — use canned clips + impossible TTS lines
@@ -3140,7 +3533,8 @@ async def run_producer(
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
-                            audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
+                            with _timed_render_stage(state, "tts"):
+                                audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
                             state.last_banter_script = [
                                 {
                                     "host": h.name,
@@ -3164,6 +3558,8 @@ async def run_producer(
                                     config,
                                     is_new_listener=_is_new_listener,
                                     is_first_listener=_is_first_listener,
+                                    prompt_fact=prompt_fact,
+                                    use_directed_home_context=use_directed_home_context,
                                 )
                                 (
                                     (trans_host, trans_text, trans_track_ref),
@@ -3200,40 +3596,47 @@ async def run_producer(
                                 _prosody=prosody,
                                 _music_src=_adjacent_music_source(state),
                             ):
-                                await synthesize(
-                                    _text,
-                                    _host.voice,
-                                    _path,
-                                    **_prosody,
-                                    engine=_host.engine,
-                                    edge_fallback_voice=_host.edge_fallback_voice,
-                                    state=state,
-                                )
+                                with _timed_render_stage(state, "tts"):
+                                    await synthesize(
+                                        _text,
+                                        _host.voice,
+                                        _path,
+                                        **_prosody,
+                                        engine=_host.engine,
+                                        edge_fallback_voice=_host.edge_fallback_voice,
+                                        state=state,
+                                    )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
-                                result = await _try_crossfade(_path, config, xfade_out, _music_src)
+                                with _timed_render_stage(state, "mix"):
+                                    result = await _try_crossfade(_path, config, xfade_out, _music_src)
                                 return result, result == xfade_out
+
+                            async def _do_dialogue(_lines=lines, _tmp_dir=config.tmp_dir) -> Path:
+                                with _timed_render_stage(state, "tts"):
+                                    return await synthesize_dialogue(_lines, _tmp_dir, state=state)
 
                             banter_path: Path
                             (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
                                 _do_transition(),
-                                synthesize_dialogue(lines, config.tmp_dir, state=state),
+                                _do_dialogue(),
                             )
 
                             # Concat: transition + banter (both pre-normalized)
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             loop = asyncio.get_running_loop()
                             try:
-                                await loop.run_in_executor(
-                                    None,
-                                    partial(
-                                        concat_files,
-                                        [trans_voice_path, banter_path],
-                                        audio_path,
-                                        200,
-                                        False,
-                                        strict_duration=True,
-                                    ),
-                                )
+                                with _timed_render_stage(state, "mix"):
+                                    await loop.run_in_executor(
+                                        None,
+                                        partial(
+                                            concat_files,
+                                            [trans_voice_path, banter_path],
+                                            audio_path,
+                                            200,
+                                            False,
+                                            strict_duration=True,
+                                        ),
+                                    )
                             except Exception:
                                 audio_path.unlink(missing_ok=True)
                                 raise
@@ -3281,6 +3684,7 @@ async def run_producer(
                                     )
                                 else:
                                     await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                                state.finish_render_timing("failed", reason="render_failure")
                                 continue
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
@@ -3291,22 +3695,24 @@ async def run_producer(
                             # None and the abandon above is a no-op. Restore any
                             # begun-but-unqueued beat by ledger status.
                             _release_campaign_abandon_in_flight(state)
+                            state.finish_render_timing("failed", reason="render_failure")
                             continue
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
                         expected_min_duration_sec = None if canned else banter_expected_min_duration_sec
                         expected_line_count = None if canned else banter_expected_line_count
-                        await loop.run_in_executor(
-                            None,
-                            partial(
-                                validate_segment_audio,
-                                audio_path,
-                                SegmentType.BANTER,
-                                expected_min_duration_sec=expected_min_duration_sec,
-                                expected_line_count=expected_line_count,
-                            ),
-                        )
+                        with _timed_render_stage(state, "quality"):
+                            await loop.run_in_executor(
+                                None,
+                                partial(
+                                    validate_segment_audio,
+                                    audio_path,
+                                    SegmentType.BANTER,
+                                    expected_min_duration_sec=expected_min_duration_sec,
+                                    expected_line_count=expected_line_count,
+                                ),
+                            )
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping banter quality check: %s", exc)
                     except AudioQualityError as exc:
@@ -3332,9 +3738,10 @@ async def run_producer(
                         fallback_canned = _pick_canned_clip("banter", state=state)
                         if fallback_canned:
                             try:
-                                await loop.run_in_executor(
-                                    None, validate_segment_audio, fallback_canned, SegmentType.BANTER
-                                )
+                                with _timed_render_stage(state, "quality"):
+                                    await loop.run_in_executor(
+                                        None, validate_segment_audio, fallback_canned, SegmentType.BANTER
+                                    )
                                 logger.info(
                                     "Using canned banter fallback after quality reject: %s", fallback_canned.name
                                 )
@@ -3381,6 +3788,9 @@ async def run_producer(
                                     else:
                                         await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
                                 _drop_unqueued_banter_receipts("generation_failed", "fallback-quality-reject")
+                                state.finish_render_timing(
+                                    "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                )
                                 continue
                         else:
                             _drop_unqueued_banter_receipts("generation_failed", "quality-reject")
@@ -3394,6 +3804,7 @@ async def run_producer(
                                     )
                                 else:
                                     await asyncio.sleep(CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS)
+                            state.finish_render_timing("discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT)
                             continue
 
                 if canned is None:
@@ -3418,9 +3829,10 @@ async def run_producer(
                             sfx_pick = random.choice(sfx_files)
                             humanity_out = config.tmp_dir / f"humanity_{uuid4().hex[:8]}.mp3"
                             try:
-                                await loop.run_in_executor(
-                                    None, mix_oneshot_sfx, audio_path, sfx_pick, humanity_out, 2.0, -18.0
-                                )
+                                with _timed_render_stage(state, "mix"):
+                                    await loop.run_in_executor(
+                                        None, mix_oneshot_sfx, audio_path, sfx_pick, humanity_out, 2.0, -18.0
+                                    )
                                 if canned is None:
                                     audio_path.unlink(missing_ok=True)
                                 audio_path = humanity_out
@@ -3442,6 +3854,8 @@ async def run_producer(
                 ritual_moment_id = state.last_banter_ritual_moment_id or ""
                 gag_moment_id = state.ha_running_gag_moment_id or ""
                 attach_moment_ids = canned is None and not impossible_tts
+                home_fact = state.last_banter_home_fact if attach_moment_ids else None
+                home_fact_metadata: dict[str, str | int] = home_fact.segment_metadata() if home_fact is not None else {}
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -3469,6 +3883,7 @@ async def run_producer(
                         # would mint a false aired receipt.
                         "ritual_moment_id": ritual_moment_id if attach_moment_ids and ritual_moment_id else None,
                         "gag_moment_id": gag_moment_id if attach_moment_ids and gag_moment_id else None,
+                        **home_fact_metadata,
                         **release_beat_metadata,
                         **memory_extraction_metadata,
                     },
@@ -3478,6 +3893,7 @@ async def run_producer(
                 # metadata (or intentionally not, for canned fallbacks — the
                 # elected row then simply never airs and ages out honestly).
                 state.last_banter_ritual_moment_id = ""
+                state.last_banter_home_fact = None
 
                 def _banter_callback(
                     *,
@@ -3576,21 +3992,25 @@ async def run_producer(
                     if category == "traffic":
                         flash_rate = "+10%"
 
-                    await synthesize(
-                        text,
-                        host.voice,
-                        flash_path,
-                        rate=flash_rate,
-                        engine=host.engine,
-                        edge_fallback_voice=host.edge_fallback_voice,
-                        state=state,
-                    )
+                    with _timed_render_stage(state, "tts"):
+                        await synthesize(
+                            text,
+                            host.voice,
+                            flash_path,
+                            rate=flash_rate,
+                            engine=host.engine,
+                            edge_fallback_voice=host.edge_fallback_voice,
+                            state=state,
+                        )
 
                     # Overlay on the tail of the last music segment — but only when a
                     # song aired immediately before this flash (else it bleeds stale).
                     flash_music = _adjacent_music_source(state)
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
-                    audio_path = await _try_crossfade(flash_path, config, crossfade_out, flash_music, tail_seconds=6.0)
+                    with _timed_render_stage(state, "mix"):
+                        audio_path = await _try_crossfade(
+                            flash_path, config, crossfade_out, flash_music, tail_seconds=6.0
+                        )
                     has_music_tail = audio_path == crossfade_out
                     if audio_path is flash_path:
                         # No adjacent song / crossfade failed — bundled or synthetic bed,
@@ -3605,6 +4025,7 @@ async def run_producer(
                     state.last_banter_script = [{"host": host.name, "text": text, "type": "news_flash"}]
                 except Exception as exc:
                     logger.warning("News flash TTS failed, skipping: %s", exc)
+                    state.finish_render_timing("failed", reason="render_failure")
                     continue
 
                 segment = Segment(
@@ -3653,24 +4074,48 @@ async def run_producer(
                         sweeper_fallback = sweeper_host.edge_fallback_voice
                     loop = asyncio.get_running_loop()
 
-                    voice_task = synthesize(
-                        ident_text,
-                        sweeper_voice,
-                        voice_path,
-                        engine=sweeper_engine,
-                        edge_fallback_voice=sweeper_fallback,
-                        state=state,
-                    )
-                    sting_task = loop.run_in_executor(None, generate_station_id_bed, sting_path, 3.0, sb.motif_notes)
-                    await asyncio.gather(voice_task, sting_task)
+                    async def _build_station_voice(
+                        _text=ident_text,
+                        _voice=sweeper_voice,
+                        _path=voice_path,
+                        _engine=sweeper_engine,
+                        _fallback=sweeper_fallback,
+                    ) -> None:
+                        with _timed_render_stage(state, "tts"):
+                            await synthesize(
+                                _text,
+                                _voice,
+                                _path,
+                                engine=_engine,
+                                edge_fallback_voice=_fallback,
+                                state=state,
+                            )
+
+                    async def _build_station_sting(
+                        _loop=loop,
+                        _path=sting_path,
+                        _notes=sb.motif_notes,
+                    ) -> None:
+                        with _timed_render_stage(state, "mix"):
+                            await _loop.run_in_executor(
+                                None,
+                                generate_station_id_bed,
+                                _path,
+                                3.0,
+                                _notes,
+                            )
+
+                    await asyncio.gather(_build_station_voice(), _build_station_sting())
 
                     # Mix voice over sting
                     audio_path = config.tmp_dir / f"stid_{uuid4().hex[:8]}.mp3"
-                    await loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path)
+                    with _timed_render_stage(state, "mix"):
+                        await loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path)
                     voice_path.unlink(missing_ok=True)
                     sting_path.unlink(missing_ok=True)
                 except Exception as exc:
                     logger.warning("Station ID generation failed: %s", exc)
+                    state.finish_render_timing("failed", reason="render_failure")
                     continue
 
                 segment = Segment(
@@ -3689,6 +4134,7 @@ async def run_producer(
                     audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
+                    state.finish_render_timing("failed", reason="render_failure")
                     continue
 
                 segment = Segment(
@@ -3716,24 +4162,37 @@ async def run_producer(
                     chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
                     host = random.choice(_sw._regular_hosts(config))
                     loop = asyncio.get_running_loop()
-                    # Voice + chime in parallel (independent)
-                    await asyncio.gather(
-                        synthesize(
-                            time_text,
-                            host.voice,
-                            voice_path,
-                            engine=host.engine,
-                            edge_fallback_voice=host.edge_fallback_voice,
-                            state=state,
-                        ),
-                        loop.run_in_executor(None, generate_tone, chime_path, 1047, 0.3),
-                    )
+
+                    # Voice + chime run in parallel, but retain their distinct
+                    # diagnostic ownership: provider voice vs local imaging.
+                    async def _build_time_voice(
+                        _text=time_text,
+                        _host=host,
+                        _path=voice_path,
+                    ) -> None:
+                        with _timed_render_stage(state, "tts"):
+                            await synthesize(
+                                _text,
+                                _host.voice,
+                                _path,
+                                engine=_host.engine,
+                                edge_fallback_voice=_host.edge_fallback_voice,
+                                state=state,
+                            )
+
+                    async def _build_time_chime(_loop=loop, _path=chime_path) -> None:
+                        with _timed_render_stage(state, "mix"):
+                            await _loop.run_in_executor(None, generate_tone, _path, 1047, 0.3)
+
+                    await asyncio.gather(_build_time_voice(), _build_time_chime())
                     audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
-                    await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
+                    with _timed_render_stage(state, "mix"):
+                        await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
                     chime_path.unlink(missing_ok=True)
                     voice_path.unlink(missing_ok=True)
                 except Exception as exc:
                     logger.warning("Time check generation failed: %s", exc)
+                    state.finish_render_timing("failed", reason="render_failure")
                     continue
 
                 segment = Segment(
@@ -3747,6 +4206,7 @@ async def run_producer(
                 if not config.ads.brands:
                     logger.warning("No brands configured — skipping ad, resetting ad pacing counter")
                     state.songs_since_ad = 0
+                    state.finish_render_timing("discarded", reason="no_ad_brands")
                     continue
 
                 num_spots = max(1, config.pacing.ad_spots_per_break)
@@ -3792,22 +4252,25 @@ async def run_producer(
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
-                        ihost, itext, itrack_ref = await _sw.write_transition(state, config, next_segment="ad")
+                        with _timed_render_stage(state, "script"):
+                            ihost, itext, itrack_ref = await _sw.write_transition(state, config, next_segment="ad")
                     except Exception:
                         ihost = random.choice(_sw._regular_hosts(config))
                         itext = random.choice(_sw.AD_BREAK_INTROS)
                         itrack_ref = None
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
-                    await synthesize(
-                        itext,
-                        ihost.voice,
-                        ipath,
-                        engine=ihost.engine,
-                        edge_fallback_voice=ihost.edge_fallback_voice,
-                        state=state,
-                    )
+                    with _timed_render_stage(state, "tts"):
+                        await synthesize(
+                            itext,
+                            ihost.voice,
+                            ipath,
+                            engine=ihost.engine,
+                            edge_fallback_voice=ihost.edge_fallback_voice,
+                            state=state,
+                        )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
-                    ipath = await _try_crossfade(ipath, config, xout, _music_src)
+                    with _timed_render_stage(state, "mix"):
+                        ipath = await _try_crossfade(ipath, config, xout, _music_src)
                     has_music_tail = ipath == xout
                     parts.append(ipath)
                     # Promo compliance tag
@@ -3822,16 +4285,17 @@ async def run_producer(
                             pvoice = ihost.voice
                             pengine = ihost.engine
                             pfallback = ihost.edge_fallback_voice
-                        await synthesize(
-                            "Messaggio promozionale.",
-                            pvoice,
-                            ppath,
-                            rate="+40%",
-                            pitch="-10Hz",
-                            engine=pengine,
-                            edge_fallback_voice=pfallback,
-                            state=state,
-                        )
+                        with _timed_render_stage(state, "tts"):
+                            await synthesize(
+                                "Messaggio promozionale.",
+                                pvoice,
+                                ppath,
+                                rate="+40%",
+                                pitch="-10Hz",
+                                engine=pengine,
+                                edge_fallback_voice=pfallback,
+                                state=state,
+                            )
                         parts.append(ppath)
                     except Exception:
                         pass
@@ -3852,7 +4316,8 @@ async def run_producer(
                     tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
                     for mb in mid_bumpers:
                         tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
-                    await asyncio.gather(*tasks)
+                    with _timed_render_stage(state, "mix"):
+                        await asyncio.gather(*tasks)
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
@@ -3869,7 +4334,12 @@ async def run_producer(
                 # object leaks its repr ("AdBrand(name='Gelato Infinito', ...)")
                 # into the admin In-Produzione feed (machine words on a human screen).
                 _ad_brand = spot_params[0][0].name if spot_params else ""
-                state.set_gen("writing", "ad", f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break")
+                state.set_gen(
+                    "writing",
+                    "ad",
+                    f"Writing the {_ad_brand} spot" if _ad_brand else "Writing an ad break",
+                    track_timing=False,
+                )
                 # Callback Director: offer one cross-domain verbal gag for the
                 # break, handed to the FIRST spot only (at most one callback per
                 # break). Best-effort; never raises into audio.
@@ -3881,15 +4351,13 @@ async def run_producer(
                     except Exception:
                         _cb_gag = None
                 _cb_gag_text = _cb_gag[1].text if _cb_gag else None
-                _gen_ok = False
-                try:
-                    (
-                        (intro_parts, intro_text, intro_has_music_tail, intro_track_ref),
-                        scripts,
-                        (bumper_in, mid_bumpers),
-                    ) = await asyncio.gather(
-                        _build_intro(),
-                        asyncio.gather(
+
+                async def _write_ad_scripts(
+                    _spot_params=tuple(spot_params),
+                    _callback_gag_text=_cb_gag_text,
+                ):
+                    with _timed_render_stage(state, "script"):
+                        return await asyncio.gather(
                             *(
                                 _sw.write_ad(
                                     brand,
@@ -3899,11 +4367,21 @@ async def run_producer(
                                     ad_format=af,
                                     sonic=sn,
                                     spot_index=i,
-                                    callback_gag=(_cb_gag_text if i == 0 else None),
+                                    callback_gag=(_callback_gag_text if i == 0 else None),
                                 )
-                                for i, (brand, af, sn, vm) in enumerate(spot_params)
+                                for i, (brand, af, sn, vm) in enumerate(_spot_params)
                             )
-                        ),
+                        )
+
+                _gen_ok = False
+                try:
+                    (
+                        (intro_parts, intro_text, intro_has_music_tail, intro_track_ref),
+                        scripts,
+                        (bumper_in, mid_bumpers),
+                    ) = await asyncio.gather(
+                        _build_intro(),
+                        _write_ad_scripts(),
                         _build_bumpers(),
                     )
                     _gen_ok = True
@@ -3912,12 +4390,20 @@ async def run_producer(
                     state.end_gen(ok=_gen_ok)
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
-                ad_paths = await asyncio.gather(
-                    *(
-                        synthesize_ad(script, vm, config.tmp_dir, sfx_dir, state=state, cache_dir=config.cache_dir)
-                        for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                with _timed_render_stage(state, "tts"):
+                    ad_paths = await asyncio.gather(
+                        *(
+                            synthesize_ad(
+                                script,
+                                vm,
+                                config.tmp_dir,
+                                sfx_dir,
+                                state=state,
+                                cache_dir=config.cache_dir,
+                            )
+                            for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                        )
                     )
-                )
 
                 # ── PHASE 3: Assemble break_parts in order ──
                 if intro_text:
@@ -3960,17 +4446,27 @@ async def run_producer(
                 outro_host = random.choice(_sw._regular_hosts(config))
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
                 outro_text = random.choice(_sw.AD_BREAK_OUTROS)
-                await asyncio.gather(
-                    loop.run_in_executor(None, generate_bumper_jingle, bumper_out),
-                    synthesize(
-                        outro_text,
-                        outro_host.voice,
-                        outro_path,
-                        engine=outro_host.engine,
-                        edge_fallback_voice=outro_host.edge_fallback_voice,
-                        state=state,
-                    ),
-                )
+
+                async def _build_closing_bumper(_loop=loop, _path=bumper_out) -> None:
+                    with _timed_render_stage(state, "mix"):
+                        await _loop.run_in_executor(None, generate_bumper_jingle, _path)
+
+                async def _build_outro_voice(
+                    _text=outro_text,
+                    _host=outro_host,
+                    _path=outro_path,
+                ) -> None:
+                    with _timed_render_stage(state, "tts"):
+                        await synthesize(
+                            _text,
+                            _host.voice,
+                            _path,
+                            engine=_host.engine,
+                            edge_fallback_voice=_host.edge_fallback_voice,
+                            state=state,
+                        )
+
+                await asyncio.gather(_build_closing_bumper(), _build_outro_voice())
                 break_parts.append(bumper_out)
                 break_parts.append(outro_path)
 
@@ -3980,21 +4476,23 @@ async def run_producer(
                 else:
                     ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
                     try:
-                        await loop.run_in_executor(
-                            None,
-                            concat_files,
-                            break_parts,
-                            ad_break_path,
-                            300,
-                            False,
-                        )
+                        with _timed_render_stage(state, "mix"):
+                            await loop.run_in_executor(
+                                None,
+                                concat_files,
+                                break_parts,
+                                ad_break_path,
+                                300,
+                                False,
+                            )
                     finally:
                         for p in break_parts:
                             p.unlink(missing_ok=True)
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
-                        await loop.run_in_executor(None, validate_segment_audio, ad_break_path, SegmentType.AD)
+                        with _timed_render_stage(state, "quality"):
+                            await loop.run_in_executor(None, validate_segment_audio, ad_break_path, SegmentType.AD)
                     except AudioToolError as exc:
                         logger.warning("Audio tool unavailable, skipping ad quality check: %s", exc)
                     except AudioQualityError as exc:
@@ -4011,6 +4509,7 @@ async def run_producer(
                         ad_break_path.unlink(missing_ok=True)
                         # Prevent scheduler lock on AD if we reject a full break.
                         state.songs_since_ad = 0
+                        state.finish_render_timing("discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT)
                         continue
 
                 # Dashboard display: show all brands in the break
@@ -4053,6 +4552,7 @@ async def run_producer(
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
+            state.finish_render_timing("failed", reason="render_failure")
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
             # unpacked), so restore any begun-but-unqueued beat by ledger status.
@@ -4087,30 +4587,31 @@ async def run_producer(
                     loop = asyncio.get_running_loop()
                     sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
                     imaging_lib = _make_imaging_lib(config)
-                    await loop.run_in_executor(
-                        None,
-                        imaging_lib.pick_stinger,
-                        prev_seg_type,
-                        actual_seg_type,
-                        sting_path,
-                    )
-                    merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
-                    pre_sting_path = segment.path
-                    pre_sting_ephemeral = segment.ephemeral
-                    try:
+                    with _timed_render_stage(state, "mix"):
                         await loop.run_in_executor(
                             None,
-                            concat_files,
-                            [sting_path, segment.path],
-                            merged_path,
-                            0,
-                            False,
+                            imaging_lib.pick_stinger,
+                            prev_seg_type,
+                            actual_seg_type,
+                            sting_path,
                         )
-                    except Exception:
-                        merged_path.unlink(missing_ok=True)
-                        raise
-                    finally:
-                        sting_path.unlink(missing_ok=True)
+                        merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
+                        pre_sting_path = segment.path
+                        pre_sting_ephemeral = segment.ephemeral
+                        try:
+                            await loop.run_in_executor(
+                                None,
+                                concat_files,
+                                [sting_path, segment.path],
+                                merged_path,
+                                0,
+                                False,
+                            )
+                        except Exception:
+                            merged_path.unlink(missing_ok=True)
+                            raise
+                        finally:
+                            sting_path.unlink(missing_ok=True)
                     if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
                         pre_sting_path.unlink(missing_ok=True)
                     segment = replace(segment, path=merged_path, ephemeral=True)
@@ -4128,6 +4629,7 @@ async def run_producer(
                 _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                state.finish_render_timing("discarded", reason=stale_reason)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
                 await _sleep_post_failure_backoff(post_failure_backoff)
@@ -4138,29 +4640,106 @@ async def run_producer(
                 _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_CHAOS, "chaos-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
+                state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
                 if is_operator_forced:
                     state.operator_force_pending = None  # render abandoned — let the operator retry
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
+            if generation_continuity_epoch != state.continuity_epoch:
+                logger.info("Discarding stale %s segment after a live continuity reservation", seg_type.value)
+                state.record_discard(segment, reason=GenerationWasteReason.STALE_CONTINUITY)
+                _drop_segment_moment_receipts(
+                    state, segment, GenerationWasteReason.STALE_CONTINUITY, "continuity-discard"
+                )
+                _abandon_release_beat_commit(state, banter_commit)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
+                state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CONTINUITY)
+                if is_operator_forced:
+                    state.operator_force_pending = None
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
+            if not _home_fact_policy_is_current(segment):
+                logger.info("Discarding stale banter after Home Context policy change")
+                state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-policy")
+                _abandon_release_beat_commit(state, banter_commit)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             # Stable per-segment id: the shared queue publication helper stamps
             # this on both the audio and its Scaletta row before admission.
             shadow_entry = _queue_shadow_entry(segment)
+            # Reserve the ambient home fact (if any) BEFORE admission. A rejected
+            # reservation means the topic is already queued ahead or resting on
+            # cooldown, so airing this segment would double the same cue on-air —
+            # drop it here instead of after it is already in the queue. This reads
+            # only segment metadata, so it is a safe no-op on non-home segments.
+            _seg_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+            _home_fact_id = str(_seg_metadata.get("home_fact_id") or "")
+            _home_fact_director = state.home_context_director
+            _home_fact_queue_id = str(_seg_metadata.get("queue_id") or "")
+            if (
+                _home_fact_id
+                and _home_fact_director is not None
+                and not _home_fact_director.reserve_by_id(_home_fact_queue_id, _home_fact_id)
+            ):
+                logger.info("Discarding banter: home fact reservation rejected (topic already queued or resting)")
+                state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                _drop_segment_moment_receipts(
+                    state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-reserve-rejected"
+                )
+                _abandon_release_beat_commit(state, banter_commit)
+                _unlink_if_tmp_render(segment, config.tmp_dir)
+                await _sleep_post_failure_backoff(post_failure_backoff)
+                continue
             if is_operator_forced:
                 # Air-next: front-insert past the buffered lookahead so the operator
                 # hears their pick at the next boundary, never minutes later.
+                def _front_insert_stale_check(_segment: Segment = segment) -> bool:
+                    # Stale if the continuity/source/playlist/chaos gate fires OR
+                    # the home-fact policy changed for this segment.
+                    if bool(_enqueue_stale_reason()):
+                        return True
+                    return not _home_fact_policy_is_current(_segment)
+
                 if not await _enqueue_with_egress(
-                    queue, state, config, segment, front_insert=True, shadow_entry=shadow_entry
+                    queue,
+                    state,
+                    config,
+                    segment,
+                    front_insert=True,
+                    shadow_entry=shadow_entry,
+                    stale_check=_front_insert_stale_check,
                 ):
+                    if _home_fact_id and _home_fact_director is not None:
+                        _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_release_beat_commit(state, banter_commit)
+                    state.operator_force_pending = None
+                    state.finish_render_timing(
+                        "discarded",
+                        reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)
+                        or GenerationWasteReason.AIR_NEXT_OVERFLOW,
+                    )
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
                 # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
                 prev_seg_type = _adjacency_type_for(segment)
             else:
-                if not await _queue_segment(segment, shadow_entry=shadow_entry):
+                if not await _queue_segment(
+                    segment,
+                    shadow_entry=shadow_entry,
+                    stale_check=_enqueue_stale_reason,
+                ):
+                    if _home_fact_id and _home_fact_director is not None:
+                        _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_release_beat_commit(state, banter_commit)
+                    state.finish_render_timing(
+                        "discarded",
+                        reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)
+                        or GenerationWasteReason.EGRESS_STALE,
+                    )
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
@@ -4219,7 +4798,8 @@ async def run_producer(
             logger.info(
                 "Queued %s in %.1fs (queue size: %d)",
                 segment.type.value,
-                time.perf_counter() - _t_render,
+                time.monotonic() - _t_render,
                 queue.qsize(),
             )
+            state.finish_render_timing("produced")
             await _sleep_post_failure_backoff(post_failure_backoff)
