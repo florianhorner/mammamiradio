@@ -1,0 +1,8 @@
+# listener bitrate — test proof
+# branch: florianhorner/chore/analyse-findings
+# command: pytest tests/web/test_streamer_routes.py -k 'renders_configured_stream_bitrate or serves_listener_page'
+
+tests/web/test_streamer_routes.py::test_listener_page_renders_configured_stream_bitrate[128] PASSED [ 33%]
+tests/web/test_streamer_routes.py::test_get_root_serves_listener_page PASSED [ 66%]
+tests/web/test_streamer_routes.py::test_listener_page_renders_configured_stream_bitrate[192] PASSED [100%]
+====================== 3 passed, 188 deselected in 0.77s =======================
