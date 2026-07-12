@@ -299,11 +299,20 @@ def test_stream_start_activates_thirty_minute_cooldown_and_release_cannot_cancel
     fact = director.select()
     assert fact is not None
     assert director.reserve("queue-1", fact) is True
+    # A legacy stream-start callback may omit its fact id while the reservation
+    # is live, but only an exact typed callback may acknowledge a later retry.
+    assert director.activate("queue-1") is True
+    activated = director.admin_status()
+    clock.now += 1
+    assert director.activate("queue-1") is False
     assert director.activate("queue-1", fact_id=fact.fact_id) is True
+    duplicate = director.admin_status()
+    assert duplicate["session_counters"] == activated["session_counters"]
+    assert duplicate["last_changed_at"] == activated["last_changed_at"]
     assert director.release("queue-1", fact_id=fact.fact_id) is False
     assert director.select() is None
 
-    clock.now += COOLDOWN_SECONDS - 1
+    clock.now += COOLDOWN_SECONDS - 2
     assert director.select() is None
     clock.now += 1
     later = director.select()
@@ -400,12 +409,13 @@ def test_policy_revision_rejects_mute_race_and_invalidation_reports_only_unstart
     assert director.reserve("queue-again", fact) is False
 
 
-def test_activate_rejected_on_stale_revision_still_clears_reservation(director):
-    """activate() runs once at stream start and its result is discarded by the
-    caller — an aired segment never reaches release(). So a stale-revision
-    rejection must still pop the reservation and topic lock, or the whole
-    ambient.temperature family leaks out of select() for the rest of the session
-    the moment an operator toggles any unrelated entity."""
+def test_stale_revision_activation_starts_cooldown_and_replays_rejection_result():
+    """An aired fact consumes its replay budget even when only another entity's
+    policy changed after reservation. The stale-policy result remains stable on
+    retries, while the listener-visible lifecycle is settled as activated."""
+    clock = Clock()
+    ids = fact_ids()
+    director = HomeContextDirector(clock=clock, id_factory=lambda: next(ids))
     director.observe([weather()], policy_revision=0)
     fact = director.select()
     assert fact is not None
@@ -417,9 +427,61 @@ def test_activate_rejected_on_stale_revision_still_clears_reservation(director):
     director.observe([weather()], policy_revision=1)
     assert director.activate("queue-1", fact_id=fact.fact_id) is False
 
-    # Rejected, but not leaked: reservation and topic lock are cleared, and
-    # because no cooldown started the topic is immediately selectable again.
-    assert director.admin_status()["reserved_count"] == 0
+    settled = director._settled_queue_ids["queue-1"]
+    assert settled.fact_id == fact.fact_id
+    assert settled.terminal_state == "activated"
+    assert settled.revision_current is False
+    assert director._issued_facts[fact.fact_id].state == "activated"
+    first_status = director.admin_status()
+    assert first_status["reserved_count"] == 0
+    assert first_status["cooling_count"] == 1
+    assert first_status["session_counters"]["activated"] == 1
+    assert first_status["session_counters"]["policy_rejected"] == 1
+    assert first_status["last_outcome"] == "activation_rejected"
+
+    clock.now += 1
+    assert director.activate("queue-1", fact_id=fact.fact_id) is False
+    duplicate_status = director.admin_status()
+    assert duplicate_status["session_counters"] == first_status["session_counters"]
+    assert duplicate_status["last_outcome"] == first_status["last_outcome"]
+    assert duplicate_status["last_changed_at"] == first_status["last_changed_at"]
+
+    clock.now += COOLDOWN_SECONDS - 2
+    assert director.select() is None
+    clock.now += 1
+    again = director.select()
+    assert again is not None
+    assert again.topic_key == "ambient.temperature"
+
+
+def test_mismatched_activation_settles_released_and_never_acknowledges_original_id(director):
+    director.observe([weather()], policy_revision=0)
+    fact = director.select()
+    assert fact is not None
+    assert director.reserve("queue-1", fact)
+
+    assert director.activate("queue-1", fact_id="wrong-fact") is False
+    settled = director._settled_queue_ids["queue-1"]
+    assert settled.fact_id == fact.fact_id
+    assert settled.terminal_state == "released"
+    assert settled.revision_current is False
+    assert director._issued_facts[fact.fact_id].state == "released"
+    first_status = director.admin_status()
+    assert first_status["reserved_count"] == 0
+    assert first_status["cooling_count"] == 0
+    assert first_status["session_counters"]["activated"] == 0
+    assert first_status["session_counters"]["released"] == 1
+    assert first_status["session_counters"]["policy_rejected"] == 0
+    assert first_status["last_outcome"] == "activation_rejected"
+
+    assert director.activate("queue-1", fact_id=fact.fact_id) is False
+    assert director.activate("queue-1", fact_id="wrong-fact") is False
+    assert director.activate("queue-1") is False
+    duplicate_status = director.admin_status()
+    assert duplicate_status["session_counters"] == first_status["session_counters"]
+    assert duplicate_status["last_outcome"] == first_status["last_outcome"]
+    assert duplicate_status["last_changed_at"] == first_status["last_changed_at"]
+
     again = director.select()
     assert again is not None
     assert again.topic_key == "ambient.temperature"
