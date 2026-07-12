@@ -219,7 +219,7 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
   - Text: cream (`#F5EDD8`)
   - Success/connected: blue (`#2563EB`) — never green (colorblind)
 - **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
-- **Favicon**: inline SVG data URI in `admin.html` and `listener.html` (simplified version of logo)
+- **Favicon**: `mammamiradio/web/static/favicon.svg` is the browser-tab copy of the canonical logo; `tests/web/test_route_smoke.py` keeps it byte-for-byte synchronized with `mammamiradio/assets/logo.svg`. The browser fallback route is `/favicon.ico`.
 - **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
 - To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256 && cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512`
 - **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns

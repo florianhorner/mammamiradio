@@ -2954,9 +2954,9 @@ async def og_card(request: Request):
 
 @router.get("/favicon.ico")
 async def favicon():
-    """Serve the browser default favicon path from the station icon."""
+    """Serve the canonical app logo at the browser's default favicon path."""
     return FileResponse(
-        _STATIC_DIR / "icon-192.svg",
+        _STATIC_DIR / "favicon.svg",
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=3600"},
     )
