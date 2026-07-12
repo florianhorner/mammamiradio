@@ -228,6 +228,15 @@ class _Reservation:
 
 
 @dataclass(frozen=True, slots=True)
+class _SettledQueue:
+    """Terminal queue lifecycle state used to make callbacks idempotent."""
+
+    fact_id: str
+    terminal_state: Literal["activated", "released"]
+    revision_current: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _Cooldown:
     activated_at: float
     source: str
@@ -259,7 +268,7 @@ class HomeContextDirector:
         self._reservations: dict[str, _Reservation] = {}
         self._reserved_topics: dict[str, str] = {}
         self._cooldowns: dict[str, _Cooldown] = {}
-        self._settled_queue_ids: OrderedDict[str, str] = OrderedDict()
+        self._settled_queue_ids: OrderedDict[str, _SettledQueue] = OrderedDict()
         self._rotation_topic: str | None = None
         self._counters = {
             "selected": 0,
@@ -424,7 +433,8 @@ class HomeContextDirector:
         existing = self._reservations.get(queue_id)
         if existing is not None:
             return existing.fact_id == fact.fact_id
-        if self._settled_queue_ids.get(queue_id) == fact.fact_id:
+        settled = self._settled_queue_ids.get(queue_id)
+        if settled is not None and settled.fact_id == fact.fact_id:
             return False
         issued = self._issued_facts.get(fact.fact_id)
         if issued is None or issued.fact != fact or issued.state != "selected" or not self.is_policy_current(fact):
@@ -479,16 +489,30 @@ class HomeContextDirector:
         # family for the rest of the session. Mirror release()'s pop-then-account.
         reservation = self._reservations.pop(queue_id, None)
         if reservation is None:
-            return bool(fact_id and self._settled_queue_ids.get(queue_id) == fact_id)
+            settled = self._settled_queue_ids.get(queue_id)
+            return bool(
+                fact_id
+                and settled is not None
+                and settled.fact_id == fact_id
+                and settled.terminal_state == "activated"
+                and settled.revision_current
+            )
         self._reserved_topics.pop(reservation.topic_key, None)
         if fact_id is not None and reservation.fact_id != fact_id:
-            self._record("activation_rejected")
-            return False
-        if reservation.policy_revision != self._policy_revision:
-            self._increment("policy_rejected")
+            issued = self._issued_facts.get(reservation.fact_id)
+            if issued is not None:
+                issued.state = "released"
+            self._remember_settled(
+                queue_id,
+                reservation.fact_id,
+                terminal_state="released",
+                revision_current=False,
+            )
+            self._increment("released")
             self._record("activation_rejected")
             return False
 
+        revision_current = reservation.policy_revision == self._policy_revision
         self._cooldowns[reservation.topic_key] = _Cooldown(
             activated_at=self._now(),
             source=reservation.candidate.source,
@@ -500,8 +524,17 @@ class HomeContextDirector:
         issued = self._issued_facts.get(reservation.fact_id)
         if issued is not None:
             issued.state = "activated"
-        self._remember_settled(queue_id, reservation.fact_id)
+        self._remember_settled(
+            queue_id,
+            reservation.fact_id,
+            terminal_state="activated",
+            revision_current=revision_current,
+        )
         self._increment("activated")
+        if not revision_current:
+            self._increment("policy_rejected")
+            self._record("activation_rejected")
+            return False
         self._record("activated")
         return True
 
@@ -523,7 +556,12 @@ class HomeContextDirector:
         issued = self._issued_facts.get(reservation.fact_id)
         if issued is not None:
             issued.state = "released"
-        self._remember_settled(queue_id, reservation.fact_id)
+        self._remember_settled(
+            queue_id,
+            reservation.fact_id,
+            terminal_state="released",
+            revision_current=False,
+        )
         self._increment("released")
         self._record("released")
         return True
@@ -602,8 +640,19 @@ class HomeContextDirector:
                 continue
             self._issued_facts.popitem(last=False)
 
-    def _remember_settled(self, queue_id: str, fact_id: str) -> None:
-        self._settled_queue_ids[queue_id] = fact_id
+    def _remember_settled(
+        self,
+        queue_id: str,
+        fact_id: str,
+        *,
+        terminal_state: Literal["activated", "released"],
+        revision_current: bool,
+    ) -> None:
+        self._settled_queue_ids[queue_id] = _SettledQueue(
+            fact_id=fact_id,
+            terminal_state=terminal_state,
+            revision_current=revision_current,
+        )
         self._settled_queue_ids.move_to_end(queue_id)
         while len(self._settled_queue_ids) > _MAX_SETTLED_QUEUE_IDS:
             self._settled_queue_ids.popitem(last=False)
