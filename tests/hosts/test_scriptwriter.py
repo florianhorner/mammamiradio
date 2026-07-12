@@ -428,6 +428,103 @@ async def test_write_banter_parses_valid_json(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handoff(config, state):
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact(
+        fact_id="opaque-fact-1",
+        entity_id="weather.home",
+        topic_key="ambient.temperature",
+        fingerprint="fingerprint",
+        prompt="Oggi il meteo è soleggiato, con 24 gradi.",
+        policy_revision=3,
+    )
+    state.ha_context = "- Private bedroom sensor: on"
+    response = {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "Fuori sembra proprio estate."},
+            {"host": config.hosts[1].name, "text": "E noi litighiamo anche col sole."},
+        ],
+        "new_joke": None,
+        "home_fact_id": "opaque-fact-1",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as generate:
+        result, _ = await write_banter(
+            state,
+            config,
+            prompt_fact=fact,
+            use_directed_home_context=True,
+        )
+
+    assert len(result) == 2
+    assert state.last_banter_home_fact == fact
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "Oggi il meteo è soleggiato" in prompt
+    assert "Private bedroom sensor" not in prompt
+    assert "opaque-fact-1" in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    invalid = {
+        "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata."}],
+        "new_joke": None,
+        "home_fact_id": "wrong",
+    }
+    repaired = {**invalid, "home_fact_id": "opaque-fact-1"}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[invalid, repaired],
+    ) as generate:
+        await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert generate.await_count == 2
+    assert "REPAIR: The previous reply violated HOME FACT CONTRACT" in generate.await_args_list[1].kwargs["prompt"]
+    assert state.last_banter_home_fact == fact
+
+
+@pytest.mark.asyncio
+async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(config, state):
+    """A model that refuses the id contract twice must NOT sink good banter to
+    stock copy — the banter airs, just without an attached (tracked) home fact."""
+    from mammamiradio.home.context_director import HomeContextDirector, PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    state.home_context_director = HomeContextDirector()
+    invalid = {
+        "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata di sole."}],
+        "new_joke": None,
+        "home_fact_id": "wrong",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[invalid, invalid],  # the model refuses the id on both attempts
+    ) as generate:
+        result, _ = await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert generate.await_count == 2
+    # Good banter survived (not the stock fallback), but no fact is attached.
+    assert len(result) == 1
+    assert "bella giornata" in result[0][1]
+    assert state.last_banter_home_fact is None
+    counters = state.home_context_director.admin_status()["session_counters"]
+    assert counters["fact_free_fallback"] == 1
+    assert counters["repaired"] == 0
+
+
+@pytest.mark.asyncio
 async def test_write_banter_skips_thinking_blocks(config, state):
     """Thinking-capable models (Fable 5) prepend thinking blocks to resp.content.
 

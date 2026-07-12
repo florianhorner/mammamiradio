@@ -865,6 +865,47 @@ async def test_packaged_recovery_segment_probe_not_blocked_by_norm_slots(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp_path):
+    """The out-of-band row disappears at the same moment playback claims its audio."""
+    from mammamiradio.web.streamer import _continuity_slot_status
+
+    app = _make_test_app()
+    app.state.stream_hub.subscribe()
+    slot_path = tmp_path / "protected_slot.mp3"
+    slot_path.write_bytes(b"protected-audio" * 1024)
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={
+            "title": "Protected continuity",
+            "continuity_reservation": True,
+            "continuity_reservation_id": "playback-slot",
+        },
+        ephemeral=False,
+    )
+    state = app.state.station_state
+    state.continuity_slot = slot
+    started = asyncio.Event()
+    original_on_stream_segment = state.on_stream_segment
+
+    def _on_stream_segment(segment):
+        original_on_stream_segment(segment)
+        started.set()
+
+    state.on_stream_segment = _on_stream_segment
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert state.now_streaming["metadata"]["continuity_reservation_id"] == "playback-slot"
+        assert state.continuity_slot is None
+        assert _continuity_slot_status(state) is None
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
     """A packaged clip's duration is probed once (as rescue) then reused, so
     rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
@@ -1093,7 +1134,10 @@ async def test_run_playback_loop_stop_during_queue_wait_skips_fallback(tmp_path)
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 1.0
+            # Exits the instant the loop reaches its queue wait, so a generous
+            # ceiling costs nothing on a healthy run and avoids a wall-clock
+            # flake under coverage instrumentation in CI.
+            deadline = time.monotonic() + 5.0
             while calls == 0:
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not enter queue wait")
@@ -1936,6 +1980,32 @@ async def test_skip_route_persists_music_skips_with_youtube_id():
 
 
 @pytest.mark.asyncio
+async def test_skip_route_succeeds_when_skip_history_persistence_fails():
+    """Once the cut is committed, history persistence is best-effort."""
+    app = _make_test_app()
+    persona_store = MagicMock()
+    persona_store._session_id = "session-persistence-failure"
+    persona_store.record_play = AsyncMock(side_effect=OSError("skip history unavailable"))
+    app.state.station_state.persona_store = persona_store
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Skipped Song",
+        "started": time.time() - 8,
+        "metadata": {"youtube_id": "yt_skip_failure"},
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/skip")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert app.state.skip_event.is_set()
+    assert app.state.station_state.now_streaming["type"] == "skipping"
+    persona_store.record_play.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_skip_bit_sets_pending_directive():
     """When detect_skip_bit returns True, ha_pending_directive is set for reactive banter."""
     app = _make_test_app()
@@ -1984,6 +2054,50 @@ async def test_get_root_serves_listener_page():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bitrate_kbps", [192, 128])
+async def test_listener_page_renders_configured_stream_bitrate(bitrate_kbps: int):
+    """Every visible listener bitrate must match the canonical audio config."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = bitrate_kbps
+    # Pin the frequency so the three frequency-gated ticker repetitions render
+    # even if the default radio.toml brand is later changed.
+    app.state.config.brand.frequency = "98.7 FM"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    # Assert each site class independently so a change to the ticker repetition
+    # count can't silently mask the about-card losing its bitrate (a bare
+    # total-count check passes if one site is dropped and another duplicated).
+    # About-card: always visible, not frequency-gated.
+    assert resp.text.count(f"Stream MP3</span> · {bitrate_kbps} kbps") == 1
+    # Ticker: three frequency-prefixed repetitions.
+    assert resp.text.count(f"98.7 FM · {bitrate_kbps} kbps") == 3
+    # Total visible bitrate labels, and never the stale hardcoded value.
+    assert resp.text.count(f"· {bitrate_kbps} kbps") == 4
+    assert "320 kbps" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_listener_page_about_card_bitrate_survives_blank_frequency():
+    """No frequency configured hides the ticker, but the always-visible about-card
+    must still show the honest configured bitrate (the one ungated site)."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 128
+    app.state.config.brand.frequency = ""
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    # Ticker sites are frequency-gated and gone; only the about-card remains.
+    assert resp.text.count("· 128 kbps") == 1
+    assert resp.text.count("Stream MP3</span> · 128 kbps") == 1
+    assert "320 kbps" not in resp.text
+
+
+@pytest.mark.asyncio
 async def test_get_root_renders_italian_when_super_italian_on():
     """Super Italian Mode ON: CTA + form button render in Italian."""
     app = _make_test_app()
@@ -2010,7 +2124,11 @@ async def test_get_root_bakes_stopped_state_into_first_paint():
     assert resp.status_code == 200
     assert 'data-stopped="true"' in resp.text
     assert "is-stopped" in resp.text
-    assert re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Resume station")', resp.text)
+    for control_id in ("nav-cta", "np-play", "hero-play"):
+        assert re.search(
+            rf'<button\b(?=[^>]*\bid="{control_id}")(?=[^>]*\baria-label="Station paused")(?=[^>]*\bdisabled\b)',
+            resp.text,
+        ), f"{control_id} must paint as a disabled paused-status control."
     assert not re.search(r'<button\b(?=[^>]*\bid="nav-cta")(?=[^>]*\baria-label="Listen now")', resp.text)
     assert "In Onda" not in resp.text  # live label must not flash on a stopped station
 
@@ -2181,6 +2299,27 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
+async def test_setup_recovery_endpoints_remain_available_while_session_stopped():
+    """Paused transport must not lock operators out of setup and diagnostics."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._persist_and_apply_credentials", new=AsyncMock()) as persist:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            recheck = await client.post("/api/setup/recheck")
+            preview = await client.get("/api/homeassistant/context-candidates")
+            save_keys = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-test"})
+
+    assert recheck.status_code == 200
+    assert preview.status_code == 200
+    assert save_keys.status_code == 200
+    assert save_keys.json()["ok"] is True
+    persist.assert_awaited_once()
+    assert app.state.station_state.session_stopped is True
+
+
+@pytest.mark.asyncio
 async def test_setup_recheck_bypasses_golden_path_ttl_cache(monkeypatch):
     from mammamiradio.web import status_payload as status_payload_mod
 
@@ -2306,6 +2445,51 @@ async def test_trigger_rejects_second_while_one_pending():
     assert "tap again" in body["error"].lower()  # a way out, not a dead end
     # The operator's first pick is preserved, not overwritten by the rejected tap.
     assert app.state.station_state.operator_force_pending == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_trigger_rejects_operator_pick_while_session_stopped():
+    """A visually disabled Air Next control must also be rejected server-side."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "banter"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_skip_rejects_while_session_stopped_without_mutating_playback():
+    """The routine Next-track control cannot change a stopped session's transport."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": 123.0,
+        "metadata": {},
+    }
+    before = dict(state.now_streaming)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/skip")
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert state.now_streaming == before
+    assert state.force_next is None
+    assert not app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -2719,8 +2903,9 @@ async def test_panic_cut_while_streaming():
     assert state.force_next == SegmentType.MUSIC
     # session_stopped must NOT be set — stream stays live
     assert state.session_stopped is False
-    # shadow queue must be cleared
-    assert len(state.queued_segments) == 0
+    # Stale rows are replaced by an audible protected reservation.
+    assert len(state.queued_segments) == app.state.queue.qsize() == 1
+    assert state.queued_segments[0]["reason"] == "Protected continuity audio."
 
 
 @pytest.mark.asyncio
@@ -2752,6 +2937,65 @@ async def test_panic_does_not_set_session_stopped():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         await client.post("/api/panic")
     assert state.session_stopped is False
+
+
+@pytest.mark.asyncio
+async def test_panic_rejects_while_stopped_without_mutating_transport_or_queue(tmp_path):
+    """Panic Cut is a live transport action, so a stopped station rejects it unchanged."""
+    app = _make_test_app()
+    state = app.state.station_state
+    queued = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "queued.mp3",
+        metadata={"title": "Queued"},
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"type": "music", "label": "Queued", "metadata": {}}]
+    state.session_stopped = True
+    state.now_streaming = {
+        "type": "stopped",
+        "label": "Session stopped",
+        "started": 123.0,
+        "metadata": {},
+    }
+    state.force_next = SegmentType.BANTER
+    before_now = dict(state.now_streaming)
+    before_shadow = list(state.queued_segments)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/panic")
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+    assert "press start" in body["error"].lower()
+    assert list(app.state.queue._queue) == [queued]
+    assert state.queued_segments == before_shadow
+    assert state.now_streaming == before_now
+    assert state.force_next is SegmentType.BANTER
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_remains_available_after_session_stop():
+    """The emergency interrupt is intentional recovery, not a routine stopped transport control."""
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch(
+        "mammamiradio.scheduling.producer._fire_interrupt",
+        new=AsyncMock(return_value=True),
+    ) as fire_interrupt:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/interrupt",
+                json={"directive": "Return to air with a short recovery message.", "urgency": "urgent"},
+            )
+
+    assert response.json()["ok"] is True
+    fire_interrupt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2886,6 +3130,74 @@ async def test_admin_panel_loopback_no_password_returns_html():
         resp = await client.get("/admin")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
+
+
+async def _admin_first_paint_responses(*, stopped: bool) -> tuple[httpx.Response, httpx.Response]:
+    app = _make_test_app(is_addon=True)
+    app.state.station_state.session_stopped = stopped
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        direct = await client.get("/admin")
+        ingress = await client.get(
+            "/",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/test-token"},
+        )
+    return direct, ingress
+
+
+@pytest.mark.asyncio
+async def test_admin_first_paint_seeds_stopped_state_for_direct_and_ingress_routes():
+    """A stopped admin page must not flash enabled producer controls before polling."""
+    direct, ingress = await _admin_first_paint_responses(stopped=True)
+
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        assert re.search(r'</head>\s*<body data-stopped="true">', response.text)
+
+
+@pytest.mark.asyncio
+async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_routes():
+    """A running admin page explicitly paints enabled producer controls."""
+    direct, ingress = await _admin_first_paint_responses(stopped=False)
+
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        assert re.search(r'</head>\s*<body data-stopped="false">', response.text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_admin_first_paint_injects_state_when_body_has_attributes(monkeypatch, stopped):
+    """The stopped marker must survive harmless body-tag layout changes."""
+    import mammamiradio.web.streamer as streamer
+    from mammamiradio.web import pages
+
+    altered_html = streamer._ADMIN_HTML.replace(
+        "</head>\n<body>",
+        '</head>\n<body class="admin-shell">',
+        1,
+    )
+    assert altered_html != streamer._ADMIN_HTML
+    monkeypatch.setattr(streamer, "_ADMIN_HTML", altered_html)
+    monkeypatch.setattr(pages, "_injected_html_cache", {})
+
+    app = _make_test_app(is_addon=True)
+    app.state.station_state.session_stopped = stopped
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        direct = await client.get("/admin")
+        ingress = await client.get(
+            "/",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/test-token"},
+        )
+
+    expected = "true" if stopped else "false"
+    for response in (direct, ingress):
+        assert response.status_code == 200
+        body_tag = re.search(r"</head>\s*(<body\b[^>]*>)", response.text)
+        assert body_tag is not None
+        assert 'class="admin-shell"' in body_tag.group(1)
+        assert f'data-stopped="{expected}"' in body_tag.group(1)
 
 
 @pytest.mark.asyncio
@@ -3544,6 +3856,54 @@ async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_
     assert resp.status_code == 200
     assert app.state.queue.qsize() == 1
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Already rendered"}]
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued_presence_banter(tmp_path):
+    """Revoking a presence opt-in must pull an unstarted queued break for that
+    entity, the same privacy contract as a mute — the airing segment is untouched."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.ha_scored_entities = [
+        {
+            "entity_id": "binary_sensor.living_presence",
+            "label": "Living presence",
+            "area": "Living room",
+            "domain": "binary_sensor",
+            "device_class": "occupancy",
+            "state": "on",
+            "summary": "presence",
+        }
+    ]
+    # A queued (not yet airing) presence break tied to that entity.
+    queued = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/presence-break.mp3"),
+        metadata={"queue_id": "q-presence-1", "home_fact_entity_id": "binary_sensor.living_presence"},
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"type": "banter", "label": "Presence break", "id": "q-presence-1"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        opt_in = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": True},
+        )
+        opt_out = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": False},
+        )
+
+    assert opt_in.status_code == 200
+    assert opt_in.json()["personal_moment_enabled"] is True
+    assert opt_out.status_code == 200
+    assert opt_out.json()["personal_moment_enabled"] is False
+    assert opt_out.json()["purged_pending_banter_count"] == 1
+    # The queued presence break was pulled, and its shadow row with it.
+    assert app.state.queue.qsize() == 0
+    assert state.queued_segments == []
 
 
 @pytest.mark.asyncio
@@ -4302,3 +4662,139 @@ async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
     assert resp.status_code == 200
     # The stale old-key 401 must NOT clobber the fresh "valid" verdict.
     assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_fact(tmp_path):
+    from mammamiradio.home.context_director import HomeContextDirector
+    from mammamiradio.home.ha_context import HomeContext, ScoredEntity
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    presence = ScoredEntity(
+        entity_id="binary_sensor.office_presence",
+        area="Office",
+        domain="binary_sensor",
+        score=0.9,
+        raw_state={"state": "on", "attributes": {"device_class": "presence"}},
+        label_it="Office presence",
+        label_en="Office presence",
+        summary_line="Office: active",
+    )
+    context = HomeContext(scored=[presence], timestamp=time.time())
+    state = app.state.station_state
+    state.home_context_director = HomeContextDirector()
+    state.home_context_director.observe([], policy_revision=0)
+    queued = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/context-fact.mp3"),
+        metadata={
+            "queue_id": "fact-queue",
+            "home_fact_entity_id": "binary_sensor.office_presence",
+            "home_fact_id": "opaque",
+        },
+    )
+    app.state.queue.put_nowait(queued)
+    state.queued_segments = [{"id": "fact-queue", "type": "banter", "label": "Host break"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.home.ha_context._ha_cache", context):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            enabled = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "binary_sensor.office_presence", "personal_moment_enabled": True},
+            )
+            muted = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "binary_sensor.office_presence", "muted": True},
+            )
+
+    assert enabled.status_code == 200
+    assert enabled.json()["personal_moment_effective"] is True
+    assert muted.status_code == 200
+    assert muted.json()["personal_moment_enabled"] is False
+    assert muted.json()["purged_pending_banter_count"] == 1
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+
+
+@pytest.mark.asyncio
+async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_path):
+    """A fact reserved at admission but not yet physically enqueued (mid-egress
+    render) is released when its entity is muted. The physical-queue purge cannot
+    see it, so the endpoint must honor invalidate_entity's returned pending ids."""
+    from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    director = HomeContextDirector()
+    director.observe(
+        [
+            DirectorObservation(
+                entity_id="weather.forecast_home", domain="weather", state="sunny", score=9.0, temperature_c=24.0
+            )
+        ],
+        policy_revision=0,
+    )
+    fact = director.select()
+    assert fact is not None
+    # Reserved, but deliberately NOT put in app.state.queue — it is still rendering.
+    assert director.reserve("inflight-queue", fact)
+    state = app.state.station_state
+    state.home_context_director = director
+    assert director.admin_status()["reserved_count"] == 1
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        muted = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "weather.forecast_home", "muted": True},
+        )
+
+    assert muted.status_code == 200
+    # Released via invalidate_entity's return value, not the physical-queue purge.
+    assert director.admin_status()["reserved_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_personal_moment_enable_rejects_non_presence_entity(tmp_path):
+    """Enabling a personal moment on an entity that is not a live room-presence
+    sensor is refused with 422 and never persisted (fail-closed consent)."""
+    from mammamiradio.home.entity_policy import personal_moment_opt_in_entity_ids
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.home.ha_context._ha_cache", None):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": "switch.kitchen_light", "personal_moment_enabled": True},
+            )
+
+    assert resp.status_code == 422
+    assert "personal moment" in resp.json()["detail"]
+    assert personal_moment_opt_in_entity_ids(tmp_path) == set()
+
+
+@pytest.mark.asyncio
+async def test_entity_policy_requires_exactly_one_action(tmp_path):
+    """The PATCH contract accepts exactly one of muted / personal_moment_enabled;
+    both-present or neither-present is a 422."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        both = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.kitchen_light", "muted": True, "personal_moment_enabled": True},
+        )
+        neither = await client.patch(
+            "/api/homeassistant/entity-policy",
+            json={"entity_id": "switch.kitchen_light"},
+        )
+
+    assert both.status_code == 422
+    assert neither.status_code == 422

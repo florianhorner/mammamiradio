@@ -28,6 +28,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |
 | Generate TTS audition clips and manifest           | `scripts/audition_tts_voices.py`            |
 | Home Assistant polling / state formatting          | `mammamiradio/home/ha_context.py`            |
+| Home Context Director selection / lifecycle        | `mammamiradio/home/context_director.py`      |
 | HA event derivation (diffs, pruning)               | `mammamiradio/home/ha_enrichment.py`         |
 | Segment scheduling (banter / ad / music)           | `mammamiradio/scheduling/scheduler.py`       |
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |

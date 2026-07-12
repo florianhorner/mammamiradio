@@ -20,7 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from itertools import cycle
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import anthropic
 
@@ -69,6 +69,9 @@ from mammamiradio.hosts.prompt_world import (
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import _massage_transition_text, _transition_stem
 from mammamiradio.playlist.playlist import write_persisted_heading
+
+if TYPE_CHECKING:
+    from mammamiradio.home.context_director import PromptFact
 
 logger = logging.getLogger(__name__)
 
@@ -1916,6 +1919,8 @@ async def write_banter(
     is_new_listener: bool = False,
     is_first_listener: bool = False,
     chaos_subtype: ChaosSubtype | None = None,
+    prompt_fact: PromptFact | None = None,
+    use_directed_home_context: bool = False,
 ) -> tuple[list[tuple[HostPersonality, str]], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -1974,13 +1979,15 @@ async def write_banter(
     # content within state values cannot override the boundary instruction.
     ha_block = ""
     home_state_sections = []
-    if state.ha_context:
+    if prompt_fact is not None:
+        home_state_sections.append("AMBIENT CUE:\n" + _sanitize_prompt_data(prompt_fact.prompt, max_len=280))
+    elif state.ha_context and not use_directed_home_context:
         home_state_sections.append(state.ha_context)
-    if state.ha_events_summary:
+    if state.ha_events_summary and not use_directed_home_context:
         home_state_sections.append("EVENTI RECENTI:\n" + state.ha_events_summary)
     if state.ha_ritual_context:
         home_state_sections.append("RITUALI DI CASA:\n" + _sanitize_prompt_data(state.ha_ritual_context, max_len=160))
-    if state.ha_weather_arc:
+    if state.ha_weather_arc and not use_directed_home_context:
         home_state_sections.append("WEATHER ARC: " + state.ha_weather_arc)
 
     # Impossible Moments v2 (A): the evening running-gag. DATA goes INSIDE the
@@ -2027,7 +2034,7 @@ async def write_banter(
 
     # Weather-mood fusion: when both are set, allow natural connection
     weather_mood_fusion = ""
-    if state.ha_home_mood and state.ha_weather_arc:
+    if state.ha_home_mood and state.ha_weather_arc and not use_directed_home_context:
         weather_mood_fusion = (
             "Weather and home mood are aligned — you may connect outdoor conditions "
             "to indoor activity naturally. This counts toward the 2-item cap.\n"
@@ -2303,6 +2310,15 @@ GUEST HOST GATE:
         or new_listener_block
     )
     exchange_count = _banter_exchange_count(warranted=warranted_long)
+    home_fact_schema = (
+        f', "home_fact_id": "{prompt_fact.fact_id}"' if prompt_fact is not None else ', "home_fact_id": null'
+    )
+    home_fact_instruction = (
+        "\nHOME FACT CONTRACT: Use the supplied AMBIENT CUE at most once, never invent another home "
+        f"detail, and return home_fact_id exactly as {prompt_fact.fact_id!r}.\n"
+        if prompt_fact is not None
+        else "\nHOME FACT CONTRACT: Return home_fact_id as null.\n"
+    )
 
     prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
@@ -2312,9 +2328,9 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}{home_fact_instruction}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}}}"""
 
     try:
         data = await _generate_json_response_with_language_guard(
@@ -2325,6 +2341,52 @@ Return JSON:
             max_tokens=_BANTER_MAX_TOKENS,
             caller="banter",
         )
+        expected_home_fact_id = prompt_fact.fact_id if prompt_fact is not None else None
+        returned_home_fact_id = data.get("home_fact_id")
+        valid_home_fact_contract = (
+            str(returned_home_fact_id) == expected_home_fact_id
+            if expected_home_fact_id is not None
+            else returned_home_fact_id in (None, "")
+        )
+        if not valid_home_fact_contract:
+            # Preserve the current attempt's exact prompt and selection. A
+            # recursive write_banter() call would consume one-shot directives,
+            # persona state, or gag offers twice.
+            repair_prompt = (
+                prompt
+                + "\nREPAIR: The previous reply violated HOME FACT CONTRACT. Return the same JSON shape "
+                + f"with home_fact_id {json.dumps(expected_home_fact_id)} and no more than one home reference."
+            )
+            data = await _generate_json_response_with_language_guard(
+                prompt=repair_prompt,
+                config=config,
+                state=state,
+                model=resolve_model(config.models, "banter", "anthropic"),
+                max_tokens=_BANTER_MAX_TOKENS,
+                caller="banter",
+            )
+            returned_home_fact_id = data.get("home_fact_id")
+            valid_home_fact_contract = (
+                str(returned_home_fact_id) == expected_home_fact_id
+                if expected_home_fact_id is not None
+                else returned_home_fact_id in (None, "")
+            )
+            if not valid_home_fact_contract:
+                # The model twice refused the id contract. Rather than discard
+                # otherwise-good banter to stock copy, keep it and detach the
+                # home fact: the ambient cue was grounded, we simply don't claim
+                # or cool down the topic, so the producer attaches no home_fact
+                # metadata. A supplied fact becomes a fact-free fallback; a
+                # spurious id under the null contract is ignored.
+                if prompt_fact is not None:
+                    director = getattr(state, "home_context_director", None)
+                    if director is not None:
+                        director.note_fact_free_fallback()
+                    prompt_fact = None
+            else:
+                director = getattr(state, "home_context_director", None)
+                if director is not None:
+                    director.note_repaired()
 
         result = []
         raw_lines = data.get("lines")
@@ -2411,6 +2473,9 @@ Return JSON:
 
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
+        # Producer consumes this one-shot handoff only after a successful render;
+        # the director is reserved at queue admission, never at prompt selection.
+        state.last_banter_home_fact = prompt_fact
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
@@ -2467,6 +2532,11 @@ Return JSON:
         )
 
     except Exception as e:
+        state.last_banter_home_fact = None
+        if prompt_fact is not None:
+            director = getattr(state, "home_context_director", None)
+            if director is not None:
+                director.note_fact_free_fallback()
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
         if release_beat_commit is not None:
             release_beat_commit.abandon(state)

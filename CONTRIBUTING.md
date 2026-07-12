@@ -8,9 +8,11 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e . && cp .env.example .env
+python -m pip install -e . -r requirements-dev.txt
+cp .env.example .env
 ./start.sh                # or: docker compose up
-pytest tests/             # before any commit
+pytest tests/core/test_config.py -q  # fast loop while editing
+make check                         # complete gate before committing
 ```
 
 Full prerequisites, run modes, tests, lint, and commit-message rules below.
@@ -21,16 +23,18 @@ Full prerequisites, run modes, tests, lint, and commit-message rules below.
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-Music source fallback chain: when `MAMMAMIRADIO_ALLOW_YTDLP=true` the app blends live Italian charts with anything in `music/`; with yt-dlp disabled it plays local `music/` only; if neither is available it falls through to silence. No external service credentials are required to run the station.
+No AI key is required to run the station: host writing falls back to stock copy and fallback voices. Music is separate. With `MAMMAMIRADIO_ALLOW_YTDLP=true`, the app can use live charts when the network permits; Jamendo is the other network source. In a source checkout, you can also put MP3s in the repo-local `music/` directory. That development path is not mounted by the stock Docker Compose or Home Assistant packages. The bundled recovery clip can cover a thin queue, but it is not a music rotation.
 
 ## Local setup
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install -e . -r requirements-dev.txt
 cp .env.example .env
 ```
+
+That one install command includes the application plus the repo's pinned developer tools: pytest, Ruff, mypy, coverage, and the test watcher.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
@@ -96,19 +100,22 @@ Useful URLs:
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON
 
-## Tests
+## Fast loop and complete gate
 
-Fast tests:
+During an edit, run the smallest relevant test file or test target. For a broader fast pass without coverage instrumentation, use `make test-fast`:
 
 ```bash
 pytest tests/core/test_config.py tests/scheduling/test_scheduler.py
+make test-fast
 ```
 
-Full suite:
+Before committing, run the complete local gate:
 
 ```bash
-pytest tests/
+make check
 ```
+
+`make check` is the pre-commit source of truth: lint, format check, type checking, dead-code scan, the full pytest suite, coverage, and per-module coverage floors. A focused test is the fast feedback loop, not a substitute for this gate.
 
 Notes:
 
@@ -120,6 +127,15 @@ scripts/validate-addon.sh
 ```
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
+
+For Home Context Director changes, first run the credential-free contract path:
+
+```bash
+pytest tests/home/test_context_director.py tests/home/test_entity_policy.py tests/core/test_home_context_director_lifecycle.py tests/web/test_context_director_public_metadata.py \
+  tests/web/test_streamer_routes.py -k "personal_moment or home_fact or entity_policy"
+```
+
+It covers safe selection, policy migration, queue settlement, public metadata exclusion, and the `PATCH /api/homeassistant/entity-policy` contract (consent gate, queue purge, in-flight reservation release) without a live Home Assistant or provider key.
 
 ## Lint, format, and type check
 
@@ -165,6 +181,8 @@ When behavior changes, update the matching docs in the same change:
 - `CHANGELOG.md` for shipped behavior worth calling out
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
+
+When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
 
 

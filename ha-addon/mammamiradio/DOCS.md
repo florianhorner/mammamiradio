@@ -4,10 +4,12 @@ Operational guide for the Home Assistant add-on. Covers architecture, failure mo
 
 ## First run in 4 steps
 
+This app requires **Home Assistant OS**. Home Assistant Container does not include Apps; if **Settings → Apps** is missing, use the [Docker alternative](../../README.md#docker-alternative) instead.
+
 ### 1. Add the repository
 
-In HA: Settings → Add-ons → Add-on Store → overflow menu → Repositories.
-Add: `https://github.com/florianhorner/mammamiradio`
+In Home Assistant: **Settings → Apps → App store → ⋮ → Repositories**.
+Paste `https://github.com/florianhorner/mammamiradio`, select **Add**, open **Mamma Mi Radio** in the store, and select **Install**.
 
 ### 2. Start the add-on
 
@@ -15,9 +17,8 @@ Click Start. Watch the log for:
 - `[mammamiradio] Starting add-on...`
 - `[mammamiradio] Home Assistant API access configured via Supervisor`
 - `Producer started`
-- `Station ready`
 
-First boot can take 30-90 seconds while chart tracks are downloaded and cached. Once the station is ready, the listener stream should produce audio quickly. No AI key is required for this first proof: Demo Radio plays with stock host copy and fallback voices.
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. Music is a separate requirement — live charts need outbound access, or configure a Jamendo client ID in the app's advanced options. A successful start shows `Producer started` in the log and returns `"ready": true` from `/readyz`.
 
 ### 3. Open the Web UI and listen
 
@@ -27,11 +28,13 @@ Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode,
 
 Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
 
-After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; already-rendered audio is not purged.
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Casual host breaks use at most one safe rotating cue, while room-presence is a separate default-off **personal on-air moment** permission. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; current audio finishes normally, while an unstarted queued host break carrying that entity's selected director fact is removed.
 
 Premium voice keys are optional and separate from the first AI-host unlock.
 
-Create `/config/secrets.env` in the add-on config folder for provider credentials. Supported keys are
+The Home Assistant controls are separate too. **Enable Home Assistant Integration** is the master connection for entity publishing, optional host context, and timer interrupts. **Host home context** controls the full filtered state polling used for AI prompts; turn it off to keep the integration, entity publishing, and timer interrupts while keeping home state out of host prompts. Both default to on, and the prompt-context refresh interval defaults to 300 seconds.
+
+The admin stores provider credentials in `/config/secrets.env` inside the add-on config folder. Supported keys are
 `ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
 `ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
@@ -60,7 +63,7 @@ The command writes clips and a `manifest.json` under `tmp/voice-auditions/`.
 Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
-Without any API key, the station runs in Demo Mode: music plays, banter falls back to stock copy (the bundled-clip inventory is a TODO — `demo_assets/banter/` ships empty today).
+Without an AI key, the station runs in Demo Mode: host writing falls back to stock copy and fallback voices. Demo Mode does not bundle a song library; in the Home Assistant app, music still comes from reachable charts or Jamendo. The bundled recovery clip covers thin-queue moments but is not a rotation.
 
 ## Architecture
 
@@ -77,13 +80,12 @@ HA Supervisor
   +-- /data/ (persistent across restarts)
         +-- cache/   (downloaded track audio — survives restarts)
         +-- tmp/     (rendered segments — ephemeral)
-        +-- music/   (local music files — optional)
 ```
 
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
-2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, `HA_ENABLED=true`, and maps the Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
+2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, maps **Enable Home Assistant Integration** to `HA_ENABLED`, and maps the separate Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
 3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
 5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
@@ -104,9 +106,9 @@ HA Supervisor
 2. FFmpeg not found on PATH
 3. Network blocks outbound connections to YouTube
 
-**Fix**: SSH to the HA host, add `export MAMMAMIRADIO_SKIP_QUALITY_GATE=1` to `/addon_configs/mammamiradio/run.sh` before the `exec uvicorn` line, then restart the addon. Once real tracks download and are cached, remove the line and restart again.
+**Recovery**: Keep the add-on running while you collect the relevant log lines. Check that Home Assistant can reach the configured music source, and install the latest released add-on update if one is available. If the problem needs a code fix, share the logs with the project; the supported path is `branch → PR → merge → CI builds image → add-on update`. When Home Assistant offers that image, choose **Update** once at a planned moment.
 
-If silence is in cache from a failed run: stop the addon, SSH to the HA host, delete `/data/addon_configs/<slug>/cache/`, restart.
+Please leave the running add-on intact: do not SSH in to edit container or runtime files, bypass the audio quality gate, delete its live cache, or restart it repeatedly as an experiment. Those changes disappear on the next update and can turn a recoverable audio problem into a longer interruption.
 
 ### TTS banter not generating
 
@@ -188,7 +190,10 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
   |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
   |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
-  |     HA_ENABLED (from enable_home_assistant),
+  |     HA_ENABLED (from enable_home_assistant; master HA integration switch),
+  |     MAMMAMIRADIO_HA_CONTEXT_ENABLED (from ha_context_enabled;
+  |       turn off to stop AI prompt-context polling while keeping HA integration),
+  |     MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL (default 300 seconds),
   |     MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
   |     MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
   |     MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
@@ -217,10 +222,10 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
   |
   +-- HA Supervisor nginx strips prefix, forwards GET / to addon:8000
   |
-  +-- App returns listener HTML
-  |     - Static attributes: src="/stream" rewritten to src="<prefix>/stream"
-  |     - JS: _base = window.location.pathname
-  |     - JS fetch calls: _base + '/status' -> /api/hassio_ingress/<token>/status
+  +-- Trusted ingress returns the admin control room at /
+  |     - The setup strip opens the listener at /listen
+  |     - Static route attributes are rewritten under <prefix>
+  |     - JS fetch calls stay under /api/hassio_ingress/<token>/...
   |
   +-- Browser fetches <prefix>/stream
   |     -> HA proxy passes through streaming MP3 response
@@ -229,21 +234,11 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 
 **Critical rule**: `_inject_ingress_prefix` must NEVER rewrite JS string literals. Only static HTML attributes are rewritten.
 
-## Updating the addon
+## Updating and releasing the add-on
 
-1. Bump `version` in `config.yaml` and `pyproject.toml`
-2. Update `CHANGELOG.md`
-3. Push to main — CI builds and pushes the Docker image to GHCR automatically
-4. HA Supervisor checks for updates periodically (or user clicks "Check for updates")
-5. User clicks "Update" in the HA UI
+**Operators:** When Home Assistant offers an update, choose **Update** at a planned moment. The update pulls the published image and performs the one expected add-on restart; no live file edits are needed.
 
-**Pre-merge checklist**:
-- [ ] CI builds successfully for both amd64 and aarch64
-- [ ] GHCR packages are public (github.com/florianhorner → Packages → each mammamiradio-addon-* → visibility: Public)
-- [ ] Install the addon from the repo URL on a test HA instance
-- [ ] Verify the addon starts (check log for `Producer started`)
-- [ ] Verify ingress works (listener page loads, audio plays)
-- [ ] Verify stream plays for 60+ minutes without interruption
+**Maintainers:** Follow the canonical [HA add-on release runbook](../../docs/runbooks/ha-addon.md#the-release-chain). It owns the synchronized version and changelog files, `make pre-release`, the protected branch and PR landing path, CI image promotion, and post-release verification. Do not duplicate or shortcut that contract here.
 
 ## Renaming the station
 
@@ -326,6 +321,6 @@ The dashboard shows one of three tiers based on your configuration:
 
 | Tier | What you hear | What it needs |
 |------|--------------|---------------|
-| Demo Radio | Music from yt-dlp charts; banter falls back to stock copy (bundled clips TBD) | Nothing (works out of the box) |
-| Full AI Radio | Live AI banter and ads, yt-dlp charts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env` (legacy add-on option fallback still works) |
+| Demo Radio | Stock host copy and fallback voices over any available music source | No AI key; reachable charts or Jamendo still provide the music |
+| Full AI Radio | Live AI banter and ads over the configured music source | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env`, plus reachable charts or Jamendo |
 | Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |

@@ -199,6 +199,97 @@ async def test_imaging_after_prev_seg_type_reset_skips_spurious_transition(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_continuity_epoch_refreshes_producer_predecessor_from_reserved_tail(tmp_path):
+    """A live queue replacement severs a removed song before the next banter renders.
+
+    The reservation is visible to the producer while it is full, then playback
+    consumes it before the next segment is made. The retained producer-local
+    predecessor must still be BANTER, not the pre-control MUSIC segment.
+    """
+    old_song = tmp_path / "old_song.mp3"
+    old_song.write_bytes(b"music")
+    continuity = tmp_path / "continuity.mp3"
+    continuity.write_bytes(b"voice")
+    dialogue = tmp_path / "dialogue.mp3"
+    dialogue.write_bytes(b"voice")
+    state = _make_state()
+    state.last_music_file = old_song
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=old_song, metadata={"title": "Old song"}))
+    host = config.hosts[0]
+    banter_lines = [(host, "Ripartiamo puliti.")]
+    real_sleep = asyncio.sleep
+    control_step = 0
+
+    async def _control_sleep(delay: float) -> None:
+        nonlocal control_step
+        if delay == 0.5:
+            if control_step == 0:
+                queue.get_nowait()
+                queue.task_done()
+                queue.put_nowait(
+                    Segment(
+                        type=SegmentType.BANTER,
+                        path=continuity,
+                        metadata={"title": "Station continuity", "continuity_reservation": True},
+                    )
+                )
+                state.queued_segments = [{"type": "banter", "label": "Station continuity"}]
+                state.last_enqueued_type = SegmentType.BANTER
+                state.continuity_epoch += 1
+                control_step = 1
+            elif control_step == 1:
+                queue.get_nowait()
+                queue.task_done()
+                state.queued_segments.clear()
+                state.force_next = SegmentType.BANTER
+                control_step = 2
+        await real_sleep(0)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Siamo tornati.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=dialogue),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as crossfade,
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+        patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_control_sleep),
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = lambda _duration, output_path, _source_track=None: output_path
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while state.segments_produced < 1:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue banter after continuity replacement")
+                await real_sleep(0.02)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert control_step == 2
+    assert queue.get_nowait().type == SegmentType.BANTER
+    assert state.last_enqueued_type == SegmentType.BANTER
+    # The previous music was removed by the control; it must not be used as a
+    # talk bed or become a MUSIC -> BANTER transition sting.
+    assert imaging.pick_talk_bed.call_args.args[2] is None
+    crossfade.assert_not_called()
+    imaging.pick_stinger.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_emergency_tone_tail_at_startup_does_not_seed_transition_stinger(tmp_path):
     tone = tmp_path / "tone.mp3"
     tone.write_bytes(b"tone")
@@ -305,15 +396,10 @@ async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     queue.put_nowait(Segment(type=SegmentType.BANTER, path=previous_banter, metadata={"title": "Banter"}))
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=RuntimeError("network down")),
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
         patch(
             f"{PRODUCER_MODULE}.generate_silence",
             side_effect=AssertionError("silence should never be a producer recovery fallback"),
@@ -337,7 +423,8 @@ async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
-    assert seg.path.name.startswith("recovery_tone_")
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     mock_imaging_cls.return_value.pick_stinger.assert_not_called()
 
 

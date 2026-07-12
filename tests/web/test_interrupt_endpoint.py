@@ -212,14 +212,47 @@ async def test_fire_interrupt_drains_queue_and_fires_skip(tmp_path: Path):
     assert state.last_interrupt_ts > 0
 
 
+@pytest.mark.asyncio
+async def test_fire_interrupt_clears_prior_capacity_exempt_continuity_slot(tmp_path: Path):
+    """The urgent bridge must not be followed by stale audio from an older control."""
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    stale_path = tmp_path / "stale_continuity.mp3"
+    stale_path.write_bytes(b"stale")
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+        continuity_slot=Segment(
+            type=SegmentType.BANTER,
+            path=stale_path,
+            metadata={"continuity_reservation": True},
+            ephemeral=False,
+        ),
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    skip_event = asyncio.Event()
+
+    fired = await _fire_interrupt(
+        state,
+        InterruptSpec(directive="Urgent!", urgency="urgent", cooldown=60),
+        queue,
+        skip_event,
+        bridge_tmp_dir=tmp_path,
+    )
+
+    assert fired is True
+    assert state.continuity_slot is None
+    assert state.interrupt_slot is not None
+    assert skip_event.is_set()
+
+
 # ---------------------------------------------------------------------------
-# Scenario 2: alert.mp3 absent → generated bridge tone
+# Scenario 2: alert.mp3 absent → packaged bridge tone
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_generates_bridge_when_alert_missing(tmp_path: Path):
-    """Scenario 2: alert.mp3 absent → generated bridge tone still gives immediate audio."""
+async def test_fire_interrupt_uses_packaged_bridge_when_alert_missing(tmp_path: Path):
+    """Scenario 2: alert.mp3 absent → bundled tone still gives immediate audio."""
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     state = StationState(
@@ -229,22 +262,20 @@ async def test_fire_interrupt_generates_bridge_when_alert_missing(tmp_path: Path
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
 
-    with (
-        patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")),
-        patch("mammamiradio.scheduling.producer.generate_tone", side_effect=_fake_tone),
-    ):
+    with patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")):
         await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
     assert state.interrupt_slot is not None
     assert state.interrupt_slot.exists()
-    assert state.interrupt_slot_ephemeral is True
+    assert state.interrupt_slot.name == "emergency_tone.mp3"
+    assert state.interrupt_slot_ephemeral is False
     assert skip_event.is_set()
     assert state.ha_pending_directive == "Svegliati!"
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_no_bridge_when_bridge_generation_fails(tmp_path: Path):
-    """Bridge generation failure must not block the interrupt directive."""
+async def test_fire_interrupt_uses_packaged_bridge_when_ffmpeg_is_unavailable(tmp_path: Path):
+    """A bundled bridge makes FFmpeg availability irrelevant to an interrupt."""
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     state = StationState(
@@ -254,13 +285,11 @@ async def test_fire_interrupt_no_bridge_when_bridge_generation_fails(tmp_path: P
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
 
-    with (
-        patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")),
-        patch("mammamiradio.scheduling.producer.generate_tone", side_effect=RuntimeError("ffmpeg broken")),
-    ):
+    with patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")):
         await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
-    assert state.interrupt_slot is None
+    assert state.interrupt_slot is not None
+    assert state.interrupt_slot.name == "emergency_tone.mp3"
     assert state.interrupt_slot_ephemeral is False
     assert skip_event.is_set()
     assert state.ha_pending_directive == "Svegliati!"

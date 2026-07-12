@@ -8,6 +8,11 @@ actually honor.
 It complements the add-on. The add-on plays the audio and serves the
 now-playing contract; this integration is the HA-native face of it.
 
+This integration is optional. Install it when you want HA-native controls or
+want to prove the first listen on a physical speaker through Media Source; the
+add-on can still serve its browser player without it. HACS installation takes
+effect only after a Home Assistant restart.
+
 ## What you get
 
 - `media_player.mammamiradio` — a registered entity (not the legacy pushed
@@ -42,11 +47,12 @@ integration domain, entity ID, and media-source ID stay stable:
 `mammamiradio`, `media_player.mammamiradio`, and
 `media-source://mammamiradio/live`.
 
-## Install (HACS custom repository)
+## Install the optional HACS integration
 
 1. HACS → three-dot menu → **Custom repositories**.
 2. Add `https://github.com/florianhorner/mammamiradio`, category **Integration**.
-3. Install **Mamma Mi Radio**, then restart Home Assistant.
+3. Install **Mamma Mi Radio**, then restart Home Assistant before adding or
+   using the integration.
 4. **Settings → Devices & Services → Add Integration → Mamma Mi Radio.**
    - **Host:** keep the default `local-mammamiradio` on Home Assistant OS; on a
      plain Docker install use the add-on's container name (for example
@@ -56,13 +62,14 @@ integration domain, entity ID, and media-source ID stay stable:
      Use the same value as the add-on's `admin_token` option. Leave blank for
      now-playing display only.
 
-## Turn off the add-on's media_player push (when using this integration)
+## Let the HACS integration own the media player (optional)
 
-The add-on pushes a `media_player.mammamiradio` "ghost" after segment changes
-and on its heartbeat — **on by default**, so an add-on-only setup gets a basic
-media-player tile automatically. Once this integration owns that entity, the
-push fights it (the HA state machine is last-writer-wins) and flaps the card. So
-when you install this integration:
+Before the speaker test, decide which component should own
+`media_player.mammamiradio`. The add-on pushes a basic "ghost" card after
+segment changes and on its heartbeat — **on by default**. If you want the HACS
+integration's registered entity to own that card, change the setting now. It
+prevents two sources from competing to update the same player card; it is not
+needed for Media Source speaker playback.
 
 **Add-on → Configuration → turn off `On-air media player push`
 (`ha_media_player_push`).**
@@ -72,7 +79,30 @@ ghost once so this integration claims the id cleanly), while the
 `sensor.mammamiradio_*` / `binary_sensor.mammamiradio_on_air` entities keep
 flowing as before. If Home Assistant shows a Repair about a legacy media-player
 conflict, reload the integration (Settings → Devices & Services → Mamma Mi Radio
-→ ⋮ → **Reload**) to clear the notice.
+→ ⋮ → **Reload**) to clear the notice. If you leave the push on, Media Source
+speaker playback still works and the add-on keeps its basic media-player tile.
+
+## Play it on one speaker
+
+This is the optional first-listen proof: a real Home Assistant speaker playing
+the station through Media Source, rather than a browser tab. Complete the
+following in order after you have installed the integration and restarted Home
+Assistant. The media-player ownership choice above does not change this route.
+
+1. Go to **Developer tools → Actions** and choose **Play specified media**.
+2. Under **Target**, select one physical speaker — not
+   `media_player.mammamiradio`.
+3. In the **Media** picker, choose **Mamma Mi Radio → Mamma Mi Radio Live**,
+   then select **Perform action**.
+
+**Success:** the selected speaker starts playing the station. This proves the
+Home Assistant media-source route (`media-source://mammamiradio/live`), not
+browser playback.
+
+If **Mamma Mi Radio Live** is missing or the speaker stays silent, reload the
+integration (**Settings → Devices & Services → Mamma Mi Radio → ⋮ → Reload**)
+and try the action again. If it still does not play, follow the [Home Assistant
+app recovery steps](../troubleshooting.md#home-assistant-app).
 
 > Migration note: if you have automations that read the old pushed
 > `media_player.mammamiradio` state, they keep working — the registered entity

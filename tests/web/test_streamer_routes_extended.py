@@ -463,8 +463,8 @@ async def test_load_playlist_clears_shadow_upcoming_after_purge(tmp_path):
             resp = await client.post("/api/playlist/load", json={"url": resolved_source.url})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
-    assert app.state.station_state.queued_segments == []
-    assert app.state.queue.qsize() == 0
+    assert len(app.state.station_state.queued_segments) == app.state.queue.qsize() == 1
+    assert app.state.station_state.queued_segments[0]["reason"] == "Protected continuity audio."
     assert not queued_file.exists()
 
 
@@ -990,7 +990,8 @@ async def test_playlist_load_purges_queue_and_skips():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
     assert resp.json()["ok"] is True
-    assert app.state.queue.empty()
+    assert app.state.queue.qsize() == 1
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert app.state.skip_event.is_set()
 
 
@@ -2026,8 +2027,9 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     assert state.force_next == SegmentType.MUSIC
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/listener-requests/dismiss", json={"id": req["request_id"]})
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/listener-requests/dismiss", json={"id": req["request_id"]})
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "removed": 1}
@@ -2036,6 +2038,8 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     assert state.playlist_revision == starting_revision + 2
     assert state.pinned_track is None
     assert state.force_next is None
+    assert state.continuity_epoch == 1
+    assert app.state.queue.qsize() > 0
 
 
 @pytest.mark.asyncio

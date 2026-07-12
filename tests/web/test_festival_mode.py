@@ -114,7 +114,8 @@ async def test_post_party_enable_sets_festival_mode_purges_queue_and_arms_banter
     assert body["mode"] == "festival"
     assert config.party_mode == "festival"
     assert state.force_next == SegmentType.BANTER
-    assert app.state.queue.empty()
+    assert app.state.queue.qsize() == 1
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] == "true"
     save_dotenv.assert_called_once_with({"MAMMAMIRADIO_FESTIVAL_MODE": "true"})
 
@@ -144,9 +145,9 @@ async def test_post_party_enable_clears_shadow_queue(tmp_path, monkeypatch):
             resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
 
     assert resp.status_code == 200
-    # Both views purged together — no stale "Up Next" rows survive the toggle.
-    assert app.state.queue.empty()
-    assert state.queued_segments == []
+    # Both views rebuild together — no stale "Up Next" rows survive the toggle.
+    assert app.state.queue.qsize() == len(state.queued_segments) == 1
+    assert state.queued_segments[0]["reason"] == "Protected continuity audio."
 
 
 @pytest.mark.asyncio

@@ -4,13 +4,74 @@
 
 # Mamma Mi Radio
 
-A song's playing. As it winds down, one of the hosts leans in: "The coffee machine just started, someone's home early, and it's 14 degrees in here. Classic Tuesday."
+Italian radio for Home Assistant: music, stock host copy, and fallback voices
+with no AI key required. Start by hearing it on one real speaker. When you add
+an AI host key, review the filtered home-context preview first; mute individual
+entities locally, or turn **Host home context** off to stop full-state polling.
 
-Mamma Mi Radio is an AI radio station running on Home Assistant. Live charts, gloriously fake ads, and two hosts who riff on what's actually happening at home: the weather turning, the hallway light coming on again, the front door opening at the exact wrong time.
+## First listen: one real speaker
+
+**Hear it before you choose what the hosts may use.** Install the Home
+Assistant OS app below, then take the [optional HACS speaker
+path](docs/integrations/ha-integration.md#play-it-on-one-speaker). It puts
+**Mamma Mi Radio Live** on one physical speaker through
+`media-source://mammamiradio/live`, not browser playback. HACS needs one Home
+Assistant restart; the guide covers speaker recovery and the optional
+media-player ownership choice. That choice is not needed for first speaker
+playback.
+
+### Home Assistant OS app
+
+Home Assistant Apps require **Home Assistant OS** (including Home Assistant Green and Yellow). Home Assistant Container does not include Apps; if you do not have **Settings → Apps**, use the Docker alternative below.
+
+[![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio)
+
+Or by hand: **Settings → Apps → App store → ⋮ → Repositories**, paste `https://github.com/florianhorner/mammamiradio`, and select **Add**. Open **Mamma Mi Radio**, select **Install**, then **Start**.
+
+### What first audio needs
+
+No AI key is required for your first listen: without one, the hosts use stock
+copy and fallback voices. A reachable music source is still required. The app
+tries live charts by default, which need outbound network access; for a
+predictable Home Assistant alternative, configure a Jamendo client ID in the
+app's advanced options.
+
+First audio is separate from home context. **Host home context** is on by
+default and, when the add-on has Home Assistant access, refreshes a filtered
+state slice for host segments. Turn it off in the app configuration before you
+start if you do not want full-state prompt-context polling. Without
+script-provider credentials, that state is not sent to an AI provider.
+
+### Check the app (operators)
+
+`Producer started` in the app log and `"ready": true` from `/readyz` show that
+the app is healthy. They are operator checks, not the first-listen proof: for
+that, hear **Mamma Mi Radio Live** on the selected speaker.
+
+### Docker alternative
+
+<details>
+<summary>Run it without Home Assistant Apps</summary>
+
+```bash
+git clone https://github.com/florianhorner/mammamiradio.git && cd mammamiradio
+cp .env.example .env
+docker compose up      # ADMIN_TOKEN auto-generates if unset
+```
+
+Open `http://localhost:8000`. No AI key is required; add one when you want generated hosts. The stock Docker quickstart uses live charts for music and needs outbound access; it does not currently wire a local-music mount or Jamendo option. (Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a venv. Conductor users get `scripts/conductor-*.sh` lifecycle hooks for free.)
+
+</details>
+
+→ **[How it works](docs/architecture.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
+
+## When you want the house in the show
+
+A song's playing. As it winds down, one of the hosts leans in: "The coffee
+machine just started, someone's home early, and it's 14 degrees in here.
+Classic Tuesday."
 
 You built the sensors. You wrote the automations. Now somebody finally notices.
-
-Native to Home Assistant.
 
 ## See it
 
@@ -26,27 +87,6 @@ Native to Home Assistant.
 
 > *"Breaking news from the laundry room: it's done. It's been done for two hours. Nobody cares but us."*
 
-## Add it to your Home Assistant
-
-[![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio)
-
-Or by hand: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, paste `https://github.com/florianhorner/mammamiradio`, then install **Mamma Mi Radio** and start. Open the Web UI first and hear Demo Radio. It already has Supervisor access to Home Assistant; add one AI host key when you want generated hosts, then review the prompt-safe home context for home-aware banter.
-
-<details>
-<summary>Just want to hear it first, without Home Assistant?</summary>
-
-```bash
-git clone https://github.com/florianhorner/mammamiradio.git && cd mammamiradio
-cp .env.example .env
-docker compose up      # ADMIN_TOKEN auto-generates if unset
-```
-
-Open `http://localhost:8000`. Music plays in seconds, no keys needed. Add an AI key to wake the hosts. (Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a venv. Conductor users get `scripts/conductor-*.sh` lifecycle hooks for free.)
-
-</details>
-
-→ **[How it works](docs/architecture.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
-
 <p align="center">
   <img src="https://img.shields.io/github/stars/florianhorner/mammamiradio?style=flat" alt="GitHub stars">
   <img src="https://img.shields.io/github/actions/workflow/status/florianhorner/mammamiradio/quality.yml?branch=main&label=CI&style=flat" alt="CI">
@@ -61,19 +101,19 @@ Open `http://localhost:8000`. Music plays in seconds, no keys needed. Add an AI 
 
 ## What you get
 
-It plays the moment you start it, and climbs from there:
+It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing: the add-on, or `docker compose up` | Demo Radio plays before you add keys. Proof it runs before you wire it in. |
+| **Hear it first** | No AI key; reachable live charts, or Jamendo in the Home Assistant app | Demo Radio uses stock host copy and fallback voices over that music source. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 
-The first step lets you hear it before you trust it with your house. The last step is the point.
+"Demo Radio" is the no-AI-key tier, not a bundled song library. The first step lets you hear the station before you trust it with your house. The last step is the point.
 
-It never goes silent: if a provider hiccups or the queue runs dry, it bridges to cached audio and keeps playing, so the illusion holds.
+Once the station has playable audio, recovery clips and cached tracks bridge many provider hiccups and thin-queue moments. The bundled recovery clip is cover audio, not a full music rotation.
 
-It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there to keep it out of future host/context use. Already-rendered audio is not purged. Leave HA context off, or run without script-provider credentials, and the hosts never mention the house.
+It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When Host home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there to keep it out of future host/context use. Already-rendered audio is not purged. The Home Assistant integration and Host home context are separate: turn Host home context off to stop full-state prompt polling while keeping entity publishing and timer interrupts, or run without script-provider credentials so the hosts never send home context to an AI provider.
 
 ## Make it yours
 
