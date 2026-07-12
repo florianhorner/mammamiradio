@@ -2059,15 +2059,41 @@ async def test_listener_page_renders_configured_stream_bitrate(bitrate_kbps: int
     """Every visible listener bitrate must match the canonical audio config."""
     app = _make_test_app()
     app.state.config.audio.bitrate = bitrate_kbps
-    # Keep the three ticker repetitions in this route-level contract even if
-    # the default radio.toml brand is later changed.
+    # Pin the frequency so the three frequency-gated ticker repetitions render
+    # even if the default radio.toml brand is later changed.
     app.state.config.brand.frequency = "98.7 FM"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/")
 
     assert resp.status_code == 200
+    # Assert each site class independently so a change to the ticker repetition
+    # count can't silently mask the about-card losing its bitrate (a bare
+    # total-count check passes if one site is dropped and another duplicated).
+    # About-card: always visible, not frequency-gated.
+    assert resp.text.count(f"Stream MP3</span> · {bitrate_kbps} kbps") == 1
+    # Ticker: three frequency-prefixed repetitions.
+    assert resp.text.count(f"98.7 FM · {bitrate_kbps} kbps") == 3
+    # Total visible bitrate labels, and never the stale hardcoded value.
     assert resp.text.count(f"· {bitrate_kbps} kbps") == 4
+    assert "320 kbps" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_listener_page_about_card_bitrate_survives_blank_frequency():
+    """No frequency configured hides the ticker, but the always-visible about-card
+    must still show the honest configured bitrate (the one ungated site)."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 128
+    app.state.config.brand.frequency = ""
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    # Ticker sites are frequency-gated and gone; only the about-card remains.
+    assert resp.text.count("· 128 kbps") == 1
+    assert resp.text.count("Stream MP3</span> · 128 kbps") == 1
     assert "320 kbps" not in resp.text
 
 
