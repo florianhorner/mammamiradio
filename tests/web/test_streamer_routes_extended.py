@@ -5199,6 +5199,252 @@ async def test_admin_status_ha_details_present_with_full_context():
 
 
 @pytest.mark.asyncio
+async def test_admin_status_ha_refresh_diagnostics_are_truthful_and_admin_only():
+    """A late refresh is observable to operators without leaking to listeners."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "some HA context"
+    state.ha_context_last_updated = 1_700_000_000.0
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_last_attempt_at = 1_700_000_010.0
+    state.ha_context_refresh_active_foreground_timed_out = True
+    state.ha_context_refresh_last_result = "success"
+    state.ha_context_refresh_last_result_duration_ms = 2_500
+    state.ha_context_refresh_last_result_used_background = True
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload.time.time", return_value=1_700_000_020.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            admin = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+            public = await client.get("/public-status")
+
+    assert admin.status_code == 200
+    refresh = admin.json()["ha_details"]["refresh"]
+    assert refresh == {
+        "freshness": "fresh",
+        "in_flight": True,
+        "adoption_pending": False,
+        "last_success_at": 1_700_000_000.0,
+        "age_seconds": 20,
+        "last_attempt_at": 1_700_000_010.0,
+        "active_foreground_timed_out": True,
+        "last_result": "success",
+        "last_result_duration_ms": 2500,
+        "last_result_used_background": True,
+    }
+    assert admin.json()["ha_details"]["context_last_updated"] == refresh["last_success_at"]
+    assert "ha_details" not in public.json()
+    assert "context_last_updated" not in public.json()
+    assert "last_result_duration_ms" not in str(public.json())
+    assert "adoption_pending" not in str(public.json())
+
+
+@pytest.mark.asyncio
+async def test_admin_status_shows_cold_refresh_without_prompt_context():
+    """The card remains available while Home Assistant is still catching up."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_last_attempt_at = 1_700_000_010.0
+    state.ha_context_refresh_active_foreground_timed_out = True
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ha_details"]["refresh"] == {
+        "freshness": "unavailable",
+        "in_flight": True,
+        "adoption_pending": False,
+        "last_success_at": None,
+        "age_seconds": None,
+        "last_attempt_at": 1_700_000_010.0,
+        "active_foreground_timed_out": True,
+        "last_result": None,
+        "last_result_duration_ms": None,
+        "last_result_used_background": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_status_marks_producer_gated_snapshot_stale():
+    """A stale retained snapshot stays degraded while its replacement runs."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "retained only for diagnostics"
+    state.ha_context_last_updated = 1_700_000_000.0
+    state.ha_context_refresh_last_attempt_at = 1_700_000_600.0
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_last_result = "stale"
+    state.ha_context_refresh_last_result_duration_ms = 30_000
+    state.ha_context_refresh_stale = True
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload.time.time", return_value=1_700_000_601.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    assert resp.status_code == 200
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["freshness"] == "stale"
+    assert refresh["in_flight"] is True
+    assert refresh["age_seconds"] == 601
+    assert refresh["last_result"] == "stale"
+    assert refresh["last_result_duration_ms"] == 30_000
+
+
+@pytest.mark.asyncio
+async def test_admin_status_derives_staleness_from_the_producer_threshold_between_segments():
+    """Music/idle time may age a snapshot without another producer boundary."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "old but retained for diagnostics"
+    state.ha_context_last_updated = 1_700_000_000.0
+    state.ha_context_refresh_stale_after_seconds = 120.0
+    state.ha_context_refresh_stale = False
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload.time.time", return_value=1_700_000_121.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["freshness"] == "stale"
+    assert refresh["age_seconds"] == 121
+
+
+@pytest.mark.asyncio
+async def test_admin_status_keeps_producer_eligible_snapshot_fresh_at_exact_threshold():
+    """The admin must not withhold a snapshot the producer can still use."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "still eligible at the threshold"
+    state.ha_context_last_updated = 1_700_000_000.0
+    state.ha_context_refresh_stale_after_seconds = 120.0
+    state.ha_context_refresh_stale = False
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload.time.time", return_value=1_700_000_120.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["freshness"] == "fresh"
+    assert refresh["age_seconds"] == 120
+
+
+@pytest.mark.asyncio
+async def test_admin_status_marks_completed_mailbox_ready_for_safe_adoption():
+    """A reply is not still 'catching up' after its task has completed."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    mailbox = MagicMock()
+    mailbox.read_refresh_mailbox_status.return_value = {
+        "in_flight": False,
+        "adoption_pending": True,
+        "last_result": "success",
+        "last_result_duration_ms": 2500,
+        "last_result_used_background": True,
+    }
+    state.ha_context_refresh_mailbox = mailbox
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_active_foreground_timed_out = True
+    state.ha_context_last_updated = 1_700_000_000.0
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["in_flight"] is False
+    assert refresh["adoption_pending"] is True
+    assert refresh["active_foreground_timed_out"] is False
+    assert refresh["last_result"] == "success"
+    assert refresh["last_result_duration_ms"] == 2500
+    assert refresh["last_result_used_background"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_status_does_not_call_a_failed_mailbox_reply_update_ready():
+    """A terminal timeout must not masquerade as a fresh reply awaiting adoption."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    mailbox = MagicMock()
+    mailbox.read_refresh_mailbox_status.return_value = {
+        "in_flight": False,
+        "adoption_pending": False,
+        "last_result": "background_timeout",
+        "last_result_duration_ms": 30_000,
+        "last_result_used_background": True,
+    }
+    state.ha_context_refresh_mailbox = mailbox
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_last_result = "success"
+    state.ha_context_refresh_last_result_duration_ms = 2_500
+    state.ha_context_refresh_last_result_used_background = False
+    state.ha_context_last_updated = 1_700_000_000.0
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["in_flight"] is False
+    assert refresh["adoption_pending"] is False
+    assert refresh["last_result"] == "background_timeout"
+    assert refresh["last_result_duration_ms"] == 30_000
+    assert refresh["last_result_used_background"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_status_reports_stale_completed_mailbox_reply_only_to_operators():
+    """A reply that aged in the mailbox is terminal, not ready to adopt."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    mailbox = MagicMock()
+    mailbox.read_refresh_mailbox_status.return_value = {
+        "in_flight": False,
+        "adoption_pending": False,
+        "last_result": "stale",
+        "last_result_duration_ms": 2_500,
+        "last_result_used_background": True,
+    }
+    state.ha_context_refresh_mailbox = mailbox
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_last_result = "success"
+    state.ha_context_refresh_last_result_duration_ms = 1_000
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+        public = await client.get("/public-status")
+
+    refresh = admin.json()["ha_details"]["refresh"]
+    assert refresh["in_flight"] is False
+    assert refresh["adoption_pending"] is False
+    assert refresh["last_result"] == "stale"
+    assert refresh["last_result_duration_ms"] == 2_500
+    assert refresh["last_result_used_background"] is True
+    assert "ha_details" not in public.json()
+    assert "stale" not in str(public.json())
+
+
+@pytest.mark.asyncio
+async def test_admin_status_shows_waiting_state_before_first_configured_ha_refresh():
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context_refresh_configured = True
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    assert resp.json()["ha_details"]["refresh"]["freshness"] == "unavailable"
+    assert resp.json()["ha_details"]["refresh"]["in_flight"] is False
+
+
+@pytest.mark.asyncio
 async def test_admin_status_ha_details_present_when_all_entities_filtered():
     """Denylist observability still appears when no HA entity is prompt-safe."""
     app = _make_test_app(admin_token="secret-tok")

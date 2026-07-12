@@ -2224,6 +2224,7 @@ CHAOS DIRECTION:
     # (stripped quotes/role markers, truncated past 300 chars) on every fallback.
     raw_pending_directive = state.ha_pending_directive
     raw_pending_directive_moment_id = state.ha_pending_directive_moment_id
+    raw_pending_directive_source = state.ha_pending_directive_source
     pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
     consumed_pending_directive = False
     if pending_directive:
@@ -2246,6 +2247,7 @@ Make this the focus of this banter break. It happened just now — react natural
         if not is_interrupt:
             state.ha_pending_directive = ""
             state.ha_pending_directive_moment_id = ""
+            state.ha_pending_directive_source = ""
             consumed_pending_directive = True
 
     # Record Hunt narration has its own one-shot slot. It is planned after the
@@ -2644,6 +2646,7 @@ Return JSON:
             # failed generation restores both, so the elected row is never
             # orphaned — it airs with the retry instead.
             state.ha_pending_directive_moment_id = raw_pending_directive_moment_id
+            state.ha_pending_directive_source = raw_pending_directive_source
         if heading_announcement_commit is not None and raw_heading is not None:
             current_heading = state.heading
             if current_heading is not None and current_heading.id == raw_heading.id:
