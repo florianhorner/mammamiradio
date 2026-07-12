@@ -104,6 +104,12 @@ The fix marks the request `song_pinned` at whichever site pins first (set synchr
 
 That usually means script generation failed and the app fell back to stock copy.
 
+## A host transition stopped after only a few words
+
+Song-end transitions are validated before they reach TTS. Missing, malformed, shorter-than-three-word, or visibly cut-off text (for example `And now...`) is replaced immediately with complete stock copy; the station does not buy another model retry for this handoff. Normal Mode uses an English-led line such as `Stay close, amici — a quick word from our sponsors.` and Super Italian Mode uses the matching Italian line. Those fallbacks deliberately carry no just-played-track reference, so a queue reorder cannot make a generic handoff claim the wrong song.
+
+Generated banter keeps lively interruptions only when the next emitted line belongs to a different host and answers or counters the cut-in. A terminal cut-off, same-speaker continuation, or stray one/two-word fragment rejects the generated exchange and uses the existing stock banter instead. This is script validation only: it does not change TTS, FFmpeg, streaming, or Home Assistant runtime behavior.
+
 The app tries Anthropic first, then falls back to OpenAI through the active
 quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `model_registry.toml`), then to stock lines. Check the registry—not Python or

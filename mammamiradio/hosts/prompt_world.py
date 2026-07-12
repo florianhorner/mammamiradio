@@ -262,8 +262,9 @@ CHAOS SUBTYPE: CHAOS_FOURTH_WALL
 """,
     ChaosSubtype.ABANDONED_STORM: """
 CHAOS SUBTYPE: CHAOS_ABANDONED_STORM
-- No sentence finishes cleanly before another host cuts in.
-- Use interruptions, corrections, and abandoned starts. The energy is a storm of unfinished thoughts.
+- Let hosts cut in before a thought is finished only when the next host immediately answers or counters it.
+- Use interruptions, corrections, and rapid restarts. The energy is a storm of answered collisions,
+  ending on a complete thought.
 """,
     ChaosSubtype.IMPOSSIBLE_RECALL: """
 CHAOS SUBTYPE: CHAOS_IMPOSSIBLE_RECALL

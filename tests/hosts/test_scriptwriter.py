@@ -27,8 +27,11 @@ from mammamiradio.hosts.scriptwriter import (
     ListenerRequestCommit,
     _banter_commit,
     _banter_exchange_count,
+    _banter_fallback_pools,
+    _banter_turn_taking_ok,
     _build_system_prompt,
     _chaos_prompt_block,
+    _chaos_stock_exchange,
     _host_expression_block,
     _massage_transition_text,
     _personality_modifier,
@@ -143,6 +146,22 @@ def test_system_prompt_bans_forward_framing_for_played_tracks(config):
     assert "we just heard" in prompt
 
 
+def test_system_prompt_requires_answered_interruptions(config):
+    """Prompt fiction keeps the cut-ins but forbids a stranded final host line."""
+    prompt = _build_system_prompt(config)
+
+    assert "immediate answer or counter from a different host" in prompt
+    assert "The final line of every exchange is a complete thought." in prompt
+    assert "hosts abandon sentences" not in prompt
+
+    from mammamiradio.hosts import prompt_world
+
+    storm = prompt_world.CHAOS_SUBTYPE_BLOCKS[ChaosSubtype.ABANDONED_STORM]
+    assert "immediately answers or counters" in storm
+    assert "ending on a complete thought" in storm
+    assert "No sentence finishes cleanly" not in storm
+
+
 def test_system_prompt_uses_resolved_station_identity(config):
     config.station.name = "Engine Internal"
     config.brand.station_name = "Legacy Brand"
@@ -184,7 +203,7 @@ def test_prompt_world_constants_byte_stable():
     )
     assert (
         hashlib.sha256(blob.encode("utf-8")).hexdigest()
-        == "b4901714e3e4476dfd2da6645cdf5c9d79ed50354d0aac71832fdea5a209001f"
+        == "c68bf92a2c5650e78d988efc5a308b0378773ca8260fd923ae5744481cdb29d7"
     ), "prompt-fiction constants changed — if intentional, re-capture the hash"
 
 
@@ -241,6 +260,52 @@ def test_transitions_fallbacks_extraction_structural_and_reexport():
     assert scriptwriter_module.AD_BREAK_OUTROS is fallbacks.AD_BREAK_OUTROS
     assert scriptwriter_module._massage_transition_text is transitions._massage_transition_text
     assert scriptwriter_module._transition_stem is transitions._transition_stem
+    assert scriptwriter_module._transition_text_usable is transitions._transition_text_usable
+    assert scriptwriter_module._transition_stock_copy is transitions._transition_stock_copy
+
+
+def test_transition_stock_fallbacks_cover_all_segments_and_modes():
+    """Every deterministic handoff is complete, mode-specific, and airable."""
+    from mammamiradio.hosts import transitions
+
+    expected_normal = {
+        "banter": "Stay with us, amici — we have one more thing to settle.",
+        "ad": "Stay close, amici — a quick word from our sponsors.",
+        "news_flash": "Hold that thought, amici — a bulletin just reached the desk.",
+    }
+    expected_italian = {
+        "banter": "Restate con noi, amici — c'è ancora qualcosa da chiarire.",
+        "ad": "Restate con noi, amici — un messaggio dai nostri sponsor.",
+        "news_flash": "Attenzione, amici — è arrivato un aggiornamento in redazione.",
+    }
+
+    for super_italian, expected in ((False, expected_normal), (True, expected_italian)):
+        fallbacks = transitions._transition_stock_fallbacks(super_italian=super_italian)
+        assert fallbacks == expected
+        assert len(set(fallbacks.values())) == 3
+        for segment, text in expected.items():
+            assert transitions._transition_stock_copy(segment, super_italian=super_italian) == text
+            assert transitions._transition_text_usable(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, False),
+        (42, False),
+        ("Go", False),
+        ("And now", False),
+        ("Hold that—", False),
+        ("Hold that–", False),
+        ("Hold that...", False),
+        ("Hold that…", False),
+        ("That landing has teeth, amici.", True),
+    ],
+)
+def test_transition_text_usable_predicate(text, expected):
+    from mammamiradio.hosts.transitions import _transition_text_usable
+
+    assert _transition_text_usable(text) is expected
 
 
 def test_news_flash_category_prompts_do_not_seed_recycled_premises():
@@ -1271,9 +1336,10 @@ async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is
         ),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text, _ = await write_transition(state, config, song_cues=[])
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="ad", song_cues=[])
 
-    assert text == "All right..."
+    assert text == "Stay close, amici — a quick word from our sponsors."
+    assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -1892,7 +1958,7 @@ async def test_write_banter_string_lines_alternate_around_blanks(config, state):
     # alternation counts only emitted string lines, not raw positions.
     if len(config.hosts) < 2:
         pytest.skip("needs at least two hosts to assert alternation")
-    response_json = json.dumps({"lines": ["uno", "", "due"], "new_joke": None})
+    response_json = json.dumps({"lines": ["Uno.", "", "Due."], "new_joke": None})
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
@@ -1901,7 +1967,7 @@ async def test_write_banter_string_lines_alternate_around_blanks(config, state):
     ):
         result, _ = await write_banter(state, config)
 
-    assert [text for _, text in result] == ["uno", "due"]
+    assert [text for _, text in result] == ["Uno.", "Due."]
     assert result[0][0] is not result[1][0]
 
 
@@ -4547,6 +4613,128 @@ async def test_write_news_flash_strips_markdown_fences(config, state):
     assert text == "Traffico bloccato."
 
 
+def test_stock_banter_and_chaos_exchanges_satisfy_turn_taking_contract(config):
+    """The recovery copy must obey the same no-stranded-speech invariant."""
+    for super_italian in (False, True):
+        config.super_italian_mode = super_italian
+        for exchange in _banter_fallback_pools(config):
+            assert _banter_turn_taking_ok(exchange)
+
+    for subtype in ChaosSubtype:
+        assert _banter_turn_taking_ok(_chaos_stock_exchange(config, subtype))
+
+    config.hosts = [_regular_hosts(config)[0]]
+    for super_italian in (False, True):
+        config.super_italian_mode = super_italian
+        for exchange in _banter_fallback_pools(config):
+            assert _banter_turn_taking_ok(exchange)
+    for subtype in ChaosSubtype:
+        assert _banter_turn_taking_ok(_chaos_stock_exchange(config, subtype))
+
+
+@pytest.mark.asyncio
+async def test_write_banter_preserves_paired_different_host_cutoff(config, state):
+    """Marco may trail off when Giulia immediately answers him."""
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Io volevo dire che—"},
+            {"host": giulia.name, "text": "No, il punto vero è che hai perso il ritmo."},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == [
+        "Io volevo dire che—",
+        "No, il punto vero è che hai perso il ritmo.",
+    ]
+    assert _banter_turn_taking_ok(result)
+
+
+@pytest.mark.asyncio
+async def test_write_banter_terminal_cutoff_uses_stock_exchange(config, state):
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Questa canzone aveva davvero carattere."},
+            {"host": giulia.name, "text": "No, aspetta—"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_same_speaker_cutoff_uses_stock_exchange(config, state):
+    config.super_italian_mode = True
+    marco = _regular_hosts(config)[0]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Aspetta—"},
+            {"host": marco.name, "text": "volevo soltanto dire che questa parte funziona."},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_deduped_unpaired_fragment_uses_stock_exchange(config, state):
+    """The guard checks the emitted sequence after de-duplication, not raw JSON."""
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "No davvero"},
+            {"host": giulia.name, "text": "No davvero"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
 # --- write_transition tests ---
 
 
@@ -4606,7 +4794,11 @@ async def test_write_transition_played_track_ref_none_when_no_history(config, st
 async def test_write_transition_no_key_returns_fallback(config, state):
     config.anthropic_api_key = ""
     state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
-    for next_seg, expected in [("banter", "All right..."), ("ad", "And now..."), ("news_flash", "Attention...")]:
+    for next_seg, expected in [
+        ("banter", "Stay with us, amici — we have one more thing to settle."),
+        ("ad", "Stay close, amici — a quick word from our sponsors."),
+        ("news_flash", "Hold that thought, amici — a bulletin just reached the desk."),
+    ]:
         host, text, played_track_ref = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
@@ -4618,7 +4810,11 @@ async def test_write_transition_no_key_returns_fallback(config, state):
 async def test_write_transition_no_key_super_italian_returns_italian_fallback(config, state):
     config.super_italian_mode = True
     config.anthropic_api_key = ""
-    for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
+    for next_seg, expected in [
+        ("banter", "Restate con noi, amici — c'è ancora qualcosa da chiarire."),
+        ("ad", "Restate con noi, amici — un messaggio dai nostri sponsor."),
+        ("news_flash", "Attenzione, amici — è arrivato un aggiornamento in redazione."),
+    ]:
         host, text, _ = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
@@ -4639,14 +4835,93 @@ async def test_write_transition_api_exception_returns_fallback(config, state):
         host, text, played_track_ref = await write_transition(state, config, next_segment="banter")
 
     assert isinstance(host, HostPersonality)
-    assert text == "All right..."
+    assert text == "Stay with us, amici — we have one more thing to settle."
     # The LLM-exception fallback also uses a generic line — no track claim to invalidate.
     assert played_track_ref is None
 
 
 @pytest.mark.asyncio
+async def test_write_transition_provider_exception_uses_segment_stock_copy(config, state):
+    """A direct provider failure cannot leave a partial handoff on air."""
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("provider unavailable"),
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="news_flash", song_cues=[])
+
+    assert text == "Hold that thought, amici — a bulletin just reached the desk."
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_transition_short_successful_response_uses_stock_copy(config, state):
+    """A successful JSON response still falls back when its spoken text is cut off."""
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": "And now..."},
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="ad", song_cues=[])
+
+    assert text == "Stay close, amici — a quick word from our sponsors."
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("next_segment", "short_text", "expected"),
+    [
+        ("banter", "Ecco—", "Restate con noi, amici — c'è ancora qualcosa da chiarire."),
+        ("ad", "E adesso...", "Restate con noi, amici — un messaggio dai nostri sponsor."),
+        ("news_flash", "Attenzione", "Attenzione, amici — è arrivato un aggiornamento in redazione."),
+    ],
+)
+async def test_write_transition_super_italian_invalid_response_uses_exact_stock_copy(
+    config, state, next_segment, short_text, expected
+):
+    config.super_italian_mode = True
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": short_text},
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment=next_segment, song_cues=[])
+
+    assert text == expected
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_transition_valid_complete_response_preserves_track_reference(config, state):
+    track = Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")
+    state.played_tracks = [track]
+    text = "That landing had teeth, amici, so we keep the room moving."
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": text},
+    ):
+        _host, actual_text, played_track_ref = await write_transition(
+            state, config, next_segment="banter", song_cues=[]
+        )
+
+    assert actual_text == text
+    assert played_track_ref == track.cache_key
+
+
+@pytest.mark.asyncio
 async def test_write_transition_strips_markdown_fences(config, state):
-    response_text = '```json\n{"text": "Che bel pezzo..."}\n```'
+    response_text = '```json\n{"text": "Che bel pezzo, andiamo avanti."}\n```'
     mock_cls = _mock_anthropic_response(response_text)
 
     with (
@@ -4655,7 +4930,7 @@ async def test_write_transition_strips_markdown_fences(config, state):
     ):
         _host, text, _ = await write_transition(state, config)
 
-    assert text == "Che bel pezzo..."
+    assert text == "Che bel pezzo, andiamo avanti."
 
 
 @pytest.mark.asyncio
@@ -4696,7 +4971,7 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
 
     async def capture_prompt(*args, **kwargs):
         captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
-        return {"text": "Bellissima, e adesso..."}
+        return {"text": "Bellissima, e adesso cambiamo marcia."}
 
     with (
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
@@ -4705,7 +4980,7 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
         host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert isinstance(host, HostPersonality)
-    assert text == "Bellissima, e adesso..."
+    assert text == "Bellissima, e adesso cambiamo marcia."
     assert captured_prompts, "_generate_json_response was never called — patch path may be wrong"
     assert "Musical exclamation FIRST" not in captured_prompts[0]
 
@@ -5682,7 +5957,7 @@ async def test_record_hunt_block_carries_mode_language_rule(config, state, super
         patch(
             "mammamiradio.hosts.scriptwriter._generate_json_response",
             new_callable=AsyncMock,
-            return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+            return_value={"lines": [{"host": host_name, "text": "Ok, ci siamo."}], "new_joke": None},
         ) as mock_generate,
         patch("mammamiradio.hosts.scriptwriter.write_persisted_heading"),
     ):
@@ -5712,7 +5987,7 @@ async def test_record_hunt_coexists_with_persistent_festival_mode(config, state)
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
-        return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+        return_value={"lines": [{"host": host_name, "text": "Ok, ci siamo."}], "new_joke": None},
     ) as mock_generate:
         await write_banter(state, config)
 
