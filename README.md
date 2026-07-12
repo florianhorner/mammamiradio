@@ -4,15 +4,21 @@
 
 # Mamma Mi Radio
 
-A song's playing. As it winds down, one of the hosts leans in: "The coffee machine just started, someone's home early, and it's 14 degrees in here. Classic Tuesday."
+Italian radio for Home Assistant: music, stock host copy, and fallback voices
+with no AI key required. Start by hearing it on one real speaker. When you add
+an AI host key, review the filtered home-context preview first; mute individual
+entities locally, or turn **Host home context** off to stop full-state polling.
 
-Mamma Mi Radio is an AI radio station running on Home Assistant. Live charts, gloriously fake ads, and two hosts who riff on what's actually happening at home: the weather turning, the hallway light coming on again, the front door opening at the exact wrong time.
+## First listen: one real speaker
 
-You built the sensors. You wrote the automations. Now somebody finally notices.
-
-Native to Home Assistant.
-
-## Start here
+**Hear it before you choose what the hosts may use.** Install the Home
+Assistant OS app below, then take the [optional HACS speaker
+path](docs/integrations/ha-integration.md#play-it-on-one-speaker). It puts
+**Mamma Mi Radio Live** on one physical speaker through
+`media-source://mammamiradio/live`, not browser playback. HACS needs one Home
+Assistant restart; the guide covers speaker recovery and the optional
+media-player ownership choice. That choice is not needed for first speaker
+playback.
 
 ### Home Assistant OS app
 
@@ -22,7 +28,25 @@ Home Assistant Apps require **Home Assistant OS** (including Home Assistant Gree
 
 Or by hand: **Settings → Apps → App store → ⋮ → Repositories**, paste `https://github.com/florianhorner/mammamiradio`, and select **Add**. Open **Mamma Mi Radio**, select **Install**, then **Start**.
 
-No AI key is required for the first run: without one, the hosts use stock copy and fallback voices. Music is a separate requirement. The app tries live charts by default, but that needs outbound network access; for a predictable Home Assistant alternative, configure a Jamendo client ID in the app's advanced options. A successful start shows `Producer started` in the log and returns `"ready": true` from `/readyz`.
+### What first audio needs
+
+No AI key is required for your first listen: without one, the hosts use stock
+copy and fallback voices. A reachable music source is still required. The app
+tries live charts by default, which need outbound network access; for a
+predictable Home Assistant alternative, configure a Jamendo client ID in the
+app's advanced options.
+
+First audio is separate from home context. **Host home context** is on by
+default and, when the add-on has Home Assistant access, refreshes a filtered
+state slice for host segments. Turn it off in the app configuration before you
+start if you do not want full-state prompt-context polling. Without
+script-provider credentials, that state is not sent to an AI provider.
+
+### Check the app (operators)
+
+`Producer started` in the app log and `"ready": true` from `/readyz` show that
+the app is healthy. They are operator checks, not the first-listen proof: for
+that, hear **Mamma Mi Radio Live** on the selected speaker.
 
 ### Docker alternative
 
@@ -40,6 +64,14 @@ Open `http://localhost:8000`. No AI key is required; add one when you want gener
 </details>
 
 → **[How it works](docs/architecture.md)** · **[Contribute](CONTRIBUTING.md)** · **[Changelog](CHANGELOG.md)**
+
+## When you want the house in the show
+
+A song's playing. As it winds down, one of the hosts leans in: "The coffee
+machine just started, someone's home early, and it's 14 degrees in here.
+Classic Tuesday."
+
+You built the sensors. You wrote the automations. Now somebody finally notices.
 
 ## See it
 
