@@ -5315,6 +5315,26 @@ async def test_admin_status_derives_staleness_from_the_producer_threshold_betwee
 
 
 @pytest.mark.asyncio
+async def test_admin_status_keeps_producer_eligible_snapshot_fresh_at_exact_threshold():
+    """The admin must not withhold a snapshot the producer can still use."""
+    app = _make_test_app(admin_token="secret-tok")
+    state = app.state.station_state
+    state.ha_context = "still eligible at the threshold"
+    state.ha_context_last_updated = 1_700_000_000.0
+    state.ha_context_refresh_stale_after_seconds = 120.0
+    state.ha_context_refresh_stale = False
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.status_payload.time.time", return_value=1_700_000_120.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
+
+    refresh = resp.json()["ha_details"]["refresh"]
+    assert refresh["freshness"] == "fresh"
+    assert refresh["age_seconds"] == 120
+
+
+@pytest.mark.asyncio
 async def test_admin_status_marks_completed_mailbox_ready_for_safe_adoption():
     """A reply is not still 'catching up' after its task has completed."""
     app = _make_test_app(admin_token="secret-tok")

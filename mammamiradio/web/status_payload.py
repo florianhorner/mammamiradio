@@ -217,7 +217,7 @@ def _ha_refresh_payload(state: StationState) -> dict[str, object]:
     age = max(0.0, time.time() - last_success_at) if last_success_at is not None else None
     age_seconds = int(age) if age is not None else None
     stale_after_seconds = _positive_seconds(getattr(state, "ha_context_refresh_stale_after_seconds", 0.0))
-    stale_by_age = bool(age is not None and stale_after_seconds is not None and age >= stale_after_seconds)
+    stale_by_age = bool(age is not None and stale_after_seconds is not None and age > stale_after_seconds)
     in_flight, adoption_pending, mailbox_result, mailbox_duration_ms, mailbox_used_background = _ha_mailbox_state(state)
     raw_result = getattr(state, "ha_context_refresh_last_result", "")
     state_last_result = raw_result if isinstance(raw_result, str) and raw_result in _HA_REFRESH_RESULTS else None

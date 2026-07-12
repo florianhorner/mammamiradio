@@ -258,6 +258,9 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
     clock = [1_010.0]
     prior = HomeContext(summary="safe prior", timestamp=1_000.0)
     event = HomeEvent("switch.lamp", "Lamp", "off", "on", 1_010.0)
+    radio_baseline = {"switch.lamp": {"state": "on"}}
+    ritual_baseline = {"ritual.lamp": {"state": "on"}}
+    published: list[_HomeContextFetchOutcome] = []
     completed = asyncio.Event()
 
     async def _completed_then_held(**_kwargs):
@@ -274,13 +277,19 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
             attempt_started_at=1_010.0,
             attempt_finished_at=1_010.0,
             duration_seconds=0.001,
+            radio_event_state_baseline=radio_baseline,
+            ritual_recipe_state_baseline=ritual_baseline,
         )
+
+    def _record_published(outcome: _HomeContextFetchOutcome) -> bool:
+        published.append(outcome)
+        return True
 
     with (
         patch.object(producer.time, "time", side_effect=lambda: clock[0]),
         patch.object(producer, "get_cached_home_context", lambda *_args: prior),
         patch.object(producer, "_fetch_home_context_outcome", _completed_then_held),
-        patch.object(producer, "_publish_home_context_outcome", return_value=True),
+        patch.object(producer, "_publish_home_context_outcome", side_effect=_record_published),
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
         try:
@@ -312,6 +321,10 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
             assert state.ha_pending_directive == ""
             assert state.ha_pending_directive_source == ""
             assert not coordinator.home_event_handoffs_allowed
+            assert len(published) == 1
+            assert published[0].snapshot_timestamp == 1_010.0
+            assert published[0].radio_event_state_baseline == radio_baseline
+            assert published[0].ritual_recipe_state_baseline == ritual_baseline
         finally:
             await coordinator.close()
 
