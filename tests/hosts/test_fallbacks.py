@@ -70,7 +70,9 @@ def test_chaos_stock_exchange_uses_each_subtype_in_the_active_spoken_mode(
 def test_chaos_stock_uses_normal_mode_when_super_italian_has_non_italian_station_language():
     selected = chaos_stock_lines(super_italian_mode=True, station_language="en")
 
-    assert selected is CHAOS_NORMAL_STOCK_LINES
+    # Hot reload replaces the module-level dictionaries. The contract is the
+    # selected copy, not object identity with a pre-reload import.
+    assert selected == CHAOS_NORMAL_STOCK_LINES
 
 
 @pytest.mark.parametrize(
