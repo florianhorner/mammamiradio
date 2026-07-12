@@ -217,7 +217,9 @@ def test_browse_and_resolve_live_stream_use_audio_mpeg_proxy(monkeypatch: pytest
     playable = asyncio.run(source.async_resolve_media(_item(module, "live")))
 
     assert root.media_content_id == "media-source://mammamiradio"
+    assert root.title == "Mamma Mi Radio"
     assert child.media_content_id == "media-source://mammamiradio/live"
+    assert child.title == "Mamma Mi Radio Live"
     assert child.can_play is True
     assert child.can_expand is False
     assert child.media_content_type == "audio/mpeg"
@@ -252,6 +254,49 @@ def test_ha_docs_no_longer_defer_media_source() -> None:
     assert "Home Assistant stream proxy" in doc
     assert "Follow Me Music" in doc
     assert "`media_source.py` (casting the stream to other HA speakers)" not in doc
+
+
+def test_first_listen_funnel_documents_the_hacs_speaker_proof() -> None:
+    """The README must lead a first listener to the actual speaker test."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    doc = DOC.read_text(encoding="utf-8")
+    rendered_readme = " ".join(readme.split())
+    rendered_doc = " ".join(doc.split())
+
+    assert "docs/integrations/ha-integration.md#play-it-on-one-speaker" in readme
+    assert "## First listen: one real speaker" in readme
+    assert "Italian radio for Home Assistant" in readme
+    assert "with no AI key required" in readme
+    assert "mute individual\nentities locally" in readme
+    assert "turn **Host home context** off to stop full-state polling" in readme
+    assert "optional HACS speaker" in readme
+    assert "No AI key is required for your first listen" in readme
+    assert "A reachable music source is still required" in readme
+    assert "Host home context** is on by default" in rendered_readme
+    assert "not sent to an AI provider" in readme
+    assert "## Check the app (operators)" in readme
+    assert readme.index("## First listen: one real speaker") < readme.index("### Home Assistant OS app")
+    assert readme.index("## First listen: one real speaker") < readme.index("## When you want the house in the show")
+
+    assert "This integration is optional" in doc
+    assert "Home Assistant restart" in doc
+    assert "## Let the HACS integration own the media player (optional)" in doc
+    assert "it is not needed for Media Source speaker playback" in rendered_doc
+    assert "does not change this route" in doc
+    assert "Developer tools → Actions" in doc
+    assert "Play specified media" in doc
+    assert "one physical speaker" in doc
+    assert "Mamma Mi Radio Live" in rendered_doc
+    assert "media-source://mammamiradio/live" in doc
+    assert "**Success:**" in doc
+    assert "../troubleshooting.md#home-assistant-app" in doc
+    ownership_choice = doc.index("## Let the HACS integration own the media player (optional)")
+    developer_tools = doc.index("Developer tools → Actions")
+    physical_speaker = doc.index("one physical speaker")
+    live_media = doc.index("Mamma Mi Radio → Mamma Mi Radio Live")
+    success = doc.index("**Success:**")
+    recovery = doc.index("../troubleshooting.md#home-assistant-app")
+    assert ownership_choice < developer_tools < physical_speaker < live_media < success < recovery
 
 
 # --- Stream-proxy view (MammaRadioStreamView.get) -------------------------------
