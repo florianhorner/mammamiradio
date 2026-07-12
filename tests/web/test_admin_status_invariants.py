@@ -315,6 +315,35 @@ def test_engine_room_ha_observability_escapes_home_assistant_values() -> None:
     assert "esc(k)+': <strong>'" in block
 
 
+def test_engine_room_ha_refresh_states_are_truthful_and_human() -> None:
+    html = _read_admin_html()
+    presentation = _function_block(html, "homeSnapshotPresentation")
+    refresh_result = _function_block(html, "homeRefreshResultLine")
+    engine = _function_block(html, "updateEngineRoom")
+
+    assert "function formatHomeSnapshotAge" in html
+    assert "function formatHomeSnapshotTimestamp" in html
+    for state in ("'fresh'", "'stale'", "'working'", "'degraded'", "'idle'"):
+        assert state in presentation
+    for phrase in ("current", "catching up", "waiting for its first update"):
+        assert phrase in presentation
+    assert "background_timeout:'took too long to finish'" in refresh_result
+    assert "stale:'arrived too late to use'" in refresh_result
+    assert "continued after the audio deadline" in refresh_result
+    assert "if(r.adoption_pending)" in _function_block(html, "homeSnapshotPresentation")
+    assert "update ready" in _function_block(html, "homeSnapshotPresentation")
+    assert presentation.index("if(r.adoption_pending)") < presentation.index("if(r.freshness==='stale')")
+    assert presentation.index("if(r.freshness==='stale')") < presentation.index("if(r.in_flight)")
+    assert "The old snapshot is withheld; hosts are waiting for its replacement." in presentation
+    assert "Hosts are using a snapshot from '+age+'." in presentation
+    assert "const refresh=hd.refresh||{}" in engine
+    assert "homeSnapshotPresentation(refresh)" in engine
+    assert "formatHomeSnapshotTimestamp(refresh.last_success_at)" in engine
+    assert "formatHomeSnapshotAge(refresh.age_seconds)" in engine
+    assert "homeRefreshResultLine(refresh)" in engine
+    assert "statusInline(snapshot.state,snapshot.label)" in engine
+
+
 def test_system_health_rows_use_canonical_status_helpers() -> None:
     html = _read_admin_html()
     status_row = _function_block(html, "statusRow")

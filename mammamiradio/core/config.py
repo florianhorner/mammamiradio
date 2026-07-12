@@ -488,11 +488,10 @@ class HomeAssistantSection:
     context_enabled: bool = True  # full /api/states prompt-context ingest
     poll_interval: int = 300  # seconds between full state refreshes
     timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
-    # Wall-clock budget (seconds) the producer gives a single HA context refresh
-    # before it airs on last-known context instead of blocking segment production.
-    # Audio continuity wins over HA freshness (INSTANT AUDIO). Steady-state value;
-    # the one-time cold registry/weather warm-up gets a longer budget in the
-    # producer (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
+    # Foreground wait (seconds) before warm prompt generation uses its last safe
+    # context. The producer retains the one request for a separate 30s total cap;
+    # the one-time cold registry/weather warm-up gets a longer foreground wait
+    # (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
     context_refresh_timeout: float = 2.0
     # Experimental LLM scene-namer for the home mood. The heuristic ladder stays
     # the always-instant fallback and the default remains off.

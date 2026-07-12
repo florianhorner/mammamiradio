@@ -589,6 +589,30 @@ class StationState:
     ha_context_last_updated: float = 0.0
     ha_context_entity_count: int = 0
     ha_context_char_count: int = 0
+    # Producer-owned Home Assistant refresh telemetry. These fields describe
+    # the refresh coordinator only; `ha_context_last_updated` remains the
+    # source-snapshot timestamp consumed by legacy status callers.
+    ha_context_refresh_in_flight: bool = False
+    ha_context_refresh_last_attempt_at: float = 0.0
+    ha_context_refresh_active_foreground_timed_out: bool = False
+    ha_context_refresh_last_result: str = ""
+    ha_context_refresh_last_result_duration_ms: int | None = None
+    ha_context_refresh_last_result_used_background: bool = False
+    # Kept by the producer against max(2 * poll_interval, 120s), so status
+    # does not guess at a device-specific prompt-safety threshold.
+    ha_context_refresh_stale: bool = False
+    ha_context_refresh_stale_after_seconds: float = 0.0
+    # Lets the admin show the honest first-update state before any eligible
+    # host segment has started a refresh. It is internal coordinator metadata,
+    # not a user-facing configuration option.
+    ha_context_refresh_configured: bool = False
+    # Provenance prevents an aged HA event directive from being mistaken for a
+    # non-HA cue such as the listener skip-bit when stale prompt context is
+    # withheld.
+    ha_pending_directive_source: str = ""
+    # Non-serialised producer-owned object used by the admin serializer for a
+    # read-only mailbox completion check. It is cleared at producer shutdown.
+    ha_context_refresh_mailbox: object | None = field(default=None, repr=False, compare=False)
     ha_first_home_context_moment_fired: bool = False
     # Community-inspired Impossible Moments recipe telemetry. Public surfaces
     # may expose only the coarse family labels; recipe internals stay admin-only.

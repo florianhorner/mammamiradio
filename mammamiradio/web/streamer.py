@@ -1377,6 +1377,7 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
             logger.debug("Moment receipt mute drop failed", exc_info=True)
     state.ha_pending_directive = ""
     state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = ""
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
     state.ha_running_gag_moment_id = ""
@@ -2291,6 +2292,7 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
         )
         state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
+        state.ha_pending_directive_source = "skip_bit"
         state.pending_actions.append(
             {
                 "type": "ha_directive",
@@ -3125,6 +3127,7 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
         skip_event,
         enforce_global_cooldown=True,
         bridge_tmp_dir=request.app.state.config.tmp_dir,
+        directive_source="operator",
     )
     if not fired:
         # _fire_interrupt's global cooldown gate beat us (concurrent caller).

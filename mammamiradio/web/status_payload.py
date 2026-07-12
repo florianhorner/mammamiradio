@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import math
 import os
 import time
 from pathlib import Path
@@ -134,7 +136,129 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     return result
 
 
+_HA_REFRESH_RESULTS = frozenset({"success", "failed", "background_timeout", "stale"})
+
+
+def _finite_timestamp(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _nonnegative_milliseconds(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+        return None
+    return round(value)
+
+
+def _positive_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _ha_mailbox_state(state: StationState) -> tuple[bool, bool, str | None, int | None, bool | None]:
+    """Read producer mailbox status without letting serialization mutate it."""
+    mailbox = getattr(state, "ha_context_refresh_mailbox", None)
+    reader = getattr(mailbox, "read_refresh_mailbox_status", None)
+    if callable(reader):
+        try:
+            mailbox_status = reader()
+        except Exception:  # pragma: no cover - diagnostics must stay fail-soft
+            mailbox_status = None
+        if isinstance(mailbox_status, dict):
+            in_flight = bool(mailbox_status.get("in_flight", False))
+            adoption_pending = bool(mailbox_status.get("adoption_pending", False))
+            result = mailbox_status.get("last_result")
+            duration_ms = mailbox_status.get("last_result_duration_ms")
+            used_background = mailbox_status.get("last_result_used_background")
+            return (
+                in_flight,
+                adoption_pending,
+                result if isinstance(result, str) else None,
+                _nonnegative_milliseconds(duration_ms),
+                bool(used_background) if used_background is not None else None,
+            )
+
+    task = getattr(mailbox, "in_flight_task", None)
+    if task is None:
+        return bool(getattr(state, "ha_context_refresh_in_flight", False)), False, None, None, None
+    try:
+        done = bool(task.done())
+    except Exception:  # pragma: no cover - diagnostics must stay fail-soft
+        return bool(getattr(state, "ha_context_refresh_in_flight", False)), False, None, None, None
+    if not done:
+        return True, False, None, None, None
+    # Compatibility fallback for an embedding that exposes only a Task rather
+    # than the coordinator's richer reader. A task that failed must never be
+    # presented as an update ready for adoption.
+    try:
+        outcome = task.result()
+    except TimeoutError:
+        return False, False, "background_timeout", None, None
+    except (asyncio.CancelledError, Exception):
+        return False, False, "failed", None, None
+    kind = getattr(outcome, "kind", None)
+    duration_seconds = getattr(outcome, "duration_seconds", None)
+    duration = (
+        _nonnegative_milliseconds(duration_seconds * 1000)
+        if isinstance(duration_seconds, int | float) and not isinstance(duration_seconds, bool)
+        else None
+    )
+    if kind == "fresh":
+        return False, True, "success", duration, None
+    return False, False, "failed", duration, None
+
+
+def _ha_refresh_payload(state: StationState) -> dict[str, object]:
+    """Serialize coarse HA refresh telemetry for the authenticated admin surface."""
+    last_success_at = _finite_timestamp(state.ha_context_last_updated)
+    last_attempt_at = _finite_timestamp(getattr(state, "ha_context_refresh_last_attempt_at", 0.0))
+    age = max(0.0, time.time() - last_success_at) if last_success_at is not None else None
+    age_seconds = int(age) if age is not None else None
+    stale_after_seconds = _positive_seconds(getattr(state, "ha_context_refresh_stale_after_seconds", 0.0))
+    stale_by_age = bool(age is not None and stale_after_seconds is not None and age >= stale_after_seconds)
+    in_flight, adoption_pending, mailbox_result, mailbox_duration_ms, mailbox_used_background = _ha_mailbox_state(state)
+    raw_result = getattr(state, "ha_context_refresh_last_result", "")
+    state_last_result = raw_result if isinstance(raw_result, str) and raw_result in _HA_REFRESH_RESULTS else None
+    mailbox_last_result = mailbox_result if mailbox_result in _HA_REFRESH_RESULTS else None
+    last_result = mailbox_last_result or state_last_result
+    last_result_duration_ms = (
+        mailbox_duration_ms
+        if mailbox_last_result is not None
+        else _nonnegative_milliseconds(getattr(state, "ha_context_refresh_last_result_duration_ms", None))
+    )
+    last_result_used_background = (
+        mailbox_used_background
+        if mailbox_last_result is not None and mailbox_used_background is not None
+        else bool(getattr(state, "ha_context_refresh_last_result_used_background", False))
+    )
+
+    if last_success_at is None:
+        freshness = "unavailable"
+    elif stale_by_age or bool(getattr(state, "ha_context_refresh_stale", False)):
+        freshness = "stale"
+    else:
+        freshness = "fresh"
+
+    return {
+        "freshness": freshness,
+        "in_flight": in_flight,
+        "adoption_pending": adoption_pending,
+        "last_success_at": last_success_at,
+        "age_seconds": age_seconds,
+        "last_attempt_at": last_attempt_at,
+        "active_foreground_timed_out": bool(
+            in_flight and getattr(state, "ha_context_refresh_active_foreground_timed_out", False)
+        ),
+        "last_result": last_result,
+        "last_result_duration_ms": last_result_duration_ms,
+        "last_result_used_background": last_result_used_background,
+    }
+
+
 def _ha_details_payload(state: StationState) -> dict | None:
+    refresh = _ha_refresh_payload(state)
     has_ha_observability = bool(
         state.ha_context
         or state.ha_scored_entities
@@ -142,6 +266,11 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or state.ha_ritual_public_families
         or state.ha_ritual_matches
         or state.ha_ritual_recipe_audit
+        or refresh["in_flight"]
+        or refresh["last_success_at"]
+        or refresh["last_attempt_at"]
+        or refresh["last_result"]
+        or bool(getattr(state, "ha_context_refresh_configured", False))
     )
     if not has_ha_observability:
         return None
@@ -163,7 +292,10 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "registry_source": state.ha_registry_source or None,
         "context_char_count": state.ha_context_char_count,
         "context_entity_count": state.ha_context_entity_count,
-        "context_last_updated": state.ha_context_last_updated or None,
+        # Legacy source-snapshot timestamp. `refresh.last_success_at` carries
+        # the same value for the new admin contract.
+        "context_last_updated": refresh["last_success_at"],
+        "refresh": refresh,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
     if state.ha_ritual_public_families or state.ha_ritual_matches or state.ha_ritual_recipe_audit:
