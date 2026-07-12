@@ -18,6 +18,7 @@ from mammamiradio.audio.normalizer import norm_cache_duration_sec
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.moment_receipts import MomentStore
@@ -471,6 +472,7 @@ async def startup():
         moment_store=moment_store,
         verbal_gag_ledger=verbal_gag_ledger,
         release_campaign=release_campaign,
+        home_context_director=HomeContextDirector(),
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
         immediate_audio_index=_build_immediate_audio_index(

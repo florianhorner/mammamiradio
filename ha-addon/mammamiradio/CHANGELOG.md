@@ -5,6 +5,7 @@
 ### Added
 
 - **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the add-on is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
+- **Home context now rotates instead of repeating itself.** A casual host break gets at most one safe ambient cue, and a topic rests for 30 minutes after it starts airing. Room-presence moments stay off until explicitly enabled for that sensor; the add-on never adds extra Home Assistant polling, and its public status never exposes the internal cue bookkeeping.
 
 ### Fixed
 

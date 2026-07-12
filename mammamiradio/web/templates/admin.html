@@ -3432,13 +3432,18 @@ function renderHomeContextPreview(data){
     const action=muted?'Unmute':'Mute for future host use';
     const aria=(muted?'Unmute ':'Mute ')+(row.label||row.entity_id)+(muted?'':' for future host use');
     const meta=[row.area,row.domain,row.state_summary,row.reason].filter(Boolean).join(' · ');
+    const personalEligible=Boolean(row.personal_moment_eligible);
+    const personalEnabled=Boolean(row.personal_moment_enabled);
+    const personalAction=personalEligible?`<button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt data-ha-entity-id="${esc(row.entity_id)}" data-ha-personal-next="${personalEnabled?'false':'true'}">${esc(personalEnabled?'Stop using as a personal moment':'Use as a personal on-air moment')}</button>`:'';
+    const personalHint=personalEligible?'<div class="ha-preview-meta">Personal room-presence moments are off by default.</div>':'';
     return `<div class="ha-preview-row" data-entity="${esc(row.entity_id)}">
       <div>
         <div class="ha-preview-title">${esc(row.label||row.entity_id)}</div>
         <div class="ha-preview-meta">${esc(meta)}</div>
+        ${personalHint}
         <div class="ha-preview-id">${esc(row.entity_id)}</div>
       </div>
-      <button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>
+      <div><button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt aria-label="${esc(aria)}" data-ha-entity-id="${esc(row.entity_id)}" data-ha-muted-next="${muted?'false':'true'}">${esc(action)}</button>${personalAction}</div>
     </div>`;
   }).join('');
 }
@@ -3466,15 +3471,32 @@ async function setHaEntityMuted(entityId, muted, el){
   flash(el);
   const resp=await api('PATCH','/api/homeassistant/entity-policy',{entity_id:entityId,muted:Boolean(muted)});
   if(!resp.ok){toast(wayOut('update home context'));return}
-  toast(Boolean(muted)?'Home entity muted':'Home entity unmuted');
+  toast(Boolean(muted)?('Home entity muted'+(Number(resp.purged_pending_banter_count||0)?`; removed ${Number(resp.purged_pending_banter_count)} queued host break(s)`:'') ):'Home entity unmuted');
+  await loadHomeContextPreview();
+  await refreshFast();
+}
+async function setHaPersonalMoment(entityId, enabled, el){
+  flash(el);
+  const resp=await api('PATCH','/api/homeassistant/entity-policy',{entity_id:entityId,personal_moment_enabled:Boolean(enabled)});
+  if(!resp.ok){toast(wayOut('update personal on-air moment'));return}
+  // Disabling tightens privacy server-side and can purge a queued break, just
+  // like a mute — surface that count so the toast matches setHaEntityMuted.
+  const purged=Number(resp.purged_pending_banter_count||0);
+  toast(Boolean(enabled)?'Personal on-air moment enabled':('Personal on-air moment disabled'+(purged?`; removed ${purged} queued host break(s)`:'')));
   await loadHomeContextPreview();
   await refreshFast();
 }
 document.addEventListener('click',event=>{
   const btn=event.target.closest('[data-ha-entity-id][data-ha-muted-next]');
-  if(!btn)return;
+  if(btn){
+    event.preventDefault();
+    setHaEntityMuted(btn.getAttribute('data-ha-entity-id')||'',btn.getAttribute('data-ha-muted-next')==='true',btn);
+    return;
+  }
+  const personalBtn=event.target.closest('[data-ha-entity-id][data-ha-personal-next]');
+  if(!personalBtn)return;
   event.preventDefault();
-  setHaEntityMuted(btn.getAttribute('data-ha-entity-id')||'',btn.getAttribute('data-ha-muted-next')==='true',btn);
+  setHaPersonalMoment(personalBtn.getAttribute('data-ha-entity-id')||'',personalBtn.getAttribute('data-ha-personal-next')==='true',personalBtn);
 });
 function renderSetup(setup){
   if(!setup) return;
@@ -4936,6 +4958,12 @@ function updateEngineRoom(st,caps){
     lines.push('Recent events: '+(hd.recent_event_count||0));
     lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
     if(hd.context_last_updated)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+    const director=hd.home_context_director;
+    if(director){
+      const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';
+      const counts=[['eligible',director.eligible_count],['resting',director.cooling_count],['queued',director.reserved_count]].filter(([,v])=>v!=null).map(([k,v])=>esc(k)+': '+Number(v||0)).join(' · ');
+      lines.push('Home context rotation: <strong>'+esc(rotation)+'</strong>'+(counts?'<br><span style="color:var(--muted)">'+counts+'</span>':''));
+    }
     lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
     if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
     if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
