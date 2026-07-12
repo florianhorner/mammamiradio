@@ -808,9 +808,11 @@ def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason:
         _mark_moment_dropped(state, str(metadata.get(key) or ""), reason, f"{context}:{key}")
 
 
-# Legacy process-local cache for ``_latest_music_file``. Recovery and speech-bed
-# selection are deliberately state-scoped through ``StationState.last_music_file``
-# so a replacement station cannot inherit another station's audio.
+# Legacy process-local cache used only by ``_latest_music_file`` as a tmp-directory
+# scan shortcut. The post-admission writers ``_remember_rendered_music`` and
+# ``_remember_enqueued`` intentionally keep it synchronized with
+# ``StationState.last_music_file``. Recovery and speech-bed selection must read only
+# the state-scoped value so a replacement station cannot inherit another's audio.
 _last_music_file: Path | None = None
 
 _MUSIC_TYPES = {SegmentType.MUSIC}

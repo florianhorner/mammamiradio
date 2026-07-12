@@ -201,6 +201,44 @@ async def _wait_for_last_music(state: StationState, expected: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recovery_after_persisted_stop_does_not_inherit_prior_station_music(tmp_path):
+    """A restarted, operator-stopped station starts without another station's recovery candidate."""
+    config = _config(tmp_path)
+    stopped_flag = config.cache_dir / "session_stopped.flag"
+    stopped_flag.write_text("stopped")
+    prior_music = config.cache_dir / "prior_station.mp3"
+    prior_music.write_bytes(b"prior")
+    producer._last_music_file = prior_music
+
+    restarted_state = _state()
+    restarted_state.session_stopped = stopped_flag.exists()
+    assert restarted_state.session_stopped is True
+    assert restarted_state.last_music_file is None
+
+    # The operator resumes, but the first production attempt fails. Recovery
+    # must use station continuity instead of audio cached by the prior state.
+    restarted_state.session_stopped = False
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "post_restart_recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True},
+    )
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_recovery_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+    ):
+        selected = await producer._producer_error_recovery_segment(restarted_state, config)
+
+    assert selected is recovery
+    assert restarted_state.last_music_file is None
+
+
+@pytest.mark.asyncio
 async def test_playlist_revision_discard_preserves_cached_music(tmp_path):
     state = _state()
     config = _config(tmp_path)
