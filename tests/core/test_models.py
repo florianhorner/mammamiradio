@@ -106,6 +106,9 @@ def test_new_render_attempt_records_an_abandoned_previous_attempt():
     assert state.render_timings[0]["outcome"] == "failed"
     assert state.render_timings[0]["reason"] == "abandoned"
     assert state.render_timings[0]["stages_ms"] == {"script": 15}
+    # The abandoned attempt is closed at the new attempt's start (20.0), not the
+    # wall clock, so its elapsed time reflects real work: 20.0 - 10.0 = 10s.
+    assert state.render_timings[0]["total_elapsed_ms"] == 10000
 
 
 def test_render_timing_emits_structured_safe_log(caplog):

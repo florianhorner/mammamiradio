@@ -4943,7 +4943,12 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
     state.queued_segments = [{"id": "buffered", "type": "music"}]
 
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
-    assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
+    # Isolate the emergency-tone branch: with no alert.mp3 available, the bridge
+    # must fall to the packaged emergency tone regardless of a real _SFX_DIR asset.
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
+        assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert queue.empty()  # buffered tail purged
     assert state.last_enqueued_type is None
@@ -4974,12 +4979,52 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
-    with patch.object(producer, "_DEMO_ASSETS_DIR", demo_root):
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+    ):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert packaged.exists()
     assert queue.empty()
     assert state.interrupt_slot == packaged.parent / "emergency_tone.mp3"
+
+
+async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
+    """Both bridge assets missing must abort the interrupt, not cut to dead air.
+
+    With neither alert.mp3 nor the packaged emergency tone available, hard-cutting
+    would drain the queue and fire skip_event with nothing to air. The interrupt
+    aborts instead, preserving whatever is already queued (INSTANT AUDIO).
+    """
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    empty_demo = tmp_path / "empty_demo"
+    empty_demo.mkdir()
+    state = _make_state()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    buffered = Segment(
+        type=SegmentType.MUSIC, path=tmp_path / "song.mp3", metadata={"title": "Buffered"}, ephemeral=False
+    )
+    queue.put_nowait(buffered)
+    state.queued_segments = [{"id": "buffered", "type": "music"}]
+    spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    with (
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch.object(producer, "_DEMO_ASSETS_DIR", empty_demo),
+    ):
+        result = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert result is False
+    assert list(queue._queue) == [buffered]  # queue preserved — no dead-air cut
+    assert state.interrupt_slot is None
 
 
 def test_remember_rendered_music_populates_immediate_audio_index(tmp_path):

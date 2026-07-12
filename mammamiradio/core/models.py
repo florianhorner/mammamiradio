@@ -833,10 +833,12 @@ class StationState:
         """Begin one producer attempt; later stage timings remain best-effort."""
         # A recoverable branch can return to the producer loop without a single
         # shared ``finally``. Preserve that terminal evidence rather than
-        # silently overwriting it when the next attempt starts.
-        if self._render_timing_started:
-            self.finish_render_timing("failed", reason="abandoned")
+        # silently overwriting it when the next attempt starts. Close the
+        # abandoned attempt at the new attempt's start so its elapsed time is
+        # bounded by real work, not the wall clock at the next begin call.
         now = time.monotonic() if started is None else started
+        if self._render_timing_started:
+            self.finish_render_timing("failed", reason="abandoned", started=now)
         self._render_timing_started = now
         self._render_timing_kind = str(kind)
         self._render_timing_stages.clear()

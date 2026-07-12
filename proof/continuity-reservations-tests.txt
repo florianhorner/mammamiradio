@@ -1,13 +1,13 @@
-# Proof: test suite — PR #825 (protected continuity reservations + render timings)
-# Captured 2026-07-11T23:12:41Z on bff0c1e3 (pending eviction-test refactor commit)
+# Proof: test suite — PR #829 (protected continuity reservations + render timings)
+# Captured 2026-07-12T12:15:06Z on fa54d5d1 (pending review-fix commit)
 
 ## Full suite WITH coverage (exact CI quality-gate path)
-4615 passed, 3 skipped, 21 deselected — total coverage 93%, all module floors held
-(mammamiradio.scheduling.producer 89%, floor 83%)
+All module floors held; total 93% (producer 89% / floor 83%).
 
-## CI quality flake resolution
-test_cache_eviction_protects_capacity_exempt_continuity_slot raced a wall clock against
-run_producer reaching its eviction branch (CI-only 'evict not called' / TimeoutError,
-never reproducible locally). Extracted the protected-paths computation into a pure helper
-(_cache_eviction_protected_paths) that the loop uses, and now assert it directly — no loop,
-no timing, no thread pool. The loop's eviction call site stays covered by full-loop tests.
+## Review-round changes (CodeRabbit findings addressed)
+- _fire_interrupt aborts (returns False, preserves queue) when neither alert.mp3 nor emergency_tone exists, instead of cutting to dead air.
+- _render_music_track removes a partial norm_cached on any copy2 failure (not only the cache-required path).
+- begin_render_timing closes an abandoned attempt at the new attempt's start, not the wall clock.
+- CHANGELOG ban/removal claim scoped to reserve-rebuild time.
+- Test hardening: air-next shadow invariant assertion; _SFX_DIR isolation on emergency-tone interrupt tests; try/finally release in skip-race test.
+- New tests: interrupt-abort-when-no-bridge; render partial-cache cleanup on non-required path; render-timing abandoned elapsed.

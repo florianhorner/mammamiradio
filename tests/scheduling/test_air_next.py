@@ -176,6 +176,12 @@ def test_front_insert_moves_protected_audio_to_slot_before_evicting_existing_air
     assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
 
     assert list(q._queue) == [newer, existing_air_next]
+    # Pin the atomic real-queue/shadow invariant: the moved continuity row must
+    # leave the shadow too, in the same order as the real queue.
+    assert [row["label"] for row in state.queued_segments] == [
+        "newer-air-next",
+        "existing-air-next",
+    ]
     assert state.continuity_slot is protected
     assert state.discarded_segments_total == 0
 

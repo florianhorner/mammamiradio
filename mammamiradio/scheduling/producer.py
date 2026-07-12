@@ -404,8 +404,12 @@ async def _render_music_track(
                 norm_cached,
                 exc,
             )
-            if cache_write_required:
+            # copy2 can leave a partial norm_cached behind. Remove it on every
+            # failure so a corrupt file can never be selected for recovery or
+            # continuity playback, not only on the cache-required path.
+            with contextlib.suppress(OSError):
                 norm_cached.unlink(missing_ok=True)
+            if cache_write_required:
                 norm_path.unlink(missing_ok=True)
                 raise
         else:
@@ -2139,7 +2143,12 @@ async def _fire_interrupt(
     elif emergency_tone.is_file():
         state.interrupt_slot = emergency_tone
     else:
-        logger.error("Interrupt bridge assets are unavailable")
+        # No bridge audio at all: hard-cutting here would drain the queue and
+        # fire skip_event with nothing to air, opening dead air until banter
+        # renders. Preserve whatever is already queued and abort the interrupt
+        # instead of breaking the illusion (INSTANT AUDIO).
+        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
+        return False
 
     # Drain the lookahead queue so no buffered music leaks between bridge and banter.
     purged = 0

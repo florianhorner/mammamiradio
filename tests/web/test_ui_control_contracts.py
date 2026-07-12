@@ -152,11 +152,15 @@ class TestSkipEndpoint:
         with patch("mammamiradio.web.streamer._persist_skipped_music", new=AsyncMock(side_effect=_slow_persist)):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
                 request_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
-                await asyncio.wait_for(persist_started.wait(), timeout=1.0)
-                assert app.state.skip_event.is_set()
-                assert app.state.station_state.now_streaming["type"] == "skipping"
-                assert not request_task.done()
-                release_persist.set()
+                try:
+                    await asyncio.wait_for(persist_started.wait(), timeout=1.0)
+                    assert app.state.skip_event.is_set()
+                    assert app.state.station_state.now_streaming["type"] == "skipping"
+                    assert not request_task.done()
+                finally:
+                    # Always unblock the persistence task so a failed assertion
+                    # can't leave a pending ASGI task dangling during teardown.
+                    release_persist.set()
                 resp = await request_task
 
         assert resp.status_code == 200
