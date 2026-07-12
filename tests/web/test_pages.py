@@ -71,6 +71,7 @@ def test_inject_ingress_prefix_rewrites_static_paths():
     prefix = "/api/hassio_ingress/abc123"
     assert f'"{prefix}/static/manifest.json"' in _inject_ingress_prefix('href="/static/manifest.json"', prefix)
     assert f'"{prefix}/static/icon-192.svg"' in _inject_ingress_prefix('href="/static/icon-192.svg"', prefix)
+    assert f'"{prefix}/static/favicon.svg"' in _inject_ingress_prefix('href="/static/favicon.svg"', prefix)
 
 
 def test_inject_ingress_prefix_rewrites_script_src_static():
