@@ -240,7 +240,7 @@
     <div class="mmr-about-card" lang="it"><div class="eyebrow">Palinsesto</div><p>Scritto ogni sera da un modello linguistico addestrato sulla radiofonia italiana, dalle notti di Radio Montecarlo alle trasmissioni di quartiere degli anni '80.</p></div>
     <div class="mmr-about-card" lang="it"><div class="eyebrow">Voci</div><p>Conduttori — {% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %}, {% endif %}{% endfor %} — registrati su nastro e rimixati per la sera.</p></div>
     <div class="mmr-about-card" lang="it"><div class="eyebrow">Musica</div><p>Catalogo curato: cantautori, melodico leggero, disco italiana, napoletano classico. Niente algoritmi di scoperta.</p></div>
-    <div class="mmr-about-card"><div class="eyebrow" lang="it">Codice</div><p><span lang="en">Open source</span> <span lang="it">su</span> GitHub. <span data-cap="pwa" hidden>PWA <span lang="it">installabile</span>.</span> <span data-cap="ha" hidden>Home Assistant <span lang="it">integrato</span>.</span> <span data-cap="llm" lang="en" hidden>AI scriptwriter.</span> <span lang="en">Stream MP3</span> · 320 kbps. <span lang="en">Made with espresso.</span></p></div>
+    <div class="mmr-about-card"><div class="eyebrow" lang="it">Codice</div><p><span lang="en">Open source</span> <span lang="it">su</span> GitHub. <span data-cap="pwa" hidden>PWA <span lang="it">installabile</span>.</span> <span data-cap="ha" hidden>Home Assistant <span lang="it">integrato</span>.</span> <span data-cap="llm" lang="en" hidden>AI scriptwriter.</span> <span lang="en">Stream MP3</span> · {{ stream_bitrate_kbps }} kbps. <span lang="en">Made with espresso.</span></p></div>
   </div>
 </section>
 
@@ -253,17 +253,17 @@
     {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
     <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
-    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
+    {% if brand.frequency %}<span>{{ brand.frequency }} · {{ stream_bitrate_kbps }} kbps</span><span class="dot">&#10022;</span>{% endif %}
     <span lang="it">{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
     {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
     <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
-    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
+    {% if brand.frequency %}<span>{{ brand.frequency }} · {{ stream_bitrate_kbps }} kbps</span><span class="dot">&#10022;</span>{% endif %}
     <span lang="it">{{ brand.tagline or "La notte è italiana" }}</span><span class="dot">&#10022;</span>
     {% if brand.hosts %}<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span><span class="dot">&#10022;</span>{% endif %}
     <span lang="it">Dediche aperte</span><span class="dot">&#10022;</span>
     <span lang="it">Manda al DJ</span><span class="dot">&#10022;</span>
-    {% if brand.frequency %}<span>{{ brand.frequency }} · 320 kbps</span><span class="dot">&#10022;</span>{% endif %}
+    {% if brand.frequency %}<span>{{ brand.frequency }} · {{ stream_bitrate_kbps }} kbps</span><span class="dot">&#10022;</span>{% endif %}
   </div>
 </div>
 

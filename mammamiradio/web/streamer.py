@@ -2357,6 +2357,9 @@ def _listener_context(request: Request, config, prefix: str) -> dict:
     state = getattr(request.app.state, "station_state", None)
     return {
         "brand": config.brand,
+        # Keep listener-facing format copy aligned with /public-status and
+        # /stream headers; this helper is the canonical audio-format source.
+        "stream_bitrate_kbps": stream_audio_metadata(config)["bitrate_kbps"],
         "ingress_prefix": _sanitize_ingress_prefix(prefix),
         "csrf_token": _get_csrf_token(request.app),
         "asset_version": _ASSET_VERSION,

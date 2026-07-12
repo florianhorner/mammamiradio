@@ -2010,6 +2010,24 @@ async def test_get_root_serves_listener_page():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bitrate_kbps", [192, 128])
+async def test_listener_page_renders_configured_stream_bitrate(bitrate_kbps: int):
+    """Every visible listener bitrate must match the canonical audio config."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = bitrate_kbps
+    # Keep the three ticker repetitions in this route-level contract even if
+    # the default radio.toml brand is later changed.
+    app.state.config.brand.frequency = "98.7 FM"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    assert resp.text.count(f"· {bitrate_kbps} kbps") == 4
+    assert "320 kbps" not in resp.text
+
+
+@pytest.mark.asyncio
 async def test_get_root_renders_italian_when_super_italian_on():
     """Super Italian Mode ON: CTA + form button render in Italian."""
     app = _make_test_app()
