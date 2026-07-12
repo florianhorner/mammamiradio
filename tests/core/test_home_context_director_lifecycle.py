@@ -100,3 +100,48 @@ def test_record_discard_survives_raising_director():
     state.record_discard(segment, reason="test")
 
     assert state.discard_by_reason.get("test", 0) >= 1
+
+
+class _RecordingDirector:
+    """Counts lifecycle calls so we can prove which segments reach the director."""
+
+    def __init__(self) -> None:
+        self.activate_calls = 0
+        self.release_calls = 0
+
+    def activate(self, *args, **kwargs) -> None:
+        self.activate_calls += 1
+
+    def release(self, *args, **kwargs) -> None:
+        self.release_calls += 1
+
+
+def test_ordinary_segment_without_home_fact_never_touches_director():
+    # An ordinary segment carries a queue_id but no home_fact_id. Only home-fact
+    # segments hold reservations, so the director must not be called — otherwise a
+    # fact_id=None release would wildcard-match an unrelated reservation.
+    director = _RecordingDirector()
+    state = StationState(home_context_director=director)
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/song.mp3"),
+        metadata={"queue_id": "queue-ordinary", "title": "Song"},
+    )
+
+    state.on_stream_segment(ordinary)
+    state.record_discard(ordinary, reason="test")
+
+    assert director.activate_calls == 0
+    assert director.release_calls == 0
+
+    # A home-fact segment still reaches the director.
+    home = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/banter.mp3"),
+        metadata={"queue_id": "queue-home", "home_fact_id": "fact-1"},
+    )
+    state.on_stream_segment(home)
+    state.record_discard(home, reason="test")
+
+    assert director.activate_calls == 1
+    assert director.release_calls == 1
