@@ -665,6 +665,163 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_banter_home_fact_reservation_rejected_is_discarded_before_air(tmp_path):
+    """A home-fact banter whose reservation is rejected at admission (the topic is
+    already queued ahead or resting on cooldown) is discarded, not aired without a
+    reservation/cooldown. A following fact-free banter still queues (no dead air)."""
+    from mammamiradio.home.context_director import HomeContextDirector, PromptFact
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.home_context_director = HomeContextDirector()  # empty: this fact was never issued
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter_home.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    # policy_revision 0 + an unmuted entity so the policy gate passes and the
+    # discard is driven purely by the rejected reservation.
+    fact = PromptFact("orphan-fact-1", "weather.forecast_home", "ambient.temperature", "fp", "Sole e 24 gradi.", 0)
+    calls = 0
+
+    async def _banter(state_arg, config_arg, **_kwargs):
+        nonlocal calls
+        calls += 1
+        # The first banter carries a fact the director never issued (its
+        # reservation is rejected); later banters are fact-free so the loop settles.
+        if calls == 1:
+            state_arg.last_banter_home_fact = fact
+            state_arg.force_next = SegmentType.BANTER  # keep the retry a banter, not music
+        else:
+            state_arg.last_banter_home_fact = None
+        return ([(host, "Ciao ragazzi!")], None)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1, timeout=15.0)
+
+    # The rejected-reservation banter was discarded; a later fact-free banter
+    # queued carrying no home_fact metadata.
+    assert state.discard_by_reason.get("operator_purge", 0) >= 1
+    assert calls >= 2
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert "home_fact_id" not in seg.metadata
+
+
+@pytest.mark.asyncio
+async def test_no_llm_banter_does_not_advance_home_fact_rotation(tmp_path):
+    """A demo/no-LLM station must not call director.select() — a canned banter
+    never consumes a fact, so selecting there would burn rotation/cooldown for a
+    cue the listener never hears."""
+    from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.canned_clips_streamed = 2  # gold-closer branch -> canned pick
+    director = HomeContextDirector()
+    director.observe(
+        [DirectorObservation("weather.forecast_home", "weather", "sunny", score=9.0, temperature_c=22.0)],
+        policy_revision=0,
+    )
+    state.home_context_director = director
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned_no_llm.mp3"
+    canned_clip.write_bytes(b"canned audio" * 100)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{PRODUCER_MODULE}._synthesize_impossible_moment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert queue.qsize() >= 1
+    # select() was never called: rotation and the selected counter stay untouched.
+    assert director.admin_status()["session_counters"]["selected"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_directive_keeps_legacy_home_context_in_prompt(tmp_path):
+    """A pending home directive must keep the legacy ha_context/events/weather in
+    the prompt: the director is bypassed (no fact), so use_directed_home_context
+    must be False, otherwise the FIRST CONNECTED HOME MOMENT airs with no data."""
+    from mammamiradio.home.context_director import HomeContextDirector
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.home_context_director = HomeContextDirector()
+    state.ha_context = "- Coffee machine: on"
+    state.ha_pending_directive = "FIRST CONNECTED HOME MOMENT: use one or two concrete home details."
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter_directive.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    captured: list[dict] = []
+
+    async def _banter(state_arg, config_arg, **kwargs):
+        captured.append(kwargs)
+        return ([(host, "Ciao ragazzi!")], None)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert captured, "write_banter was never called"
+    # A pending directive must not put the banter in director-owned mode, and no
+    # fact is selected for it.
+    assert captured[0]["use_directed_home_context"] is False
+    assert captured[0].get("prompt_fact") is None
+
+
+@pytest.mark.asyncio
 async def test_banter_no_llm_impossible_tts_failure_falls_back_to_canned(tmp_path):
     """No-LLM banter falls back to canned clip when impossible-moment TTS fails."""
     state = _make_run_state()

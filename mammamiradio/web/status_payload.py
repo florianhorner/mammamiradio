@@ -135,6 +135,14 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
 
 
 def _ha_details_payload(state: StationState) -> dict | None:
+    director_status: dict | None = None
+    director = getattr(state, "home_context_director", None)
+    if director is not None:
+        try:
+            candidate = director.admin_status()
+            director_status = candidate if isinstance(candidate, dict) else None
+        except Exception:
+            director_status = None
     has_ha_observability = bool(
         state.ha_context
         or state.ha_scored_entities
@@ -142,6 +150,7 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or state.ha_ritual_public_families
         or state.ha_ritual_matches
         or state.ha_ritual_recipe_audit
+        or director_status
     )
     if not has_ha_observability:
         return None
@@ -172,6 +181,8 @@ def _ha_details_payload(state: StationState) -> dict | None:
             "matches": copy.deepcopy(state.ha_ritual_matches[:8]),
             "audit": copy.deepcopy(state.ha_ritual_recipe_audit[:16]),
         }
+    if director_status is not None:
+        payload["home_context_director"] = director_status
     return payload
 
 
@@ -335,6 +346,14 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
 
 _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
     {
+        # Home Context Director bookkeeping is intentionally internal.  The
+        # selected fact is an opaque prompt contract, not listener-facing data.
+        "home_fact_id",
+        "home_fact_topic",
+        "home_fact_topic_key",
+        "home_fact_fingerprint",
+        "home_fact_entity_id",
+        "home_fact_policy_revision",
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",
@@ -351,7 +370,22 @@ def _public_segment_metadata(metadata: object) -> dict:
     """Copy segment metadata for public/shared status payloads."""
     if not isinstance(metadata, dict):
         return {}
-    return {key: copy.deepcopy(value) for key, value in metadata.items() if key not in _INTERNAL_SEGMENT_METADATA_KEYS}
+
+    def _without_internal(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: _without_internal(child)
+                for key, child in value.items()
+                if key not in _INTERNAL_SEGMENT_METADATA_KEYS
+            }
+        if isinstance(value, list):
+            return [_without_internal(child) for child in value]
+        if isinstance(value, tuple):
+            return tuple(_without_internal(child) for child in value)
+        return copy.deepcopy(value)
+
+    public = _without_internal(metadata)
+    return public if isinstance(public, dict) else {}
 
 
 def _public_now_streaming_payload(now_streaming: dict | None) -> dict:

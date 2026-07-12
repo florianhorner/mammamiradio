@@ -1,0 +1,14 @@
+Home Context Director — test proof
+Generated: 2026-07-11
+Branch: florianhorner/fix/temperature-announcement-limits
+
+== Full suite (make target: pytest tests/) ==
+4561 passed, 2 skipped, 21 deselected in 111.02s
+
+Includes the pre-ship squad regression tests (stale-revision reservation leak,
+in-flight release, director-exception audio-safety guards, personal-moment 422
+gate, exactly-one-action contract) and the CodeRabbit follow-up coverage
+(non-mapping HA payload fail-closed, tuple/non-dict public-metadata scrub).
+
+Local gates: ruff check clean, ruff format clean, mypy clean,
+scripts/check-release-invariants.sh 10/10, scripts/check-changelog-lint.sh clean.

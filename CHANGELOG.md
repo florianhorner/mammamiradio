@@ -6,6 +6,10 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+### Added
+
+- **Home references now rotate like radio, not a dashboard.** Casual host breaks receive at most one privacy-safe ambient cue, and the station holds that topic out until it has actually aired and rested. Weather, climate, vacuum, sun, and curated coffee cues can vary naturally without extra Home Assistant polling; room-presence moments stay off until explicitly enabled for that sensor. The control room shows a fact-free rotation state, and private director bookkeeping never reaches listener or public-status payloads.
+
 ## [2.17.0] - 2026-07-12
 
 First listen, then home context. v2.17 makes the station easier to start and gives you a clearer view of the Home Assistant layer the hosts may use.

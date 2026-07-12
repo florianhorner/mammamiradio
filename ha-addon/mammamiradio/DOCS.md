@@ -28,7 +28,7 @@ Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode,
 
 Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
 
-After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; already-rendered audio is not purged.
+After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Casual host breaks use at most one safe rotating cue, while room-presence is a separate default-off **personal on-air moment** permission. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; current audio finishes normally, while an unstarted queued host break carrying that entity's selected director fact is removed.
 
 Premium voice keys are optional and separate from the first AI-host unlock.
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Home context now rotates instead of repeating itself.** A casual host break gets at most one safe ambient cue, and a topic rests for 30 minutes after it starts airing. Room-presence moments stay off until explicitly enabled for that sensor; the add-on never adds extra Home Assistant polling, and its public status never exposes the internal cue bookkeeping.
+
 ## 2.18.0
 
 ## 2.17.0 - 2026-07-12
