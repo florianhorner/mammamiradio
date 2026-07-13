@@ -70,6 +70,7 @@ def _mock_anthropic_response(text: str):
     mock_response = MagicMock()
     mock_response.content = [mock_content_block]
     mock_client = MagicMock()
+    mock_client.with_options.return_value = mock_client
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
     mock_cls = MagicMock(return_value=mock_client)

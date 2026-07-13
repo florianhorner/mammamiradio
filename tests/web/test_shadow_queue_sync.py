@@ -823,6 +823,56 @@ class TestScriptProviderStatusRecovery:
 
         assert "usage limit" in snap["providers"]["script_provider"]["action_guidance"]
 
+    def test_transient_reason_is_a_short_circuit_breaker_while_active(self):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() + 20
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_transient",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(
+            req,
+            provider_health=_provider_health(anthropic_degraded=True, retry_after_s=20),
+        )
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] == "circuit_breaker"
+        assert provider["retry_in_seconds"] == 20
+        assert provider["action_guidance"] == _FALLBACK_REASON_LABELS["anthropic_transient"]
+        assert provider["recovery_mode"] != "action_required"
+
+    @pytest.mark.parametrize("reason", ["anthropic_transient", "anthropic_transient_blocked"])
+    def test_expired_transient_reasons_auto_recover_without_operator_action(self, reason: str):
+        app = _make_app()
+        state = app.state.station_state
+        app.state.config.anthropic_api_key = "anthropic-key"
+        app.state.config.openai_api_key = "openai-key"
+        state.anthropic_disabled_until = time.time() - 1
+        state.update_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason=reason,
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req, provider_health=_provider_health())
+        provider = snap["providers"]["script_provider"]
+
+        assert provider["recovery_mode"] == "transient"
+        assert provider["retry_in_seconds"] is None
+        assert provider["action_guidance"] == "No action needed - will retry automatically"
+        assert provider["recovery_mode"] != "action_required"
+
     def test_recovery_mode_none_when_no_fallback(self):
         app = _make_app()
         app.state.config.anthropic_api_key = "anthropic-key"
