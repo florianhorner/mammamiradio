@@ -60,6 +60,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.context_director import DirectorObservation, PromptFact
 from mammamiradio.home.entity_policy import (
@@ -2308,7 +2309,13 @@ def _has_real_home_context(ctx: HomeContext | None) -> bool:
     return _has_refresh_budget_context(ctx)
 
 
-async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeContext | None) -> HomeContext:
+async def _refresh_home_context_budgeted(
+    config: StationConfig,
+    ha_cache: HomeContext | None,
+    *,
+    authorization: HomeAuthorization | None = None,
+    observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+) -> HomeContext:
     """Refresh HA context within a wall-clock budget; never block production.
 
     Returns the freshest HomeContext available: a completed refresh, else the
@@ -2319,14 +2326,21 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
     longer warm-up budget so the registry/weather snapshot can populate; every
     steady-state refresh gets the tight ``context_refresh_timeout``.
     """
-    have_context = _has_refresh_budget_context(ha_cache) or _has_refresh_budget_context(get_cached_home_context())
+    active_authorization = authorization or HomeAuthorization.narrow()
+    cached_global = get_cached_home_context(authorization=active_authorization)
+    if cached_global is not None and cached_global.authorization_mode != active_authorization.mode.value:
+        cached_global = None
+    same_mode_cache = (
+        ha_cache if ha_cache is not None and ha_cache.authorization_mode == active_authorization.mode.value else None
+    )
+    have_context = _has_refresh_budget_context(same_mode_cache) or _has_refresh_budget_context(cached_global)
     budget = (
         config.homeassistant.context_refresh_timeout
         if have_context
         else max(config.homeassistant.context_refresh_timeout, _HA_CONTEXT_COLD_LOAD_TIMEOUT)
     )
     try:
-        return await asyncio.wait_for(
+        refreshed = await asyncio.wait_for(
             fetch_home_context(
                 ha_url=config.homeassistant.url,
                 ha_token=config.ha_token,
@@ -2334,16 +2348,28 @@ async def _refresh_home_context_budgeted(config: StationConfig, ha_cache: HomeCo
                 _cache=ha_cache,
                 cache_dir=config.cache_dir,
                 radio_event_rules=config.radio_events,
+                authorization=active_authorization,
+                observed_entity_ids_callback=observed_entity_ids_callback,
             ),
             timeout=budget,
         )
+        if refreshed.authorization_mode != active_authorization.mode.value:
+            logger.error(
+                "HA context authorization mismatch (%s != %s); discarding refreshed context",
+                refreshed.authorization_mode,
+                active_authorization.mode.value,
+            )
+            return HomeContext(authorization_mode=active_authorization.mode.value)
+        return refreshed
     except TimeoutError:
         logger.warning("HA context refresh exceeded %.1fs budget — airing on last-known context", budget)
-        stale = ha_cache or get_cached_home_context() or HomeContext()
+        stale = same_mode_cache or cached_global
         # fetch_home_context() mute-filters on every return path; this fallback
         # bypasses it entirely by reusing a context built before this call, so
         # the live mute policy has to be re-applied here explicitly.
-        return apply_entity_mute_policy(stale, config.cache_dir)
+        if stale is not None:
+            return apply_entity_mute_policy(stale, config.cache_dir)
+        return HomeContext(authorization_mode=active_authorization.mode.value)
 
 
 def _apply_radio_event_matches(state: StationState, matches: list[RadioEventMatch]) -> list[HomeEvent]:
@@ -2591,6 +2617,7 @@ async def run_producer(
         _ha_tasks.add(task)
         task.add_done_callback(_ha_tasks.discard)
 
+    home_authorization = state.home_authorization or HomeAuthorization.narrow()
     if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
 
         async def _ha_heartbeat() -> None:
@@ -2622,7 +2649,7 @@ async def run_producer(
 
         # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
         # Only fetches the timer entity states, not the full 200+ entity context.
-        if config.homeassistant.timer_interrupts:
+        if config.homeassistant.timer_interrupts and home_authorization.allows_household_moments:
             _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
             # Pre-populate old_states for timer entities with "idle" so the first
             # active→idle transition is detected correctly (cold-start fix).
@@ -2969,16 +2996,24 @@ async def run_producer(
             # Refresh within a wall-clock budget so a slow/hung HA never blocks
             # segment production (INSTANT AUDIO). The state-copy below then runs on
             # whatever HomeContext we end up with — fresh, stale, or empty.
-            ha_cache = await _refresh_home_context_budgeted(config, ha_cache)
+            ha_cache = await _refresh_home_context_budgeted(
+                config,
+                ha_cache,
+                authorization=state.home_authorization,
+                observed_entity_ids_callback=state.home_entity_ids_observer,
+            )
             # Fail-soft: the scene namer is a mood garnish, and this block runs
             # OUTSIDE the segment-render try below — an exception here would
             # kill the producer task itself (INSTANT AUDIO). Same posture as
             # the schedule_label_generation wrap further down.
-            try:
-                mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
-            except Exception:
-                logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
-                mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
+            if home_authorization.mode is HomeAuthorizationMode.NARROW:
+                mood_it, mood_en = "", ""
+            else:
+                try:
+                    mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
+                except Exception:
+                    logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
+                    mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = mood_it
@@ -3002,7 +3037,7 @@ async def run_producer(
             ][:8]
             state.ha_ritual_recipe_audit = list(getattr(ha_cache, "ritual_recipe_audit", []) or [])[:16]
             raw_states = getattr(ha_cache, "raw_states", {})
-            if isinstance(raw_states, dict):
+            if isinstance(raw_states, dict) and home_authorization.mode is not HomeAuthorizationMode.NARROW:
                 # Fail-soft: scheduling does synchronous preflight work before
                 # creating the background task; an exception here must never
                 # stop segment production (INSTANT AUDIO).
@@ -3091,18 +3126,19 @@ async def run_producer(
                         status="dropped",
                         drop_reason="interrupt_cooldown",
                     )
-            _maybe_arm_first_home_context_moment(
-                state,
-                ha_cache,
-                seg_type,
-                can_generate_banter=_sw.has_script_llm(config),
-            )
+            if home_authorization.mode is not HomeAuthorizationMode.NARROW:
+                _maybe_arm_first_home_context_moment(
+                    state,
+                    ha_cache,
+                    seg_type,
+                    can_generate_banter=_sw.has_script_llm(config),
+                )
 
             # Impossible Moments v2 (A): fold new events into the evening ledger
             # (watermark-deduped) and, for banter only, surface one eligible
             # running-gag. Ads stay gag-free in v0. The ledger persists across
             # the addon's frequent restarts.
-            if state.evening_ledger is not None:
+            if state.evening_ledger is not None and home_authorization.mode is not HomeAuthorizationMode.NARROW:
                 _now = time.time()
                 state.evening_ledger.observe([*ha_cache.events, *radio_gag_events, *ritual_gag_events], now=_now)
                 if seg_type == SegmentType.BANTER:
@@ -3141,6 +3177,13 @@ async def run_producer(
                     state.ha_running_gag_key = ""
                     state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
+            elif home_authorization.mode is HomeAuthorizationMode.NARROW:
+                # A copied/restored cache can contain buckets elected by an
+                # older install. Narrow mode may retain that file for explicit
+                # future recovery, but it never offers or airs those callbacks.
+                state.ha_running_gag = ""
+                state.ha_running_gag_key = ""
+                state.ha_running_gag_moment_id = ""
         # Flush Moment Receipts once per cycle at loop level, NOT inside the HA
         # block: streamer-side finalizes (airing → true outcome) set the dirty
         # flag from the playback loop, and must still reach disk when HA context

@@ -22,6 +22,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
@@ -75,6 +76,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,  # simulate a live listener so the producer gate passes
+        home_authorization=HomeAuthorization.legacy(),
     )
 
 
@@ -1600,6 +1602,7 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 def _ha_ctx_mock():
     """A HomeContext-shaped mock with the fields the producer HA block reads."""
     ctx = MagicMock()
+    ctx.authorization_mode = HomeAuthorizationMode.LEGACY.value
     ctx.summary = ""
     ctx.events_summary = ""
     ctx.events = []

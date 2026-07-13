@@ -21,6 +21,23 @@ TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
 
 
+def _privacy_startup_config(tmp_path: Path) -> MagicMock:
+    config = MagicMock()
+    config.station.name = "TestRadio"
+    config.station.language = "it"
+    config.bind_host = "127.0.0.1"
+    config.port = 8000
+    config.pacing.lookahead_segments = 3
+    config.max_cache_size_mb = 500
+    config.tmp_dir = tmp_path / "tmp"
+    config.cache_dir = tmp_path / "cache"
+    config.homeassistant.enabled = False
+    config.ha_token = ""
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    return config
+
+
 @pytest.fixture(autouse=True)
 def _stub_provider_verdict():
     """Stop startup() from firing a real key-validation probe in lifecycle tests.
@@ -132,6 +149,277 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "producer_task")
         assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_install_stays_narrow_after_database_created_and_restart(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import (
+        load_legacy_home_database_preflight_v1,
+        load_legacy_home_preflight_v1,
+        preflight_path,
+    )
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert (config.cache_dir / "mammamiradio.db").exists()
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+        # Even loss of the sidecar cannot let the now-existing DB reclassify
+        # this cold install: the DB-local origin sentinel restores false.
+        preflight_path(config.cache_dir / "state").unlink()
+        await startup()
+
+    preflight = load_legacy_home_preflight_v1(config.cache_dir / "state")
+    assert preflight is not None
+    assert preflight.database_preexisted is False
+    assert load_legacy_home_database_preflight_v1(config.cache_dir / "mammamiradio.db") == preflight
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert app.state.station_state.home_entity_ids_observer is None
+
+
+@pytest.mark.asyncio
+async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only_provenance(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1, load_legacy_home_provenance_v1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    state = app.state.station_state
+    assert state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+    assert state.home_entity_ids_observer is not None
+    state.home_entity_ids_observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+    await app.state.legacy_home_provenance_task
+    provenance = load_legacy_home_provenance_v1(
+        config.cache_dir / "state",
+        config.cache_dir / "mammamiradio.db",
+    )
+    assert provenance is not None
+    assert provenance.manifest_digest == LEGACY_HOME_MANIFEST_V1.entity_id_digest
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_preflight_write_failure_stops_before_database_init(tmp_path):
+    config = _privacy_startup_config(tmp_path)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.capture_legacy_home_preflight_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.init_db") as init_db,
+        pytest.raises(RuntimeError, match="cold-install Home context boundary"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    init_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_preexisting_preflight_write_failure_fails_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(f"{MODULE}.capture_legacy_home_preflight_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_disagreeing_durable_witnesses_fail_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(
+            f"{MODULE}.load_legacy_home_database_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=False),
+        ),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_database_origin_write_failure_fails_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.persist_legacy_home_database_preflight_v1", side_effect=RuntimeError("locked")),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_invalid_database_origin_fails_narrow_without_repairing_sidecar(tmp_path):
+    import sqlite3
+
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import DATABASE_ORIGIN_TABLE, preflight_path
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    db_path = config.cache_dir / "mammamiradio.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(f"CREATE TABLE {DATABASE_ORIGIN_TABLE} (wrong_column INTEGER)")
+        connection.commit()
+    finally:
+        connection.close()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert app.state.station_state.home_entity_ids_observer is None
+    assert not preflight_path(config.cache_dir / "state").exists()
+
+
+@pytest.mark.asyncio
+async def test_startup_provenance_observer_runs_fsync_work_off_event_loop(tmp_path):
+    import threading
+
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    started = threading.Event()
+    release = threading.Event()
+    seal_calls = 0
+
+    def _slow_seal(*_args, **_kwargs):
+        nonlocal seal_calls
+        seal_calls += 1
+        if seal_calls > 1:
+            return None
+        started.set()
+        release.wait(timeout=2.0)
+        raise RuntimeError("disk fault")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.seal_legacy_home_provenance_v1", side_effect=_slow_seal) as seal,
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        observer = app.state.station_state.home_entity_ids_observer
+        assert observer is not None
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+
+        assert await asyncio.to_thread(started.wait, 1.0)
+        task = app.state.legacy_home_provenance_task
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+        assert app.state.legacy_home_provenance_task is task
+        assert not task.done()
+        assert task in app.state.background_tasks
+        # Event-loop work continues while the durability call is blocked in its thread.
+        await asyncio.sleep(0)
+        release.set()
+        await task
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+        retry_task = app.state.legacy_home_provenance_task
+        assert retry_task is not task
+        await retry_task
+
+    assert task not in app.state.background_tasks
+    assert retry_task not in app.state.background_tasks
+    assert seal.call_count == 2
 
 
 @pytest.mark.asyncio
