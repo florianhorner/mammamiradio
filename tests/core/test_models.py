@@ -96,6 +96,104 @@ def test_render_timings_are_bounded_newest_first_and_sanitized():
     assert "reason" in state.render_timings[-1]
 
 
+def test_stream_delivery_diagnostics_coalesce_and_keep_only_anonymous_bounded_values():
+    """The private egress diagnostics aggregate timing without retaining identity."""
+    state = StationState()
+    state.listeners_active = 3
+    state.gen_phase = "mastering"
+    state.gen_kind = "ad"
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_active_foreground_timed_out = True
+    state.set_ha_context_refresh_stage("projection", started=10.0)
+
+    state.record_stream_pacing_event(
+        "not-a-real-kind",
+        lateness_ms=1,
+        remaining_lead_ms=1,
+        segment_type="music",
+        timestamp=99.0,
+        monotonic_now=10.0,
+    )
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=-2,
+        remaining_lead_ms=-3,
+        deficit_ms=-4,
+        segment_type="",
+        timestamp=100.0,
+        monotonic_now=10.1,
+    )
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=25,
+        remaining_lead_ms=200,
+        deficit_ms=0,
+        segment_type="",
+        timestamp=100.5,
+        # The coarse HA snapshot is deliberately part of the coalescing key.
+        # Keep it identical here so this proves the aggregation path itself.
+        monotonic_now=10.1,
+    )
+    # A later event must not be folded into the earlier one merely because it
+    # has the same context; the rolling counters retain both sends.
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=30,
+        remaining_lead_ms=150,
+        segment_type="music",
+        timestamp=102.0,
+        monotonic_now=10.3,
+    )
+    state.record_stream_pacing_event(
+        "underrun",
+        lateness_ms=600,
+        remaining_lead_ms=0,
+        deficit_ms=100,
+        segment_type="music",
+        timestamp=102.5,
+        monotonic_now=10.4,
+    )
+    state.record_stream_outcome(
+        segment_type="",
+        result="",
+        bytes_sent=-1,
+        starting_listener_count=-2,
+        terminal_reason="not-a-real-reason",
+        timestamp=102.5,
+    )
+    state.record_slow_listener_drops(0, timestamp=100.0)
+    state.record_slow_listener_drops(2, timestamp=100.0)
+    state.record_slow_listener_drops(3, timestamp=100.5)
+
+    snapshot = state.stream_delivery_snapshot(now=102.5, monotonic_now=11.0)
+
+    assert snapshot["session"] == {"late": 3, "underrun": 1, "overrun_rebased": 0, "total": 4}
+    assert snapshot["window_15m"] == snapshot["session"]
+    assert [event["count"] for event in snapshot["recent"]] == [2, 1, 1]
+    assert snapshot["recent"][0]["segment_type"] == "unknown"
+    assert snapshot["recent"][0]["lateness_ms"] == 25
+    assert snapshot["recent"][0]["remaining_lead_ms"] == 0
+    assert snapshot["recent"][0]["generator"] == {"phase": "mastering", "kind": "ad"}
+    assert snapshot["recent"][0]["ha_refresh"] == {
+        "in_flight": True,
+        "foreground_timed_out": True,
+        "stage": "projection",
+        "stage_elapsed_ms": 100,
+    }
+    assert snapshot["ha_refresh"]["stage_elapsed_ms"] == 1000
+    assert snapshot["recent_stream_outcomes"] == [
+        {
+            "timestamp": 102.5,
+            "segment_type": "unknown",
+            "result": "not_streamed",
+            "bytes_sent": 0,
+            "starting_listener_count": 0,
+            "terminal_reason": "file_error",
+        }
+    ]
+    assert snapshot["slow_listener_drops"] == {"session": 5, "window_15m": 5, "last_drop_at": 100.5}
+
+
 def test_new_render_attempt_records_an_abandoned_previous_attempt():
     state = StationState()
     state.begin_render_timing("banter", started=10.0)

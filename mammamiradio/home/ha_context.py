@@ -8,6 +8,9 @@ ambient home state ~30-50% of the time, like glancing out a window.
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
+import copy
 import datetime
 import json
 import logging
@@ -16,7 +19,7 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -28,7 +31,17 @@ from websockets.asyncio.client import connect as websocket_connect
 from mammamiradio.core.config import DEFAULT_STATION_NAME, RadioEventRule, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
-from mammamiradio.home.catalog import ENTITY_LABELS, ENTITY_LABELS_EN, LabelResolution, resolve_label
+from mammamiradio.home.catalog import (
+    ENTITY_LABELS,
+    ENTITY_LABELS_EN,
+    LabelResolution,
+    _catalog_entry_valid,
+    _fallback_label,
+    compute_hash,
+    load_catalog,
+    resolve_label,
+    validate_label,
+)
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
@@ -38,8 +51,14 @@ from mammamiradio.home.ha_enrichment import (
     diff_states,
     prune_events,
 )
-from mammamiradio.home.radio_events import RadioEventMatch, build_radio_event_baseline, match_radio_events
+from mammamiradio.home.radio_events import (
+    _DIRECTIVE_COOLDOWNS,
+    RadioEventMatch,
+    build_radio_event_baseline,
+    match_radio_events,
+)
 from mammamiradio.home.ritual_recipes import (
+    _RITUAL_COOLDOWNS,
     RitualRecipeMatch,
     audit_ritual_recipes,
     build_ritual_recipe_baseline,
@@ -49,6 +68,15 @@ from mammamiradio.home.ritual_recipes import (
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
+
+# JSON decoding and the full entity projection are deliberately isolated from
+# the asyncio loop that paces the live stream. One named worker keeps abandoned
+# calculations bounded and ordered without sharing the default executor.
+_ha_projection_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="ha-projection",
+)
+atexit.register(_ha_projection_executor.shutdown, wait=False, cancel_futures=True)
 
 # Entities curated for maximum radio entertainment value
 GOLD_ENTITIES = [
@@ -431,10 +459,42 @@ class _HomeContextFetchOutcome:
     duration_seconds: float
     radio_event_state_baseline: dict[str, dict] = field(default_factory=dict)
     ritual_recipe_state_baseline: dict[str, dict] = field(default_factory=dict)
+    observed_entity_ids: frozenset[str] = field(default_factory=frozenset)
 
     def is_adoptable_from(self, baseline_timestamp: float) -> bool:
         """Whether this represents a genuinely newer fetched snapshot."""
         return self.kind == "fresh" and self.snapshot_timestamp > baseline_timestamp
+
+
+@dataclass(frozen=True)
+class _HomeContextProjectionInput:
+    """Copied, inert values consumed by the dedicated projection worker."""
+
+    response_bytes: bytes
+    registry_snapshot: HomeRegistrySnapshot
+    weather_arc: str
+    weather_arc_en: str
+    authorization_mode: str
+    muted_ids: frozenset[str]
+    effective_cache: HomeContext | None
+    radio_event_rules: tuple[RadioEventRule, ...]
+    radio_event_state_baseline: dict[str, dict]
+    ritual_recipe_state_baseline: dict[str, dict]
+    radio_event_cooldowns: dict[str, float]
+    ritual_recipe_cooldowns: dict[str, float]
+    label_catalog: dict
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class _HomeContextProjectionCandidate:
+    """Pure worker result; publication remains coordinator-owned."""
+
+    context: HomeContext
+    radio_event_state_baseline: dict[str, dict]
+    ritual_recipe_state_baseline: dict[str, dict]
+    observed_entity_ids: frozenset[str]
+    warnings: tuple[str, ...] = ()
 
 
 def _copy_raw_state(state_data: dict) -> dict:
@@ -578,8 +638,32 @@ def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str
     return score
 
 
-def _resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None = None) -> LabelResolution | None:
-    return resolve_label(entity_id, state_data, cache_dir=cache_dir)
+def _resolve_label(
+    entity_id: str,
+    state_data: dict,
+    *,
+    cache_dir: Path | None = None,
+    catalog: Mapping[str, object] | None = None,
+) -> LabelResolution | None:
+    """Resolve a label from an inert catalog copy when projection is threaded."""
+    if catalog is None:
+        return resolve_label(entity_id, state_data, cache_dir=cache_dir)
+    if entity_id in ENTITY_LABELS:
+        return LabelResolution(
+            ENTITY_LABELS[entity_id],
+            ENTITY_LABELS_EN.get(entity_id, ENTITY_LABELS[entity_id]),
+            "curated",
+        )
+    entries = catalog.get("entries")
+    entry = entries.get(entity_id) if isinstance(entries, Mapping) else None
+    valid = _catalog_entry_valid(entity_id, entry, compute_hash(entity_id, state_data))
+    if valid is not None:
+        label_it, label_en = valid
+        return LabelResolution(label_it, label_en, "catalog")
+    fallback = _fallback_label(entity_id, state_data)
+    if fallback and validate_label(fallback, entity_id):
+        return LabelResolution(fallback, fallback, "fallback")
+    return None
 
 
 def _format_state(
@@ -587,6 +671,7 @@ def _format_state(
     state_data: dict,
     *,
     cache_dir: Path | None = None,
+    catalog: Mapping[str, object] | None = None,
     resolved: LabelResolution | None = None,
 ) -> str | None:
     """Format a single entity state as a natural language line.
@@ -596,7 +681,7 @@ def _format_state(
     """
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
-    resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+    resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
     if resolved is None:
         # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
         # catalog, registry, or friendly label is available, drop the entity.
@@ -701,16 +786,17 @@ def _build_scored_entities(
     limit: int = DEFAULT_CONTEXT_ENTITY_LIMIT,
     char_limit: int = DEFAULT_CONTEXT_CHAR_LIMIT,
     cache_dir: Path | None = None,
+    catalog: Mapping[str, object] | None = None,
 ) -> list[ScoredEntity]:
     """Score filtered HA entities and return the budgeted prompt slice."""
     ref_now = time.time() if now is None else now
     event_ids = event_entity_ids or set()
     scored: list[ScoredEntity] = []
     for entity_id, state_data in states.items():
-        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
         if resolved is None:
             continue
-        line = _format_state(entity_id, state_data, cache_dir=cache_dir, resolved=resolved)
+        line = _format_state(entity_id, state_data, cache_dir=cache_dir, catalog=catalog, resolved=resolved)
         if not line:
             continue
         scored.append(
@@ -954,6 +1040,7 @@ def _build_entity_label_maps(
     states: dict[str, dict],
     *,
     cache_dir: Path | None = None,
+    catalog: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     labels_it = dict(ENTITY_LABELS)
     labels_en = dict(ENTITY_LABELS_EN)
@@ -965,7 +1052,7 @@ def _build_entity_label_maps(
         # events_summary, bypassing the guard.
         if entity_id in labels_it and entity_id in labels_en:
             continue
-        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir)
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
         if resolved is None:
             continue
         labels_it.setdefault(entity_id, resolved.label_it)
@@ -1662,6 +1749,174 @@ def _apply_registry_snapshot(entity_id: str, state_data: dict, snapshot: HomeReg
     return enriched
 
 
+def _project_home_context(projection_input: _HomeContextProjectionInput) -> _HomeContextProjectionCandidate:
+    """Decode and project one HA reply without mutating process-owned state."""
+    decoded = json.loads(projection_input.response_bytes)
+    if not isinstance(decoded, list):
+        raise TypeError("Home Assistant states response must be a list")
+
+    active_authorization = HomeAuthorization(HomeAuthorizationMode(projection_input.authorization_mode))
+    muted_ids = set(projection_input.muted_ids)
+    effective_cache = projection_input.effective_cache
+    timestamp = projection_input.timestamp
+    warnings: list[str] = []
+    denylist_hits: dict[str, int] = {}
+
+    all_entity_map = {
+        str(entity.get("entity_id", "")): entity
+        for entity in decoded
+        if isinstance(entity, dict) and entity.get("entity_id")
+    }
+    muted_present = set(all_entity_map) & muted_ids
+    entity_map = (
+        {entity_id: data for entity_id, data in all_entity_map.items() if entity_id not in muted_ids}
+        if muted_present
+        else all_entity_map
+    )
+    enriched_entity_map = {
+        entity_id: _apply_registry_snapshot(entity_id, state_data, projection_input.registry_snapshot)
+        for entity_id, state_data in entity_map.items()
+    }
+    projection = active_authorization.project(enriched_entity_map)
+    projected_muted = set(projection.states) & muted_ids
+    authorized_entity_map = {
+        entity_id: state_data for entity_id, state_data in projection.states.items() if entity_id not in projected_muted
+    }
+    ambient_sources = {
+        synthetic_id: source_id
+        for synthetic_id, source_id in projection.ambient_sources.items()
+        if synthetic_id not in projected_muted
+    }
+
+    radio_events: list[RadioEventMatch] = []
+    if active_authorization.allows_household_moments and projection_input.radio_event_rules:
+        try:
+            radio_events = match_radio_events(
+                projection_input.radio_event_rules,
+                projection_input.radio_event_state_baseline,
+                authorized_entity_map,
+                now=timestamp,
+                cooldowns=dict(projection_input.radio_event_cooldowns),
+            )
+        except Exception:
+            warnings.append("radio_event_match_failed")
+        try:
+            radio_event_state_baseline = build_radio_event_baseline(
+                authorized_entity_map,
+                projection_input.radio_event_rules,
+            )
+        except Exception:
+            warnings.append("radio_event_baseline_failed")
+            radio_event_state_baseline = {}
+    else:
+        radio_event_state_baseline = {}
+
+    ritual_recipe_matches: list[RitualRecipeMatch] = []
+    if active_authorization.allows_household_moments:
+        try:
+            ritual_recipe_matches = match_ritual_recipes(
+                None,
+                projection_input.ritual_recipe_state_baseline,
+                authorized_entity_map,
+                now=timestamp,
+                cooldowns=dict(projection_input.ritual_recipe_cooldowns),
+            )
+        except Exception:
+            warnings.append("ritual_recipe_match_failed")
+        try:
+            ritual_recipe_state_baseline = build_ritual_recipe_baseline(authorized_entity_map)
+        except Exception:
+            warnings.append("ritual_recipe_baseline_failed")
+            ritual_recipe_state_baseline = {}
+    else:
+        ritual_recipe_state_baseline = {}
+
+    relevant = {
+        entity_id: filtered
+        for entity_id, state_data in authorized_entity_map.items()
+        if (filtered := _filter_state(entity_id, state_data, denylist_hits)) is not None
+    }
+    if muted_present or projected_muted:
+        denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present | projected_muted)
+    old_states = {
+        entity_id: state_data
+        for entity_id, state_data in (effective_cache.raw_states if effective_cache else {}).items()
+        if entity_id not in muted_ids
+    }
+    old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
+    labels_it, labels_en = _build_entity_label_maps(relevant, catalog=projection_input.label_catalog)
+    events = (
+        diff_states(
+            old_states,
+            relevant,
+            old_events,
+            entity_labels=labels_it,
+            state_translations=STATE_TRANSLATIONS,
+            now=timestamp,
+        )
+        if active_authorization.allows_household_moments
+        else deque(maxlen=EVENT_BUFFER_SIZE)
+    )
+    scored = _build_scored_entities(
+        relevant,
+        event_entity_ids={event.entity_id for event in events},
+        now=timestamp,
+        catalog=projection_input.label_catalog,
+    )
+    label_stats = _label_stats(scored)
+    mood = classify_home_mood(relevant) if active_authorization.allows_derived_mood else ""
+    mood_en = classify_home_mood_en(relevant) if active_authorization.allows_derived_mood else ""
+    weather_muted = _has_weather_mute(muted_ids)
+    weather_arc = (
+        ""
+        if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW
+        else projection_input.weather_arc
+    )
+    ritual_public_families = public_family_labels(ritual_recipe_matches)
+    ritual_recipe_audit = (
+        audit_ritual_recipes(states=authorized_entity_map) if active_authorization.allows_household_moments else []
+    )
+    last_event_label_en = ""
+    if events:
+        newest = max(events, key=lambda event: event.timestamp)
+        last_event_label_en = labels_en.get(newest.entity_id, newest.label)
+    context = HomeContext(
+        raw_states=relevant,
+        summary=_build_budgeted_summary(scored),
+        events=events,
+        radio_events=radio_events,
+        ritual_recipe_matches=ritual_recipe_matches,
+        ritual_public_families=ritual_public_families,
+        ritual_recipe_audit=ritual_recipe_audit,
+        events_summary=build_events_summary(events, now=timestamp),
+        mood=mood,
+        weather_arc=weather_arc,
+        timestamp=timestamp,
+        mood_en=mood_en,
+        weather_arc_en=(
+            ""
+            if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW
+            else projection_input.weather_arc_en
+        ),
+        events_summary_en=build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp),
+        last_event_label_en=last_event_label_en,
+        scored=scored,
+        catalog_hit_rate=float(label_stats["catalog_hit_rate"]),
+        label_stats=label_stats,
+        registry_source=projection_input.registry_snapshot.source,
+        denylist_hits=denylist_hits,
+        authorization_mode=active_authorization.mode.value,
+        ambient_sources=ambient_sources,
+    )
+    return _HomeContextProjectionCandidate(
+        context=context,
+        radio_event_state_baseline=radio_event_state_baseline,
+        ritual_recipe_state_baseline=ritual_recipe_state_baseline,
+        observed_entity_ids=frozenset(all_entity_map),
+        warnings=tuple(warnings),
+    )
+
+
 async def _fetch_home_context_outcome(
     ha_url: str,
     ha_token: str,
@@ -1671,6 +1926,7 @@ async def _fetch_home_context_outcome(
     radio_event_rules: list[RadioEventRule] | None = None,
     authorization: HomeAuthorization | None = None,
     observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> _HomeContextFetchOutcome:
     """Fetch HA context without publishing it to module-level state.
 
@@ -1689,6 +1945,7 @@ async def _fetch_home_context_outcome(
         *,
         radio_event_state_baseline: dict[str, dict] | None = None,
         ritual_recipe_state_baseline: dict[str, dict] | None = None,
+        observed_entity_ids: frozenset[str] | None = None,
     ) -> _HomeContextFetchOutcome:
         attempt_finished_at = time.time()
         return _HomeContextFetchOutcome(
@@ -1700,6 +1957,7 @@ async def _fetch_home_context_outcome(
             duration_seconds=max(0.0, time.monotonic() - started_monotonic),
             radio_event_state_baseline=radio_event_state_baseline or {},
             ritual_recipe_state_baseline=ritual_recipe_state_baseline or {},
+            observed_entity_ids=observed_entity_ids or frozenset(),
         )
 
     # Prefer explicitly passed cache, then module-level cache. A context built
@@ -1723,6 +1981,8 @@ async def _fetch_home_context_outcome(
 
     enrichment_tasks: list[asyncio.Task] = []
     try:
+        if stage_callback is not None:
+            stage_callback("states_request")
 
         async def _optional_registry_snapshot() -> HomeRegistrySnapshot:
             try:
@@ -1784,7 +2044,17 @@ async def _fetch_home_context_outcome(
             timeout=_HA_CONTEXT_TOTAL_FETCH_TIMEOUT,
         )
         resp.raise_for_status()
-        all_states = resp.json()
+        raw_content = getattr(resp, "content", b"")
+        # Real httpx responses always expose bytes here. The fallback preserves
+        # the long-standing mocked-response seam without moving production JSON
+        # decoding back onto the event loop.
+        response_bytes = (
+            bytes(raw_content)
+            if isinstance(raw_content, bytes | bytearray | memoryview)
+            else json.dumps(resp.json(), ensure_ascii=False).encode("utf-8")
+        )
+        if stage_callback is not None:
+            stage_callback("enrichment_wait")
 
         # Optional enrichment errors and timeouts have already degraded to
         # fallback values.  Await their tasks only after the state reply so a
@@ -1794,185 +2064,60 @@ async def _fetch_home_context_outcome(
             await registry_task if registry_task is not None else HomeRegistrySnapshot(source="narrow_not_loaded")
         )
         fetched_weather_arc = await weather_task if weather_task is not None else ""
-
-        timestamp = time.time()
-        denylist_hits: dict[str, int] = {}
-        # Re-read the mute policy after the awaited HA/registry calls above so an
-        # operator mute applied mid-refresh isn't served by a stale pre-await
-        # snapshot (TOCTOU — codex adversarial review).
+        # The coordinator owns all process state. Snapshot every mutable input
+        # before crossing into the one-wide worker; the worker receives no
+        # StationState, callbacks, live baselines, or cache handles.
         if cache_dir is not None:
             muted_ids = muted_entity_ids(Path(cache_dir))
-        all_entity_map = {str(e.get("entity_id", "")): e for e in all_states if e.get("entity_id")}
+        projection_input = _HomeContextProjectionInput(
+            response_bytes=response_bytes,
+            registry_snapshot=HomeRegistrySnapshot(
+                entity_areas=dict(registry_snapshot.entity_areas),
+                entity_names=dict(registry_snapshot.entity_names),
+                entity_device_names=dict(registry_snapshot.entity_device_names),
+                fetched_at=registry_snapshot.fetched_at,
+                source=registry_snapshot.source,
+            ),
+            weather_arc=str(fetched_weather_arc),
+            weather_arc_en=str(get_weather_arc_en()),
+            authorization_mode=active_authorization.mode.value,
+            muted_ids=frozenset(muted_ids),
+            effective_cache=_copy_home_context(effective_cache) if effective_cache is not None else None,
+            radio_event_rules=tuple(copy.deepcopy(radio_event_rules or ())),
+            radio_event_state_baseline=copy.deepcopy(_radio_event_state_cache),
+            ritual_recipe_state_baseline=copy.deepcopy(_ritual_recipe_state_cache),
+            radio_event_cooldowns=dict(_DIRECTIVE_COOLDOWNS),
+            ritual_recipe_cooldowns=dict(_RITUAL_COOLDOWNS),
+            label_catalog=copy.deepcopy(load_catalog(cache_dir)),
+            timestamp=time.time(),
+        )
+        if stage_callback is not None:
+            stage_callback("projection")
+        candidate = await asyncio.get_running_loop().run_in_executor(
+            _ha_projection_executor,
+            _project_home_context,
+            projection_input,
+        )
         if observed_entity_ids_callback is not None:
             try:
-                observed_entity_ids_callback(frozenset(all_entity_map))
+                observed_entity_ids_callback(candidate.observed_entity_ids)
             except Exception:
-                # Bridge provenance is diagnostic/recovery metadata. It must be
-                # loud in logs but can never block the context fetch or audio.
                 logger.warning("Legacy-home observation persistence failed", exc_info=True)
-        muted_present = set(all_entity_map) & muted_ids
-        # Muted ids are dropped from entity_map itself — not just the ambient
-        # "relevant" slice — so a configured radio_event rule can never fire a
-        # directive for an entity the operator explicitly excluded.
-        entity_map = (
-            {eid: data for eid, data in all_entity_map.items() if eid not in muted_ids}
-            if muted_present
-            else all_entity_map
-        )
-        enriched_entity_map = {
-            entity_id: _apply_registry_snapshot(entity_id, state_data, registry_snapshot)
-            for entity_id, state_data in entity_map.items()
-        }
-        projection = active_authorization.project(enriched_entity_map)
-        projected_muted = set(projection.states) & muted_ids
-        authorized_entity_map = {
-            entity_id: state_data
-            for entity_id, state_data in projection.states.items()
-            if entity_id not in projected_muted
-        }
-        ambient_sources = {
-            synthetic_id: source_id
-            for synthetic_id, source_id in projection.ambient_sources.items()
-            if synthetic_id not in projected_muted
-        }
-        radio_events: list[RadioEventMatch] = []
-        if active_authorization.allows_household_moments and radio_event_rules:
-            try:
-                radio_events = match_radio_events(
-                    radio_event_rules,
-                    _radio_event_state_cache,
-                    authorized_entity_map,
-                    now=timestamp,
-                )
-            except Exception as exc:  # pragma: no cover - defensive continuity guard
-                logger.warning("Failed to match configured HA radio events: %s", exc)
-                radio_events = []
-            try:
-                radio_event_state_baseline = build_radio_event_baseline(authorized_entity_map, radio_event_rules)
-            except Exception as exc:  # pragma: no cover - defensive continuity guard
-                logger.warning("Failed to update configured HA radio-event baseline: %s", exc)
-                radio_event_state_baseline = {}
-        else:
-            radio_event_state_baseline = {}
-        ritual_recipe_matches: list[RitualRecipeMatch] = []
-        if active_authorization.allows_household_moments:
-            try:
-                ritual_recipe_matches = match_ritual_recipes(
-                    None,
-                    _ritual_recipe_state_cache,
-                    authorized_entity_map,
-                    now=timestamp,
-                )
-            except Exception as exc:  # pragma: no cover - defensive continuity guard
-                logger.warning("Failed to match HA ritual recipes: %s", exc)
-                ritual_recipe_matches = []
-            try:
-                ritual_recipe_state_baseline = build_ritual_recipe_baseline(authorized_entity_map)
-            except Exception as exc:  # pragma: no cover - defensive continuity guard
-                logger.warning("Failed to update HA ritual recipe baseline: %s", exc)
-                ritual_recipe_state_baseline = {}
-        else:
-            ritual_recipe_state_baseline = {}
-        relevant = {
-            entity_id: filtered
-            for entity_id, state_data in authorized_entity_map.items()
-            if (
-                filtered := _filter_state(
-                    entity_id,
-                    state_data,
-                    denylist_hits,
-                )
-            )
-            is not None
-        }
-        if muted_present or projected_muted:
-            denylist_hits["user_muted"] = denylist_hits.get("user_muted", 0) + len(muted_present | projected_muted)
-        old_states = {
-            entity_id: state_data
-            for entity_id, state_data in (effective_cache.raw_states if effective_cache else {}).items()
-            if entity_id not in muted_ids
-        }
-        old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
-        labels_it, labels_en = _build_entity_label_maps(relevant, cache_dir=cache_dir)
-        events = (
-            diff_states(
-                old_states,
-                relevant,
-                old_events,
-                entity_labels=labels_it,
-                state_translations=STATE_TRANSLATIONS,
-                now=timestamp,
-            )
-            if active_authorization.allows_household_moments
-            else deque(maxlen=EVENT_BUFFER_SIZE)
-        )
-        scored = _build_scored_entities(
-            relevant,
-            event_entity_ids={event.entity_id for event in events},
-            now=timestamp,
-            cache_dir=cache_dir,
-        )
-        label_stats = _label_stats(scored)
-        mood = classify_home_mood(relevant) if active_authorization.allows_derived_mood else ""
-        mood_en = classify_home_mood_en(relevant) if active_authorization.allows_derived_mood else ""
-        weather_muted = _has_weather_mute(muted_ids)
-        weather_arc = (
-            "" if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW else fetched_weather_arc
-        )
-        summary = _build_budgeted_summary(scored)
-        events_summary = build_events_summary(events, now=timestamp)
-        events_summary_en = build_events_summary_en(events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
-        ritual_public_families = public_family_labels(ritual_recipe_matches)
-        ritual_recipe_audit = (
-            audit_ritual_recipes(states=authorized_entity_map) if active_authorization.allows_household_moments else []
-        )
-        # Determine English label of the most recent event for admin display
-        last_event_label_en = ""
-        if events:
-            newest = max(events, key=lambda e: e.timestamp)
-            last_event_label_en = labels_en.get(newest.entity_id, newest.label)
-        context = HomeContext(
-            raw_states=relevant,
-            summary=summary,
-            events=events,
-            radio_events=radio_events,
-            ritual_recipe_matches=ritual_recipe_matches,
-            ritual_public_families=ritual_public_families,
-            ritual_recipe_audit=ritual_recipe_audit,
-            events_summary=events_summary,
-            mood=mood,
-            weather_arc=weather_arc,
-            timestamp=timestamp,
-            mood_en=mood_en,
-            weather_arc_en=(
-                ""
-                if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW
-                else get_weather_arc_en()
-            ),
-            events_summary_en=events_summary_en,
-            last_event_label_en=last_event_label_en,
-            scored=scored,
-            catalog_hit_rate=float(label_stats["catalog_hit_rate"]),
-            label_stats=label_stats,
-            registry_source=registry_snapshot.source,
-            denylist_hits=denylist_hits,
-            authorization_mode=active_authorization.mode.value,
-            ambient_sources=ambient_sources,
-        )
+        for warning in candidate.warnings:
+            logger.warning("HA context projection warning: %s", warning)
         logger.info(
-            "Fetched HA context: %d/%d entities, %d scored, %d events, %d ritual matches, mood=%r",
-            len(relevant),
-            len(authorized_entity_map),
-            len(scored),
-            len(events),
-            len(ritual_recipe_matches),
-            mood or "none",
+            "Fetched HA context: %d retained entities, %d scored, %d events, %d ritual matches",
+            len(candidate.context.raw_states),
+            len(candidate.context.scored),
+            len(candidate.context.events),
+            len(candidate.context.ritual_recipe_matches),
         )
         return outcome(
             "fresh",
-            context,
-            radio_event_state_baseline=radio_event_state_baseline,
-            ritual_recipe_state_baseline=ritual_recipe_state_baseline,
+            candidate.context,
+            radio_event_state_baseline=candidate.radio_event_state_baseline,
+            ritual_recipe_state_baseline=candidate.ritual_recipe_state_baseline,
+            observed_entity_ids=candidate.observed_entity_ids,
         )
 
     except asyncio.CancelledError:
@@ -2046,6 +2191,14 @@ async def fetch_home_context(
         observed_entity_ids_callback=observed_entity_ids_callback,
     )
     if result.kind == "fresh":
+        # A direct caller has no producer coordinator to perform the final
+        # safe-boundary check.  Re-read the live mute policy after the worker
+        # completed, so a mute added during projection cannot leak into this
+        # legacy publish path.
+        result = replace(
+            result,
+            context=revalidate_home_context_mutes(result.context, cache_dir),
+        )
         _publish_home_context_outcome(result)
     elif result.context.timestamp and cache_dir is None:
         # Preserve the legacy cache-only/failure fallback behaviour for direct

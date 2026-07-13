@@ -277,6 +277,50 @@ chooses music instead. If the bounded queue is effectively saturated and still
 cannot reach the seconds floor, the due speech is allowed so optional breaks do
 not starve forever on short-track stations.
 
+### Reading stream-delivery diagnostics
+
+`runtime_status.stream_delivery` is a **private, admin-only** diagnostic surface
+(authenticated `/status` only — it is never added to `/public-status`, and there
+is no listener copy or operator control). It proves when the 500 ms delivery
+cushion (see [Delivery cushion](architecture.md#delivery-cushion-send-ahead-pacing))
+absorbed a scheduling delay versus when it was exhausted, and distinguishes an
+app-side segment outcome, a global pacing miss, and one lagging listener — all
+without retaining any listener or Home Assistant identity.
+
+Shape (all counters and lists are present from boot, zeroed / empty / `idle`
+before anything is recorded; `slow_listener_drops.last_drop_at` is `null` until
+the first overflow, because no timestamp exists yet):
+
+- `target_lead_ms` — the fixed send-ahead target (`500`).
+- `late_threshold_ms` — the lateness that records an event (`50`).
+- `session` / `window_15m` — counts of `late`, `underrun`, `overrun_rebased`, and
+  `total`, for the whole session and a rolling 15-minute window.
+- `recent` — up to 20 coalesced recent pacing events. Each carries a `kind`
+  (`late` = a late send the cushion still absorbed; `underrun` = the cushion was
+  exhausted; `overrun_rebased` = an overlong stall was bounded to the recovery
+  burst and the timeline rebased), timestamp, `lateness_ms`, `remaining_lead_ms`,
+  `deficit_ms`, `segment_type`, `playback_epoch`, `listener_count`, a coarse
+  generator `phase`/`kind`, and the HA refresh `in_flight` / `foreground_timed_out`
+  / `stage` / `stage_elapsed_ms`.
+- `recent_stream_outcomes` — up to 20 anonymous completed-send outcomes:
+  timestamp, `segment_type`, classified `result`, `bytes_sent`,
+  `starting_listener_count`, and `terminal_reason` (`eof`, `skip`, or
+  `file_error`).
+- `slow_listener_drops` — `session` / `window_15m` totals and `last_drop_at` for
+  queue-overflow drops of a lagging listener (no identifier is retained).
+- `ha_refresh` — the current coarse HA projection `stage` (`states_request`,
+  `enrichment_wait`, `projection`, `idle`) and `stage_elapsed_ms`.
+
+How to read it: a `late` event means the cushion did its job. An `underrun`
+(also a rate-limited device-log warning, so it survives after the bounded status
+history rolls over) means a stall exceeded the cushion and was audible; correlate
+its coarse generator kind and HA `stage` to tell rendering pressure from an HA
+projection. An `overrun_rebased` confirms a long stall was bounded and did not
+compound into a catch-up burst. **Privacy exclusion list** — these rows never
+contain raw HA states, labels, titles, segment IDs, listener IDs, IP addresses,
+or prompt material; only timestamps, counts, durations, coarse kinds, and state
+flags.
+
 ### Detecting a not-working provider key
 
 A key that is present but invalid is validated actively, so the operator sees it

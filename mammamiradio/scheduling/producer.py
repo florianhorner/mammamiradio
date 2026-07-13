@@ -246,6 +246,7 @@ async def _fetch_producer_context_outcome(
     radio_event_rules: list[RadioEventRule] | None,
     authorization: HomeAuthorization | None = None,
     observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> _HomeContextFetchOutcome:
     """Fetch the typed mailbox outcome, preserving the legacy injected seam."""
     if not _uses_injected_legacy_fetch():
@@ -257,7 +258,10 @@ async def _fetch_producer_context_outcome(
             cache_dir=cache_dir,
             radio_event_rules=radio_event_rules,
             authorization=authorization,
-            observed_entity_ids_callback=observed_entity_ids_callback,
+            # The real producer defers observation bookkeeping until the
+            # coordinator drains and accepts this inert candidate.
+            observed_entity_ids_callback=None,
+            stage_callback=stage_callback,
         )
 
     started_at = time.time()
@@ -2491,6 +2495,7 @@ class _HAContextRefreshCoordinator:
         self._home_event_handoffs_allowed = True
         self._next_retry_not_before = 0.0
         self._closed = False
+        self._attempt_generation = 0
         self._state.ha_context_refresh_stale_after_seconds = self.stale_threshold_seconds
         self._state.ha_context_refresh_configured = bool(
             config.homeassistant.enabled
@@ -2502,7 +2507,16 @@ class _HAContextRefreshCoordinator:
         # distinguish a still-running request from a completed reply awaiting
         # adoption. No completion callback writes StationState.
         self._state.ha_context_refresh_mailbox = self
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
+
+    def _set_refresh_stage(self, stage: str, generation: int) -> None:
+        """Accept coarse stage writes only from the currently owned request."""
+        if generation != self._attempt_generation:
+            return
+        if self._closed and stage != "idle":
+            return
+        self._state.set_ha_context_refresh_stage(stage)
 
     @property
     def current_context(self) -> HomeContext | None:
@@ -2671,6 +2685,9 @@ class _HAContextRefreshCoordinator:
         self._attempt_finished_monotonic = 0.0
         self._attempt_started_after_stale_gap = self._is_stale()
         self._foreground_timed_out = False
+        self._attempt_generation += 1
+        attempt_generation = self._attempt_generation
+        self._set_refresh_stage("states_request", attempt_generation)
 
         async def _bounded_fetch() -> _HomeContextFetchOutcome:
             # This is the sole total-request timeout.  The foreground wait uses
@@ -2689,6 +2706,7 @@ class _HAContextRefreshCoordinator:
                     radio_event_rules=self._config.radio_events,
                     authorization=self._state.home_authorization,
                     observed_entity_ids_callback=self._state.home_entity_ids_observer,
+                    stage_callback=lambda stage: self._set_refresh_stage(stage, attempt_generation),
                 ),
                 name="ha-context-fetch",
             )
@@ -2708,6 +2726,7 @@ class _HAContextRefreshCoordinator:
                         await request
                 # Private timing only: no task callback writes StationState.
                 self._attempt_finished_monotonic = time.monotonic()
+                self._set_refresh_stage("idle", attempt_generation)
 
         self._task = asyncio.create_task(_bounded_fetch(), name="ha-context-refresh")
         self._state.ha_context_refresh_in_flight = True
@@ -2720,6 +2739,7 @@ class _HAContextRefreshCoordinator:
         self._state.ha_context_refresh_last_result = result
         self._state.ha_context_refresh_last_result_duration_ms = round(max(0.0, duration_seconds) * 1000)
         self._state.ha_context_refresh_last_result_used_background = used_background
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
 
     async def _drain_completed_result(self) -> tuple[HomeContext, bool] | None:
@@ -2774,6 +2794,13 @@ class _HAContextRefreshCoordinator:
             )
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
+
+        observer = self._state.home_entity_ids_observer
+        if observer is not None and outcome.observed_entity_ids:
+            try:
+                observer(outcome.observed_entity_ids)
+            except Exception:
+                logger.warning("Legacy-home observation persistence failed", exc_info=True)
 
         # A request that *started* while the prior snapshot was safe keeps its
         # legitimate one-shots when it is adopted promptly, even if the prior
@@ -2875,6 +2902,7 @@ class _HAContextRefreshCoordinator:
     async def close(self) -> None:
         """Explicitly cancel and await the retained request during producer exit."""
         self._closed = True
+        self._attempt_generation += 1
         task = self._task
         self._task = None
         if task is not None:
@@ -2884,6 +2912,7 @@ class _HAContextRefreshCoordinator:
                 await task
         self._state.ha_context_refresh_in_flight = False
         self._state.ha_context_refresh_active_foreground_timed_out = False
+        self._state.set_ha_context_refresh_stage("idle")
         if self._state.ha_context_refresh_mailbox is self:
             self._state.ha_context_refresh_mailbox = None
 

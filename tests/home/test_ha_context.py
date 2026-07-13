@@ -39,6 +39,8 @@ from mammamiradio.home.ha_context import (
     _format_state,
     _ha_websocket_url,
     _HomeContextFetchOutcome,
+    _HomeContextProjectionInput,
+    _project_home_context,
     _publish_home_context_outcome,
     _sanitize_state_value,
     _score_entity,
@@ -68,6 +70,56 @@ def test_age_seconds_returns_correct_value():
 def test_age_seconds_no_timestamp_returns_inf():
     ctx = HomeContext()
     assert ctx.age_seconds == float("inf")
+
+
+def test_projection_candidate_keeps_refresh_recoverable_when_optional_matchers_fail():
+    """The HA worker returns a safe candidate rather than leaking one matcher failure."""
+    projection_input = _HomeContextProjectionInput(
+        response_bytes=json.dumps(
+            [
+                {
+                    "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                    "state": "on",
+                    "attributes": {},
+                }
+            ]
+        ).encode(),
+        registry_snapshot=HomeRegistrySnapshot(source="empty_fallback"),
+        weather_arc="",
+        weather_arc_en="",
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        muted_ids=frozenset(),
+        effective_cache=None,
+        radio_event_rules=(RadioEventRule(id="coffee_switch", entity_glob="switch.*"),),
+        radio_event_state_baseline={},
+        ritual_recipe_state_baseline={},
+        radio_event_cooldowns={},
+        ritual_recipe_cooldowns={},
+        label_catalog={},
+        timestamp=1_000.0,
+    )
+
+    with (
+        patch("mammamiradio.home.ha_context.match_radio_events", side_effect=RuntimeError("radio matcher")),
+        patch("mammamiradio.home.ha_context.build_radio_event_baseline", side_effect=RuntimeError("radio baseline")),
+        patch("mammamiradio.home.ha_context.match_ritual_recipes", side_effect=RuntimeError("ritual matcher")),
+        patch(
+            "mammamiradio.home.ha_context.build_ritual_recipe_baseline",
+            side_effect=RuntimeError("ritual baseline"),
+        ),
+    ):
+        candidate = _project_home_context(projection_input)
+
+    assert candidate.context.authorization_mode == HomeAuthorizationMode.LEGACY.value
+    assert candidate.observed_entity_ids == frozenset({"switch.bar_kaffeemaschine_steckdose"})
+    assert candidate.radio_event_state_baseline == {}
+    assert candidate.ritual_recipe_state_baseline == {}
+    assert candidate.warnings == (
+        "radio_event_match_failed",
+        "radio_event_baseline_failed",
+        "ritual_recipe_match_failed",
+        "ritual_recipe_baseline_failed",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1665,6 +1717,48 @@ async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
 
     assert calls["n"] >= 2
     assert "switch.muted" not in result.raw_states
+
+
+@pytest.mark.asyncio
+async def test_direct_fresh_fetch_revalidates_mute_added_during_projection(tmp_path):
+    """The legacy direct-fetch path must not publish a worker-era mute leak."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.content = json.dumps([{"entity_id": "switch.muted", "state": "on", "attributes": {}}]).encode()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+    calls = {"n": 0}
+
+    def _fake_muted(_dir):
+        # The worker's input sees no mute.  The final direct-call revalidation
+        # must observe the policy which landed while projection was running.
+        calls["n"] += 1
+        return set() if calls["n"] <= 2 else {"switch.muted"}
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch("mammamiradio.home.ha_context.muted_entity_ids", side_effect=_fake_muted),
+        patch("mammamiradio.home.ha_context._publish_home_context_outcome") as publish,
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            cache_dir=tmp_path,
+            authorization=HomeAuthorization.legacy(),
+        )
+
+    assert calls["n"] >= 3
+    assert "switch.muted" not in result.raw_states
+    published = publish.call_args.args[0].context
+    assert "switch.muted" not in published.raw_states
 
 
 @pytest.mark.asyncio

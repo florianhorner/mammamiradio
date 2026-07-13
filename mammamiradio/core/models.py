@@ -479,6 +479,9 @@ class ExternalAddNotice(TypedDict):
 
 
 RECENTLY_CONSUMED_RETENTION_SECONDS = 300
+STREAM_DELIVERY_WINDOW_SECONDS = 15 * 60
+STREAM_PACING_EVENT_KINDS = ("late", "underrun", "overrun_rebased")
+HA_REFRESH_STAGES = ("states_request", "enrichment_wait", "projection", "idle")
 
 
 class ConsumedListenerRequest(TypedDict):
@@ -615,6 +618,10 @@ class StationState:
     ha_context_refresh_last_result: str = ""
     ha_context_refresh_last_result_duration_ms: int | None = None
     ha_context_refresh_last_result_used_background: bool = False
+    # Coarse coordinator-owned stage telemetry for private stream-delivery
+    # correlation. It never contains entity data and is never scheduling input.
+    ha_context_refresh_stage: str = "idle"
+    ha_context_refresh_stage_started_monotonic: float = 0.0
     # Kept by the producer against max(2 * poll_interval, 120s), so status
     # does not guess at a device-specific prompt-safety threshold.
     ha_context_refresh_stale: bool = False
@@ -770,6 +777,20 @@ class StationState:
     listeners_peak: int = 0
     listeners_total: int = 0
     new_listeners_pending: int = 0
+    # Bounded, anonymous stream-delivery diagnostics. These are session-local
+    # and exposed only through authenticated /status. Raw listener identity,
+    # segment labels/titles, and Home Assistant values never enter these rows.
+    stream_pacing_counts: dict[str, int] = field(
+        default_factory=lambda: {kind: 0 for kind in STREAM_PACING_EVENT_KINDS}
+    )
+    stream_pacing_events: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
+    _stream_pacing_window_events: deque[tuple[float, str, int]] = field(
+        default_factory=lambda: deque(maxlen=2700), repr=False
+    )
+    stream_outcome_history: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
+    slow_listener_drops_total: int = 0
+    slow_listener_last_drop_at: float = 0.0
+    _slow_listener_drop_events: deque[tuple[float, int]] = field(default_factory=lambda: deque(maxlen=900), repr=False)
     queue_empty_since: float | None = None
     # Monotonic stamp of the last segment the playback loop started airing —
     # including continuity clips and rescue fills. The /healthz - /readyz
@@ -853,6 +874,156 @@ class StationState:
             else ""
         )
         self._render_stage_started = now if self._render_stage_name else 0.0
+
+    def set_ha_context_refresh_stage(self, stage: str, *, started: float | None = None) -> None:
+        """Set privacy-safe HA refresh stage telemetry from its coordinator."""
+        normalized = stage if stage in HA_REFRESH_STAGES else "idle"
+        self.ha_context_refresh_stage = normalized
+        self.ha_context_refresh_stage_started_monotonic = (
+            0.0 if normalized == "idle" else time.monotonic() if started is None else max(0.0, started)
+        )
+
+    def record_stream_pacing_event(
+        self,
+        kind: str,
+        *,
+        lateness_ms: float,
+        remaining_lead_ms: float,
+        segment_type: str,
+        deficit_ms: float = 0.0,
+        timestamp: float | None = None,
+        monotonic_now: float | None = None,
+    ) -> None:
+        """Record one bounded pacing signal without retaining content or identity."""
+        if kind not in STREAM_PACING_EVENT_KINDS:
+            return
+        ts = time.time() if timestamp is None else float(timestamp)
+        mono = time.monotonic() if monotonic_now is None else float(monotonic_now)
+        self.stream_pacing_counts[kind] = self.stream_pacing_counts.get(kind, 0) + 1
+        if self._stream_pacing_window_events and self._stream_pacing_window_events[-1][1] == kind:
+            previous_ts, _, previous_count = self._stream_pacing_window_events[-1]
+            if ts - previous_ts <= 1.0:
+                self._stream_pacing_window_events[-1] = (ts, kind, previous_count + 1)
+            else:
+                self._stream_pacing_window_events.append((ts, kind, 1))
+        else:
+            self._stream_pacing_window_events.append((ts, kind, 1))
+
+        stage = self.ha_context_refresh_stage if self.ha_context_refresh_stage in HA_REFRESH_STAGES else "idle"
+        stage_elapsed_ms = (
+            max(0, round((mono - self.ha_context_refresh_stage_started_monotonic) * 1000))
+            if stage != "idle" and self.ha_context_refresh_stage_started_monotonic > 0
+            else 0
+        )
+        event = {
+            "timestamp": ts,
+            "kind": kind,
+            "lateness_ms": max(0, round(float(lateness_ms), 1)),
+            "remaining_lead_ms": max(0, round(float(remaining_lead_ms), 1)),
+            "deficit_ms": max(0, round(float(deficit_ms), 1)),
+            "segment_type": str(segment_type or "unknown"),
+            "playback_epoch": int(self.playback_epoch),
+            "listener_count": max(0, int(self.listeners_active)),
+            "generator": {"phase": str(self.gen_phase or "idle"), "kind": str(self.gen_kind or "idle")},
+            "ha_refresh": {
+                "in_flight": bool(self.ha_context_refresh_in_flight),
+                "foreground_timed_out": bool(self.ha_context_refresh_active_foreground_timed_out),
+                "stage": stage,
+                "stage_elapsed_ms": stage_elapsed_ms,
+            },
+            "count": 1,
+        }
+        if self.stream_pacing_events:
+            previous = self.stream_pacing_events[-1]
+            coalesce_keys = ("kind", "segment_type", "playback_epoch")
+            same_context = all(previous.get(key) == event[key] for key in coalesce_keys)
+            same_context = same_context and previous.get("generator") == event["generator"]
+            same_context = same_context and previous.get("ha_refresh") == event["ha_refresh"]
+            if same_context and ts - float(previous.get("timestamp", 0.0)) <= 1.0:
+                previous["timestamp"] = ts
+                previous["lateness_ms"] = max(previous.get("lateness_ms", 0.0), event["lateness_ms"])
+                previous["remaining_lead_ms"] = min(
+                    previous.get("remaining_lead_ms", event["remaining_lead_ms"]),
+                    event["remaining_lead_ms"],
+                )
+                previous["deficit_ms"] = max(previous.get("deficit_ms", 0.0), event["deficit_ms"])
+                previous["count"] = int(previous.get("count", 1)) + 1
+                return
+        self.stream_pacing_events.append(event)
+
+    def record_stream_outcome(
+        self,
+        *,
+        segment_type: str,
+        result: str,
+        bytes_sent: int,
+        starting_listener_count: int,
+        terminal_reason: str,
+        timestamp: float | None = None,
+    ) -> None:
+        """Append one anonymous completed-send result to the bounded history."""
+        reason = terminal_reason if terminal_reason in {"eof", "skip", "file_error"} else "file_error"
+        self.stream_outcome_history.append(
+            {
+                "timestamp": time.time() if timestamp is None else float(timestamp),
+                "segment_type": str(segment_type or "unknown"),
+                "result": str(result or "not_streamed"),
+                "bytes_sent": max(0, int(bytes_sent)),
+                "starting_listener_count": max(0, int(starting_listener_count)),
+                "terminal_reason": reason,
+            }
+        )
+
+    def record_slow_listener_drops(self, count: int = 1, *, timestamp: float | None = None) -> None:
+        """Count queue-overflow drops without retaining which listener lagged."""
+        amount = max(0, int(count))
+        if amount <= 0:
+            return
+        ts = time.time() if timestamp is None else float(timestamp)
+        self.slow_listener_drops_total += amount
+        self.slow_listener_last_drop_at = ts
+        if self._slow_listener_drop_events and ts - self._slow_listener_drop_events[-1][0] <= 1.0:
+            previous_ts, previous_count = self._slow_listener_drop_events[-1]
+            self._slow_listener_drop_events[-1] = (max(previous_ts, ts), previous_count + amount)
+        else:
+            self._slow_listener_drop_events.append((ts, amount))
+
+    def stream_delivery_snapshot(self, *, now: float | None = None, monotonic_now: float | None = None) -> dict:
+        """Return the zero-safe authenticated stream-delivery diagnostic shape."""
+        ts = time.time() if now is None else float(now)
+        mono = time.monotonic() if monotonic_now is None else float(monotonic_now)
+        cutoff = ts - STREAM_DELIVERY_WINDOW_SECONDS
+        window_counts = {kind: 0 for kind in STREAM_PACING_EVENT_KINDS}
+        for event_ts, kind, count in self._stream_pacing_window_events:
+            if event_ts >= cutoff and kind in window_counts:
+                window_counts[kind] += count
+        slow_window = sum(count for event_ts, count in self._slow_listener_drop_events if event_ts >= cutoff)
+        stage = self.ha_context_refresh_stage if self.ha_context_refresh_stage in HA_REFRESH_STAGES else "idle"
+        stage_elapsed_ms = (
+            max(0, round((mono - self.ha_context_refresh_stage_started_monotonic) * 1000))
+            if stage != "idle" and self.ha_context_refresh_stage_started_monotonic > 0
+            else 0
+        )
+        session_counts = {kind: int(self.stream_pacing_counts.get(kind, 0)) for kind in STREAM_PACING_EVENT_KINDS}
+        return {
+            "target_lead_ms": 500,
+            "late_threshold_ms": 50,
+            "session": {**session_counts, "total": sum(session_counts.values())},
+            "window_15m": {**window_counts, "total": sum(window_counts.values())},
+            "recent": list(self.stream_pacing_events),
+            "recent_stream_outcomes": list(self.stream_outcome_history),
+            "slow_listener_drops": {
+                "session": int(self.slow_listener_drops_total),
+                "window_15m": int(slow_window),
+                "last_drop_at": self.slow_listener_last_drop_at or None,
+            },
+            "ha_refresh": {
+                "in_flight": bool(self.ha_context_refresh_in_flight),
+                "foreground_timed_out": bool(self.ha_context_refresh_active_foreground_timed_out),
+                "stage": stage,
+                "stage_elapsed_ms": stage_elapsed_ms,
+            },
+        }
 
     def end_gen(self, ok: bool = True) -> None:
         """Clear the current production phase, pushing it onto the recent trail.

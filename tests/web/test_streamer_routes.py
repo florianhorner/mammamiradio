@@ -37,6 +37,7 @@ from mammamiradio.web.streamer import (
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
     LiveStreamHub,
+    StreamPacer,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -70,6 +71,25 @@ def _scripted_clock(values):
         return last
 
     return clock
+
+
+class _FakeMonotonic:
+    """Deterministic monotonic clock for source-packet pacing tests."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += max(0.0, seconds)
+
+
+def _paced_send(pacer: StreamPacer, clock: _FakeMonotonic, chunk_bytes: int = 4096):
+    decision = pacer.after_send(chunk_bytes)
+    clock.advance(decision.sleep_seconds)
+    return decision
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +135,11 @@ def _make_test_app(
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+    # Drive run_playback_loop integration tests with a real-time pacer (no
+    # send-ahead lead) so their queue/rescue timing assertions stay
+    # deterministic. The 500 ms delivery cushion itself is covered directly by
+    # the StreamPacer unit tests, not through these wall-clock loop tests.
+    app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(bytes_per_second, target_lead_seconds=0.0)
     return app
 
 
@@ -127,6 +152,89 @@ def test_ha_green_queue_fallback_budget_is_shorter_than_health_failure():
     assert QUEUE_FALLBACK_WAIT_SECONDS <= 5.0
     assert SILENCE_FAILURE_SECONDS >= 30.0
     assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
+
+
+def test_stream_pacer_builds_one_500ms_lead_and_keeps_natural_segments_on_the_same_timeline():
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(24_000, monotonic=clock)
+
+    initial = [_paced_send(pacer, clock) for _ in range(4)]
+    assert all(decision.sleep_seconds >= 0 for decision in initial)
+    assert pacer.media_seconds - clock.now == pytest.approx(0.5, abs=0.001)
+
+    media_at_boundary = pacer.media_seconds
+    first_packet_of_next_natural_segment = _paced_send(pacer, clock)
+    assert pacer.reset_count == 0
+    assert pacer.media_seconds == pytest.approx(media_at_boundary + 4096 / 24_000)
+    assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(4096 / 24_000)
+
+
+def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline():
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(24_000, monotonic=clock)
+    for _ in range(4):
+        _paced_send(pacer, clock)
+
+    before = pacer.media_seconds
+    clock.advance(0.1)
+    delayed = _paced_send(pacer, clock)
+    assert delayed.kind == "late"
+    assert delayed.lateness_seconds == pytest.approx(0.1)
+    assert pacer.media_seconds == pytest.approx(before + 4096 / 24_000)
+
+    next_packet = _paced_send(pacer, clock)
+    assert next_packet.kind is None
+    assert next_packet.sleep_seconds == pytest.approx(4096 / 24_000)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["no_listeners", "playback_stop_resume", "explicit_skip", "queue_gap_fallback"],
+)
+def test_stream_pacer_resets_only_for_named_transport_discontinuities(reason: str):
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(24_000, monotonic=clock)
+    for _ in range(4):
+        _paced_send(pacer, clock)
+
+    pacer.reset_timeline(reason)
+    decision = _paced_send(pacer, clock)
+    assert pacer.reset_count == 1
+    assert decision.sleep_seconds == 0
+    assert pacer.media_seconds == pytest.approx(4096 / 24_000)
+
+
+def test_stream_pacer_absorbs_sub_lead_pause_without_rebase_or_negative_sleep():
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(24_000, monotonic=clock)
+    for _ in range(4):
+        _paced_send(pacer, clock)
+
+    clock.advance(0.4)
+    recovery = [_paced_send(pacer, clock) for _ in range(3)]
+    assert all(decision.sleep_seconds >= 0 for decision in recovery)
+    assert all(decision.kind != "underrun" for decision in recovery)
+    assert all(decision.kind != "overrun_rebased" for decision in recovery)
+    assert recovery[-1].sleep_seconds > 0
+
+
+def test_stream_pacer_caps_overlong_pause_recovery_at_three_chunks_then_rebases_once():
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(24_000, monotonic=clock)
+    for _ in range(4):
+        _paced_send(pacer, clock)
+
+    clock.advance(1.2)
+    recovery = [_paced_send(pacer, clock) for _ in range(3)]
+    assert [decision.kind for decision in recovery] == ["underrun", None, "overrun_rebased"]
+    assert all(decision.sleep_seconds >= 0 for decision in recovery)
+    assert recovery[0].deficit_seconds > 0
+    assert recovery[2].deficit_seconds == recovery[0].deficit_seconds
+    assert pacer.media_seconds == pytest.approx(3 * 4096 / 24_000)
+
+    resumed = _paced_send(pacer, clock)
+    assert resumed.kind is None
+    assert resumed.sleep_seconds >= 0
 
 
 def test_first_byte_grace_serves_rescue_before_producer_stall_threshold():
@@ -169,6 +277,78 @@ async def test_subscribe_returns_id_and_queue():
     assert isinstance(lid, int)
     assert isinstance(q, asyncio.Queue)
     assert hub.has_listener(lid)
+
+
+def test_listener_epoch_advances_only_when_an_empty_room_refills():
+    hub = LiveStreamHub()
+    first, _ = hub.subscribe()
+    assert hub.listener_epoch == 1
+
+    second, _ = hub.subscribe()
+    assert hub.listener_epoch == 1
+
+    hub.unsubscribe(first)
+    hub.unsubscribe(second)
+    hub.subscribe()
+    assert hub.listener_epoch == 2
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconnect(tmp_path):
+    """A reconnect within a file must not inherit the previous media clock."""
+    app = _make_test_app()
+    # 4 KiB is just over one second at 32 kbps.  The default 500 ms pacer
+    # therefore sleeps after the first packet, giving this test a deterministic
+    # window to replace the last listener before packet two.
+    app.state.config.audio.bitrate = 32
+    created_pacers: list[StreamPacer] = []
+
+    def _default_pacer(bytes_per_second: float) -> StreamPacer:
+        pacer = StreamPacer(bytes_per_second)
+        created_pacers.append(pacer)
+        return pacer
+
+    app.state.stream_pacer_factory = _default_pacer
+    first_listener, _ = app.state.stream_hub.subscribe()
+    audio_path = tmp_path / "midsegment-reconnect.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Reconnect", "title_only": "Reconnect", "artist": "Test"},
+        )
+    )
+
+    first_packet_sent = asyncio.Event()
+    second_packet_sent = asyncio.Event()
+    calls = 0
+    broadcast = app.state.stream_hub.broadcast
+
+    async def _broadcast(chunk: bytes) -> None:
+        nonlocal calls
+        await broadcast(chunk)
+        calls += 1
+        if calls == 1:
+            first_packet_sent.set()
+        elif calls == 2:
+            second_packet_sent.set()
+
+    app.state.stream_hub.broadcast = _broadcast
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(first_packet_sent.wait(), timeout=1.0)
+        app.state.stream_hub.unsubscribe(first_listener)
+        _, reconnected_queue = app.state.stream_hub.subscribe()
+
+        await asyncio.wait_for(second_packet_sent.wait(), timeout=1.0)
+        pacer = created_pacers[0]
+        assert pacer.target_lead_seconds == pytest.approx(0.5)
+        assert pacer.reset_count == 1
+        assert await asyncio.wait_for(reconnected_queue.get(), timeout=0.1) == b"x" * 4096
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -238,12 +418,16 @@ async def test_broadcast_pushes_to_all():
 @pytest.mark.asyncio
 async def test_broadcast_drops_slow_listeners():
     hub = LiveStreamHub(listener_queue_size=1)
+    state = StationState()
+    hub.bind_state(state)
     lid, q = hub.subscribe()
     # Fill the queue so the listener is slow
     q.put_nowait(b"old")
     await hub.broadcast(b"new")
     # Slow listener should have been dropped
     assert not hub.has_listener(lid)
+    assert state.slow_listener_drops_total == 1
+    assert state.slow_listener_last_drop_at > 0
 
 
 @pytest.mark.asyncio
@@ -2182,6 +2366,61 @@ async def test_public_status_returns_json():
     # payload so it can freeze the launch-waveform when the operator pauses.
     assert "session_stopped" in body
     assert body["session_stopped"] is False  # default for fresh test app
+
+
+@pytest.mark.asyncio
+async def test_stream_delivery_diagnostics_are_bounded_anonymous_and_admin_only():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.listeners_active = 2
+    state.playback_epoch = 7
+    state.set_ha_context_refresh_stage("projection", started=10.0)
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=100,
+        remaining_lead_ms=400,
+        segment_type="music",
+        timestamp=1_000.0,
+        monotonic_now=10.1,
+    )
+    for index in range(22):
+        state.record_stream_outcome(
+            segment_type="music" if index % 2 == 0 else "banter",
+            result="aired" if index % 3 else "fallback_aired",
+            bytes_sent=4096 + index,
+            starting_listener_count=2,
+            terminal_reason="eof",
+            timestamp=1_000.0 + index,
+        )
+    state.record_slow_listener_drops(2, timestamp=1_020.0)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin = (await client.get("/status")).json()
+        public = (await client.get("/public-status")).json()
+
+    delivery = admin["runtime_status"]["stream_delivery"]
+    assert delivery["target_lead_ms"] == 500
+    assert delivery["late_threshold_ms"] == 50
+    assert delivery["session"]["late"] == 1
+    assert len(delivery["recent"]) == 1
+    assert len(delivery["recent_stream_outcomes"]) == 20
+    assert set(delivery["recent_stream_outcomes"][-1]) == {
+        "timestamp",
+        "segment_type",
+        "result",
+        "bytes_sent",
+        "starting_listener_count",
+        "terminal_reason",
+    }
+    assert delivery["slow_listener_drops"]["session"] == 2
+    assert delivery["slow_listener_drops"]["last_drop_at"] == 1_020.0
+    assert delivery["ha_refresh"]["stage"] == "projection"
+
+    assert "runtime_status" not in public
+    assert "stream_delivery" not in public
+    assert "ha_refresh" not in public
+    assert "ha_context_refresh_stage" not in public
 
 
 @pytest.mark.asyncio

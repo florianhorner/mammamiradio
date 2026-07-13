@@ -9,11 +9,13 @@ tests deliberately scale wall-clock values down; their relationships mirror the
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 import time
 from collections import deque
 from pathlib import Path
 from typing import Literal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,7 +23,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.entity_policy import set_entity_muted
-from mammamiradio.home.ha_context import HomeContext, _HomeContextFetchOutcome
+from mammamiradio.home.ha_context import HomeContext, HomeRegistrySnapshot, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.scheduling import producer
@@ -62,6 +64,153 @@ def _outcome(
 
 def _snapshot(summary: str, *, age: float = 0.0, **kwargs) -> HomeContext:
     return HomeContext(summary=summary, timestamp=time.time() - age, **kwargs)
+
+
+def _states_response(states: list[dict]) -> MagicMock:
+    response = MagicMock()
+    response.content = json.dumps(states).encode("utf-8")
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.asyncio
+async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordinator_drains(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
+    state = StationState(home_authorization=HomeAuthorization.legacy())
+    prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
+    response = _states_response(
+        [
+            {
+                "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                "state": "on",
+                "attributes": {},
+            }
+        ]
+    )
+    client = AsyncMock()
+    client.get.return_value = response
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+    real_projection = ha_context._project_home_context
+
+    def _blocked_projection(projection_input):
+        assert threading.current_thread().name.startswith("ha-projection")
+        worker_started.set()
+        release_worker.wait(timeout=1.0)
+        try:
+            return real_projection(projection_input)
+        finally:
+            worker_finished.set()
+
+    ticks = 0
+
+    async def _heartbeat() -> None:
+        nonlocal ticks
+        deadline = asyncio.get_running_loop().time() + 0.02
+        while asyncio.get_running_loop().time() < deadline:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(
+            ha_context,
+            "_fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch.object(ha_context, "fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch.object(ha_context, "_project_home_context", side_effect=_blocked_projection),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            fallback, fresh = await coordinator.prepare_for_segment()
+            assert worker_started.wait(timeout=0.2)
+            assert fallback.summary == "old ambient"
+            assert not fresh
+            assert state.ha_context_refresh_stage == "projection"
+
+            await _heartbeat()
+            assert ticks > 1
+            assert coordinator.current_context is prior
+            publish.assert_not_called()
+
+            release_worker.set()
+            retained = coordinator.in_flight_task
+            assert retained is not None
+            await asyncio.wait_for(asyncio.shield(retained), timeout=0.5)
+            assert state.ha_context_refresh_stage == "idle"
+            publish.assert_not_called()
+
+            adopted, fresh = await coordinator.prepare_for_segment()
+            assert fresh
+            assert "switch.bar_kaffeemaschine_steckdose" in adopted.raw_states
+            publish.assert_called_once()
+        finally:
+            release_worker.set()
+            await coordinator.close()
+    assert worker_finished.wait(timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_close_while_projection_worker_runs_ignores_late_candidate_and_clears_stage(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    config = _config(tmp_path, timeout=0.004, poll_interval=0.01)
+    state = StationState(home_authorization=HomeAuthorization.legacy())
+    prior = _snapshot("safe", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
+    client = AsyncMock()
+    client.get.return_value = _states_response(
+        [{"entity_id": "switch.bar_kaffeemaschine_steckdose", "state": "on", "attributes": {}}]
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+    real_projection = ha_context._project_home_context
+
+    def _blocked_projection(projection_input):
+        worker_started.set()
+        release_worker.wait(timeout=1.0)
+        try:
+            return real_projection(projection_input)
+        finally:
+            worker_finished.set()
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(
+            ha_context,
+            "_fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch.object(ha_context, "fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch.object(ha_context, "_project_home_context", side_effect=_blocked_projection),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        await coordinator.prepare_for_segment()
+        assert worker_started.wait(timeout=0.2)
+        assert state.ha_context_refresh_stage == "projection"
+
+        await coordinator.close()
+        assert state.ha_context_refresh_stage == "idle"
+        assert not state.ha_context_refresh_in_flight
+        assert coordinator.current_context is prior
+        publish.assert_not_called()
+
+        release_worker.set()
+        assert worker_finished.wait(timeout=0.5)
+        await asyncio.sleep(0)
+        assert state.ha_context_refresh_stage == "idle"
+        assert coordinator.current_context is prior
+        publish.assert_not_called()
 
 
 @pytest.mark.asyncio
