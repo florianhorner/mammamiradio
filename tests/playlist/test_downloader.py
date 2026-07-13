@@ -159,7 +159,7 @@ def test_download_sync_prefers_demo_asset(track, cache_dir, music_dir, tmp_path)
 
 
 def test_ytdlp_disabled_by_default(track, cache_dir, music_dir):
-    """yt-dlp should NOT run when MAMMAMIRADIO_ALLOW_YTDLP is unset."""
+    """yt-dlp-disabled tracks are marked unavailable, never rendered as silence."""
     import os
 
     from mammamiradio.playlist.downloader import _download_sync
@@ -167,14 +167,11 @@ def test_ytdlp_disabled_by_default(track, cache_dir, music_dir):
     env = os.environ.copy()
     env.pop("MAMMAMIRADIO_ALLOW_YTDLP", None)
 
-    with (
-        patch.dict(os.environ, env, clear=True),
-        patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg,
-    ):
-        _download_sync(track, cache_dir, music_dir)
+    with patch.dict(os.environ, env, clear=True):
+        result = _download_sync(track, cache_dir, music_dir)
 
-    # Should fall through to silence, never touching yt-dlp
-    mock_ffmpeg.assert_called_once()
+    assert result == cache_dir / f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "yt-dlp disabled"
 
 
 def test_ytdlp_success_when_enabled(track, cache_dir, music_dir):
@@ -365,11 +362,12 @@ def test_download_ytdlp_uses_exact_watch_url_when_youtube_id(cache_dir):
     assert captured_queries == ["https://www.youtube.com/watch?v=abc123"]
 
 
-# --- _download_sync: yt-dlp failure falls back to placeholder ---
+# --- _download_sync: yt-dlp failure marks source unavailable ---
 
 
-def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
+def test_ytdlp_403_marks_track_unavailable_without_rendering_silence(track, cache_dir, music_dir):
     import os
+    from urllib.error import HTTPError
 
     from mammamiradio.playlist.downloader import _download_sync
 
@@ -377,27 +375,29 @@ def test_ytdlp_failure_falls_back_to_placeholder(track, cache_dir, music_dir):
     mock_ydl_instance = MagicMock()
     mock_ydl_instance.__enter__ = MagicMock(return_value=mock_ydl_instance)
     mock_ydl_instance.__exit__ = MagicMock(return_value=False)
-    mock_ydl_instance.download.side_effect = Exception("Download failed")
+    mock_ydl_instance.download.side_effect = HTTPError(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        403,
+        "Forbidden",
+        hdrs=None,
+        fp=None,
+    )
     mock_yt_dlp.YoutubeDL.return_value = mock_ydl_instance
 
     with (
         patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
-        patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    mock_ffmpeg.assert_called_once()
-    expected_path = cache_dir / f"_silence_{track.cache_key}.mp3"
+    expected_path = cache_dir / f"_failed_{track.cache_key}.mp3"
     assert result == expected_path
+    assert result.read_text() == "yt-dlp failed: HTTP Error 403: Forbidden"
+    assert not (cache_dir / f"_silence_{track.cache_key}.mp3").exists()
 
 
-def test_ytdlp_socket_timeout_falls_back_to_placeholder(track, cache_dir, music_dir):
-    """G3: a socket-timeout-style yt-dlp failure still degrades to the silence placeholder.
-
-    Audio-delivery Scenario 2 (empty fallback) — a stalled download must never
-    leave the listener with dead air.
-    """
+def test_ytdlp_socket_timeout_marks_track_unavailable(track, cache_dir, music_dir):
+    """A stalled download is skipped so the recovery ladder supplies real audio."""
     import os
 
     from mammamiradio.playlist.downloader import _download_sync
@@ -412,18 +412,17 @@ def test_ytdlp_socket_timeout_falls_back_to_placeholder(track, cache_dir, music_
     with (
         patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
-        patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    mock_ffmpeg.assert_called_once()
-    assert result == cache_dir / f"_silence_{track.cache_key}.mp3"
+    assert result == cache_dir / f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "yt-dlp failed: timed out"
 
 
-# --- _download_sync: yt-dlp not installed falls back to placeholder ---
+# --- _download_sync: yt-dlp not installed marks source unavailable ---
 
 
-def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_dir):
+def test_ytdlp_import_error_marks_track_unavailable(track, cache_dir, music_dir):
     import os
 
     from mammamiradio.playlist.downloader import _download_sync
@@ -432,59 +431,26 @@ def test_ytdlp_import_error_falls_back_to_placeholder(track, cache_dir, music_di
     with (
         patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": None}),
-        patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg,
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    mock_ffmpeg.assert_called_once()
-    expected_path = cache_dir / f"_silence_{track.cache_key}.mp3"
+    expected_path = cache_dir / f"_failed_{track.cache_key}.mp3"
     assert result == expected_path
+    assert result.read_text().startswith("yt-dlp failed:")
 
 
-# --- _generate_placeholder ---
-
-
-def test_generate_silence_calls_ffmpeg(track, tmp_path):
-    from mammamiradio.playlist.downloader import _generate_silence
-
-    out_path = tmp_path / "silence.mp3"
-
-    with patch("mammamiradio.playlist.downloader._run_ffmpeg") as mock_ffmpeg:
-        result = _generate_silence(track, out_path)
-
-    assert result == out_path
-    mock_ffmpeg.assert_called_once()
-    cmd = mock_ffmpeg.call_args[0][0]
-    assert "ffmpeg" in cmd[0]
-    assert "anullsrc" in " ".join(cmd)
-    duration_index = cmd.index("-t") + 1
-    assert cmd[duration_index] == "210"
-    assert str(out_path) in cmd
-    assert "-write_xing" in cmd
-    assert cmd[cmd.index("-write_xing") + 1] == "0"
-
-
-def test_silence_placeholder_uses_prefixed_path(track, cache_dir, music_dir):
-    """When yt-dlp is disabled and no local/cache file exists, the silence placeholder
-    must be written to _silence_<cache_key>.mp3, NOT <cache_key>.mp3.
-
-    This prevents stale silence files from being served as 'Cache hit' on subsequent
-    iterations or restarts, which would cause an endless quality-gate rejection loop.
-    """
+def test_ytdlp_disabled_uses_failed_marker_not_real_cache_path(track, cache_dir, music_dir):
+    """Unavailable tracks never occupy the real cache slot or synthesize audio."""
     import os
 
     from mammamiradio.playlist.downloader import _download_sync
 
-    with (
-        patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}),
-        patch("mammamiradio.playlist.downloader._run_ffmpeg"),
-    ):
+    with patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
         result = _download_sync(track, cache_dir, music_dir)
 
-    # Must NOT be the plain cache-key path that _resolve_cached_or_local would find
-    assert result.name != f"{track.cache_key}.mp3", "silence must not clobber the real cache slot"
-    assert result.name.startswith("_silence_"), f"silence must use _silence_ prefix, got: {result.name}"
-    assert str(cache_dir) in str(result), "silence must still be under cache_dir for purge_suspect to find it"
+    assert result.name != f"{track.cache_key}.mp3"
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    assert str(cache_dir) in str(result)
 
 
 # --- download_track async wrapper ---
@@ -1492,8 +1458,9 @@ def test_jamendo_without_direct_url_blocks_ytdlp(tmp_path):
     mock_ytdlp.assert_not_called()
 
 
-def test_failed_download_marker_short_circuits_resolve(tmp_path):
-    from mammamiradio.playlist.downloader import _resolve_cached_or_local
+def test_failed_download_marker_short_circuits_repeat_acquisition(tmp_path):
+    """A marker avoids retrying yt-dlp again before the next process start."""
+    from mammamiradio.playlist.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
@@ -1503,14 +1470,17 @@ def test_failed_download_marker_short_circuits_resolve(tmp_path):
         title="Failed Marker",
         artist="Skip Artist",
         duration_ms=180000,
-        spotify_id="jamendo_failed",
-        source="jamendo",
+        youtube_id="dQw4w9WgXcQ",
+        source="youtube",
     )
     marker = cache_dir / f"_failed_{track.cache_key}.mp3"
     marker.write_text("prior failure")
 
-    result = _resolve_cached_or_local(track, cache_dir, music_dir)
+    with patch("mammamiradio.playlist.downloader._download_ytdlp") as mock_ytdlp:
+        result = _download_sync(track, cache_dir, music_dir)
+
     assert result == marker
+    mock_ytdlp.assert_not_called()
 
 
 def test_resolve_uses_track_local_path_when_set(tmp_path):

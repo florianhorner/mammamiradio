@@ -2117,10 +2117,9 @@ async def prewarm_first_segment(
         return None
 
     try:
-        track = state.select_next_track(
-            repeat_cooldown=config.playlist.repeat_cooldown,
-            artist_cooldown=config.playlist.artist_cooldown,
-        )
+        track = _select_accepted_music_track(state, config)
+        if track is None:
+            return False
         logger.info("Pre-warming first track: %s", track.display)
         rendered = await _render_music_track(
             track,
@@ -2148,6 +2147,10 @@ async def prewarm_first_segment(
                     duration_sec=(track.duration_ms or 0) / 1000.0,
                     ephemeral=not rendered.cache_hit,
                 )
+                # A quality rejection means this normalization is not safe
+                # recovery media either. Remove the cache copy as well as the
+                # transient render so a later rescue path cannot select it.
+                rendered.cache_path.unlink(missing_ok=True)
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
@@ -3810,7 +3813,7 @@ async def _run_producer_inner(
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
                 # packaged recovery clip (when the rejection is due to silence — i.e. all
-                # tracks are silence placeholders and playing them would cause dead air) or
+                # available audio is silent and playing it would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
@@ -3828,9 +3831,15 @@ async def _run_producer_inner(
                         if _music_qg_rejections >= MUSIC_QUALITY_GATE_REJECTION_LIMIT:
                             _music_qg_rejections = 0
                             if "silence" in str(exc).lower():
-                                # All available tracks are silence placeholders.  Playing
+                                # All available tracks are silent. Playing
                                 # them would break the illusion with dead air.  Insert a
                                 # packaged recovery clip instead so the stream stays alive.
+                                # The rejected normalization is not safe recovery media
+                                # either. Remove both its durable cache copy and its
+                                # transient render before selecting a fallback.
+                                norm_cached.unlink(missing_ok=True)
+                                if not norm_is_cached:
+                                    norm_path.unlink(missing_ok=True)
                                 fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
@@ -3840,8 +3849,6 @@ async def _run_producer_inner(
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.BANTER,
@@ -3863,15 +3870,13 @@ async def _run_producer_inner(
                                 # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
-                                if last_good:
+                                if last_good and last_good != norm_cached:
                                     logger.warning(
                                         "Quality gate circuit breaker: silence with no banter fallback — "
                                         "recycling last-known-good music (%s: %s)",
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.MUSIC,
@@ -3890,17 +3895,16 @@ async def _run_producer_inner(
                                         "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
                                     )
                                     continue
-                                # No recovery clip, no last-known-good.  Drop this track and let
-                                # the streamer's rescue path handle the gap — queueing a
-                                # silent file would break the illusion.
+                                # No recovery clip and no distinct last-known-good file.
+                                # Drop this track and let the streamer's rescue path handle
+                                # the gap — queueing a rejected silent file would break the
+                                # illusion.
                                 logger.error(
                                     "Quality gate circuit breaker: silence, no banter, "
-                                    "no last-known-good music — dropping track (%s: %s)",
+                                    "no distinct last-known-good music — dropping track (%s: %s)",
                                     norm_path.name,
                                     exc,
                                 )
-                                if not norm_is_cached:
-                                    norm_path.unlink(missing_ok=True)
                                 state.finish_render_timing(
                                     "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
                                 )

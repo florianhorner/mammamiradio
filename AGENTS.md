@@ -37,12 +37,11 @@ as in-process asyncio tasks.
 - **yt-dlp YouTube downloads are bot-blocked from this datacenter IP.** Chart
   metadata fetches fine (you'll see "Using live Italian charts (75 tracks)"), but
   each track download fails with "Sign in to confirm you're not a bot" and the
-  station substitutes a silence placeholder. This is graceful degradation, not a
-  setup failure — the stream stays alive and `/stream` serves valid MP3 bytes
-  throughout. Real chart audio needs residential network or yt-dlp cookies; the
-  audio pipeline itself (normalize, queue, playback, egress) is fully exercised
-  regardless. Edge TTS (Microsoft) reaches the network fine, so banter voice
-  synthesis works (e.g. `it-IT-IsabellaNeural`).
+  station marks that source unavailable before it can enter the audio queue. The
+  continuity-recovery ladder keeps `/stream` audible; it does not present a
+  synthesized silent track as music. Real chart audio needs residential network
+  or yt-dlp cookies. Edge TTS (Microsoft) reaches the network fine, so banter
+  voice synthesis works (e.g. `it-IT-IsabellaNeural`).
 
 - **Test-isolation flake tied to `.env`.** `mammamiradio/core/config.py` calls
   `load_dotenv()` at import. If `.env` sets `MAMMAMIRADIO_PORT`, it leaks into

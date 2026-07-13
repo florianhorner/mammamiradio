@@ -386,22 +386,14 @@ def test_download_sync_direct_url_validates_with_background(tmp_path, monkeypatc
     assert result.exists()
 
 
-def test_download_sync_silence_fallback_is_background(tmp_path, monkeypatch):
-    """The last-resort silence render inherits the background flag so prefetch
-    never takes a foreground slot for placeholder audio."""
+def test_download_sync_unavailable_source_skips_ffmpeg_admission(tmp_path, monkeypatch):
+    """A failed acquisition creates a marker without consuming an FFmpeg slot."""
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
     track = Track(title="Song", artist="Artist", duration_ms=180_000, source="youtube")
-    seen: dict[str, bool] = {}
-
-    def fake_run_ffmpeg(cmd, description, *, rescue=False, background=False):
-        seen["background"] = background
-        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(downloader, "_run_ffmpeg", fake_run_ffmpeg)
     result = downloader._download_sync(track, tmp_path, tmp_path / "music", background=True)
 
-    assert seen["background"] is True
-    assert result.name.startswith("_silence_")
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "yt-dlp disabled"
 
 
 def test_ordinary_silence_generation_stays_bounded(tmp_path, monkeypatch):
