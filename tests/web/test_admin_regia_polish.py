@@ -518,6 +518,27 @@ def test_motore_runtime_groups_precede_setup() -> None:
     )
 
 
+def test_home_moment_drop_reasons_explain_changed_show_state() -> None:
+    """The admin-only receipt trail explains why a matched moment was held back.
+
+    These are operator explanations, never raw discard codes or the generic
+    fallback label: a full directive slot and a changing playlist/source/Chaos
+    mode each need an actionable, human-readable account.
+    """
+    html = _html()
+    block = html[html.index("function momentStatusLabel") : html.index("function updateMoments")]
+
+    for reason, label in (
+        ("directive_slot_busy", "stepped aside — another moment was already lined up"),
+        ("interrupt_slot_busy", "stepped aside — another moment was already lined up"),
+        ("stale_playlist", "set aside when the playlist changed — the hosts are following the new rundown"),
+        ("stale_source", "set aside when the music source changed — the hosts are following the new source"),
+        ("stale_chaos", "set aside when Chaos Mode changed — the hosts are following the new direction"),
+    ):
+        assert reason in block
+        assert label in block
+
+
 def test_format_request_age_guards_invalid_values() -> None:
     html = _html()
     assert "function formatRequestAge" in html

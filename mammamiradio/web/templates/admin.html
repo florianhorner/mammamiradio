@@ -3242,6 +3242,9 @@ function momentStatusLabel(row){
     if(r==='canned_fallback')return{text:'a stand-in clip aired instead — it can come around again',color:'var(--muted)'};
     if(r==='directive_slot_busy'||r==='interrupt_slot_busy')return{text:'stepped aside — another moment was already lined up',color:'var(--muted)'};
     if(r==='interrupt_override')return{text:'bumped by a live cut-in',color:'var(--muted)'};
+    if(r==='stale_playlist')return{text:'set aside when the playlist changed — the hosts are following the new rundown',color:'var(--muted)'};
+    if(r==='stale_source')return{text:'set aside when the music source changed — the hosts are following the new source',color:'var(--muted)'};
+    if(r==='stale_chaos')return{text:'set aside when Chaos Mode changed — the hosts are following the new direction',color:'var(--muted)'};
     if(r==='muted')return{text:'set aside — you muted this device',color:'var(--muted)'};
     if(r==='restart')return{text:'cut off by a restart',color:'var(--muted)'};
     return{text:"didn't make it to air",color:'var(--muted)'};

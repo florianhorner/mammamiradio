@@ -241,7 +241,9 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-casa .row.dim { color: var(--text-secondary); }
 .mmr-casa .row .ico { font-family: var(--font-mono); font-size: 10px; color: var(--ok); width: 10px; display: inline-block; }
 .mmr-casa .casa-moments-eyebrow { margin-top: 10px; }
+.mmr-casa .casa-moments-helper { color: var(--text-secondary); font-size: 10px; line-height: 1.4; margin: -2px 0 7px; }
 #casa-moments-rows .row { font-size: 11px; }
+.mmr-casa .casa-moments-stale { color: var(--text-secondary); font-size: 10px; line-height: 1.4; margin: 7px 0 0; }
 
 /* Radio illustration */
 .mmr-hero-art { position: relative; aspect-ratio: 1/1; max-height: 520px; width: 100%; display: flex; align-items: center; justify-content: center; }
