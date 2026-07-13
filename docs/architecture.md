@@ -491,6 +491,8 @@ just static parameters.
 
 Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
 
+A session's blended TTS estimate records a confirmed paid-provider response before local raw-file I/O or normalization. If that local processing later fails and the role falls back to Edge, the session still includes the paid request; missing credentials, provider errors, and Edge-only synthesis remain uncounted. This is a conservative session estimate, not invoice-level provider reconciliation.
+
 A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
 ## Compounding listener memory

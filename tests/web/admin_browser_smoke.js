@@ -378,6 +378,30 @@ async (page) => {
     'successful skip lost its confirmation',
   );
 
+  const sessionEstimateStates = await page.evaluate(() => {
+    const render = (consumption) => {
+      updateEngineRoom({ listeners: { active: 0, peak: 0 }, consumption, produced_log: [] }, {});
+      return {
+        text: engineRuntime.innerText,
+        estimates: document.querySelectorAll('#apiCostEl').length,
+      };
+    };
+    return {
+      ttsOnly: render({ api_calls: 0, tts_characters: 42, api_cost_estimate_usd: 0.25 }),
+      idle: render({ api_calls: 0, tts_characters: 0, api_cost_estimate_usd: 0 }),
+      unknownTts: render({ api_calls: 0, tts_characters: 42, api_cost_estimate_usd: null }),
+    };
+  });
+  assert(sessionEstimateStates.ttsOnly.text.includes('AI calls: 0'), 'TTS-only session lost the zero AI-call fact');
+  assert(sessionEstimateStates.ttsOnly.text.includes('TTS characters: 42'), 'TTS-only session hid paid characters');
+  assert(sessionEstimateStates.ttsOnly.text.includes('Session estimate: <$1 est'), 'TTS-only session hid the session estimate');
+  assert(sessionEstimateStates.ttsOnly.estimates === 1, 'TTS-only session rendered more than one session estimate');
+  assert(!sessionEstimateStates.idle.text.includes('TTS characters:'), 'idle refresh kept stale TTS characters');
+  assert(!sessionEstimateStates.idle.text.includes('Session estimate:'), 'idle refresh kept a stale session estimate');
+  assert(sessionEstimateStates.idle.estimates === 0, 'idle refresh kept a stale estimate element');
+  assert(sessionEstimateStates.unknownTts.text.includes('Session estimate: —'), 'unknown TTS cost did not use the existing dash');
+  assert(sessionEstimateStates.unknownTts.estimates === 1, 'unknown TTS cost lost its session estimate element');
+
   await page.unroute('**/status*');
   await page.unroute('**/api/listener-requests');
   await page.unroute('**/api/hosts');

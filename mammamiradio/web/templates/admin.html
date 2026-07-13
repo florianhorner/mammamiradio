@@ -4916,6 +4916,7 @@ function updateEngineRoom(st,caps){
   const _rawCost=con.api_cost_estimate_usd;
   const cost=_rawCost==null?'—':((_rawCost<1?'<$1':'~$'+Math.round(_rawCost))+' est'+(unpriced?' (unpriced model)':''));
   const ttsCh=con.tts_characters||0;
+  const hasPaidUsage=apiCalls>0||ttsCh>0;
 
   // Update sidebar cost
   const sidebarCost=document.getElementById('sidebarCost');
@@ -4940,8 +4941,9 @@ function updateEngineRoom(st,caps){
     'Playlist: <strong>'+pl+'</strong> tracks',
     'Listeners: <strong>'+listeners+'</strong> (peak: '+(st.listeners?st.listeners.peak:'—')+')',
     'Segments produced: <strong>'+(st.segments_produced||'—')+'</strong>',
-    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' input / '+outTok.toLocaleString()+' output tokens) · est. <strong id="apiCostEl">'+cost+'</strong>':'AI calls: <strong>0</strong>',
+    apiCalls>0?'AI calls: <strong>'+apiCalls+'</strong> ('+inTok.toLocaleString()+' input / '+outTok.toLocaleString()+' output tokens)':'AI calls: <strong>0</strong>',
     ttsCh>0?'TTS characters: <strong>'+ttsCh.toLocaleString()+'</strong>':'',
+    hasPaidUsage?'Session estimate: <strong id="apiCostEl">'+cost+'</strong>':'',
   ].filter(Boolean).join('<br>');
   renderCostSplit(con);
 

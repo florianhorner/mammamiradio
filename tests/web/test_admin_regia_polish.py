@@ -308,6 +308,15 @@ def test_session_cost_reframe_template_invariants() -> None:
     assert "'~$'+Math.round(_rawCost)" in html
 
 
+def test_tts_only_session_keeps_a_single_session_estimate_row() -> None:
+    """Paid TTS must not disappear just because the LLM call count is zero."""
+    html = _html()
+
+    assert "const hasPaidUsage=apiCalls>0||ttsCh>0;" in html
+    assert 'Session estimate: <strong id="apiCostEl">' in html
+    assert html.count('id="apiCostEl"') == 1
+
+
 def test_generated_waste_cost_zero_state_renders_dollar_zero() -> None:
     """A clean session (waste cost 0.0) must render "$0", never "<$1" — the
     waste row must never imply spend when nothing was wasted (#397)."""
