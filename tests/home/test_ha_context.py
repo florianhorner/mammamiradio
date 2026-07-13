@@ -1758,7 +1758,11 @@ async def test_fetch_outcome_starts_optional_enrichment_with_delayed_states_and_
         patch("mammamiradio.home.ha_context._HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT", 0.01),
         patch("mammamiradio.home.ha_context._ha_cache", None),
     ):
-        fetch_task = asyncio.create_task(_fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0))
+        fetch_task = asyncio.create_task(
+            _fetch_home_context_outcome(
+                "http://ha:8123", "token", poll_interval=0.0, authorization=HomeAuthorization.legacy()
+            )
+        )
         await state_started.wait()
         await registry_started.wait()
         await weather_started.wait()
@@ -1816,7 +1820,9 @@ async def test_fetch_outcome_cancels_optional_enrichment_after_state_failure():
         ),
         patch("mammamiradio.home.ha_context._ha_cache", None),
     ):
-        result = await _fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0)
+        result = await _fetch_home_context_outcome(
+            "http://ha:8123", "token", poll_interval=0.0, authorization=HomeAuthorization.legacy()
+        )
 
     assert result.kind == "failed"
     assert state_started.is_set()
@@ -1867,7 +1873,11 @@ async def test_fetch_outcome_cancellation_awaits_optional_enrichment():
         ),
         patch("mammamiradio.home.ha_context._ha_cache", None),
     ):
-        fetch_task = asyncio.create_task(_fetch_home_context_outcome("http://ha:8123", "token", poll_interval=0.0))
+        fetch_task = asyncio.create_task(
+            _fetch_home_context_outcome(
+                "http://ha:8123", "token", poll_interval=0.0, authorization=HomeAuthorization.legacy()
+            )
+        )
         await state_started.wait()
         await registry_started.wait()
         await weather_started.wait()

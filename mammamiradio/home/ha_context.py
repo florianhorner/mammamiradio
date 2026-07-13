@@ -1764,7 +1764,10 @@ async def _fetch_home_context_outcome(
                 name="ha-context-registry-enrichment",
             )
             enrichment_tasks.append(registry_task)
-            if "weather.forecast_home" not in muted_ids:
+            # Any weather.* hard mute invalidates the shared forecast arc, so an
+            # operator muting a single weather source skips the forecast fetch
+            # entirely (privacy) — not just a mute of weather.forecast_home.
+            if not _has_weather_mute(muted_ids):
                 weather_task = asyncio.create_task(
                     _optional_weather_arc(),
                     name="ha-context-weather-enrichment",
@@ -1788,9 +1791,7 @@ async def _fetch_home_context_outcome(
         # slow but valid `/api/states` response is never serialized behind
         # registry/weather work.
         registry_snapshot = (
-            await registry_task
-            if registry_task is not None
-            else HomeRegistrySnapshot(source="narrow_not_loaded")
+            await registry_task if registry_task is not None else HomeRegistrySnapshot(source="narrow_not_loaded")
         )
         fetched_weather_arc = await weather_task if weather_task is not None else ""
 
@@ -1916,9 +1917,7 @@ async def _fetch_home_context_outcome(
         mood_en = classify_home_mood_en(relevant) if active_authorization.allows_derived_mood else ""
         weather_muted = _has_weather_mute(muted_ids)
         weather_arc = (
-            ""
-            if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW
-            else fetched_weather_arc
+            "" if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW else fetched_weather_arc
         )
         summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
