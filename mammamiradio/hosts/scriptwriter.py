@@ -3092,10 +3092,15 @@ async def write_ad(
     ``callback_gag`` is an optional single verbal gag (chosen by the producer via
     the verbal-gag ledger) to land cross-domain; None means no callback.
     """
+    direct_primary_role = (
+        brand.campaign.spokesperson_role.strip()
+        if brand.campaign and isinstance(brand.campaign.spokesperson_role, str)
+        else ""
+    )
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config))],
+            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)],
             summary=brand.tagline,
             format=ad_format,
         )
@@ -3141,6 +3146,13 @@ BUILD ON THIS. Reference or contradict previous claims. Create a narrative arc:
 CAMPAIGN SPINE:
 - Core premise: {brand.campaign.premise}
 - Escalation rule: {brand.campaign.escalation_rule}"""
+    if direct_primary_role:
+        spine_context += f"\n- Required spokesperson role: {direct_primary_role}"
+    direct_spokesperson_rule = (
+        f"- The required spokesperson role ({direct_primary_role}) must speak at least one voice line."
+        if direct_primary_role
+        else ""
+    )
 
     # Build speaker descriptions for the prompt
     speaker_lines = []
@@ -3189,6 +3201,7 @@ RULES:
 - Think Italian TV shopping channel meets GTA radio meets a faded political showman's fever dream.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
+{direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
 - You may interleave sound effect cues and environment cues between voice lines.
 - Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
@@ -3242,13 +3255,40 @@ Return JSON:
             )
 
         # Ensure we have at least one voice part
+        used_owned_fallback = False
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+        if direct_primary_role and not any(
+            part.type == "voice"
+            and part.role == direct_primary_role
+            and isinstance(part.text, str)
+            and part.text.strip()
+            for part in parts
+        ):
+            # A direct campaign must never become a partner-only ad because
+            # the model omitted its named character. Keep the recovery copy on
+            # the owned role and demote the format rather than silently airing
+            # a different campaign voice.
+            logger.warning(
+                "Generated ad for %s omitted required direct spokesperson role %s; using owned fallback",
+                brand.name,
+                direct_primary_role,
+            )
+            parts = [
+                AdPart(
+                    type="voice",
+                    text=_ad_fallback_text(brand, config),
+                    role=direct_primary_role,
+                )
+            ]
+            used_owned_fallback = True
         parts = _ensure_attention_grabbing_ad_parts(parts, sonic)
 
         # Light validation: demote single-role duo_scenes
         roles_found = {p.role for p in parts if p.type == "voice" and p.role}
         actual_format = ad_format
+        if used_owned_fallback:
+            actual_format = AdFormat.CLASSIC_PITCH
         if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(roles_found) < 2:
             actual_format = AdFormat.CLASSIC_PITCH
             logger.info("Demoted %s to classic_pitch (only %d role(s) in output)", ad_format, len(roles_found))
@@ -3295,7 +3335,7 @@ Return JSON:
         text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=text)],
+            parts=[AdPart(type="voice", text=text, role=direct_primary_role)],
             summary=f"Fallback ad for {brand.name}",
             format=ad_format,
             sonic=sonic,

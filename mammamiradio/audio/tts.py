@@ -403,6 +403,16 @@ _ELEVENLABS_DEFAULT_VOICE_SETTINGS: dict = {
 }
 
 
+def _resolve_elevenlabs_v2_voice_settings(voice_settings: dict | None) -> dict:
+    """Return the exact ElevenLabs v2 settings payload for a configured voice."""
+
+    if voice_settings is not None and not isinstance(voice_settings, dict):
+        raise ValueError("ElevenLabs voice_settings must be a table")
+    # Keep this dict construction and key order aligned with the historical v2
+    # payload so voices without a deliberate override keep the same request.
+    return {**_ELEVENLABS_DEFAULT_VOICE_SETTINGS, **(voice_settings or {})}
+
+
 async def synthesize_elevenlabs(
     text: str,
     voice: str,
@@ -432,7 +442,7 @@ async def synthesize_elevenlabs(
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {**_ELEVENLABS_DEFAULT_VOICE_SETTINGS, **(voice_settings or {})},
+        "voice_settings": _resolve_elevenlabs_v2_voice_settings(voice_settings),
     }
     try:
         client = _get_elevenlabs_client(api_key)
@@ -647,17 +657,20 @@ async def synthesize_ad(
     sfx_dir: Path | None = None,
     state: StationState | None = None,
     cache_dir: Path | None = None,
+    default_voice: AdVoice | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
     Voices is a role->AdVoice map. Parts with a role field use the matching voice;
-    parts without a role use the first voice in the dict.
+    parts without a role use ``default_voice`` when supplied, otherwise the first
+    voice in the dict. A direct campaign character uses this narrow override so a
+    roleless script fallback cannot silently become its supporting actor.
 
     state is forwarded to each voice-part synthesize() for paid-TTS char accounting.
     """
     ad_parts: list[Path] = []
     loop = asyncio.get_running_loop()
-    default_voice = next(iter(voices.values()))
+    default_voice = default_voice or next(iter(voices.values()))
 
     # 1+2. Brand motif AND voice/SFX parts in parallel (motif is just prepended)
     from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
@@ -740,11 +753,13 @@ async def synthesize_ad(
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
             # Legal disclaimers are format-scoped, not accidental role spikes.
-            extra: dict[str, str | bool] = {
+            extra: dict[str, object] = {
                 "engine": voice_for_part.engine,
                 "edge_fallback_voice": voice_for_part.edge_fallback_voice,
                 "openai_instructions": _openai_instructions_for_ad_voice(voice_for_part),
             }
+            if voice_for_part.voice_settings:
+                extra["voice_settings"] = voice_for_part.voice_settings
             if part.role == "disclaimer_goblin":
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
@@ -800,6 +815,7 @@ async def synthesize_ad(
             engine=default_voice.engine,
             edge_fallback_voice=default_voice.edge_fallback_voice,
             openai_instructions=_openai_instructions_for_ad_voice(default_voice),
+            voice_settings=default_voice.voice_settings,
             state=state,
         )
         return fallback_path
