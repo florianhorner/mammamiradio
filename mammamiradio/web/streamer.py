@@ -4061,7 +4061,8 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
     """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: prompt_world / transitions / fallbacks (prompt-fiction + stock copy)
+    Safe to reload: language_policy / prompt_world / transitions / fallbacks (language
+    contract, prompt-fiction + stock copy)
     + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
     alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
@@ -4073,6 +4074,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     Requires --workers 1 (importlib reloads only the worker handling the request).
     """
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
+    import mammamiradio.hosts.language_policy as _language_policy_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
     import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
@@ -4103,6 +4105,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         # Reloading scriptwriter also re-runs its module body, which resets
         # _cached_system_prompt — so edited prompt data takes effect on the next
         # generation rather than serving a stale cache.
+        importlib.reload(_language_policy_mod)
         importlib.reload(_prompt_world_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
@@ -4111,12 +4114,14 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded prompt_world + transitions + fallbacks + station_name_guard + scriptwriter in %dms",
+            "hot-reload: reloaded language_policy + prompt_world + transitions + "
+            "fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
             "ok": True,
             "reloaded_modules": [
+                "mammamiradio.hosts.language_policy",
                 "mammamiradio.hosts.prompt_world",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",

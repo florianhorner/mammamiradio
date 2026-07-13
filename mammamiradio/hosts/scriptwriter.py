@@ -51,10 +51,22 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.context_cues import compute_context_block
 from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — AD_BREAK_* are read only as scriptwriter.* (CHAOS_STOCK_LINES is also used in-module)
     AD_BREAK_INTROS,
+    AD_BREAK_NORMAL_INTROS,
+    AD_BREAK_NORMAL_OUTROS,
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
     chaos_solo_recovery_lines,
     chaos_stock_lines,
+    select_ad_break_intro,
+    select_ad_break_outro,
+    select_ad_promo_tag,
+)
+from mammamiradio.hosts.language_policy import (
+    NORMAL_MODE_ENGLISH_TARGET,
+    assess_language,
+)
+from mammamiradio.hosts.language_policy import (
+    normal_mode_language_ok as _normal_mode_language_policy_ok,
 )
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
@@ -1451,139 +1463,14 @@ def _anthropic_text(content: object) -> str:
     return "\n".join(chunks)
 
 
-_LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")
-
 _NORMAL_MODE_LANGUAGE_REPAIR = """
 NORMAL MODE LANGUAGE REPAIR:
 The previous JSON was too Italian for Normal Mode. Rewrite the same content as
-English-led host speech: roughly 70% English / 30% Italian. English carries the
+English-led host speech: target roughly 75% English / 25% Italian, staying within
+the accepted 70–85% English range. English carries the
 information and full sentences; Italian is only greetings, reactions, punchlines,
 and colour. Keep the same JSON schema and valid host names.
 """.strip()
-
-_NORMAL_MODE_ENGLISH_MARKERS = frozenset(
-    {
-        "a",
-        "about",
-        "after",
-        "again",
-        "all",
-        "and",
-        "anyway",
-        "are",
-        "back",
-        "be",
-        "because",
-        "been",
-        "but",
-        "by",
-        "can",
-        "could",
-        "did",
-        "do",
-        "does",
-        "english",
-        "exactly",
-        "for",
-        "from",
-        "had",
-        "has",
-        "have",
-        "here",
-        "in",
-        "is",
-        "it",
-        "keep",
-        "little",
-        "more",
-        "music",
-        "next",
-        "no",
-        "not",
-        "now",
-        "of",
-        "on",
-        "or",
-        "out",
-        "room",
-        "say",
-        "song",
-        "stay",
-        "still",
-        "that",
-        "the",
-        "then",
-        "there",
-        "this",
-        "to",
-        "track",
-        "was",
-        "we",
-        "what",
-        "with",
-        "you",
-    }
-)
-
-_NORMAL_MODE_ITALIAN_MARKERS = frozenset(
-    {
-        "abbiamo",
-        "adesso",
-        "allora",
-        "anche",
-        "ancora",
-        "ascolta",
-        "bene",
-        "benissimo",
-        "calma",
-        "canzone",
-        "casa",
-        "che",
-        "ci",
-        "come",
-        "con",
-        "continua",
-        "cosa",
-        "cosi",
-        "così",
-        "da",
-        "dai",
-        "della",
-        "di",
-        "e",
-        "era",
-        "finisce",
-        "fretta",
-        "in",
-        "italiano",
-        "la",
-        "lo",
-        "ma",
-        "musica",
-        "nel",
-        "nella",
-        "nessuna",
-        "non",
-        "ora",
-        "piano",
-        "poi",
-        "questa",
-        "questo",
-        "qui",
-        "respira",
-        "restiamo",
-        "senza",
-        "si",
-        "sì",
-        "studio",
-        "tutti",
-        "un",
-        "una",
-        "va",
-    }
-)
-
-_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS = frozenset({"a", "in", "no"})
 
 
 def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
@@ -1618,30 +1505,45 @@ def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
     return [text] if isinstance(text, str) else []
 
 
+def _json_has_spoken_role(data: object, required_role: str) -> bool:
+    """Return whether an ad JSON payload contains non-empty text for a role."""
+    if not isinstance(data, dict) or not required_role:
+        return False
+    raw_parts = data.get("parts")
+    if not isinstance(raw_parts, list):
+        return False
+    return any(
+        isinstance(part, dict)
+        and part.get("type", "voice") == "voice"
+        and part.get("role") == required_role
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+        for part in raw_parts
+    )
+
+
 def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
-    """Return false only for clearly all-Italian generated speech in Normal Mode."""
-    if config.super_italian_mode:
-        return True
-    combined = " ".join(text.strip() for text in texts if text and text.strip())
-    if not combined:
-        return True
-    tokens = [token.casefold() for token in _LANGUAGE_TOKEN_RE.findall(combined)]
-    if len(tokens) < 12:
-        return True
+    """Apply the shared language policy using the station's active mode."""
+    return _normal_mode_language_policy_ok(texts, super_italian=config.super_italian_mode)
 
-    english_hits = sum(
-        token in _NORMAL_MODE_ENGLISH_MARKERS and token not in _NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS
-        for token in tokens
-    )
-    italian_hits = sum(
-        token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù") for token in tokens
-    )
-    english_floor = max(2, len(tokens) // 10)
-    if english_hits >= english_floor:
-        return True
 
-    italian_floor = max(4, len(tokens) // 4)
-    return italian_hits < italian_floor
+def assess_spoken_texts(texts: list[str], config: StationConfig) -> dict[str, object]:
+    """Return JSON-safe policy telemetry for final spoken provenance rows."""
+    assessment = assess_language(texts)
+    accepted = _normal_mode_language_ok(texts, config)
+    return {
+        "mode": "super_italian" if config.super_italian_mode else "normal",
+        "target_english_share": NORMAL_MODE_ENGLISH_TARGET,
+        "total_tokens": assessment.total_tokens,
+        "english_tokens": assessment.english_tokens,
+        "italian_tokens": assessment.italian_tokens,
+        "unclassified_tokens": assessment.unclassified_tokens,
+        "classified_tokens": assessment.classified_tokens,
+        "english_share": assessment.english_share,
+        "italian_share": assessment.italian_share,
+        "accepted": accepted,
+        "decision": "accepted" if accepted else "rejected",
+    }
 
 
 async def _generate_json_response_with_language_guard(
@@ -1653,6 +1555,7 @@ async def _generate_json_response_with_language_guard(
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
+    required_role: str | None = None,
     spot_index: int | None = None,
 ) -> dict:
     """Generate JSON and enforce Normal Mode's English-led output invariant."""
@@ -1669,6 +1572,12 @@ async def _generate_json_response_with_language_guard(
             role=role,
             spot_index=spot_index,
         )
+        # Direct campaigns have a structural safety repair below this guard.
+        # Let that repair replace partner-only output with owned fallback copy;
+        # otherwise the language retry raises first and skips the campaign-role
+        # invariant entirely.
+        if surface == "ad" and required_role and not _json_has_spoken_role(data, required_role):
+            return data
         if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config):
             return data
         if attempt == 0:
@@ -1878,35 +1787,47 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     if not regulars:
         return ""
     regular_hosts_text = _host_names_text(regulars)
-    station_conversation_lang = "Italian" if super_italian else "mostly English with Italian colour"
+    if super_italian:
+        guest_language_clause = (
+            "He is ON ITALIAN RADIO, so his on-air language is Italian-first: roughly 75-85% Italian, "
+            "enough that he belongs inside the full Italian conversation instead of sounding pasted in "
+            "from a German sketch."
+        )
+        conversation_word = "Italian"
+    else:
+        guest_language_clause = (
+            "Normal Mode is English-led: keep Hans Günther inside the 75% English / 25% Italian contract. "
+            "English carries the information; Italian and short Bavarian phraselets add the color without "
+            "turning his lines into an Italian monologue."
+        )
+        conversation_word = "English-led"
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
-        "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
-        "roughly 75-85% Italian, enough that he belongs inside the full Italian conversation "
-        "instead of sounding pasted in from a German sketch. Make him about 50% MORE Bavarian "
+        f"sharp, fast, funny. {guest_language_clause} Make him about 50% MORE Bavarian "
         "than before, but as texture: rhythm, swagger, nicknames, comparisons, and short "
         "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
-        "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
+        f"single words like 'fei' or 'mei' into otherwise {conversation_word} sentences; those sound off. "
         "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
         "'des is ned normale', 'wia schee questa radio', 'des is fei a Witz', "
         "'passt wie Arsch auf Eimer'. "
         "Prefer one phraselet in a Hans line, "
         "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
-        "Italian banter. No German monologues. Full German is rare and only works as an "
+        f"{conversation_word} banter. No German monologues. Full German is rare and only works as an "
         "explicit 'nobody understood him' gag; otherwise keep German/Boarisch to 2-6 word "
-        "bursts inside Italian lines. Vary how he enters every time — never reuse the same "
+        f"bursts inside {conversation_word} lines. Vary how he enters every time — never reuse the same "
         "greeting or opener. "
         f"{regular_hosts_text} "
-        f"keep the station conversation {station_conversation_lang}; they react to his Bavarianisms naturally, "
+        f"keep the station conversation {'Italian' if super_italian else 'mostly English with Italian colour'}; "
+        "they react to his Bavarianisms naturally, "
         "roasting or misunderstanding the flavor without formally translating every line. "
-        "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
+        "Never put fake or broken German in the station hosts' mouths, and never write pidgin "
         "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
         "Hans Günther is a GUEST STAR, not a co-host: he is available only when a "
         "specific banter prompt explicitly opens the guest-host gate. When the gate "
         "is closed, he stays off-mic and the regular hosts carry the exchange. "
         "When invited, he makes one short interruption and hands the floor back to "
         f"{regular_hosts_text}. Tag that invited line with the exact host name "
-        '"Hans Günther" (never just "Hans") so it attributes to him, not to an Italian host.'
+        '"Hans Günther" (never just "Hans") so it attributes to him, not to a station host.'
     )
 
 
@@ -2082,8 +2003,10 @@ async def write_banter(
             logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
         host = random.choice(_regular_hosts(config))
-        fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
-        return [(host, fallback.get(config.station.language, fallback["en"]))], None
+        fallback = (
+            "E torniamo alla musica!" if _spoken_fallback_language(config) == "it" else "And back to the music, amici!"
+        )
+        return [(host, fallback)], None
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
@@ -2128,12 +2051,16 @@ async def write_banter(
         home_state_sections.append("AMBIENT CUE:\n" + _sanitize_prompt_data(prompt_fact.prompt, max_len=280))
     elif state.ha_context and not use_directed_home_context:
         home_state_sections.append(state.ha_context)
-    if state.ha_events_summary and not use_directed_home_context:
-        home_state_sections.append("EVENTI RECENTI:\n" + state.ha_events_summary)
+    events_summary = (
+        state.ha_events_summary if _spoken_fallback_language(config) == "it" else state.ha_events_summary_en
+    )
+    if events_summary and not use_directed_home_context:
+        home_state_sections.append("EVENTI RECENTI:\n" + events_summary)
     if state.ha_ritual_context:
         home_state_sections.append("RITUALI DI CASA:\n" + _sanitize_prompt_data(state.ha_ritual_context, max_len=160))
-    if state.ha_weather_arc and not use_directed_home_context:
-        home_state_sections.append("WEATHER ARC: " + state.ha_weather_arc)
+    weather_arc = _localized_weather_arc(state, config)
+    if weather_arc and not use_directed_home_context:
+        home_state_sections.append("WEATHER ARC: " + weather_arc)
 
     # Impossible Moments v2 (A): the evening running-gag. DATA goes INSIDE the
     # fence (sanitized like all other home data); the use/no-use INSTRUCTION goes
@@ -2151,7 +2078,8 @@ async def write_banter(
 
     if home_state_sections:
         # Tiered reference depth: mood active = up to 2 total, no mood = 1 max
-        if state.ha_home_mood:
+        active_home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
+        if active_home_mood:
             ref_instruction = (
                 "You may reference UP TO TWO home details total (mood counts toward this cap). "
                 "Connect them naturally — don't list. Like glancing around the room."
@@ -2168,18 +2096,19 @@ async def write_banter(
 
     # Phase 2: home mood — interpretive, placed OUTSIDE the data fence
     mood_block = ""
-    if state.ha_home_mood:
+    active_home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
+    if active_home_mood:
         mood_block = (
-            f"HOME MOOD: {state.ha_home_mood} — "
+            f"HOME MOOD: {active_home_mood} — "
             "reference this at most once, like a passing observation. Never as a report.\n"
         )
-        example = _MOOD_EXAMPLES.get(state.ha_home_mood)
+        example = _MOOD_EXAMPLES.get(active_home_mood)
         if example:
             mood_block += f"{example}\n"
 
     # Weather-mood fusion: when both are set, allow natural connection
     weather_mood_fusion = ""
-    if state.ha_home_mood and state.ha_weather_arc and not use_directed_home_context:
+    if active_home_mood and weather_arc and not use_directed_home_context:
         weather_mood_fusion = (
             "Weather and home mood are aligned — you may connect outdoor conditions "
             "to indoor activity naturally. This counts toward the 2-item cap.\n"
@@ -2611,13 +2540,15 @@ Return JSON:
                 raise ValueError("banter response did not frame guest-host line as a cameo")
             guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
 
-        if not _normal_mode_language_ok([text for _, text in result], config):
-            raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
-
         # Sanitize: replace any wrong station names the LLM may have hallucinated
         result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
         if not _banter_turn_taking_ok(result):
             raise ValueError("banter response contained an orphaned host cut-off")
+        # This is the final speech boundary: station-name cleanup and any other
+        # post-processing must not turn an accepted response into Italian-heavy
+        # Normal Mode copy.
+        if not _normal_mode_language_ok([text for _, text in result], config):
+            raise ValueError("banter response violated Normal Mode language mix after post-processing")
         # A milestone belongs to an accepted generated exchange, not merely a
         # prompt attempt. Every response-shape, language, sanitation,
         # de-duplication, and turn-taking guard above must pass first.
@@ -2731,31 +2662,31 @@ Return JSON:
 
 NEWS_FLASH_CATEGORIES = {
     "traffic": (
-        "Absurd Italian traffic bulletin. Invent a fresh, specific road incident every time: "
+        "Absurd traffic bulletin with Italian local color. Invent a fresh, specific road incident every time: "
         "unexpected vehicles, impossible detours, bureaucratic road signs, dramatic commuters, "
         "family-lunch indecision, scolding navigation systems, or municipal mishaps. "
         "Deliver it like a real traffic update — professional tone, insane content."
     ),
     "breaking": (
-        "Absurd Italian breaking news. Invent a new civic, culinary, political, or architectural scandal "
+        "Absurd breaking news with Italian local color. Invent a new civic, culinary, political, or architectural scandal "
         "with one concrete consequence and one offended group. Useful directions include food etiquette, "
         "domestic diplomacy, public hand gestures, or negotiations interrupted by table manners. "
         "Delivered with fake-serious urgency."
     ),
     "sports": (
-        "Fake Italian sports desk update delivered by a measured, informed radio host. "
+        "Fake sports-desk update with Italian local color, delivered by a measured, informed radio host. "
         "Invent fictional teams and players, but keep the scoreline followable and the analysis clear: "
         "who scored, what changed, and why the match matters. Everyday Italian athletic feats are fair game: "
         "staircases, grocery bags, family endurance, espresso-powered comebacks. Light dry wit is welcome; "
         "avoid meltdown commentary, all-caps hype, extended goal screams, and breathless incoherence."
     ),
     "weather": (
-        "Absurd Italian weather report. Invent a new impossible forecast with a clear location, "
+        "Absurd weather report with Italian local color. Invent a new impossible forecast with a clear location, "
         "a visible effect on daily life, and one practical-sounding warning. Lean into heat, gelato logic, "
         "coffee dependency, seaside optimism, or umbrella superstition. Professional meteorologist tone."
     ),
     "culture": (
-        "Absurd Italian culture bulletin. Invent a fresh arts, museum, cinema, church, fashion, or food-world "
+        "Absurd culture bulletin with Italian local color. Invent a fresh arts, museum, cinema, church, fashion, or food-world "
         "controversy with a specific institution and a ridiculous official response. Good directions include "
         "mothers treating appetite as medical evidence, family lunches that outlast the calendar, "
         "untranslatable gestures, or sacred arguments about pasta. "
@@ -2809,7 +2740,7 @@ def _callback_block(callback_gag: str | None) -> str:
 
 _NEWS_FLASH_FALLBACK = {
     "it": "Notizia dell'ultima ora: tutto a posto. Più o meno.",
-    "en": "And in breaking news: everything's fine. More or less.",
+    "en": "And in breaking news: everything's fine, amici. More or less.",
 }
 
 
@@ -2823,7 +2754,7 @@ def _localized_weather_arc(state: StationState, config: StationConfig) -> str:
     the English arc when a forecast exists and an empty string (no grounding,
     static fictional fallback) when it does not.
     """
-    if config.station.language == "it":
+    if _spoken_fallback_language(config) == "it":
         return state.ha_weather_arc
     return state.ha_weather_arc_en
 
@@ -2851,7 +2782,18 @@ def _transition_fallback_text(config: StationConfig, next_segment: str) -> str:
 def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
     if _spoken_fallback_language(config) == "it":
         return f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}"
-    return f"{brand.name}. Because you deserve it."
+    return f"{brand.name}. Because you deserve it, amici."
+
+
+def _pharma_disclaimer_text(config: StationConfig) -> str:
+    """Return the legally styled fictional-pharma tail for the spoken mode."""
+    if _spoken_fallback_language(config) == "it":
+        return (
+            "È un medicinale a base di ibuprofene. Leggere attentamente "
+            "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
+            "Non somministrare ai bambini al di sotto dei 12 anni."
+        )
+    return "Medicine disclaimer, amici: read the leaflet; do not give to children under twelve."
 
 
 async def write_news_flash(
@@ -2860,7 +2802,7 @@ async def write_news_flash(
     category: str | None = None,
     callback_gag: str | None = None,
 ) -> tuple[HostPersonality, str, str]:
-    """Generate an absurd Italian news/traffic/sports flash bulletin.
+    """Generate an absurd news/traffic/sports flash bulletin with Italian station character.
 
     Returns (host, text, category) — the host delivers the flash solo.
 
@@ -2886,7 +2828,7 @@ async def write_news_flash(
     weather_arc = _localized_weather_arc(state, config)
     if category == "weather" and weather_arc.strip():
         real_weather = _sanitize_prompt_data(weather_arc, max_len=200)
-        home_mood = state.ha_home_mood if config.station.language == "it" else state.ha_home_mood_en
+        home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
         mood_line = ""
         if home_mood:
             mood_line = "\nHome mood: " + _sanitize_prompt_data(home_mood, max_len=120)
@@ -2922,7 +2864,7 @@ RULES:
 - 2-4 sentences MAX. Punchy, clear, and delivered with total conviction.
 - For sports: sound like an informed radio sports desk. Keep the update measured and followable.
 - For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
-- Must feel like a real Italian radio news flash interrupting the programming.
+- Must feel like a real radio news flash with Italian station character, interrupting the programming.
 - {language_mode_rule(config.super_italian_mode, config.station.language)}
 
 Return JSON:
@@ -2941,10 +2883,15 @@ Return JSON:
         text = sanitize_spoken_station_name(
             data.get("text") or _news_flash_fallback(config), config.display_station_name
         )
+        callback_landed = bool(data.get("callback_used"))
+        if not _normal_mode_language_ok([text], config):
+            logger.warning("News flash failed final Normal Mode language check; using stock copy")
+            text = _news_flash_fallback(config)
+            callback_landed = False
         if callback_gag:
             # Model-reported: did it actually land the cross-domain gag? The
             # producer retires the gag only when this is true (queue-time != used).
-            state.pending_callback_landed = bool(data.get("callback_used"))
+            state.pending_callback_landed = callback_landed
         logger.info("Generated %s flash: %d chars", category, len(text))
         return (host, text, category)
 
@@ -3065,9 +3012,17 @@ Return JSON:
         if not isinstance(raw_text, str) or not _transition_text_usable(raw_text):
             logger.warning("Transition response was unusable; using deterministic stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
-        text = _massage_transition_text(raw_text, next_segment, recent_texts)
+        text = _massage_transition_text(
+            raw_text,
+            next_segment,
+            recent_texts,
+            super_italian=_spoken_fallback_language(config) == "it",
+        )
         if not _transition_text_usable(text):
             logger.warning("Massaged transition response was unusable; using deterministic stock copy")
+            return (host, _transition_fallback_text(config, next_segment), None)
+        if not _normal_mode_language_ok([text], config):
+            logger.warning("Massaged transition failed final Normal Mode language check; using stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
         return (host, text, played_track_ref)
@@ -3198,7 +3153,7 @@ Recently played music: {recent_tracks if recent_tracks else "show just started"}
 
 RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
-- Think Italian TV shopping channel meets GTA radio meets a faded political showman's fever dream.
+- Think late-night TV shopping meets GTA radio meets a faded political showman's fever dream, with Italian station character.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 {direct_spokesperson_rule}
@@ -3233,13 +3188,13 @@ Return JSON:
             max_tokens=800,
             caller="ad",
             role="ad_spot",
+            required_role=direct_primary_role,
             spot_index=spot_index,
         )
 
-        if callback_gag:
-            # Model-reported: did the ad land the cross-domain gag? Producer
-            # retires only when true (queue-time != used).
-            state.pending_callback_landed = bool(data.get("callback_used"))
+        # Model-reported callback usage is only eligible for retirement if the
+        # exact generated copy survives all structural and language repairs.
+        callback_landed = bool(data.get("callback_used"))
 
         parts = []
         for p in data.get("parts", []):
@@ -3258,6 +3213,7 @@ Return JSON:
         used_owned_fallback = False
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+            used_owned_fallback = True
         if direct_primary_role and not any(
             part.type == "voice"
             and part.role == direct_primary_role
@@ -3311,14 +3267,28 @@ Return JSON:
             parts.append(
                 AdPart(
                     type="voice",
-                    text=(
-                        "È un medicinale a base di ibuprofene. Leggere attentamente "
-                        "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
-                        "Non somministrare ai bambini al di sotto dei 12 anni."
-                    ),
+                    text=_pharma_disclaimer_text(config),
                     role="disclaimer_goblin",
                 )
             )
+
+        voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
+        if not _normal_mode_language_ok(voice_texts, config):
+            logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
+            fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
+            if brand.category == "pharma":
+                fallback_parts.append(
+                    AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
+                )
+            parts = fallback_parts
+            actual_format = AdFormat.CLASSIC_PITCH
+            roles_found = {p.role for p in parts if p.type == "voice" and p.role}
+            used_owned_fallback = True
+
+        if callback_gag:
+            # A structural or language fallback did not speak the model's
+            # callback, so do not retire the pending offer as if it aired.
+            state.pending_callback_landed = callback_landed and not used_owned_fallback
 
         return AdScript(
             brand=brand.name,

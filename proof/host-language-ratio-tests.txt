@@ -1,4 +1,4 @@
-host-language-ratio — mode-true host language (100% Italian / 70-30)
+host-language-ratio — mode-true host language (100% Italian / 75-25 target)
 Branch: florianhorner/feat/host-language-ratio
 Commit: e9f7ce56 (+ this proof commit)
 
@@ -11,7 +11,7 @@ pytest                  : 3813 passed, 2 skipped, 19 deselected
 coverage                : Total 93% (floor 92%) — all per-module floors held
 
 Language-mode subset (tests/hosts/): 30 tests pass in 0.4s
-- test_scriptwriter_mode.py: ON=100% Italian marker, OFF=70/30 markers,
+- test_scriptwriter_mode.py: ON=100% Italian marker, OFF=75/25 target markers,
   cache-invalidates-on-flip, unmapped-code fallback degrades (no KeyError).
 - test_scriptwriter.py: both-flags coverage for news / ad / transition / weather
   / course-change prompt builders (each carries the mode-appropriate rule).

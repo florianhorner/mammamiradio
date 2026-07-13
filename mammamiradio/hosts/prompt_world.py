@@ -175,13 +175,14 @@ LANGUAGE_MODE_FULL_ITALIAN = (
 
 LANGUAGE_MODE_INTERNATIONAL = (
     "LANGUAGE — INTERNATIONAL MODE: You broadcast to a mixed international "
-    "audience. Target roughly 70% English, 30% Italian in every segment. "
+    "audience. Target 75% English, 25% Italian in every segment. "
     "English carries the information — stories, song facts, news, anything the "
     "listener must follow. Italian carries the heart — greetings, exclamations, "
-    "teasing, punchlines, sign-offs — and about one line in three may be a "
-    "complete Italian sentence, kept simple enough that the moment explains "
-    "itself. The Italian expression banks below are your palette for those "
-    "moments. Never translate your own Italian back into English. Think "
+    "teasing, punchlines, sign-offs — and roughly one word in four may be Italian, "
+    "kept simple enough that the moment explains itself. For very short transitions, "
+    "include at least one English phrase and never make the whole line Italian. "
+    "The Italian expression banks below are your palette for those moments. "
+    "Never translate your own Italian back into English. Think "
     "'Italian DJ on tour speaking to the world,' not 'RAI domestic broadcast.'"
 )
 
@@ -202,8 +203,9 @@ def language_mode_rule(super_italian: bool, language_code: str) -> str:
         language_name = _LANGUAGE_NAMES.get(code, code) if code else "Italian"
         return f"ALL text in {language_name}."
     return (
-        "Roughly 70% English / 30% Italian: English carries the information, "
-        "Italian the flavor — Italian moments land without translation."
+        "Target 75% English / 25% Italian (acceptable range 70–85% English): "
+        "English carries the information, Italian the flavor — Italian moments "
+        "land without translation. Short copy must include an English phrase."
     )
 
 

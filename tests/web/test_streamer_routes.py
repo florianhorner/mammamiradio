@@ -4688,6 +4688,7 @@ async def test_hot_reload_authenticated_200():
     body = resp.json()
     assert body["ok"] is True
     assert body["reloaded_modules"] == [
+        "mammamiradio.hosts.language_policy",
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
@@ -4710,17 +4711,17 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_prompt_world_stage_failure_returns_500():
-    """First reload stage (prompt_world) raises → 500 with stream_status=unaffected.
+async def test_hot_reload_language_policy_stage_failure_returns_500():
+    """First reload stage (language_policy) raises → 500 with stream_status=unaffected.
 
-    Guards the failure contract for the leaves-first stage. With prompt_world reloaded
+    Guards the failure contract for the leaves-first stage. With language_policy reloaded
     first, a single raising reload exercises this stage.
     """
     app = _make_test_app(admin_token="testtoken")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=ImportError("syntax error in prompt_world.py"),
+        side_effect=ImportError("syntax error in language_policy.py"),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -4733,7 +4734,7 @@ async def test_hot_reload_prompt_world_stage_failure_returns_500():
     assert body["stream_status"] == "unaffected"
     assert body["error_code"] == "reload_failed"
     assert body["retryable"] is True
-    assert "syntax error in prompt_world.py" in body["exception"]
+    assert "syntax error in language_policy.py" in body["exception"]
 
 
 @pytest.mark.asyncio
@@ -4749,7 +4750,7 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=[None, None, None, None, ImportError("syntax error in scriptwriter.py")],
+        side_effect=[None, None, None, None, None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -4812,6 +4813,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
             )
     assert resp.status_code == 200
     assert reloaded == [
+        "mammamiradio.hosts.language_policy",
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
