@@ -578,8 +578,9 @@ entirely from existing canonical components — no new vocabulary:
   honesty). No timestamps.
 - **Idle:** the feed hides entirely when nothing is generating and the trail is empty —
   never a dead box.
-- **Update delayed:** when an authoritative `/status` poll fails, the panel must stop
-  claiming the frozen backstage work is current. It swaps the section label to
+- **Update delayed:** when an authoritative `/status` poll fails, or when its
+  production block cannot be rendered safely, the panel must stop claiming the frozen
+  backstage work is current. It swaps the section label to
   `In produzione · update delayed`, removes the stale production rows, and shows a
   `.status-inline.working` line reading **Status update delayed** with the recovery
   sentence *"Can't update this panel right now. We'll keep trying automatically."* It

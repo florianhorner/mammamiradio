@@ -466,6 +466,7 @@ def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
     )
     assert live_region in html
     assert "const alreadyUnavailable=_productionUnavailable" in block
+    assert "let _productionRetryInFlight=false" in html
     assert "if(!alreadyUnavailable){" in block
     assert "const announcement=document.getElementById('productionStatusAnnouncement')" in block
     announcement_copy = (
@@ -478,12 +479,16 @@ def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
     assert 'onclick="retryProductionNow(this)"' in block
     retry = _function_block(html, "retryProductionNow")
     assert "await refreshFast()" in retry
+    assert "if(_productionRetryInFlight)return" in retry
+    assert "_productionRetryInFlight=true" in retry
+    assert "_productionRetryInFlight=false" in retry
     busy = _function_block(html, "_setProductionRetryBusy")
     assert "btn.disabled=busy" in busy
     assert "'Trying…'" in busy
 
-    # A successful poll clears the latch so a later outage re-announces on entry.
+    # A successfully rendered poll clears the latch so a later outage re-announces.
     refresh_fast = _function_block(html, "refreshFast")
+    assert refresh_fast.index("renderProduction(_st);") < refresh_fast.index("_productionUnavailable=false")
     assert "_productionUnavailable=false" in refresh_fast
     assert "productionAnnouncement.textContent=''" in refresh_fast
 
@@ -492,6 +497,20 @@ def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
     update_stop = _function_block(html, "updateStopState")
     assert "prod-retry" not in update_stop
     assert "productionRetryBtn" not in update_stop
+
+
+def test_unrenderable_production_status_replaces_stale_rows_with_fallback() -> None:
+    """A malformed production block must never leave an older live-work row visible."""
+    refresh_fast = _function_block(_read_admin_html(), "refreshFast")
+    production_guard = refresh_fast[
+        refresh_fast.index("try{\n      renderProduction(_st);") : refresh_fast.index("if (_st.station)")
+    ]
+
+    assert "console.error('refreshFast production',e);" in production_guard
+    assert "renderProductionUnavailable();" in production_guard
+    assert production_guard.index("console.error('refreshFast production',e);") < production_guard.index(
+        "renderProductionUnavailable();"
+    )
 
 
 def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
