@@ -570,7 +570,7 @@ def write_manifest(
         "config": str(config_path),
         "dry_run": dry_run,
         "counts": dict(Counter(result.status for result in results)),
-        "results": [asdict(result) for result in results],
+        "results": [_manifest_result(result) for result in results],
     }
     manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return manifest_path
@@ -611,7 +611,12 @@ _SELECTION_REJECTED_RATIONALES = frozenset(
         "rejected_profile_mismatch",
     }
 )
-_SAFE_PROFILE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_SELECTION_PROFILE_MODEL_BY_ENGINE = {
+    "edge": "edge_read_aloud",
+    "openai": "openai_tts",
+    "azure": "azure_speech",
+    "elevenlabs": "eleven_multilingual_v2",
+}
 
 
 def _receipt_mapping(value: object, field: str) -> Mapping[str, object]:
@@ -626,6 +631,32 @@ def _receipt_exact_fields(value: Mapping[str, object], allowed: frozenset[str], 
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(f"{field} contains prohibited fields: {', '.join(unknown)}")
+
+
+def _selection_candidate_id(provider: object, voice: object, profile: object) -> str:
+    """Return the opaque identity for one provider/voice/render-profile audition."""
+
+    if not isinstance(provider, str) or provider not in PROVIDERS:
+        raise ValueError("candidate.provider must name a supported provider")
+    if not isinstance(voice, str) or not voice:
+        raise ValueError("candidate.voice must be a non-empty string")
+    profile_mapping = _receipt_mapping(profile, "candidate.profile")
+    canonical = json.dumps(
+        {"provider": provider, "voice": voice, "profile": dict(profile_mapping)},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"audition-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _manifest_result(result: VoiceAuditionResult) -> dict[str, object]:
+    """Expose a profile-aware opaque candidate ID without leaking it into receipts."""
+
+    payload = asdict(result)
+    if result.profile is not None:
+        payload["candidate_id"] = _selection_candidate_id(result.provider, result.voice, result.profile)
+    return payload
 
 
 def _safe_receipt_note(value: object, field: str, *, max_length: int) -> str:
@@ -678,11 +709,18 @@ def _validate_selection_profile(value: object) -> None:
     if not isinstance(engine, str) or engine not in PROVIDERS:
         raise ValueError("candidate.profile.engine must name a supported provider")
     model = profile["model"]
-    if not isinstance(model, str) or not _SAFE_PROFILE_VALUE_RE.fullmatch(model):
-        raise ValueError("candidate.profile.model must be a safe model identifier")
+    expected_model = _SELECTION_PROFILE_MODEL_BY_ENGINE[engine]
+    if model != expected_model:
+        raise ValueError(f"candidate.profile.model must be {expected_model!r} for engine {engine!r}")
 
     settings = _receipt_mapping(profile["voice_settings"], "candidate.profile.voice_settings")
-    _receipt_exact_fields(settings, _SELECTION_VOICE_SETTING_FIELDS, "candidate.profile.voice_settings")
+    required_settings = _SELECTION_VOICE_SETTING_FIELDS if engine == "elevenlabs" else frozenset()
+    _receipt_exact_fields(settings, required_settings, "candidate.profile.voice_settings")
+    missing_settings = sorted(required_settings - set(settings))
+    if missing_settings:
+        raise ValueError(f"candidate.profile.voice_settings is missing fields: {', '.join(missing_settings)}")
+    if engine != "elevenlabs":
+        return
     for setting, setting_value in settings.items():
         if setting == "use_speaker_boost":
             if type(setting_value) is not bool:
@@ -795,6 +833,27 @@ def selection_receipt(candidates: list[Mapping[str, object]]) -> dict[str, objec
     return receipt
 
 
+def _commit_selection_receipt(receipt: Mapping[str, object], *, path: Path, overwrite: bool) -> Path:
+    """Persist reviewed evidence without a time-of-check/time-of-use overwrite race."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if overwrite:
+            temporary_path.replace(path)
+        else:
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                raise FileExistsError(f"Refusing to overwrite existing selection receipt: {path}") from None
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return path
+
+
 def write_selection_receipt(
     candidates: list[Mapping[str, object]],
     *,
@@ -809,16 +868,7 @@ def write_selection_receipt(
     version control after provider and human approval.
     """
     receipt = selection_receipt(candidates)
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"Refusing to overwrite existing selection receipt: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return path
+    return _commit_selection_receipt(receipt, path=path, overwrite=overwrite)
 
 
 def load_selection_receipt(path: Path = SELECTION_RECEIPT_PATH) -> dict[str, object]:
@@ -889,7 +939,14 @@ def selection_receipt_from_manifest(
         for raw_result in raw_results:
             result = _receipt_mapping(raw_result, "audition manifest.results[]")
             used_by = result.get("used_by")
-            if result.get("voice") == candidate_id and isinstance(used_by, list) and f"ad:{candidate_name}" in used_by:
+            result_candidate_id = _selection_candidate_id(
+                result.get("provider"),
+                result.get("voice"),
+                result.get("profile"),
+            )
+            if result.get("candidate_id") != result_candidate_id:
+                raise ValueError("audition manifest candidate_id must match its provider, voice, and profile")
+            if result_candidate_id == candidate_id and isinstance(used_by, list) and f"ad:{candidate_name}" in used_by:
                 matches.append(result)
         if len(matches) != 1:
             raise ValueError(
@@ -926,16 +983,7 @@ def write_selection_receipt_from_manifest(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
     receipt = selection_receipt_from_manifest(manifest, decisions)
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"Refusing to overwrite existing selection receipt: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return path
+    return _commit_selection_receipt(receipt, path=path, overwrite=overwrite)
 
 
 def _print_summary(results: list[VoiceAuditionResult], *, dry_run: bool, run_dir: Path | None = None) -> None:

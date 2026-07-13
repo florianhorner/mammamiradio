@@ -1053,6 +1053,51 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_empty_parts_fallback_keeps_direct_voice_settings(tmp_path, monkeypatch):
+    """The empty-script rescue keeps its selected character and tuned payload."""
+    import mammamiradio.audio.tts as tts
+
+    seen: list[dict[str, object]] = []
+
+    async def _synthesize(text, voice, output_path, **kwargs):
+        seen.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"x" * 2048)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize", _synthesize)
+    direct = AdVoice(
+        name="Il Razzo",
+        voice="voice-razzo",
+        style="fast",
+        role="disclaimer_goblin",
+        engine="elevenlabs",
+        voice_settings={"stability": 0.6},
+    )
+    hammer = AdVoice(name="House Hammer", voice="house-hammer", style="clear", role="hammer")
+
+    result = await tts.synthesize_ad(
+        AdScript(brand="Scarpe Volanti", parts=[]),
+        {"hammer": hammer, "disclaimer_goblin": direct},
+        tmp_path,
+        default_voice=direct,
+    )
+
+    assert result.exists()
+    assert seen == [
+        {
+            "text": "Scarpe Volanti",
+            "voice": "voice-razzo",
+            "engine": "elevenlabs",
+            "edge_fallback_voice": "",
+            "openai_instructions": "Perform as an Italian radio commercial character. "
+            "Role: disclaimer_goblin. Style: fast.",
+            "voice_settings": {"stability": 0.6},
+            "state": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_empty_music_bed_uses_voice_only(_mock_all, tmp_path, caplog):
     from mammamiradio.audio.tts import synthesize_ad
 

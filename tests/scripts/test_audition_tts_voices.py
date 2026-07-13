@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -304,7 +305,12 @@ def _selection_candidate(**overrides: object) -> dict[str, object]:
         "profile": {
             "engine": "elevenlabs",
             "model": "eleven_multilingual_v2",
-            "voice_settings": {"stability": 0.6, "style": 0.2, "use_speaker_boost": True},
+            "voice_settings": {
+                "stability": 0.6,
+                "similarity_boost": 0.78,
+                "style": 0.2,
+                "use_speaker_boost": True,
+            },
         },
         "text_sha256": "a" * 64,
         "provider_result": "generated",
@@ -366,29 +372,66 @@ def test_selection_receipt_rejects_incomplete_generated_evidence() -> None:
         audition.selection_receipt([candidate])
 
 
+@pytest.mark.parametrize(
+    ("profile", "match"),
+    [
+        (
+            {
+                "engine": "elevenlabs",
+                "model": "eleven_multilingual_v2",
+                "voice_settings": {"stability": 0.6, "style": 0.2, "use_speaker_boost": True},
+            },
+            "voice_settings is missing fields: similarity_boost",
+        ),
+        (
+            {
+                "engine": "elevenlabs",
+                "model": "eleven_turbo_v2_5",
+                "voice_settings": {
+                    "stability": 0.6,
+                    "similarity_boost": 0.78,
+                    "style": 0.2,
+                    "use_speaker_boost": True,
+                },
+            },
+            "model must be 'eleven_multilingual_v2'",
+        ),
+    ],
+)
+def test_selection_receipt_rejects_incomplete_or_wrong_eleven_v2_profile(
+    profile: dict[str, object], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        audition.selection_receipt([_selection_candidate(profile=profile)])
+
+
 def test_selection_receipt_from_manifest_keeps_human_decision_and_redacts_local_evidence(tmp_path) -> None:
     manifest_path = tmp_path / "manifest.json"
     decisions_path = tmp_path / "decisions.json"
     receipt_path = tmp_path / "proof" / "selection.json"
+    profile = {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.78,
+            "style": 0.45,
+            "use_speaker_boost": True,
+        },
+    }
+    candidate_id = audition._selection_candidate_id("elevenlabs", "RXoaSpLaWTEckJgPUBG3", profile)
     manifest_path.write_text(
         json.dumps(
             {
                 "results": [
                     {
+                        "provider": "elevenlabs",
                         "voice": "RXoaSpLaWTEckJgPUBG3",
+                        "candidate_id": candidate_id,
                         "used_by": ["ad:Dottoressa Tiziana"],
                         "status": "generated",
                         "output_path": "/tmp/voice-auditions/tiziana.mp3",
-                        "profile": {
-                            "engine": "elevenlabs",
-                            "model": "eleven_multilingual_v2",
-                            "voice_settings": {
-                                "stability": 0.42,
-                                "similarity_boost": 0.78,
-                                "style": 0.45,
-                                "use_speaker_boost": True,
-                            },
-                        },
+                        "profile": profile,
                         "text_sha256": "a" * 64,
                         "audio_sha256": "b" * 64,
                         "audio_duration_seconds": 7.25,
@@ -401,7 +444,7 @@ def test_selection_receipt_from_manifest_keeps_human_decision_and_redacts_local_
         json.dumps(
             [
                 {
-                    "candidate_id": "RXoaSpLaWTEckJgPUBG3",
+                    "candidate_id": candidate_id,
                     "candidate_name": "Dottoressa Tiziana",
                     "approval_status": "accepted",
                     "rationale": "accepted_balanced_brand_fit",
@@ -424,6 +467,110 @@ def test_selection_receipt_from_manifest_keeps_human_decision_and_redacts_local_
     assert isinstance(candidate, dict)
     assert candidate["candidate_name"] == "Dottoressa Tiziana"
     assert "/tmp/voice-auditions" not in receipt_path.read_text()
+
+
+def test_selection_receipt_from_manifest_keeps_same_voice_profile_variants_distinct(tmp_path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    decisions_path = tmp_path / "decisions.json"
+    receipt_path = tmp_path / "proof" / "selection.json"
+    base_voice_settings: dict[str, object] = {
+        "stability": 0.42,
+        "similarity_boost": 0.78,
+        "style": 0.45,
+        "use_speaker_boost": True,
+    }
+    base_profile: dict[str, object] = {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": base_voice_settings,
+    }
+    comparison_profile = {
+        **base_profile,
+        "voice_settings": {**base_voice_settings, "stability": 0.6},
+    }
+    voice = "RXoaSpLaWTEckJgPUBG3"
+    results = [
+        audition.VoiceAuditionResult(
+            provider="elevenlabs",
+            voice=voice,
+            label="ad-Dottoressa-Tiziana-stab42",
+            source="configured",
+            used_by=("ad:Dottoressa Tiziana",),
+            status="generated",
+            profile=base_profile,
+            text_sha256="a" * 64,
+            audio_sha256="b" * 64,
+            audio_duration_seconds=7.25,
+        ),
+        audition.VoiceAuditionResult(
+            provider="elevenlabs",
+            voice=voice,
+            label="ad-Dottoressa-Tiziana-stab60",
+            source="configured",
+            used_by=("ad:Dottoressa Tiziana",),
+            status="generated",
+            profile=comparison_profile,
+            text_sha256="c" * 64,
+            audio_sha256="d" * 64,
+            audio_duration_seconds=7.5,
+        ),
+    ]
+    audition.write_manifest(results, tmp_path, config_path=tmp_path / "radio.toml", timestamp="20260713T120000Z")
+    manifest = json.loads(manifest_path.read_text())
+    candidate_ids = [result["candidate_id"] for result in manifest["results"]]
+    assert candidate_ids[0] != candidate_ids[1]
+    decisions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "candidate_id": candidate_ids[0],
+                    "candidate_name": "Dottoressa Tiziana",
+                    "approval_status": "accepted",
+                    "rationale": "accepted_balanced_brand_fit",
+                },
+                {
+                    "candidate_id": candidate_ids[1],
+                    "candidate_name": "Dottoressa Tiziana",
+                    "approval_status": "rejected",
+                    "rationale": "rejected_profile_mismatch",
+                },
+            ]
+        )
+    )
+
+    audition.write_selection_receipt_from_manifest(
+        manifest_path=manifest_path,
+        decisions_path=decisions_path,
+        path=receipt_path,
+    )
+
+    payload = audition.load_selection_receipt(receipt_path)
+    candidates = payload["candidates"]
+    assert isinstance(candidates, list)
+    receipt_candidate_ids: list[object] = []
+    receipt_approval_statuses: list[object] = []
+    for candidate in candidates:
+        assert isinstance(candidate, dict)
+        receipt_candidate_ids.append(candidate["candidate_id"])
+        receipt_approval_statuses.append(candidate["approval_status"])
+    assert receipt_candidate_ids == candidate_ids
+    assert receipt_approval_statuses == ["accepted", "rejected"]
+
+
+def test_selection_receipt_writer_does_not_clobber_a_competing_receipt(tmp_path, monkeypatch) -> None:
+    receipt_path = tmp_path / "proof" / "selection.json"
+
+    def competing_link(_source: Path, destination: Path) -> None:
+        destination.write_text("reviewed receipt\n", encoding="utf-8")
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(audition.os, "link", competing_link)
+
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        audition.write_selection_receipt([_selection_candidate()], path=receipt_path)
+
+    assert receipt_path.read_text(encoding="utf-8") == "reviewed receipt\n"
+    assert not list(receipt_path.parent.glob("*.tmp"))
 
 
 @pytest.mark.asyncio

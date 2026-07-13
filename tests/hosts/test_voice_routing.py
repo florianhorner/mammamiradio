@@ -33,6 +33,8 @@ import tomllib
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.hosts.ad_creative import (
@@ -50,6 +52,25 @@ from mammamiradio.hosts.ad_creative import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RADIO_TOML = _REPO_ROOT / "radio.toml"
+_SHIPPED_RADIO_TOMLS = (
+    ("root", _RADIO_TOML),
+    ("add-on", _REPO_ROOT / "ha-addon" / "mammamiradio" / "radio.toml"),
+)
+_EXPECTED_APPROVED_AD_VOICE_NAMES: frozenset[str] = frozenset(
+    {
+        "L'Annunciatore",
+        "Don Carmelo",
+        "Rinaldo",
+        "Fiamma",
+        "Nonno Aldo",
+        "Lo Straniero",
+        "Roberto",
+        "Palmira",
+        "Dottore Marzio",
+        "Signora Testimonia",
+    }
+)
+_EXPECTED_STAGED_AD_VOICE_NAMES: frozenset[str] = frozenset()
 
 
 def _config():
@@ -87,17 +108,21 @@ def test_ad_voice_names_are_unique():
     assert not dupes, f"duplicate ad-voice names: {sorted(dupes)}"
 
 
-def test_configured_ad_voices_all_declare_airtime_approval():
-    """New config rows fail closed; legacy rows must affirm their approval."""
-    with open(_RADIO_TOML, "rb") as f:
+@pytest.mark.parametrize(("config_name", "radio_toml"), _SHIPPED_RADIO_TOMLS)
+def test_configured_ad_voices_all_declare_airtime_approval(config_name: str, radio_toml: Path):
+    """Each shipped roster has explicit, reviewed approval and staging decisions."""
+    with radio_toml.open("rb") as f:
         raw = tomllib.load(f)
 
-    missing = [
-        voice.get("name", "<unnamed>")
-        for voice in raw.get("ads", {}).get("voices", [])
-        if "airtime_approved" not in voice
-    ]
-    assert not missing, f"ad voices need an explicit airtime_approved decision: {missing}"
+    voices = raw.get("ads", {}).get("voices", [])
+    missing = [voice.get("name", "<unnamed>") for voice in voices if "airtime_approved" not in voice]
+    assert not missing, f"{config_name} ad voices need an explicit airtime_approved decision: {missing}"
+
+    approved = {voice["name"] for voice in voices if voice.get("airtime_approved") is True}
+    staged = {voice["name"] for voice in voices if voice.get("airtime_approved") is False}
+
+    assert approved == _EXPECTED_APPROVED_AD_VOICE_NAMES
+    assert staged == _EXPECTED_STAGED_AD_VOICE_NAMES
 
 
 def test_brand_spokesperson_pins_resolve_to_a_voice():

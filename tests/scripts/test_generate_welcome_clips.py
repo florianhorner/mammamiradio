@@ -80,6 +80,35 @@ def test_resolve_welcome_clips_uses_configured_edge_or_cloud_fallback() -> None:
     }
 
 
+def test_resolve_welcome_clips_rejects_unmatched_host() -> None:
+    clip = gen.WelcomeClip("x.mp3", "Nonexistent", "ciao")
+
+    with pytest.raises(ValueError, match="must resolve to exactly one configured host"):
+        gen.resolve_welcome_clips(_welcome_config(), (clip,))
+
+
+def test_resolve_welcome_clips_rejects_case_insensitive_duplicate_host() -> None:
+    config = _welcome_config()
+    config.hosts.append(HostPersonality(name="marco", voice="it-IT-DiegoNeural", style="host"))
+    clip = gen.WelcomeClip("x.mp3", "Marco", "ciao")
+
+    with pytest.raises(ValueError, match="must resolve to exactly one configured host"):
+        gen.resolve_welcome_clips(config, (clip,))
+
+
+def test_resolve_welcome_clips_rejects_paid_host_without_edge_fallback() -> None:
+    config = cast(
+        StationConfig,
+        SimpleNamespace(
+            hosts=[HostPersonality(name="Marco", voice="paid-marco-voice", style="host", engine="elevenlabs")]
+        ),
+    )
+    clip = gen.WelcomeClip("x.mp3", "Marco", "ciao")
+
+    with pytest.raises(ValueError, match="has no usable Edge voice"):
+        gen.resolve_welcome_clips(config, (clip,))
+
+
 @pytest.mark.asyncio
 async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch, configured_clips) -> None:
     calls: list[tuple[str, str, str]] = []

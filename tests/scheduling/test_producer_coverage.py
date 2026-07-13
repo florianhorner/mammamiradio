@@ -1020,6 +1020,55 @@ async def test_humanity_event_fires_only_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
+    """An all-unsafe cast resets pacing without rendering or queuing an ad."""
+    state = _make_run_state()
+    state.force_next = SegmentType.AD
+    state.songs_since_ad = 5
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _no_safe_campaign(*_args, **_kwargs):
+        # Keep the next producer iteration idle so this assertion observes only
+        # the skipped AD branch, not a following music render.
+        state.listeners_active = 0
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.render_timings and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            if not state.render_timings:
+                raise TimeoutError("Producer did not record the skipped ad break")
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert select_spot.call_count == 1
+    write_ad.assert_not_called()
+    synthesize_ad.assert_not_called()
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.songs_since_ad == 0
+    timing = state.render_timings[0]
+    assert timing["kind"] == SegmentType.AD.value
+    assert timing["outcome"] == "discarded"
+    assert timing["reason"] == "no_safe_ad_campaigns"
+
+
+@pytest.mark.asyncio
 async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     """When quality gate rejects an ad break, songs_since_ad is reset to 0."""
     import os

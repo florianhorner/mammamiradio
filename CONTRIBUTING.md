@@ -135,14 +135,39 @@ a provider render and human review approve them; only then set it explicitly to
 `true`. Run configured samples with real credentials; audio and manifests remain
 ignored under `tmp/voice-auditions/`:
 
+When upgrading an existing custom roster, review every `[[ads.voices]]` row:
+omitting `airtime_approved` now means `false`. Set it explicitly to `true` only
+for a character with existing provider and human approval; leave every other row
+`false`. A legacy role pin can keep serving its campaign while a replacement
+waits for approval. Otherwise an unapproved direct character's campaign is
+excluded, another safe campaign is tried, and an ad break with no safe campaign
+is skipped rather than recasting the character.
+
 ```bash
 ./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict
 ```
 
+For an on-demand A/B comparison of ElevenLabs stability, generate all variants
+from the same configured text and compare the profile-labelled clips in the
+same ignored audition directory:
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py \
+  --config radio.toml --providers elevenlabs --strict \
+  --elevenlabs-stability 0.42 0.60 0.75
+```
+
+Alternate matching clips at the same volume when listening. Differences can be
+subtle and voice-specific; this command creates comparison samples only and
+does not record or apply an approval.
+
 Listen before changing `airtime_approved`. Record the human decision with the
-receipt mode, supplying the ignored manifest and a local JSON array containing
-only `candidate_id`, `candidate_name`, `approval_status`, and a controlled
-`rationale` code. Accepted codes are `accepted_clear_natural_delivery`,
+receipt mode. `--selection-manifest` and `--selection-decisions` must be
+supplied together: the ignored manifest is the completed provider run, and the
+local JSON array contains only the profile-aware `candidate_id` copied from
+that manifest, `candidate_name`,
+`approval_status`, and a controlled `rationale` code. Accepted codes are
+`accepted_clear_natural_delivery`,
 `accepted_distinct_character`, and `accepted_balanced_brand_fit`; rejected
 codes are `rejected_provider_failure`, `rejected_unintelligible_delivery`,
 `rejected_unconvincing_character`, `rejected_off_brand_delivery`, and
@@ -151,12 +176,21 @@ codes are `rejected_provider_failure`, `rejected_unintelligible_delivery`,
 ```bash
 ./.venv/bin/python scripts/audition_tts_voices.py \
   --selection-manifest tmp/voice-auditions/audition-YYYYMMDDTHHMMSSZ/manifest.json \
-  --selection-decisions /tmp/ad-voice-decisions.json
+  --selection-decisions /tmp/ad-voice-decisions.json \
+  --selection-receipt-path proof/YYYY-MM-DD-voice-selection.json
 ```
 
-The tracked proof stores hashes, the selected profile, provider result,
-duration, and the human rationale code only. It never stores raw audition copy,
-audio, local paths, or credentials.
+Use a distinct tracked receipt path for each reviewed selection. Without
+`--selection-receipt-path`, the command uses
+`proof/2026-07-13-voice-diversity-selection.json` and refuses to replace an
+existing receipt. `--overwrite-selection-receipt` deliberately replaces that
+chosen receipt; use it only to correct the same review, never to start a new
+audit history.
+
+The redacted tracked proof stores the candidate ID and name, selected profile,
+text and audio hashes, provider result, duration, approval status, and human
+rationale code only. It never stores raw audition copy, audio, local paths, or
+credentials.
 
 For Home Context Director changes, first run the credential-free contract path:
 
