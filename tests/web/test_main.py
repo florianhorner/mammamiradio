@@ -224,6 +224,36 @@ async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only
 
 
 @pytest.mark.asyncio
+async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice(tmp_path, caplog):
+    """A legacy install with HA + Anthropic configured logs the label-generation
+    metadata notice; narrow installs never reach that gated line."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()  # pre-existing DB => legacy bridge
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
+    config.anthropic_api_key = "sk-test"
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        caplog.at_level(logging.INFO, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+    assert "Label generation sends entity metadata" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_startup_cold_preflight_write_failure_stops_before_database_init(tmp_path):
     config = _privacy_startup_config(tmp_path)
     with (
