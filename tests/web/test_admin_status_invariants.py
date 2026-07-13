@@ -254,9 +254,8 @@ def test_runtime_provider_row_handles_recovery_mode() -> None:
     assert "state='working'" in block
     assert "label='Auto-recovering'" in block
     assert "const reasonLine=item?.action_guidance||item?.switch_reason||''" in block
-    assert (
-        "const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':''"
-    ) in block
+    assert "const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0)" in block
+    assert "retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'" in block
     assert "reasonLine" in block
     assert "retryLine" in block
 
@@ -305,6 +304,8 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     block = _function_block(_read_admin_html(), "updateEngineRoom")
 
     assert "anthropicLine=statusInline('degraded','suspended'+retry" in block
+    assert "Temporarily unavailable; OpenAI fallback" in block
+    assert "Auth failed; OpenAI fallback" not in block
     assert "anthropicLine=statusInline('ready','connected')" in block
     assert "anthropicLine=statusInline('idle','not configured')" in block
     # Auth-rejected key reads as a persistent not-working state (red ✗ blocked chip),

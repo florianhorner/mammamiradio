@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
@@ -59,8 +65,20 @@ def state():
 
 
 @pytest.fixture(autouse=True)
-def _reset_provider_backoff_state():
+def _reset_provider_backoff_state(monkeypatch):
     scriptwriter_module.reset_provider_backoff()
+    original_get_client = scriptwriter_module._get_client
+
+    def _get_client_with_mock_options(*args, **kwargs):
+        client = original_get_client(*args, **kwargs)
+        # The real SDK returns a configured client here. Existing unit mocks
+        # model only messages.create, so make their per-call configuration
+        # preserve that same fake transport rather than fabricate a new mock.
+        if isinstance(client, MagicMock):
+            client.with_options.return_value = client
+        return client
+
+    monkeypatch.setattr(scriptwriter_module, "_get_client", _get_client_with_mock_options)
     yield
     scriptwriter_module.reset_provider_backoff()
 
@@ -79,6 +97,20 @@ def _mock_anthropic_response(text: str):
 
     mock_cls = MagicMock(return_value=mock_client)
     return mock_cls
+
+
+def _anthropic_status_error(
+    error_class,
+    status_code: int,
+    *,
+    message: str = "Anthropic API error",
+    error_type: str = "api_error",
+    headers: dict[str, str] | None = None,
+):
+    """Build a real Anthropic SDK status exception with a real HTTP response."""
+    request = httpx.Request("POST", "https://api.anthropic.test/v1/messages")
+    response = httpx.Response(status_code, headers=headers, request=request)
+    return error_class(message, response=response, body={"error": {"type": error_type}})
 
 
 def _openai_completion(text: str, *, finish_reason: str = "stop", completion_tokens: int = 7):
@@ -3202,6 +3234,256 @@ def test_usage_limit_classifier_matches_quota_patterns_only():
     assert _is_anthropic_usage_limit_error(Exception("404 model not found; usage limit reached")) is False
 
 
+def test_billing_error_is_classified_by_sdk_type():
+    from mammamiradio.hosts.scriptwriter import _is_anthropic_usage_limit_error
+
+    billing_error = _anthropic_status_error(
+        anthropic.APIStatusError,
+        402,
+        error_type="billing_error",
+    )
+
+    assert billing_error.status_code == 402
+    assert not isinstance(billing_error, anthropic.BadRequestError)
+    assert billing_error.type == "billing_error"
+    assert _is_anthropic_usage_limit_error(billing_error) is True
+
+
+def test_transient_classifier_wins_over_fuzzy_usage_and_provider_text():
+    from mammamiradio.hosts.scriptwriter import (
+        _is_anthropic_nonretryable_provider_error,
+        _is_anthropic_transient_error,
+        _is_anthropic_usage_limit_error,
+    )
+
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        message="usage limit reached while model was not found",
+        error_type="rate_limit_error",
+    )
+    overloaded = _anthropic_status_error(
+        anthropic.APIStatusError,
+        529,
+        error_type="overloaded_error",
+    )
+    ordinary_bad_request = _anthropic_status_error(
+        anthropic.BadRequestError,
+        400,
+        error_type="invalid_request_error",
+    )
+
+    assert _is_anthropic_transient_error(rate_limited) is True
+    assert _is_anthropic_transient_error(overloaded) is True
+    assert _is_anthropic_transient_error(ordinary_bad_request) is False
+    assert _is_anthropic_usage_limit_error(rate_limited) is False
+    assert _is_anthropic_nonretryable_provider_error(rate_limited) is False
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("30", 30),
+        ("9999", 60),
+        ("1", 5),
+        ("0", 5),
+        # A negative delta-seconds value is invalid, unlike zero, so use the
+        # conservative default rather than treating it as a very short retry.
+        ("-1", 20),
+        (None, 20),
+        ("garbage", 20),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", 20),
+        ("nan", 20),
+        ("inf", 20),
+    ],
+)
+def test_transient_backoff_seconds_honors_bounded_delta_retry_after(retry_after, expected_seconds):
+    from mammamiradio.hosts.scriptwriter import _anthropic_transient_backoff_seconds
+
+    headers = {"retry-after": retry_after} if retry_after is not None else None
+    exc = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers=headers,
+    )
+
+    assert _anthropic_transient_backoff_seconds(exc) == expected_seconds
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_backoff_is_model_scoped_and_skips_repeated_anthropic_calls(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers={"retry-after": "30"},
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_emit_llm_call", wraps=sw._emit_llm_call) as emit_spy,
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    mock_client.with_options.assert_called_once_with(max_retries=0)
+    assert 0 < state.anthropic_disabled_until - sw.time.time() <= 31
+    assert state.anthropic_auth_failures == 0
+    assert sw._anthropic_blocked_model == "model-a"
+    fallback_reasons = [
+        call.kwargs["fallback_reason"]
+        for call in emit_spy.call_args_list
+        if call.kwargs.get("provider") == "openai" and call.kwargs.get("ok") is True
+    ]
+    assert fallback_reasons == ["anthropic_transient", "anthropic_transient_blocked"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_backoff_keeps_state_mirror_for_other_model(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+    from mammamiradio.web.streamer import _provider_health_snapshot, _script_provider_status
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers={"retry-after": "30"},
+    )
+    ok_response = MagicMock()
+    ok_response.content = [MagicMock(text=json.dumps({"ok": "anthropic"}))]
+    ok_response.stop_reason = None
+    ok_response.usage = None
+
+    async def _create(**kwargs):
+        if kwargs["model"] == "model-a":
+            raise rate_limited
+        return ok_response
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_create)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+        blocked_until = state.anthropic_disabled_until
+        blocked_error = state.anthropic_last_error
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="banter"
+        )
+        provider_health = _provider_health_snapshot(config, state)
+        provider = _script_provider_status(config, state, provider_health)
+        third = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "anthropic"}
+    assert third == {"ok": "fallback"}
+    assert state.anthropic_disabled_until == blocked_until
+    assert state.anthropic_disabled_until > sw.time.time()
+    assert state.anthropic_last_error == blocked_error
+    assert provider_health["anthropic"]["degraded"] is True
+    assert provider["current_provider"] == "openai"
+    assert provider["fallback_active"] is True
+    assert provider["recovery_mode"] == "circuit_breaker"
+    assert mock_client.messages.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_overload_backoff_is_account_wide_across_models(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    overloaded = _anthropic_status_error(
+        anthropic.APIStatusError,
+        529,
+        error_type="overloaded_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=overloaded)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="transition"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="transition"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    assert 0 < state.anthropic_disabled_until - sw.time.time() <= 21
+    assert sw._anthropic_blocked_model == ""
+    assert state.anthropic_auth_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_transient_without_openai_uses_stock_copy_without_benching_anthropic(config, state, monkeypatch):
+    import mammamiradio.hosts.scriptwriter as sw
+
+    config.openai_api_key = ""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert lines  # Terminal stock copy preserves the listener's audio path.
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until == 0.0
+    assert state.anthropic_last_error == ""
+    assert sw._anthropic_auth_blocked_until == 0.0
+    assert sw._anthropic_blocked_model == ""
+
+
 @pytest.mark.asyncio
 async def test_model_not_found_backoff_is_scoped_to_model(config, state):
     import mammamiradio.hosts.scriptwriter as sw
@@ -3235,9 +3517,14 @@ async def test_model_not_found_backoff_is_scoped_to_model(config, state):
         first = await _generate_json_response(
             prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
         )
+        blocked_until = state.anthropic_disabled_until
+        blocked_error = state.anthropic_last_error
         second = await _generate_json_response(
             prompt="p", config=config, state=state, model="good-model", max_tokens=100, caller="banter"
         )
+        assert state.anthropic_disabled_until == blocked_until
+        assert state.anthropic_disabled_until > sw.time.time()
+        assert state.anthropic_last_error == blocked_error
         third = await _generate_json_response(
             prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
         )
@@ -3282,6 +3569,51 @@ async def test_usage_limit_backoff_is_account_wide_across_models(config, state):
     assert mock_client.messages.create.await_count == 1
     assert sw._anthropic_blocked_model == ""
     assert state.anthropic_auth_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_billing_error_backoff_is_account_wide_across_models(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    billing_error = _anthropic_status_error(
+        anthropic.APIStatusError,
+        402,
+        error_type="billing_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=billing_error)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_emit_llm_call", wraps=sw._emit_llm_call) as emit_spy,
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="transition"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="transition"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until > sw.time.time()
+    assert state.anthropic_auth_failures == 0
+    assert sw._anthropic_blocked_reason == "usage limit"
+    assert sw._anthropic_blocked_model == ""
+    fallback_reasons = [
+        call.kwargs["fallback_reason"]
+        for call in emit_spy.call_args_list
+        if call.kwargs.get("provider") == "openai" and call.kwargs.get("ok") is True
+    ]
+    assert fallback_reasons == ["anthropic_usage_limit", "anthropic_usage_limit_blocked"]
 
 
 @pytest.mark.asyncio
@@ -5549,6 +5881,64 @@ def test_module_state_reset_after_reload():
     assert _sw._anthropic_client is None
 
 
+def test_fresh_process_reaches_anthropic_generation_after_a_previous_backoff():
+    """A restart has no persisted breaker state, so the next listener can use Anthropic again."""
+    scriptwriter_module._anthropic_auth_blocked_key = "previous-key"
+    scriptwriter_module._anthropic_auth_blocked_until = float("inf")
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import mammamiradio.hosts.scriptwriter as scriptwriter
+        from mammamiradio.core.config import load_config
+        from mammamiradio.core.models import StationState, Track
+
+        config = load_config()
+        config.anthropic_api_key = "fresh-key"
+        config.openai_api_key = ""
+        state = StationState(
+            playlist=[Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="test")]
+        )
+        content = MagicMock()
+        content.text = json.dumps({"ok": True})
+        response = MagicMock()
+        response.content = [content]
+        response.usage = None
+        client = MagicMock()
+        client.with_options.return_value = client
+        client.messages = MagicMock()
+        client.messages.create = AsyncMock(return_value=response)
+
+        with patch.object(scriptwriter.anthropic, "AsyncAnthropic", return_value=client):
+            result = asyncio.run(
+                scriptwriter._generate_json_response(
+                    prompt="p",
+                    config=config,
+                    state=state,
+                    model="claude-test",
+                    max_tokens=100,
+                    caller="banter",
+                )
+            )
+
+        assert result == {"ok": True}
+        assert client.messages.create.await_count == 1
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_has_script_llm_is_public():
     """has_script_llm (no underscore) must be importable and callable after rename."""
     from pathlib import Path
@@ -5700,6 +6090,48 @@ async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, sta
 
 
 @pytest.mark.asyncio
+async def test_concurrent_429s_trigger_one_short_circuit_trip_and_prompt_fallbacks(config, state):
+    """Concurrent overload work should reach the backup writer without a retry storm."""
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(
+            sw, "_trip_anthropic_circuit_and_fallback", wraps=sw._trip_anthropic_circuit_and_fallback
+        ) as trip_spy,
+    ):
+        results = await asyncio.gather(
+            *(
+                _generate_json_response(
+                    prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    assert mock_client.messages.create.await_count == 1
+    assert trip_spy.call_count == 1
+    assert openai_client.chat.completions.create.call_count == 8
+    assert all(result == {"ok": "fallback"} for result in results), f"unexpected results: {results}"
+
+
+@pytest.mark.asyncio
 async def test_memory_extract_shares_foreground_anthropic_auth_flood_guard(config, state):
     from mammamiradio.hosts.scriptwriter import _generate_json_response
 
@@ -5830,6 +6262,45 @@ async def test_backoff_expiry_allows_exactly_one_retry_and_logs_once(config, sta
     assert len(expiry_logs) == 1, (
         f"expected 1 expiry log, got {len(expiry_logs)}: {[r.getMessage() for r in caplog.records]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_transient_backoff_expiry_logs_once_for_each_newly_expired_block(config, state, caplog):
+    """Each expired transient block gets one recovery log before the next short trip."""
+    import logging
+
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    errors = [_anthropic_status_error(anthropic.RateLimitError, 429, error_type="rate_limit_error") for _ in range(3)]
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=errors)
+    caplog.set_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter")
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+        sw._anthropic_auth_blocked_until = sw.time.time() - 1
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+        sw._anthropic_auth_blocked_until = sw.time.time() - 1
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+
+    assert mock_client.messages.create.await_count == 3
+    expiry_logs = [record for record in caplog.records if "backoff expired" in record.getMessage()]
+    assert len(expiry_logs) == 2
 
 
 @pytest.mark.asyncio

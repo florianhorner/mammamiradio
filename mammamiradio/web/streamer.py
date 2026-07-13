@@ -1220,6 +1220,12 @@ _FALLBACK_REASON_LABELS = {
     "anthropic_usage_limit": "Anthropic usage limit reached - check your plan at anthropic.com",
     "anthropic_usage_limit_blocked": "Anthropic usage limit reached - check your plan at anthropic.com",
     "anthropic_nonretryable": "Anthropic service error - check status.anthropic.com",
+    "anthropic_transient": (
+        "Anthropic is briefly overloaded — using the backup writer, it comes back on its own in a few seconds"
+    ),
+    "anthropic_transient_blocked": (
+        "Anthropic is briefly overloaded — using the backup writer, it comes back on its own in a few seconds"
+    ),
     "anthropic_absent": "No Anthropic key configured - running on OpenAI",
 }
 _ACTION_REQUIRED_FALLBACK_REASONS = {
