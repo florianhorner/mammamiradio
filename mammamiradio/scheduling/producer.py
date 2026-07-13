@@ -81,10 +81,12 @@ from mammamiradio.home.ha_context import (
     _publish_home_context_outcome,
     apply_entity_mute_policy,
     check_reactive_triggers,
+    discard_home_context_entities,
     fetch_home_context,
     get_cached_home_context,
+    home_context_invalidation_generation,
     push_state_to_ha,
-    revalidate_home_context_mutes,
+    revalidate_home_context_outcome_mutes,
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
@@ -319,6 +321,7 @@ async def _fetch_producer_context_outcome(
     radio_event_rules: list[RadioEventRule] | None,
     authorization: HomeAuthorization | None = None,
     observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> _HomeContextFetchOutcome:
     """Fetch the typed mailbox outcome, preserving the legacy injected seam."""
     if not _uses_injected_legacy_fetch():
@@ -330,11 +333,15 @@ async def _fetch_producer_context_outcome(
             cache_dir=cache_dir,
             radio_event_rules=radio_event_rules,
             authorization=authorization,
-            observed_entity_ids_callback=observed_entity_ids_callback,
+            # The real producer defers observation bookkeeping until the
+            # coordinator drains and accepts this inert candidate.
+            observed_entity_ids_callback=None,
+            stage_callback=stage_callback,
         )
 
     started_at = time.time()
     started_monotonic = time.monotonic()
+    invalidation_generation = home_context_invalidation_generation()
     context = _legacy_mock_home_context(
         await fetch_home_context(
             ha_url=ha_url,
@@ -359,6 +366,7 @@ async def _fetch_producer_context_outcome(
         attempt_started_at=started_at,
         attempt_finished_at=time.time(),
         duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+        invalidation_generation=invalidation_generation,
     )
 
 
@@ -2564,6 +2572,7 @@ class _HAContextRefreshCoordinator:
         self._home_event_handoffs_allowed = True
         self._next_retry_not_before = 0.0
         self._closed = False
+        self._attempt_generation = 0
         self._state.ha_context_refresh_stale_after_seconds = self.stale_threshold_seconds
         self._state.ha_context_refresh_configured = bool(
             config.homeassistant.enabled
@@ -2575,7 +2584,16 @@ class _HAContextRefreshCoordinator:
         # distinguish a still-running request from a completed reply awaiting
         # adoption. No completion callback writes StationState.
         self._state.ha_context_refresh_mailbox = self
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
+
+    def _set_refresh_stage(self, stage: str, generation: int) -> None:
+        """Accept coarse stage writes only from the currently owned request."""
+        if generation != self._attempt_generation:
+            return
+        if self._closed and stage != "idle":
+            return
+        self._state.set_ha_context_refresh_stage(stage)
 
     @property
     def current_context(self) -> HomeContext | None:
@@ -2586,6 +2604,10 @@ class _HAContextRefreshCoordinator:
     def home_event_handoffs_allowed(self) -> bool:
         """Whether the ledger may offer home-event material to a prompt."""
         return self._home_event_handoffs_allowed
+
+    def invalidate_muted_entities(self, entity_ids: set[str]) -> None:
+        """Forget muted state before a later unmute can replay its transition."""
+        self._context = discard_home_context_entities(self._context, entity_ids)
 
     @property
     def in_flight_task(self) -> asyncio.Task[_HomeContextFetchOutcome] | None:
@@ -2744,6 +2766,9 @@ class _HAContextRefreshCoordinator:
         self._attempt_finished_monotonic = 0.0
         self._attempt_started_after_stale_gap = self._is_stale()
         self._foreground_timed_out = False
+        self._attempt_generation += 1
+        attempt_generation = self._attempt_generation
+        self._set_refresh_stage("states_request", attempt_generation)
 
         async def _bounded_fetch() -> _HomeContextFetchOutcome:
             # This is the sole total-request timeout.  The foreground wait uses
@@ -2762,6 +2787,7 @@ class _HAContextRefreshCoordinator:
                     radio_event_rules=self._config.radio_events,
                     authorization=self._state.home_authorization,
                     observed_entity_ids_callback=self._state.home_entity_ids_observer,
+                    stage_callback=lambda stage: self._set_refresh_stage(stage, attempt_generation),
                 ),
                 name="ha-context-fetch",
             )
@@ -2781,6 +2807,7 @@ class _HAContextRefreshCoordinator:
                         await request
                 # Private timing only: no task callback writes StationState.
                 self._attempt_finished_monotonic = time.monotonic()
+                self._set_refresh_stage("idle", attempt_generation)
 
         self._task = asyncio.create_task(_bounded_fetch(), name="ha-context-refresh")
         self._state.ha_context_refresh_in_flight = True
@@ -2793,6 +2820,7 @@ class _HAContextRefreshCoordinator:
         self._state.ha_context_refresh_last_result = result
         self._state.ha_context_refresh_last_result_duration_ms = round(max(0.0, duration_seconds) * 1000)
         self._state.ha_context_refresh_last_result_used_background = used_background
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
 
     async def _drain_completed_result(self) -> tuple[HomeContext, bool] | None:
@@ -2848,13 +2876,21 @@ class _HAContextRefreshCoordinator:
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
 
+        observer = self._state.home_entity_ids_observer
+        if observer is not None and outcome.observed_entity_ids:
+            try:
+                observer(outcome.observed_entity_ids)
+            except Exception:
+                logger.warning("Legacy-home observation persistence failed", exc_info=True)
+
         # A request that *started* while the prior snapshot was safe keeps its
         # legitimate one-shots when it is adopted promptly, even if the prior
         # snapshot crossed the threshold in flight. A reply that itself has
         # aged past the threshold while waiting in the mailbox is different:
         # it must never become prompt input.
         was_stale_gap = self._attempt_started_after_stale_gap
-        adopted = revalidate_home_context_mutes(outcome.context, self._config.cache_dir)
+        accepted_outcome = revalidate_home_context_outcome_mutes(outcome, self._config.cache_dir)
+        adopted = accepted_outcome.context
         stale_at_adoption = self._is_stale(adopted)
         if was_stale_gap or stale_at_adoption:
             self._suppress_stale_handoffs()
@@ -2868,7 +2904,7 @@ class _HAContextRefreshCoordinator:
         # Publish both the accepted snapshot and its event-matcher baselines as
         # one producer-owned handoff.  No background-task callback can do this.
         if not _uses_injected_legacy_fetch():
-            _publish_home_context_outcome(replace(outcome, context=adopted))
+            _publish_home_context_outcome(replace(accepted_outcome, context=adopted))
         self._context = adopted
         self._record_terminal_result(
             "stale" if stale_at_adoption else "success",
@@ -2948,6 +2984,7 @@ class _HAContextRefreshCoordinator:
     async def close(self) -> None:
         """Explicitly cancel and await the retained request during producer exit."""
         self._closed = True
+        self._attempt_generation += 1
         task = self._task
         self._task = None
         if task is not None:
@@ -2957,6 +2994,7 @@ class _HAContextRefreshCoordinator:
                 await task
         self._state.ha_context_refresh_in_flight = False
         self._state.ha_context_refresh_active_foreground_timed_out = False
+        self._state.set_ha_context_refresh_stage("idle")
         if self._state.ha_context_refresh_mailbox is self:
             self._state.ha_context_refresh_mailbox = None
 

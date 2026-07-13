@@ -293,6 +293,26 @@ def validate_label(label: str, entity_id: str) -> bool:
     return not _looks_sensitive_value(text)
 
 
+def load_catalog_snapshot(cache_dir: Path | None) -> dict:
+    """Read a detached catalog snapshot without touching the module cache.
+
+    This is safe for the HA projection worker: it performs the same tolerant
+    file validation as :func:`load_catalog` but owns the returned object and
+    never races with the event-loop cache.
+    """
+    if cache_dir is None:
+        return _empty_catalog()
+    try:
+        data = json.loads(_catalog_path(Path(cache_dir)).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        data = _empty_catalog()
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        data = _empty_catalog()
+    if not isinstance(data.get("entries"), dict):
+        data = _empty_catalog()
+    return data
+
+
 def load_catalog(cache_dir: Path | None) -> dict:
     """Load the generated catalog once per cache path, degrading to empty."""
     global _catalog_cache, _catalog_cache_path
@@ -301,14 +321,7 @@ def load_catalog(cache_dir: Path | None) -> dict:
     path = _catalog_path(Path(cache_dir))
     if _catalog_cache is not None and _catalog_cache_path == path:
         return _catalog_cache
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError):
-        data = _empty_catalog()
-    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
-        data = _empty_catalog()
-    if not isinstance(data.get("entries"), dict):
-        data = _empty_catalog()
+    data = load_catalog_snapshot(cache_dir)
     _catalog_cache = data
     _catalog_cache_path = path
     return data

@@ -35,10 +35,13 @@ from mammamiradio.home.ha_context import (
     _fetch_ha_registry_areas,
     _fetch_ha_registry_snapshot,
     _fetch_home_context_outcome,
+    _filter_matcher_baseline,
     _filter_state,
     _format_state,
     _ha_websocket_url,
     _HomeContextFetchOutcome,
+    _HomeContextProjectionInput,
+    _project_home_context,
     _publish_home_context_outcome,
     _sanitize_state_value,
     _score_entity,
@@ -48,11 +51,14 @@ from mammamiradio.home.ha_context import (
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
+    discard_home_context_entities,
     fetch_home_context,
     fetch_weather_forecast,
     get_cached_home_context,
+    invalidate_home_context_entity_baselines,
     push_state_to_ha,
     revalidate_home_context_mutes,
+    revalidate_home_context_outcome_mutes,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,6 +74,56 @@ def test_age_seconds_returns_correct_value():
 def test_age_seconds_no_timestamp_returns_inf():
     ctx = HomeContext()
     assert ctx.age_seconds == float("inf")
+
+
+def test_projection_candidate_keeps_refresh_recoverable_when_optional_matchers_fail():
+    """The HA worker returns a safe candidate rather than leaking one matcher failure."""
+    projection_input = _HomeContextProjectionInput(
+        response_bytes=json.dumps(
+            [
+                {
+                    "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                    "state": "on",
+                    "attributes": {},
+                }
+            ]
+        ).encode(),
+        registry_snapshot=HomeRegistrySnapshot(source="empty_fallback"),
+        weather_arc="",
+        weather_arc_en="",
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        muted_ids=frozenset(),
+        effective_cache=None,
+        radio_event_rules=(RadioEventRule(id="coffee_switch", entity_glob="switch.*"),),
+        radio_event_state_baseline={},
+        ritual_recipe_state_baseline={},
+        radio_event_cooldowns={},
+        ritual_recipe_cooldowns={},
+        cache_dir=None,
+        timestamp=1_000.0,
+    )
+
+    with (
+        patch("mammamiradio.home.ha_context.match_radio_events", side_effect=RuntimeError("radio matcher")),
+        patch("mammamiradio.home.ha_context.build_radio_event_baseline", side_effect=RuntimeError("radio baseline")),
+        patch("mammamiradio.home.ha_context.match_ritual_recipes", side_effect=RuntimeError("ritual matcher")),
+        patch(
+            "mammamiradio.home.ha_context.build_ritual_recipe_baseline",
+            side_effect=RuntimeError("ritual baseline"),
+        ),
+    ):
+        candidate = _project_home_context(projection_input)
+
+    assert candidate.context.authorization_mode == HomeAuthorizationMode.LEGACY.value
+    assert candidate.observed_entity_ids == frozenset({"switch.bar_kaffeemaschine_steckdose"})
+    assert candidate.radio_event_state_baseline == {}
+    assert candidate.ritual_recipe_state_baseline == {}
+    assert candidate.warnings == (
+        "radio_event_match_failed",
+        "radio_event_baseline_failed",
+        "ritual_recipe_match_failed",
+        "ritual_recipe_baseline_failed",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1668,6 +1724,48 @@ async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_direct_fresh_fetch_revalidates_mute_added_during_projection(tmp_path):
+    """The legacy direct-fetch path must not publish a worker-era mute leak."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.content = json.dumps([{"entity_id": "switch.muted", "state": "on", "attributes": {}}]).encode()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+    calls = {"n": 0}
+
+    def _fake_muted(_dir):
+        # The worker's input sees no mute.  The final direct-call revalidation
+        # must observe the policy which landed while projection was running.
+        calls["n"] += 1
+        return set() if calls["n"] <= 2 else {"switch.muted"}
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch("mammamiradio.home.ha_context.muted_entity_ids", side_effect=_fake_muted),
+        patch("mammamiradio.home.ha_context._publish_home_context_outcome") as publish,
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            cache_dir=tmp_path,
+            authorization=HomeAuthorization.legacy(),
+        )
+
+    assert calls["n"] >= 3
+    assert "switch.muted" not in result.raw_states
+    published = publish.call_args.args[0].context
+    assert "switch.muted" not in published.raw_states
+
+
+@pytest.mark.asyncio
 async def test_fetch_outcome_defers_cache_and_event_baseline_publication():
     """A background task must not publish its result before the producer adopts it."""
     import mammamiradio.home.ha_context as ha_mod
@@ -1963,6 +2061,156 @@ def test_revalidate_home_context_mutes_preserves_unmuted_fresh_one_shots(tmp_pat
     assert filtered.ritual_public_families == ["Live ritual"]
     assert context.radio_events == [muted_radio, live_radio]
     assert context.ritual_recipe_matches == [muted_ritual, live_ritual]
+
+
+def test_revalidate_home_context_outcome_mutes_filters_both_baselines_and_synthetic_aliases(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    source_id = "weather.private_source"
+    synthetic_id = "weather.ambient"
+    live_id = "switch.live"
+    set_entity_muted(tmp_path, source_id, True, label="Private weather")
+    context = HomeContext(
+        raw_states={
+            synthetic_id: {"state": "sunny", "attributes": {}},
+            live_id: {"state": "on", "attributes": {}},
+        },
+        ambient_sources={synthetic_id: source_id},
+        timestamp=time.time(),
+    )
+    now = time.time()
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=context.timestamp,
+        attempt_started_at=now - 0.1,
+        attempt_finished_at=now,
+        duration_seconds=0.1,
+        radio_event_state_baseline={
+            synthetic_id: {"state": "sunny"},
+            live_id: {"state": "on"},
+        },
+        ritual_recipe_state_baseline={
+            synthetic_id: {"state": "sunny"},
+            live_id: {"state": "on"},
+        },
+    )
+
+    filtered = revalidate_home_context_outcome_mutes(outcome, tmp_path)
+
+    assert synthetic_id not in filtered.context.raw_states
+    assert filtered.radio_event_state_baseline == {live_id: {"state": "on"}}
+    assert filtered.ritual_recipe_state_baseline == {live_id: {"state": "on"}}
+    assert outcome.radio_event_state_baseline[synthetic_id] == {"state": "sunny"}
+
+
+def test_revalidate_outcome_discards_an_entity_muted_and_unmuted_while_in_flight(tmp_path):
+    """A hard mute invalidates an older candidate even after the policy is reopened."""
+    import mammamiradio.home.ha_context as ha_context
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    source_id = "weather.private_source"
+    synthetic_id = "weather.ambient"
+    live_id = "switch.live"
+    private_radio = SimpleNamespace(event=SimpleNamespace(entity_id=synthetic_id))
+    live_radio = SimpleNamespace(event=SimpleNamespace(entity_id=live_id))
+    private_ritual = SimpleNamespace(
+        entity_id=synthetic_id,
+        recipe=SimpleNamespace(public_family_label="Private ritual"),
+    )
+    live_ritual = SimpleNamespace(
+        entity_id=live_id,
+        recipe=SimpleNamespace(public_family_label="Live ritual"),
+    )
+    context = HomeContext(
+        raw_states={
+            synthetic_id: {"state": "sunny", "attributes": {}},
+            live_id: {"state": "on", "attributes": {}},
+        },
+        ambient_sources={synthetic_id: source_id},
+        radio_events=[private_radio, live_radio],
+        ritual_recipe_matches=[private_ritual, live_ritual],
+        ritual_public_families=["Private ritual", "Live ritual"],
+        timestamp=time.time(),
+    )
+    now = time.time()
+
+    with (
+        patch.object(ha_context, "_ha_cache", None),
+        patch.object(ha_context, "_radio_event_state_cache", {}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {}),
+        patch.object(ha_context, "_home_context_invalidation_generation", 0),
+        patch.object(ha_context, "_home_context_entity_invalidation_generations", {}),
+    ):
+        outcome = _HomeContextFetchOutcome(
+            kind="fresh",
+            context=context,
+            snapshot_timestamp=context.timestamp,
+            attempt_started_at=now - 0.1,
+            attempt_finished_at=now,
+            duration_seconds=0.1,
+            radio_event_state_baseline={
+                synthetic_id: {"state": "sunny"},
+                live_id: {"state": "on"},
+            },
+            ritual_recipe_state_baseline={
+                synthetic_id: {"state": "sunny"},
+                live_id: {"state": "on"},
+            },
+            invalidation_generation=0,
+        )
+        set_entity_muted(tmp_path, source_id, True, label="Private weather")
+        ha_context.invalidate_home_context_entity_baselines({source_id})
+        set_entity_muted(tmp_path, source_id, False)
+
+        filtered = revalidate_home_context_outcome_mutes(outcome, tmp_path)
+
+    assert synthetic_id not in filtered.context.raw_states
+    assert filtered.context.radio_events == [live_radio]
+    assert filtered.context.ritual_recipe_matches == [live_ritual]
+    assert filtered.context.ritual_public_families == ["Live ritual"]
+    assert filtered.radio_event_state_baseline == {live_id: {"state": "on"}}
+    assert filtered.ritual_recipe_state_baseline == {live_id: {"state": "on"}}
+
+
+def test_mute_revalidation_is_a_noop_when_persistent_policy_is_unavailable():
+    """Callers without a cache directory must retain their candidate unchanged."""
+    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=1.0,
+        attempt_started_at=0.0,
+        attempt_finished_at=1.0,
+        duration_seconds=1.0,
+    )
+
+    assert apply_entity_mute_policy(context, None) is context
+    assert revalidate_home_context_mutes(context, None) is context
+    assert revalidate_home_context_outcome_mutes(outcome, None) is outcome
+
+
+def test_mute_baseline_helpers_noop_for_empty_invalidation_request():
+    """An empty policy update must not replace retained state or matcher snapshots."""
+    import mammamiradio.home.ha_context as ha_context
+
+    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
+    baseline = {"switch.live": {"state": "on"}}
+
+    with (
+        patch.object(ha_context, "_ha_cache", context),
+        patch.object(ha_context, "_radio_event_state_cache", baseline),
+        patch.object(ha_context, "_ritual_recipe_state_cache", baseline),
+    ):
+        assert _filter_matcher_baseline(baseline, set()) is baseline
+        assert discard_home_context_entities(None, {"switch.live"}) is None
+        assert discard_home_context_entities(context, set()) is context
+
+        invalidate_home_context_entity_baselines(set())
+
+        assert ha_context._ha_cache is context
+        assert ha_context._radio_event_state_cache is baseline
+        assert ha_context._ritual_recipe_state_cache is baseline
 
 
 # ---------------------------------------------------------------------------

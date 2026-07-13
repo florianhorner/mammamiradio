@@ -411,6 +411,46 @@ When the playlist source is charts, the producer checks every 90 minutes and mer
 
 Important design choice: there is one shared timeline. Listeners tune into the current live point, not their own private playback state.
 
+### Delivery cushion (send-ahead pacing)
+
+The playback loop does not offer each source packet to listener fanout exactly
+at its real-time deadline. Source packets are capped at **125 ms** (3,000 bytes
+at 192 kbps), so a private, persistent `StreamPacer` (in `streamer.py`, owned by
+`run_playback_loop`) keeps a **500 ms send-ahead target** on one monotonic source
+media timeline. At 192 kbps that is roughly the first four packets; after that,
+the source-to-fanout schedule stays no more than one packet (625 ms) ahead. This
+helps absorb a short event-loop or CPU scheduling pause — including one caused
+by rendering a newly created station ID, ad, banter, or a Home Assistant
+projection — before it reaches a direct listener (e.g. a Sonos player consuming
+`/stream`).
+
+The timeline is deliberately **continuous across natural segment boundaries**:
+music → station ID → ad → banter → music share one origin, so the lead is not
+re-accrued at each transition (which would add silence and drift). The pacer
+resets only on a true discontinuity — no listeners (including a subsequent
+mid-segment room refill), playback stop/resume, a real queue gap / fallback, or
+an explicit skip — via a named `reset_timeline(reason)` call.
+
+If a pause is longer than the whole lead, the pacer uses **at most a three-packet
+recovery phase**, then rebases the pacing origin once and records the deficit as
+an `overrun_rebased` event. At the default packet cap, that phase restores 375
+ms; ordinary bounded packets may follow immediately until the 500 ms target is
+rebuilt. It never sleeps a negative interval and never turns the missed
+wall-clock history into an unbounded backlog of overdue chunks — the unavoidable
+long stall stays audible, but it cannot compound into a second catch-up phase or
+many seconds of stale playback. The packet cap changes source-read granularity
+while leaving bitrate, ICY metadata, queue ordering, and overflow protection
+intact. Because listener queues remain bounded by packets, their shorter packets
+give a slow listener a tighter time budget before drop. The 500/625 ms bound
+applies only to source-to-fanout pacing: after `LiveStreamHub` enqueues a chunk,
+ASGI, socket, and client buffers can still delay physical playback. A skip or
+status cutover therefore has no physical-audio latency guarantee; slow listeners
+are dropped instead of stalling the station.
+
+Pacing outcomes and completed-send outcomes feed the bounded private diagnostics
+described under [Reading stream-delivery diagnostics](operations.md#reading-stream-delivery-diagnostics)
+— exposed only through authenticated `/status`, never `/public-status`.
+
 ### Stream audio format metadata
 
 External integrations should call `GET /public-status` before playback and read
@@ -552,6 +592,41 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`, plus the Moment Receipts trail via `moments_admin`
 - scored entities and privacy filter counts are admin-only and never appear in `/public-status`
 - `push_state_to_ha` always sets `entity_picture` on `media_player.mammamiradio` to an absolute http(s) image: the track's cover (`Track.album_art`) while a song plays, and the station logo for host talk, ads, music with no cover, and idle/stopped. The logo fallback is required because HA's media-control card does not clear a removed `entity_picture` — it keeps the last cover — so omitting it would leave the previous track's art on screen during a news flash. The logo URL is `[brand] artwork_url` (absolute http(s) only; relative paths are rejected because HA resolves `entity_picture` against its own origin), defaulting to the bundled station logo. `media_image_url`/`media_image_remotely_accessible` are intentionally omitted (inert for a state pushed via the REST API rather than a media_player integration component)
+
+### Isolated HA projection
+
+A full `/api/states` reply can carry a few thousand entities. Decoding that JSON
+and running the entity-map, authorization, mute, filter, label, score, diff, and
+audit projection over it is CPU work that used to run inline on the same asyncio
+loop as `run_playback_loop` — a completed refresh could therefore block egress
+long enough to be heard by a direct listener.
+
+The retained producer-owned HA request now keeps only its **transport and
+enrichment I/O** (`/api/states`, optional registry, optional weather) on the
+event loop. Once the raw response bytes and enrichment values are available, JSON
+decoding plus the pure projection run in one module-owned
+`ThreadPoolExecutor(max_workers=1)` (`ha-projection` thread in `home/ha_context.py`).
+The worker receives copied, inert request values plus the cache-directory path,
+reads its own detached label-catalog snapshot, and returns only a candidate
+(`_HomeContextProjectionCandidate`). It never touches `StationState`, module
+caches, persistence callbacks, event baselines, or any logging that contains HA
+values.
+
+The coordinator (`_HAContextRefreshCoordinator` in `producer.py`) stays the sole
+owner of request lifetime, stage state, mute/authorization revalidation on the
+loop, stale-result discard, observed-entity bookkeeping, and safe-boundary
+adoption at `_drain_completed_result`. A cancelled, timed-out (30 s total cap),
+closed, or superseded request's worker value is ignored — it can never publish
+after coordinator close or after a newer request, and no extra refresh begins
+while the retained request still owns the mailbox. The single worker serializes
+an abandoned calculation and the next one; they never run concurrently.
+
+The coordinator also stamps a **coarse, privacy-safe stage** on `StationState`
+(`states_request`, `enrichment_wait`, `projection`, `idle`, cleared on every
+terminal/cancel/close path) via `set_ha_context_refresh_stage`. It is diagnostic
+metadata only — never a prompt input or a scheduling control — and is surfaced in
+the `/status` stream-delivery diagnostics so one late-packet event can be joined
+to the projection phase without retaining any household data.
 
 ## Album cover artwork
 

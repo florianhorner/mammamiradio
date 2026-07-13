@@ -15,6 +15,7 @@ import random as _random
 import re as _re
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -64,7 +65,12 @@ from mammamiradio.home.entity_policy import (
     set_personal_moment_enabled,
     valid_entity_id,
 )
-from mammamiradio.home.ha_context import PRESENCE_SENSOR_DEVICE_CLASSES, get_cached_home_context, push_state_to_ha
+from mammamiradio.home.ha_context import (
+    PRESENCE_SENSOR_DEVICE_CLASSES,
+    get_cached_home_context,
+    invalidate_home_context_entity_baselines,
+    push_state_to_ha,
+)
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
@@ -265,6 +271,149 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
+STREAM_TARGET_LEAD_SECONDS = 0.5
+STREAM_MAX_PACKET_SECONDS = 0.125
+STREAM_LATE_THRESHOLD_SECONDS = 0.05
+STREAM_MAX_RECOVERY_CHUNKS = 3
+STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS = 60.0
+
+
+def _stream_chunk_size(bytes_per_second: float) -> int:
+    """Bound source-packet duration so pacing cannot overshoot by a full read."""
+    return max(1, min(4096, int(max(float(bytes_per_second), 1.0) * STREAM_MAX_PACKET_SECONDS)))
+
+
+@dataclass(frozen=True)
+class StreamPacingDecision:
+    """One post-send pacing decision on the station's media timeline."""
+
+    sleep_seconds: float
+    kind: str | None = None
+    lateness_seconds: float = 0.0
+    remaining_lead_seconds: float = 0.0
+    deficit_seconds: float = 0.0
+    warn_underrun: bool = False
+
+
+class StreamPacer:
+    """Keep one bounded send-ahead timeline across contiguous segments.
+
+    The first few bounded MP3 packets establish the fixed delivery cushion.
+    Ordinary segment boundaries keep the same origin. Only callers that detect
+    a real transport discontinuity reset it explicitly.
+    """
+
+    def __init__(
+        self,
+        bytes_per_second: float,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        target_lead_seconds: float = STREAM_TARGET_LEAD_SECONDS,
+        late_threshold_seconds: float = STREAM_LATE_THRESHOLD_SECONDS,
+        max_recovery_chunks: int = STREAM_MAX_RECOVERY_CHUNKS,
+    ) -> None:
+        self.bytes_per_second = max(float(bytes_per_second), 1.0)
+        self.target_lead_seconds = max(0.0, float(target_lead_seconds))
+        self.late_threshold_seconds = max(0.0, float(late_threshold_seconds))
+        self.max_recovery_chunks = max(1, int(max_recovery_chunks))
+        self._monotonic = monotonic
+        self._origin: float | None = None
+        self._media_seconds = 0.0
+        self._recovery_chunks = 0
+        self._recovery_media_seconds = 0.0
+        self._recovery_lateness_seconds = 0.0
+        self._recovery_deficit_seconds = 0.0
+        self._last_underrun_warning = float("-inf")
+        self.reset_count = 0
+        self.last_reset_reason = ""
+
+    @property
+    def media_seconds(self) -> float:
+        """Test-visible media position on the current pacing origin."""
+        return self._media_seconds
+
+    def reset_timeline(self, reason: str) -> None:
+        """Reset after a real discontinuity, never a natural segment boundary."""
+        normalized = str(reason or "discontinuity")
+        if self._origin is None and self.last_reset_reason == normalized:
+            return
+        self._origin = None
+        self._media_seconds = 0.0
+        self._recovery_chunks = 0
+        self._recovery_media_seconds = 0.0
+        self._recovery_lateness_seconds = 0.0
+        self._recovery_deficit_seconds = 0.0
+        self.reset_count += 1
+        self.last_reset_reason = normalized
+
+    def after_send(self, chunk_bytes: int) -> StreamPacingDecision:
+        """Advance one emitted chunk and return a non-negative bounded wait."""
+        chunk_seconds = max(0, int(chunk_bytes)) / self.bytes_per_second
+        now = self._monotonic()
+        if self._origin is None:
+            self._origin = now
+            self.last_reset_reason = ""
+
+        media_before = self._media_seconds
+        elapsed = max(0.0, now - self._origin)
+        send_deadline = self._origin + max(0.0, media_before - self.target_lead_seconds)
+        lateness = max(0.0, now - send_deadline)
+        remaining_before = media_before - elapsed
+        deficit = max(0.0, -remaining_before)
+        self._media_seconds += chunk_seconds
+
+        if self._recovery_chunks:
+            self._recovery_chunks += 1
+            self._recovery_media_seconds += chunk_seconds
+            if self._recovery_chunks >= self.max_recovery_chunks:
+                # Drop the overdue wall-clock history once. The retained media
+                # position is only the bounded recovery burst, so a long pause
+                # cannot turn into an unbounded listener-queue catch-up flood.
+                self._origin = now
+                self._media_seconds = self._recovery_media_seconds
+                next_deadline = self._origin + max(0.0, self._media_seconds - self.target_lead_seconds)
+                decision = StreamPacingDecision(
+                    sleep_seconds=max(0.0, next_deadline - now),
+                    kind="overrun_rebased",
+                    lateness_seconds=self._recovery_lateness_seconds,
+                    remaining_lead_seconds=max(0.0, self._media_seconds),
+                    deficit_seconds=self._recovery_deficit_seconds,
+                )
+                self._recovery_chunks = 0
+                self._recovery_media_seconds = 0.0
+                self._recovery_lateness_seconds = 0.0
+                self._recovery_deficit_seconds = 0.0
+                return decision
+            return StreamPacingDecision(sleep_seconds=0.0)
+
+        kind: str | None = None
+        warn_underrun = False
+        if lateness >= self.late_threshold_seconds:
+            if remaining_before <= 0.0:
+                kind = "underrun"
+                self._recovery_chunks = 1
+                self._recovery_media_seconds = chunk_seconds
+                self._recovery_lateness_seconds = lateness
+                self._recovery_deficit_seconds = deficit
+                if now - self._last_underrun_warning >= STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS:
+                    self._last_underrun_warning = now
+                    warn_underrun = True
+            else:
+                kind = "late"
+
+        if self._recovery_chunks:
+            sleep_seconds = 0.0
+        else:
+            next_deadline = self._origin + max(0.0, self._media_seconds - self.target_lead_seconds)
+            sleep_seconds = max(0.0, next_deadline - now)
+        return StreamPacingDecision(
+            sleep_seconds=sleep_seconds,
+            kind=kind,
+            lateness_seconds=lateness,
+            remaining_lead_seconds=max(0.0, remaining_before),
+            deficit_seconds=deficit,
+            warn_underrun=warn_underrun,
+        )
 
 
 def _drain_segment_queue(q) -> list:
@@ -1470,6 +1619,7 @@ def _runtime_status_snapshot(
         "continuity_slot": _continuity_slot_status(state),
         "producer_headroom": _producer_headroom_snapshot(request, runtime_health),
         "render_timings": {"retention": state.render_timings.maxlen or 20, "recent": list(state.render_timings)},
+        "stream_delivery": state.stream_delivery_snapshot(),
     }
 
 
@@ -2019,6 +2169,11 @@ class LiveStreamHub:
         self._listener_queue_size = listener_queue_size
         self._listeners: dict[int, asyncio.Queue[bytes | None]] = {}
         self._next_listener_id = 0
+        # Advances only when an empty room gets its next listener.  The
+        # playback loop uses this to spot a disconnect/reconnect that happens
+        # while it is still reading the current segment, rather than letting a
+        # new listener inherit an old pacing origin.
+        self._listener_epoch = 0
         self._state: StationState | None = None
         # Set by subscribe() so the playback loop wakes the instant a listener
         # connects to an empty room, instead of sleeping out a fixed poll. Bound
@@ -2031,10 +2186,13 @@ class LiveStreamHub:
 
     def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
         """Register a listener and return its dedicated chunk queue."""
+        room_was_empty = not self._listeners
         listener_id = self._next_listener_id
         self._next_listener_id += 1
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
         self._listeners[listener_id] = queue
+        if room_was_empty:
+            self._listener_epoch += 1
         active = len(self._listeners)
         logger.info("Listener connected (%d active)", active)
         if self._state is not None:
@@ -2047,6 +2205,16 @@ class LiveStreamHub:
         # sees the new listener and never misses the wakeup.
         self._listener_arrived.set()
         return listener_id, queue
+
+    @property
+    def listener_epoch(self) -> int:
+        """Return the current empty-room-to-listener generation.
+
+        It is intentionally a coarse counter, not a listener identity: it
+        tells playback that a fresh room needs a fresh send-ahead cushion while
+        retaining no per-listener diagnostic state.
+        """
+        return self._listener_epoch
 
     def unsubscribe(self, listener_id: int) -> None:
         """Remove a listener and drop any future broadcast work for it."""
@@ -2070,8 +2238,10 @@ class LiveStreamHub:
                 slow_listeners.append(listener_id)
 
         for listener_id in slow_listeners:
-            logger.warning("Dropping slow listener %d", listener_id)
+            logger.warning("Dropping slow listener after stream queue overflow")
             self.unsubscribe(listener_id)
+        if slow_listeners and self._state is not None:
+            self._state.record_slow_listener_drops(len(slow_listeners))
 
     def close(self) -> None:
         """Signal all listeners to terminate and clear the hub."""
@@ -2121,19 +2291,27 @@ async def _packaged_recovery_segment(fallback: Path) -> Segment:
 
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
-    chunk_size = 4096
     segment_queue = app.state.queue
     skip_event = app.state.skip_event
     state = app.state.station_state
     config = app.state.config
     hub = app.state.stream_hub
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
+    chunk_size = _stream_chunk_size(bytes_per_sec)
+    pacer_factory = getattr(app.state, "stream_pacer_factory", StreamPacer)
+    pacer = pacer_factory(bytes_per_sec)
+    app.state.stream_pacer = pacer
+    # A full disconnect/reconnect can happen while the inner file-send loop is
+    # active, so the outer empty-room branch alone is not enough to restore a
+    # first-packet cushion for that new listener generation.
+    pacer_listener_epoch = hub.listener_epoch
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
     gap_clips_served = 0
 
     while True:
         if state.session_stopped:
+            pacer.reset_timeline("playback_stop_resume")
             state.queue_empty_since = None
             gap_clips_served = 0
             try:
@@ -2146,6 +2324,7 @@ async def run_playback_loop(app) -> None:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
+            pacer.reset_timeline("no_listeners")
             state.queue_empty_since = None
             gap_clips_served = 0
             # Wait on the listener-arrived event instead of a fixed 1s poll, so a
@@ -2159,6 +2338,10 @@ async def run_playback_loop(app) -> None:
                     await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
                 except TimeoutError:
                     pass
+            # If a listener arrived while this branch was parked, it starts a
+            # fresh room epoch after the reset immediately above.  Recording it
+            # here prevents a duplicate reset on the next outer iteration.
+            pacer_listener_epoch = hub.listener_epoch
             continue
 
         # Priority slot: interrupt bridge audio plays before anything in the queue.
@@ -2206,11 +2389,13 @@ async def run_playback_loop(app) -> None:
                 gap_clips_served = 0
             except TimeoutError:
                 if state.session_stopped:
+                    pacer.reset_timeline("playback_stop_resume")
                     state.queue_empty_since = None
                     gap_clips_served = 0
                     continue
 
                 if not hub._listeners:
+                    pacer.reset_timeline("no_listeners")
                     state.queue_empty_since = None
                     gap_clips_served = 0
                     continue
@@ -2218,6 +2403,7 @@ async def run_playback_loop(app) -> None:
                 if state.queue_empty_since is None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
+                pacer.reset_timeline("queue_gap_fallback")
 
                 from mammamiradio.scheduling.producer import _pick_recovery_clip
 
@@ -2417,10 +2603,10 @@ async def run_playback_loop(app) -> None:
             _ha_task.add_done_callback(_ha_push_tasks.discard)
 
         try:
-            send_start = time.monotonic()
             bytes_sent = 0
             was_skipped = False
             send_completed_cleanly = False
+            terminal_reason = "aborted"
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -2442,8 +2628,19 @@ async def run_playback_loop(app) -> None:
                         if skip_event.is_set():
                             logger.info("Skipping current segment")
                             was_skipped = True
+                            terminal_reason = "skip"
+                            pacer.reset_timeline("explicit_skip")
                             skip_event.clear()
                             break
+
+                        # The room can briefly become empty and refill while a
+                        # long segment is in flight.  Reset before that new
+                        # listener receives a packet so it gets the same
+                        # bounded bootstrap cushion as a cold start, without
+                        # changing natural segment-boundary pacing.
+                        if hub.listener_epoch != pacer_listener_epoch:
+                            pacer.reset_timeline("no_listeners")
+                            pacer_listener_epoch = hub.listener_epoch
 
                         await hub.broadcast(chunk)
                         bytes_sent += len(chunk)
@@ -2453,16 +2650,33 @@ async def run_playback_loop(app) -> None:
                         if clip_buf is not None:
                             clip_buf.append(chunk)
 
-                        elapsed = time.monotonic() - send_start
-                        expected = bytes_sent / bytes_per_sec
-                        ahead = expected - elapsed
-                        if ahead > 0.005:
-                            await asyncio.sleep(ahead)
+                        pacing = pacer.after_send(len(chunk))
+                        if pacing.kind is not None:
+                            state.record_stream_pacing_event(
+                                pacing.kind,
+                                lateness_ms=pacing.lateness_seconds * 1000,
+                                remaining_lead_ms=pacing.remaining_lead_seconds * 1000,
+                                deficit_ms=pacing.deficit_seconds * 1000,
+                                segment_type=segment.type.value,
+                            )
+                        if pacing.warn_underrun:
+                            logger.warning(
+                                "Stream delivery cushion exhausted by %.1f ms during %s",
+                                pacing.deficit_seconds * 1000,
+                                segment.type.value,
+                            )
+                        if pacing.sleep_seconds > 0.005:
+                            await asyncio.sleep(pacing.sleep_seconds)
                     else:
                         send_completed_cleanly = True
+                        terminal_reason = "eof"
+            except asyncio.CancelledError:
+                terminal_reason = "cancelled"
+                raise
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
+                terminal_reason = "file_error"
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
             # already playing again) still captures it. Single extract at the
@@ -2512,7 +2726,14 @@ async def run_playback_loop(app) -> None:
                 send_completed_cleanly=send_completed_cleanly,
                 listeners=start_listeners,
             )
-            _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
+            _emit_stream_result(
+                state,
+                segment,
+                bytes_sent,
+                was_skipped,
+                start_listeners,
+                terminal_reason=terminal_reason,
+            )
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
             # and escape the finally, killing the playback loop after we already
             # decided to move on. Reuse the guarded helper used everywhere else.
@@ -2580,7 +2801,15 @@ def _finalize_moment_receipts(state, segment, bytes_sent: int, was_skipped: bool
         logger.debug("Moment receipt finalize failed: %s", exc)
 
 
-def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+def _emit_stream_result(
+    state,
+    segment,
+    bytes_sent: int,
+    was_skipped: bool,
+    listeners: int,
+    *,
+    terminal_reason: str | None = None,
+) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
 
     Fires from the (sync) playback loop's finally, so it captures partial and
@@ -2588,6 +2817,25 @@ def _emit_stream_result(state, segment, bytes_sent: int, was_skipped: bool, list
     """
     _emit_release_campaign_result(state, segment, bytes_sent, was_skipped, listeners)
     _finalize_moment_receipts(state, segment, bytes_sent, was_skipped, listeners)
+    try:
+        from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
+
+        meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+        result = classify_stream_outcome(
+            was_skipped=was_skipped,
+            bytes_sent=bytes_sent,
+            listeners=listeners,
+            fallback_active=is_fallback_active(meta),
+        )
+        state.record_stream_outcome(
+            segment_type=segment.type.value,
+            result=result,
+            bytes_sent=bytes_sent,
+            starting_listener_count=listeners,
+            terminal_reason=terminal_reason or ("skip" if was_skipped else "eof"),
+        )
+    except Exception as exc:  # pragma: no cover - diagnostics must never break audio
+        logger.debug("Anonymous stream outcome recording failed: %s", exc)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -2654,12 +2902,12 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
     raw_warnings = getattr(report, "warnings", ())
     excluded = (
         sorted(name for name in raw_excluded if isinstance(name, str) and name.strip())
-        if isinstance(raw_excluded, (set, frozenset, list, tuple))
+        if isinstance(raw_excluded, set | frozenset | list | tuple)
         else []
     )
     warnings = (
         [warning for warning in raw_warnings if isinstance(warning, str) and warning.strip()][:20]
-        if isinstance(raw_warnings, (list, tuple))
+        if isinstance(raw_warnings, list | tuple)
         else []
     )
     return {"excluded_campaigns": excluded, "warnings": warnings}
@@ -3370,6 +3618,14 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             synthetic for synthetic, source in getattr(_ctx, "ambient_sources", {}).items() if source == entity_id
         }
     if action == "muted" and value:
+        # A hard mute is a temporal boundary as well as a visibility filter:
+        # discard the retained source/baseline now so an eventual unmute cannot
+        # turn a private transition into a delayed radio event.
+        invalidate_home_context_entity_baselines(tightened_ids)
+        mailbox = getattr(state, "ha_context_refresh_mailbox", None)
+        invalidate_muted_entities = getattr(mailbox, "invalidate_muted_entities", None)
+        if callable(invalidate_muted_entities):
+            invalidate_muted_entities(tightened_ids)
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
