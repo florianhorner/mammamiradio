@@ -5693,7 +5693,7 @@ async def _run_producer_inner(
                             )
                         extra_parts.append(_ppath)
                     except Exception:
-                        pass
+                        _unlink_path_best_effort(_ppath)
                     return tail_intro, dry_intro, extra_parts, itext, prepared, itrack_ref
 
                 bumper_in_path = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"

@@ -783,6 +783,56 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
 
 
+@pytest.mark.asyncio
+async def test_ad_promo_failure_removes_partial_file_and_queues_break(tmp_path):
+    """A failed optional promo tag cannot leak its partially written destination."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.pacing.ad_spots_per_break = 1
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    async def _write_then_fail_promo(text, _voice, output_path, **_kwargs):
+        if text == "Messaggio promozionale.":
+            output_path.write_bytes(b"partial promo")
+            raise RuntimeError("promo synthesis failed after publication")
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.", None)
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", SonicWorld(), ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_then_fail_promo),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.get_nowait().type == SegmentType.AD
+    assert list(tmp_path.glob("promo_tag_*.mp3")) == []
+
+
 # ---------------------------------------------------------------------------
 # Error recovery — recovery sweeper fallback
 # ---------------------------------------------------------------------------
