@@ -80,10 +80,11 @@ from mammamiradio.home.ha_context import (
     _publish_home_context_outcome,
     apply_entity_mute_policy,
     check_reactive_triggers,
+    discard_home_context_entities,
     fetch_home_context,
     get_cached_home_context,
     push_state_to_ha,
-    revalidate_home_context_mutes,
+    revalidate_home_context_outcome_mutes,
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
@@ -2528,6 +2529,10 @@ class _HAContextRefreshCoordinator:
         """Whether the ledger may offer home-event material to a prompt."""
         return self._home_event_handoffs_allowed
 
+    def invalidate_muted_entities(self, entity_ids: set[str]) -> None:
+        """Forget muted state before a later unmute can replay its transition."""
+        self._context = discard_home_context_entities(self._context, entity_ids)
+
     @property
     def in_flight_task(self) -> asyncio.Task[_HomeContextFetchOutcome] | None:
         """Test-visible retained task; production code never exposes this."""
@@ -2808,7 +2813,8 @@ class _HAContextRefreshCoordinator:
         # aged past the threshold while waiting in the mailbox is different:
         # it must never become prompt input.
         was_stale_gap = self._attempt_started_after_stale_gap
-        adopted = revalidate_home_context_mutes(outcome.context, self._config.cache_dir)
+        accepted_outcome = revalidate_home_context_outcome_mutes(outcome, self._config.cache_dir)
+        adopted = accepted_outcome.context
         stale_at_adoption = self._is_stale(adopted)
         if was_stale_gap or stale_at_adoption:
             self._suppress_stale_handoffs()
@@ -2822,7 +2828,7 @@ class _HAContextRefreshCoordinator:
         # Publish both the accepted snapshot and its event-matcher baselines as
         # one producer-owned handoff.  No background-task callback can do this.
         if not _uses_injected_legacy_fetch():
-            _publish_home_context_outcome(replace(outcome, context=adopted))
+            _publish_home_context_outcome(replace(accepted_outcome, context=adopted))
         self._context = adopted
         self._record_terminal_result(
             "stale" if stale_at_adoption else "success",

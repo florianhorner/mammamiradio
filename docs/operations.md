@@ -305,7 +305,8 @@ the first overflow, because no timestamp exists yet):
 - `recent_stream_outcomes` — up to 20 anonymous completed-send outcomes:
   timestamp, `segment_type`, classified `result`, `bytes_sent`,
   `starting_listener_count`, and `terminal_reason` (`eof`, `skip`, or
-  `file_error`).
+  `file_error`; `cancelled` for planned task shutdown; or `aborted` for another
+  non-I/O interruption).
 - `slow_listener_drops` — `session` / `window_15m` totals and `last_drop_at` for
   queue-overflow drops of a lagging listener (no identifier is retained).
 - `ha_refresh` — the current coarse HA projection `stage` (`states_request`,

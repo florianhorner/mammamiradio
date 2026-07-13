@@ -35,6 +35,7 @@ from mammamiradio.home.ha_context import (
     _fetch_ha_registry_areas,
     _fetch_ha_registry_snapshot,
     _fetch_home_context_outcome,
+    _filter_matcher_baseline,
     _filter_state,
     _format_state,
     _ha_websocket_url,
@@ -50,11 +51,14 @@ from mammamiradio.home.ha_context import (
     check_reactive_triggers,
     classify_home_mood,
     classify_home_mood_en,
+    discard_home_context_entities,
     fetch_home_context,
     fetch_weather_forecast,
     get_cached_home_context,
+    invalidate_home_context_entity_baselines,
     push_state_to_ha,
     revalidate_home_context_mutes,
+    revalidate_home_context_outcome_mutes,
 )
 
 # ---------------------------------------------------------------------------
@@ -95,7 +99,7 @@ def test_projection_candidate_keeps_refresh_recoverable_when_optional_matchers_f
         ritual_recipe_state_baseline={},
         radio_event_cooldowns={},
         ritual_recipe_cooldowns={},
-        label_catalog={},
+        cache_dir=None,
         timestamp=1_000.0,
     )
 
@@ -2057,6 +2061,87 @@ def test_revalidate_home_context_mutes_preserves_unmuted_fresh_one_shots(tmp_pat
     assert filtered.ritual_public_families == ["Live ritual"]
     assert context.radio_events == [muted_radio, live_radio]
     assert context.ritual_recipe_matches == [muted_ritual, live_ritual]
+
+
+def test_revalidate_home_context_outcome_mutes_filters_both_baselines_and_synthetic_aliases(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    source_id = "weather.private_source"
+    synthetic_id = "weather.ambient"
+    live_id = "switch.live"
+    set_entity_muted(tmp_path, source_id, True, label="Private weather")
+    context = HomeContext(
+        raw_states={
+            synthetic_id: {"state": "sunny", "attributes": {}},
+            live_id: {"state": "on", "attributes": {}},
+        },
+        ambient_sources={synthetic_id: source_id},
+        timestamp=time.time(),
+    )
+    now = time.time()
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=context.timestamp,
+        attempt_started_at=now - 0.1,
+        attempt_finished_at=now,
+        duration_seconds=0.1,
+        radio_event_state_baseline={
+            synthetic_id: {"state": "sunny"},
+            live_id: {"state": "on"},
+        },
+        ritual_recipe_state_baseline={
+            synthetic_id: {"state": "sunny"},
+            live_id: {"state": "on"},
+        },
+    )
+
+    filtered = revalidate_home_context_outcome_mutes(outcome, tmp_path)
+
+    assert synthetic_id not in filtered.context.raw_states
+    assert filtered.radio_event_state_baseline == {live_id: {"state": "on"}}
+    assert filtered.ritual_recipe_state_baseline == {live_id: {"state": "on"}}
+    assert outcome.radio_event_state_baseline[synthetic_id] == {"state": "sunny"}
+
+
+def test_mute_revalidation_is_a_noop_when_persistent_policy_is_unavailable():
+    """Callers without a cache directory must retain their candidate unchanged."""
+    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=1.0,
+        attempt_started_at=0.0,
+        attempt_finished_at=1.0,
+        duration_seconds=1.0,
+    )
+
+    assert apply_entity_mute_policy(context, None) is context
+    assert revalidate_home_context_mutes(context, None) is context
+    assert revalidate_home_context_outcome_mutes(outcome, None) is outcome
+
+
+def test_mute_baseline_helpers_noop_for_empty_invalidation_request():
+    """An empty policy update must not replace retained state or matcher snapshots."""
+    import mammamiradio.home.ha_context as ha_context
+
+    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
+    baseline = {"switch.live": {"state": "on"}}
+
+    with (
+        patch.object(ha_context, "_ha_cache", context),
+        patch.object(ha_context, "_radio_event_state_cache", baseline),
+        patch.object(ha_context, "_ritual_recipe_state_cache", baseline),
+    ):
+        assert _filter_matcher_baseline(baseline, set()) is baseline
+        assert discard_home_context_entities(None, {"switch.live"}) is None
+        assert discard_home_context_entities(context, set()) is context
+
+        invalidate_home_context_entity_baselines(set())
+
+        assert ha_context._ha_cache is context
+        assert ha_context._radio_event_state_cache is baseline
+        assert ha_context._ritual_recipe_state_cache is baseline
 
 
 # ---------------------------------------------------------------------------

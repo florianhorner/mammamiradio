@@ -65,7 +65,12 @@ from mammamiradio.home.entity_policy import (
     set_personal_moment_enabled,
     valid_entity_id,
 )
-from mammamiradio.home.ha_context import PRESENCE_SENSOR_DEVICE_CLASSES, get_cached_home_context, push_state_to_ha
+from mammamiradio.home.ha_context import (
+    PRESENCE_SENSOR_DEVICE_CLASSES,
+    get_cached_home_context,
+    invalidate_home_context_entity_baselines,
+    push_state_to_ha,
+)
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
@@ -267,9 +272,15 @@ CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_TARGET_LEAD_SECONDS = 0.5
+STREAM_MAX_PACKET_SECONDS = 0.125
 STREAM_LATE_THRESHOLD_SECONDS = 0.05
 STREAM_MAX_RECOVERY_CHUNKS = 3
 STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS = 60.0
+
+
+def _stream_chunk_size(bytes_per_second: float) -> int:
+    """Bound source-packet duration so pacing cannot overshoot by a full read."""
+    return max(1, min(4096, int(max(float(bytes_per_second), 1.0) * STREAM_MAX_PACKET_SECONDS)))
 
 
 @dataclass(frozen=True)
@@ -287,7 +298,7 @@ class StreamPacingDecision:
 class StreamPacer:
     """Keep one bounded send-ahead timeline across contiguous segments.
 
-    The first roughly three MP3 chunks establish the fixed delivery cushion.
+    The first few bounded MP3 packets establish the fixed delivery cushion.
     Ordinary segment boundaries keep the same origin. Only callers that detect
     a real transport discontinuity reset it explicitly.
     """
@@ -2280,13 +2291,13 @@ async def _packaged_recovery_segment(fallback: Path) -> Segment:
 
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
-    chunk_size = 4096
     segment_queue = app.state.queue
     skip_event = app.state.skip_event
     state = app.state.station_state
     config = app.state.config
     hub = app.state.stream_hub
     bytes_per_sec = (config.audio.bitrate * 1000) / 8  # bitrate is in kbps; convert to bytes/sec
+    chunk_size = _stream_chunk_size(bytes_per_sec)
     pacer_factory = getattr(app.state, "stream_pacer_factory", StreamPacer)
     pacer = pacer_factory(bytes_per_sec)
     app.state.stream_pacer = pacer
@@ -2595,7 +2606,7 @@ async def run_playback_loop(app) -> None:
             bytes_sent = 0
             was_skipped = False
             send_completed_cleanly = False
-            terminal_reason = "file_error"
+            terminal_reason = "aborted"
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -2659,6 +2670,9 @@ async def run_playback_loop(app) -> None:
                     else:
                         send_completed_cleanly = True
                         terminal_reason = "eof"
+            except asyncio.CancelledError:
+                terminal_reason = "cancelled"
+                raise
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
@@ -3585,6 +3599,14 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             synthetic for synthetic, source in getattr(_ctx, "ambient_sources", {}).items() if source == entity_id
         }
     if action == "muted" and value:
+        # A hard mute is a temporal boundary as well as a visibility filter:
+        # discard the retained source/baseline now so an eventual unmute cannot
+        # turn a private transition into a delayed radio event.
+        invalidate_home_context_entity_baselines(tightened_ids)
+        mailbox = getattr(state, "ha_context_refresh_mailbox", None)
+        invalidate_muted_entities = getattr(mailbox, "invalidate_muted_entities", None)
+        if callable(invalidate_muted_entities):
+            invalidate_muted_entities(tightened_ids)
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
             await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)

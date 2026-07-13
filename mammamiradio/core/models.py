@@ -962,7 +962,11 @@ class StationState:
         timestamp: float | None = None,
     ) -> None:
         """Append one anonymous completed-send result to the bounded history."""
-        reason = terminal_reason if terminal_reason in {"eof", "skip", "file_error"} else "file_error"
+        reason = (
+            terminal_reason
+            if terminal_reason in {"eof", "skip", "file_error", "cancelled", "aborted"}
+            else "file_error"
+        )
         self.stream_outcome_history.append(
             {
                 "timestamp": time.time() if timestamp is None else float(timestamp),

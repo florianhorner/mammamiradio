@@ -36,6 +36,8 @@ from mammamiradio.web.streamer import (
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
+    STREAM_MAX_PACKET_SECONDS,
+    STREAM_TARGET_LEAD_SECONDS,
     LiveStreamHub,
     StreamPacer,
     _copy_home_context_to_state,
@@ -43,6 +45,7 @@ from mammamiradio.web.streamer import (
     _persist_completed_music,
     _record_provider_verdict,
     _run_provider_verdict,
+    _stream_chunk_size,
     router,
     run_playback_loop,
 )
@@ -167,6 +170,22 @@ def test_stream_pacer_builds_one_500ms_lead_and_keeps_natural_segments_on_the_sa
     assert pacer.reset_count == 0
     assert pacer.media_seconds == pytest.approx(media_at_boundary + 4096 / 24_000)
     assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(4096 / 24_000)
+
+
+def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
+    bytes_per_second = 4_000  # 32 kbps
+    chunk_size = _stream_chunk_size(bytes_per_second)
+    assert chunk_size == 500
+
+    clock = _FakeMonotonic()
+    pacer = StreamPacer(bytes_per_second, monotonic=clock)
+    maximum_lead = 0.0
+    for _ in range(8):
+        decision = pacer.after_send(chunk_size)
+        maximum_lead = max(maximum_lead, pacer.media_seconds - clock.now)
+        clock.advance(decision.sleep_seconds)
+
+    assert maximum_lead <= STREAM_TARGET_LEAD_SECONDS + STREAM_MAX_PACKET_SECONDS + 0.0001
 
 
 def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline():
@@ -297,9 +316,8 @@ def test_listener_epoch_advances_only_when_an_empty_room_refills():
 async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconnect(tmp_path):
     """A reconnect within a file must not inherit the previous media clock."""
     app = _make_test_app()
-    # 4 KiB is just over one second at 32 kbps.  The default 500 ms pacer
-    # therefore sleeps after the first packet, giving this test a deterministic
-    # window to replace the last listener before packet two.
+    # The 32 kbps packet cap keeps the physical lead bounded; yield after the
+    # first packet so the reconnect happens before the next one is broadcast.
     app.state.config.audio.bitrate = 32
     created_pacers: list[StreamPacer] = []
 
@@ -321,6 +339,7 @@ async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconne
     )
 
     first_packet_sent = asyncio.Event()
+    release_first_packet = asyncio.Event()
     second_packet_sent = asyncio.Event()
     calls = 0
     broadcast = app.state.stream_hub.broadcast
@@ -331,6 +350,7 @@ async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconne
         calls += 1
         if calls == 1:
             first_packet_sent.set()
+            await release_first_packet.wait()
         elif calls == 2:
             second_packet_sent.set()
 
@@ -340,15 +360,76 @@ async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconne
         await asyncio.wait_for(first_packet_sent.wait(), timeout=1.0)
         app.state.stream_hub.unsubscribe(first_listener)
         _, reconnected_queue = app.state.stream_hub.subscribe()
+        release_first_packet.set()
 
         await asyncio.wait_for(second_packet_sent.wait(), timeout=1.0)
         pacer = created_pacers[0]
         assert pacer.target_lead_seconds == pytest.approx(0.5)
         assert pacer.reset_count == 1
-        assert await asyncio.wait_for(reconnected_queue.get(), timeout=0.1) == b"x" * 4096
+        assert await asyncio.wait_for(reconnected_queue.get(), timeout=0.1) == b"x" * _stream_chunk_size(4_000)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(tmp_path):
+    """The loop must carry real pacer recovery signals into private diagnostics."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 32
+    clock = _FakeMonotonic()
+    created_pacers: list[StreamPacer] = []
+
+    def _pacer(bytes_per_second: float) -> StreamPacer:
+        pacer = StreamPacer(bytes_per_second, monotonic=clock)
+        created_pacers.append(pacer)
+        return pacer
+
+    app.state.stream_pacer_factory = _pacer
+    app.state.stream_hub.subscribe()
+    audio_path = tmp_path / "scheduler-stall.mp3"
+    audio_path.write_bytes(b"x" * 4_000)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Scheduler stall", "title_only": "Scheduler stall", "artist": "Test"},
+        )
+    )
+
+    broadcasts = 0
+    real_broadcast = app.state.stream_hub.broadcast
+
+    async def _broadcast(chunk: bytes) -> None:
+        nonlocal broadcasts
+        broadcasts += 1
+        # Four packets establish the 500 ms cushion; the fifth normally waits
+        # one packet. Stall before the sixth send to exhaust that cushion.
+        if broadcasts == 6:
+            clock.advance(1.2)
+        await real_broadcast(chunk)
+
+    real_sleep = asyncio.sleep
+
+    async def _paced_sleep(seconds: float) -> None:
+        clock.advance(seconds)
+        await real_sleep(0)
+
+    app.state.stream_hub.broadcast = _broadcast
+    with patch("mammamiradio.web.streamer.asyncio.sleep", side_effect=_paced_sleep):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=0.5)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert broadcasts == 8
+    assert len(created_pacers) == 1
+    assert created_pacers[0].media_seconds == pytest.approx(3 * 500 / 4_000)
+    delivery = app.state.station_state.stream_delivery_snapshot()
+    assert delivery["session"] == {"late": 0, "underrun": 1, "overrun_rebased": 1, "total": 2}
+    assert [event["kind"] for event in delivery["recent"]] == ["underrun", "overrun_rebased"]
 
 
 @pytest.mark.asyncio
@@ -589,7 +670,40 @@ async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tm
         result = await asyncio.gather(task, return_exceptions=True)
 
     assert isinstance(result[0], RuntimeError)
+    assert app.state.station_state.stream_outcome_history[-1]["terminal_reason"] == "aborted"
     schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_records_cancellation_without_a_file_error(tmp_path):
+    app = _make_test_app()
+    app.state.stream_hub.subscribe()
+    audio_path = tmp_path / "cancelled.mp3"
+    audio_path.write_bytes(b"x" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Cancelled", "title_only": "Cancelled", "artist": "Test"},
+        )
+    )
+
+    sent = asyncio.Event()
+    broadcast = app.state.stream_hub.broadcast
+
+    async def _block_after_first_packet(chunk: bytes) -> None:
+        await broadcast(chunk)
+        sent.set()
+        await asyncio.Event().wait()
+
+    app.state.stream_hub.broadcast = _block_after_first_packet
+    task = asyncio.create_task(run_playback_loop(app))
+    await asyncio.wait_for(sent.wait(), timeout=1.0)
+    task.cancel()
+    result = await asyncio.gather(task, return_exceptions=True)
+
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert app.state.station_state.stream_outcome_history[-1]["terminal_reason"] == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -4102,6 +4216,61 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
     assert setup_home_context["readiness"] == "prompt_ready"
     assert setup_home_context["action"] == "review_home_context"
     assert capabilities.json()["tier"] == "connected_home"
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_mute_discards_baselines_before_later_unmute(tmp_path):
+    """A transition while muted must not become a radio event after unmuting."""
+    import mammamiradio.home.ha_context as ha_context
+    from mammamiradio.core.config import RadioEventRule
+    from mammamiradio.home.ha_context import HomeContext
+    from mammamiradio.home.radio_events import match_radio_events
+
+    entity_id = "switch.coffee_machine"
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.ha_context_refresh_mailbox = MagicMock()
+    prior = HomeContext(
+        raw_states={entity_id: {"state": "off", "attributes": {}}},
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+    rule = RadioEventRule(id="coffee_started", entity_id=entity_id, to_state="on")
+
+    with (
+        patch.object(ha_context, "_ha_cache", prior),
+        patch.object(ha_context, "_radio_event_state_cache", {entity_id: {"state": "off", "attributes": {}}}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {entity_id: {"state": "off", "attributes": {}}}),
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            muted = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": entity_id, "muted": True},
+            )
+            # The physical state flips while the hard mute is active.
+            unmuted = await client.patch(
+                "/api/homeassistant/entity-policy",
+                json={"entity_id": entity_id, "muted": False},
+            )
+
+        assert muted.status_code == 200
+        assert unmuted.status_code == 200
+        assert entity_id not in ha_context._radio_event_state_cache
+        assert entity_id not in ha_context._ritual_recipe_state_cache
+        assert entity_id not in ha_context._ha_cache.raw_states
+        app.state.station_state.ha_context_refresh_mailbox.invalidate_muted_entities.assert_called_once_with(
+            {entity_id}
+        )
+        historical_matches = match_radio_events(
+            [rule],
+            ha_context._radio_event_state_cache,
+            {entity_id: {"state": "on", "attributes": {}}},
+            cooldowns={},
+        )
+
+    assert historical_matches == []
 
 
 @pytest.mark.asyncio

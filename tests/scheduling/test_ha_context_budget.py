@@ -79,6 +79,8 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
 
     config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
     state = StationState(home_authorization=HomeAuthorization.legacy())
+    observer = MagicMock()
+    state.home_entity_ids_observer = observer
     prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     response = _states_response(
         [
@@ -94,14 +96,13 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
     worker_started = threading.Event()
     release_worker = threading.Event()
     worker_finished = threading.Event()
-    real_projection = ha_context._project_home_context
 
-    def _blocked_projection(projection_input):
+    def _blocked_catalog(cache_dir):
         assert threading.current_thread().name.startswith("ha-projection")
         worker_started.set()
         release_worker.wait(timeout=1.0)
         try:
-            return real_projection(projection_input)
+            return {}
         finally:
             worker_finished.set()
 
@@ -124,7 +125,7 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
             return_value=HomeRegistrySnapshot(source="empty_fallback"),
         ),
         patch.object(ha_context, "fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
-        patch.object(ha_context, "_project_home_context", side_effect=_blocked_projection),
+        patch.object(ha_context, "load_catalog_snapshot", side_effect=_blocked_catalog),
         patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
@@ -146,11 +147,13 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
             await asyncio.wait_for(asyncio.shield(retained), timeout=0.5)
             assert state.ha_context_refresh_stage == "idle"
             publish.assert_not_called()
+            observer.assert_not_called()
 
             adopted, fresh = await coordinator.prepare_for_segment()
             assert fresh
             assert "switch.bar_kaffeemaschine_steckdose" in adopted.raw_states
             publish.assert_called_once()
+            observer.assert_called_once_with(frozenset({"switch.bar_kaffeemaschine_steckdose"}))
         finally:
             release_worker.set()
             await coordinator.close()

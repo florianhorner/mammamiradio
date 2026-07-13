@@ -30,7 +30,11 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from mammamiradio.core.config import DEFAULT_STATION_NAME, RadioEventRule, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
-from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
+from mammamiradio.home.authorization import (
+    HomeAuthorization,
+    HomeAuthorizationMode,
+    expand_muted_with_ambient_sources,
+)
 from mammamiradio.home.catalog import (
     ENTITY_LABELS,
     ENTITY_LABELS_EN,
@@ -38,7 +42,7 @@ from mammamiradio.home.catalog import (
     _catalog_entry_valid,
     _fallback_label,
     compute_hash,
-    load_catalog,
+    load_catalog_snapshot,
     resolve_label,
     validate_label,
 )
@@ -482,7 +486,7 @@ class _HomeContextProjectionInput:
     ritual_recipe_state_baseline: dict[str, dict]
     radio_event_cooldowns: dict[str, float]
     ritual_recipe_cooldowns: dict[str, float]
-    label_catalog: dict
+    cache_dir: Path | None
     timestamp: float
 
 
@@ -1001,14 +1005,29 @@ def revalidate_home_context_mutes(context: HomeContext, cache_dir: Path | None) 
         return context
 
     muted_ids = muted_entity_ids(Path(cache_dir))
+    return _filter_fresh_home_context_mutes(context, muted_ids, cache_dir=cache_dir)
+
+
+def _filter_fresh_home_context_mutes(
+    context: HomeContext,
+    muted_ids: set[str],
+    *,
+    cache_dir: Path | None,
+) -> HomeContext:
+    """Filter a one-shot-safe context with a known live mute set."""
+    effective_muted_ids = expand_muted_with_ambient_sources(muted_ids, context.ambient_sources)
     served = _copy_home_context(context)
     served = _apply_muted_policy_to_context(served, muted_ids, cache_dir=cache_dir, now=time.time())
     muted_radio_event_ids = {
-        match.event.entity_id for match in served.radio_events if match.event.entity_id in muted_ids
+        match.event.entity_id for match in served.radio_events if match.event.entity_id in effective_muted_ids
     }
-    muted_ritual_ids = {match.entity_id for match in served.ritual_recipe_matches if match.entity_id in muted_ids}
-    served.radio_events = [match for match in served.radio_events if match.event.entity_id not in muted_ids]
-    served.ritual_recipe_matches = [match for match in served.ritual_recipe_matches if match.entity_id not in muted_ids]
+    muted_ritual_ids = {
+        match.entity_id for match in served.ritual_recipe_matches if match.entity_id in effective_muted_ids
+    }
+    served.radio_events = [match for match in served.radio_events if match.event.entity_id not in effective_muted_ids]
+    served.ritual_recipe_matches = [
+        match for match in served.ritual_recipe_matches if match.entity_id not in effective_muted_ids
+    ]
     served.ritual_public_families = public_family_labels(served.ritual_recipe_matches)
     muted_one_shot_ids = muted_radio_event_ids | muted_ritual_ids
     if muted_one_shot_ids:
@@ -1018,6 +1037,70 @@ def revalidate_home_context_mutes(context: HomeContext, cache_dir: Path | None) 
             len(muted_one_shot_ids),
         )
     return served
+
+
+def _filter_matcher_baseline(baseline: dict[str, dict], muted_ids: set[str]) -> dict[str, dict]:
+    """Drop muted entities so later polls cannot replay their old transition."""
+    if not muted_ids:
+        return baseline
+    return {entity_id: state for entity_id, state in baseline.items() if entity_id not in muted_ids}
+
+
+def revalidate_home_context_outcome_mutes(
+    outcome: _HomeContextFetchOutcome,
+    cache_dir: Path | None,
+) -> _HomeContextFetchOutcome:
+    """Reconcile a fresh candidate's context *and* matcher baselines at handoff.
+
+    A mute can arrive after the worker snapshots its inputs.  Removing the
+    visible context alone is insufficient: retaining the pre-mute matcher
+    baseline would let a later unmute turn a private transition into a delayed
+    radio event.  The final adopter therefore filters both baseline families
+    using the same live policy, including narrow-mode synthetic aliases.
+    """
+    if outcome.kind != "fresh" or cache_dir is None:
+        return outcome
+    muted_ids = muted_entity_ids(Path(cache_dir))
+    if not muted_ids:
+        return outcome
+    effective_muted_ids = expand_muted_with_ambient_sources(muted_ids, outcome.context.ambient_sources)
+    return replace(
+        outcome,
+        context=_filter_fresh_home_context_mutes(outcome.context, muted_ids, cache_dir=cache_dir),
+        radio_event_state_baseline=_filter_matcher_baseline(
+            outcome.radio_event_state_baseline,
+            effective_muted_ids,
+        ),
+        ritual_recipe_state_baseline=_filter_matcher_baseline(
+            outcome.ritual_recipe_state_baseline,
+            effective_muted_ids,
+        ),
+    )
+
+
+def discard_home_context_entities(context: HomeContext | None, entity_ids: set[str]) -> HomeContext | None:
+    """Forget muted entities from a retained snapshot before a later unmute.
+
+    Retained snapshots seed the next event diff.  Dropping their state at mute
+    time makes the next post-unmute fetch establish a new baseline instead of
+    treating a transition that happened while muted as fresh radio material.
+    """
+    if context is None or not entity_ids:
+        return context
+    return _filter_fresh_home_context_mutes(context, set(entity_ids), cache_dir=None)
+
+
+def invalidate_home_context_entity_baselines(entity_ids: set[str]) -> None:
+    """Forget muted entities from module caches and both matcher baselines."""
+    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
+    if not entity_ids:
+        return
+    effective_entity_ids = set(entity_ids)
+    if _ha_cache is not None:
+        effective_entity_ids = expand_muted_with_ambient_sources(effective_entity_ids, _ha_cache.ambient_sources)
+        _ha_cache = discard_home_context_entities(_ha_cache, effective_entity_ids)
+    _radio_event_state_cache = _filter_matcher_baseline(_radio_event_state_cache, effective_entity_ids)
+    _ritual_recipe_state_cache = _filter_matcher_baseline(_ritual_recipe_state_cache, effective_entity_ids)
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -1759,6 +1842,10 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
     muted_ids = set(projection_input.muted_ids)
     effective_cache = projection_input.effective_cache
     timestamp = projection_input.timestamp
+    # This deliberately bypasses the process-wide catalog cache. The projection
+    # worker owns its detached snapshot, so a cold cache-file read cannot block
+    # the producer/playback event loop or race with catalog generation.
+    label_catalog = load_catalog_snapshot(projection_input.cache_dir)
     warnings: list[str] = []
     denylist_hits: dict[str, int] = {}
 
@@ -1844,7 +1931,7 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         if entity_id not in muted_ids
     }
     old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
-    labels_it, labels_en = _build_entity_label_maps(relevant, catalog=projection_input.label_catalog)
+    labels_it, labels_en = _build_entity_label_maps(relevant, catalog=label_catalog)
     events = (
         diff_states(
             old_states,
@@ -1861,7 +1948,7 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         relevant,
         event_entity_ids={event.entity_id for event in events},
         now=timestamp,
-        catalog=projection_input.label_catalog,
+        catalog=label_catalog,
     )
     label_stats = _label_stats(scored)
     mood = classify_home_mood(relevant) if active_authorization.allows_derived_mood else ""
@@ -2088,7 +2175,7 @@ async def _fetch_home_context_outcome(
             ritual_recipe_state_baseline=copy.deepcopy(_ritual_recipe_state_cache),
             radio_event_cooldowns=dict(_DIRECTIVE_COOLDOWNS),
             ritual_recipe_cooldowns=dict(_RITUAL_COOLDOWNS),
-            label_catalog=copy.deepcopy(load_catalog(cache_dir)),
+            cache_dir=Path(cache_dir) if cache_dir is not None else None,
             timestamp=time.time(),
         )
         if stage_callback is not None:
@@ -2194,11 +2281,8 @@ async def fetch_home_context(
         # A direct caller has no producer coordinator to perform the final
         # safe-boundary check.  Re-read the live mute policy after the worker
         # completed, so a mute added during projection cannot leak into this
-        # legacy publish path.
-        result = replace(
-            result,
-            context=revalidate_home_context_mutes(result.context, cache_dir),
-        )
+        # legacy publish path or survive in an event-matcher baseline.
+        result = revalidate_home_context_outcome_mutes(result, cache_dir)
         _publish_home_context_outcome(result)
     elif result.context.timestamp and cache_dir is None:
         # Preserve the legacy cache-only/failure fallback behaviour for direct

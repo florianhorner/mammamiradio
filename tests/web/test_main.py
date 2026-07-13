@@ -1335,12 +1335,14 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
-        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS
+        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS, _stream_chunk_size
 
         assert hasattr(app.state, "clip_ring_buffer")
         # Happy-path maxlen is sized for the longest shareable ad/banter segment
         # (not the 240 fallback), and the lookback slot starts empty.
-        expected_maxlen = max(240, 192 * 1000 // 8 * CLIP_MAX_SEGMENT_SECONDS // 4096)
+        bytes_per_second = 192 * 1000 // 8
+        chunk_size = _stream_chunk_size(bytes_per_second)
+        expected_maxlen = max(240, -(-bytes_per_second * CLIP_MAX_SEGMENT_SECONDS // chunk_size))
         assert app.state.clip_ring_buffer.maxlen == expected_maxlen
         assert expected_maxlen > 240
         assert app.state.last_shareworthy_clip is None
@@ -1637,6 +1639,10 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
     """Ring buffer maxlen falls back to 240 when config.audio.bitrate raises ValueError."""
     from mammamiradio.core.models import Track
 
+    class _InvalidBitrate:
+        def __int__(self) -> int:
+            raise ValueError("not a number")
+
     mock_config = MagicMock()
     mock_config.station.name = "TestRadio"
     mock_config.station.language = "it"
@@ -1648,8 +1654,7 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
     mock_config.cache_dir = tmp_path / "cache"
     mock_config.homeassistant.enabled = False
     mock_config.allow_ytdlp = False
-    # Simulate a config value that causes ValueError when int() is called
-    mock_config.audio.bitrate = MagicMock(side_effect=ValueError("not a number"))
+    mock_config.audio.bitrate = _InvalidBitrate()
 
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
 
