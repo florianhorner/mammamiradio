@@ -1,8 +1,9 @@
-"""Tests for downloader module: fallback chain from cache to local to yt-dlp to placeholder."""
+"""Tests for downloader module: cache/local acquisition and unavailable-source markers."""
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -122,6 +123,7 @@ def test_cache_hit_returns_immediately(track, cache_dir, music_dir):
 
     cached = cache_dir / f"{track.cache_key}.mp3"
     cached.write_text("fake audio")
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
     result = _download_sync(track, cache_dir, music_dir)
     assert result == cached
@@ -135,6 +137,7 @@ def test_local_file_found(track, cache_dir, music_dir):
 
     local_mp3 = music_dir / f"{track.cache_key}.mp3"
     local_mp3.write_text("local audio")
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
     result = _download_sync(track, cache_dir, music_dir)
     assert result == local_mp3
@@ -148,6 +151,7 @@ def test_download_sync_prefers_demo_asset(track, cache_dir, music_dir, tmp_path)
     demo_file = demo_dir / f"{track.cache_key}.mp3"
     demo_file.write_text("demo audio")
     (music_dir / f"{track.cache_key}.mp3").write_text("local audio")
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
     with patch("mammamiradio.playlist.downloader._DEMO_ASSETS_DIR", demo_dir):
         result = _download_sync(track, cache_dir, music_dir)
@@ -952,6 +956,40 @@ def test_reject_cached_download_denylists_even_if_file_missing(tmp_path):
         clear_rejected_cache_keys()
 
 
+def test_reject_cached_download_marks_local_recovery_boundary(tmp_path):
+    """A rejected local file can be retried once only after replacement."""
+    import os
+
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        has_fresh_concrete_track_source,
+        reject_cached_download,
+    )
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Local Boundary", artist="Local Artist", duration_ms=180000, source="local")
+    local_file = music_dir / f"{track.cache_key}.mp3"
+    local_file.write_bytes(b"corrupt local audio")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(cache, track.cache_key, "invalid local audio")
+
+        marker = cache / f"_failed_{track.cache_key}.mp3"
+        assert marker.read_text() == "invalid local audio"
+        marker_mtime = marker.stat().st_mtime_ns
+        os.utime(local_file, ns=(marker_mtime - 1, marker_mtime - 1))
+        assert not has_fresh_concrete_track_source(track, cache, music_dir)
+
+        os.utime(local_file, ns=(marker_mtime + 1, marker_mtime + 1))
+        assert has_fresh_concrete_track_source(track, cache, music_dir)
+    finally:
+        clear_rejected_cache_keys()
+
+
 def test_reject_cached_download_tolerates_unlink_errors(tmp_path):
     """OSError on unlink must not crash — denylist must still be populated."""
     from mammamiradio.playlist.downloader import (
@@ -972,6 +1010,68 @@ def test_reject_cached_download_tolerates_unlink_errors(tmp_path):
 
         assert removed is False
         assert is_rejected_cache_key(cache_key), "denylist must be populated even when unlink raises OSError"
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_reject_cached_download_tolerates_failed_marker_write(tmp_path):
+    """A failure-marker refresh is best effort and must preserve the denylist."""
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_key = "marker_write_error"
+    (cache / f"_failed_{cache_key}.mp3").write_text("prior failure")
+
+    clear_rejected_cache_keys()
+    try:
+        with patch("mammamiradio.playlist.downloader.Path.write_text", side_effect=OSError("read-only")):
+            removed = reject_cached_download(cache, cache_key, "new failure")
+
+        assert removed is False
+        assert is_rejected_cache_key(cache_key)
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_accept_recovered_download_is_no_op_without_cache_key(tmp_path):
+    from mammamiradio.playlist.downloader import (
+        accept_recovered_download,
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+    )
+
+    clear_rejected_cache_keys()
+    accept_recovered_download(tmp_path, "")
+    assert not is_rejected_cache_key("")
+
+
+def test_accept_recovered_download_tolerates_marker_cleanup_error(tmp_path):
+    from mammamiradio.playlist.downloader import (
+        accept_recovered_download,
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_key = "marker_cleanup_error"
+    marker = cache / f"_failed_{cache_key}.mp3"
+    marker.write_text("prior failure")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(cache, cache_key, "prior failure")
+        with patch("mammamiradio.playlist.downloader.Path.unlink", side_effect=OSError("read-only")):
+            accept_recovered_download(cache, cache_key)
+
+        assert not is_rejected_cache_key(cache_key)
+        assert marker.exists()
     finally:
         clear_rejected_cache_keys()
 
@@ -1427,6 +1527,7 @@ def test_legacy_youtube_cache_hit_returns_old_path(tmp_path):
     )
     legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
     legacy_path.write_bytes(b"x" * 600_000)
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
     result = _resolve_cached_or_local(track, cache_dir, music_dir)
     assert result == legacy_path
@@ -1483,7 +1584,70 @@ def test_failed_download_marker_short_circuits_repeat_acquisition(tmp_path):
     mock_ytdlp.assert_not_called()
 
 
-def test_resolve_uses_track_local_path_when_set(tmp_path):
+def test_fresh_concrete_track_source_allows_replaced_local_recovery_once(tmp_path):
+    import os
+
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        has_fresh_concrete_track_source,
+        reject_cached_download,
+    )
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Local Recovery",
+        artist="Local Artist",
+        duration_ms=180000,
+        source="local",
+    )
+    local_file = music_dir / f"{track.cache_key}.mp3"
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
+
+    assert not has_fresh_concrete_track_source(track, cache_dir, music_dir)
+
+    local_file.write_bytes(b"x" * 600_000)
+    assert has_fresh_concrete_track_source(track, cache_dir, music_dir)
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(cache_dir, track.cache_key, "local recovery was corrupt")
+        assert not has_fresh_concrete_track_source(track, cache_dir, music_dir)
+
+        marker_mtime = (cache_dir / f"_failed_{track.cache_key}.mp3").stat().st_mtime_ns
+        os.utime(local_file, ns=(marker_mtime + 1, marker_mtime + 1))
+        assert has_fresh_concrete_track_source(track, cache_dir, music_dir)
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_fresh_concrete_track_source_tolerates_stat_error(tmp_path, monkeypatch):
+    from mammamiradio.playlist.downloader import has_fresh_concrete_track_source
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Stat Error", artist="Local Artist", duration_ms=180000, source="local")
+    marker = cache_dir / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("prior failure")
+    local_file = music_dir / f"{track.cache_key}.mp3"
+    local_file.write_bytes(b"x" * 600_000)
+    real_stat = Path.stat
+
+    def _stat(path, *args, **kwargs):
+        if path == local_file:
+            raise OSError("stat denied")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _stat)
+    with patch("mammamiradio.playlist.downloader._resolve_cached_or_local", return_value=local_file):
+        assert not has_fresh_concrete_track_source(track, cache_dir, music_dir)
+
+
+def test_failed_download_marker_yields_to_track_local_path(tmp_path):
     from mammamiradio.playlist.downloader import _resolve_cached_or_local
 
     cache_dir = tmp_path / "cache"
@@ -1499,6 +1663,7 @@ def test_resolve_uses_track_local_path_when_set(tmp_path):
         local_path=local_file,
         source="local",
     )
+    (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
     result = _resolve_cached_or_local(track, cache_dir, music_dir)
     assert result == local_file

@@ -97,7 +97,38 @@ def reject_cached_download(cache_dir: Path, cache_key: str, reason: str) -> bool
                 logger.warning("Purged rejected cache artifact %s: %s", path.name, reason)
         except OSError as exc:
             logger.warning("Failed to purge rejected cache artifact %s: %s", path, exc)
+    failed_path = cache_dir / f"_failed_{cache_key}.mp3"
+    try:
+        # A marker also gives a rejected local/demo fallback a timestamped
+        # recovery boundary. If it later fails admission, refresh the marker so
+        # the same corrupt file cannot restart a retry loop until replaced.
+        failed_path.write_text(reason)
+    except OSError as exc:
+        logger.warning("Failed to update rejected-download marker %s: %s", failed_path, exc)
     return removed
+
+
+def accept_recovered_download(cache_dir: Path, cache_key: str) -> None:
+    """Clear a transient rejection after an external retry is admitted.
+
+    Call this only once a later explicit download has passed the caller's
+    admission checks.  A failed acquisition is intentionally session-denied to
+    stop a retry loop, but a newly admitted replacement for that same key must
+    be selectable and must not leave its stale unavailable marker behind.
+    """
+    if not cache_key:
+        return
+    was_rejected = cache_key in _REJECTED_CACHE_KEYS
+    _REJECTED_CACHE_KEYS.discard(cache_key)
+    failed_path = cache_dir / f"_failed_{cache_key}.mp3"
+    had_marker = failed_path.exists()
+    try:
+        failed_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed to clear recovered-download marker %s: %s", failed_path, exc)
+    else:
+        if was_rejected or had_marker:
+            logger.info("Cleared recovered download rejection: %s", cache_key)
 
 
 def is_rejected_cache_key(cache_key: str) -> bool:
@@ -435,10 +466,6 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
         return out_path
-    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
-    if failed_path.exists():
-        logger.info("Failed-download marker hit, skipping: %s", track.display)
-        return failed_path
     if track.source == "youtube":
         legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
         if legacy_path.exists():
@@ -458,7 +485,36 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
         logger.info("Local file: %s -> %s", track.display, local)
         return local
 
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if failed_path.exists():
+        logger.info("Failed-download marker hit, skipping: %s", track.display)
+        return failed_path
+
     return None
+
+
+def has_fresh_concrete_track_source(track: Track, cache_dir: Path, music_dir: Path) -> bool:
+    """Return whether newer concrete media can heal an unavailable-source marker.
+
+    The producer uses this narrow escape hatch only for already-denied keys. A
+    newly synced local, demo, legacy, or raw-cache file deserves one fresh
+    admission attempt; after it fails, ``reject_cached_download`` refreshes the
+    marker timestamp so the same corrupt file cannot restart a retry loop.
+    """
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if not failed_path.exists():
+        return False
+    # A marker is the exceptional recovery path. Refresh the ordinarily cached
+    # local directory listing so an operator-synced music/ file is visible now,
+    # not after the normal 60-second lookup TTL.
+    _local_files_cache.pop(str(music_dir), None)
+    resolved = _resolve_cached_or_local(track, cache_dir, music_dir)
+    if resolved is None or resolved == failed_path:
+        return False
+    try:
+        return resolved.stat().st_mtime_ns > failed_path.stat().st_mtime_ns
+    except OSError:
+        return False
 
 
 def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:

@@ -1744,6 +1744,59 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prefetch_next_skips_session_rejected_candidate(tmp_path):
+    """A rejected first track must not prevent prefetching a playable sibling."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    rejected, playable = state.playlist
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "yt-dlp unavailable")
+        with (
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "fake.mp3",
+            ) as mock_download,
+            patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "test")),
+        ):
+            await _prefetch_next(state, config)
+
+        assert mock_download.await_args.args[0] is playable
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_returns_when_every_candidate_is_session_rejected(tmp_path):
+    """Prefetch must not try another acquisition when no accepted track remains."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    clear_rejected_cache_keys()
+    try:
+        for track in state.playlist:
+            reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_download:
+            await _prefetch_next(state, config)
+
+        mock_download.assert_not_awaited()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_prefetch_next_all_candidates_failed_returns_early(tmp_path):
     """_prefetch_next returns early when every playlist track is in _failed_keys."""
     from mammamiradio.scheduling.producer import _prefetch_next

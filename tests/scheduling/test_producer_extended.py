@@ -1658,8 +1658,8 @@ async def test_music_quality_circuit_breaker_purges_fresh_rejected_render_before
 
 
 @pytest.mark.asyncio
-async def test_music_quality_circuit_breaker_never_recycles_the_rejected_cache(tmp_path):
-    """A stale last_music_file pointing at the rejected norm must not be queued."""
+async def test_music_quality_circuit_breaker_replaces_rejected_cache_with_recovery_sweeper(tmp_path):
+    """A stale rejected norm must be removed before the recovery ladder takes over."""
     state = _make_state()
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
@@ -1669,6 +1669,11 @@ async def test_music_quality_circuit_breaker_never_recycles_the_rejected_cache(t
     rejected_norm = tmp_path / "norm_rejected.mp3"
     rejected_norm.write_bytes(b"silent normalized audio")
     state.last_music_file = rejected_norm
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
     quality_calls = 0
 
     def _always_silence(path, seg_type):
@@ -1686,22 +1691,17 @@ async def test_music_quality_circuit_breaker_never_recycles_the_rejected_cache(t
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
     ):
-        task = asyncio.create_task(run_producer(queue, state, config))
-        try:
-            deadline = asyncio.get_event_loop().time() + 5.0
-            while quality_calls < 3:
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Producer did not reach the quality-gate circuit breaker")
-                await asyncio.sleep(0.01)
-            assert queue.empty()
-        finally:
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+        await _run_until_queued(queue, state, config)
 
     assert not rejected_norm.exists()
-    assert not state.queued_segments
+    assert quality_calls == 3
+    segment = queue.get_nowait()
+    assert segment is recovery
+    assert segment.path != rejected_norm
+    assert segment.metadata["rescue"] is True
 
 
 @pytest.mark.asyncio
