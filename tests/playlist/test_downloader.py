@@ -1694,17 +1694,72 @@ def test_prune_stale_tmp_files_keeps_recent_mp3(tmp_path):
     assert fresh.exists()
 
 
+def test_prune_stale_tmp_files_removes_old_mmr_atomic_part(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    orphan = tmp_path / ".mmr-atomic-handoff_tail.mp3.deadbeef.part"
+    orphan.write_bytes(b"partial audio")
+    _age_file(orphan, hours=12)
+
+    pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 1
+    assert not orphan.exists()
+
+
+def test_prune_stale_tmp_files_keeps_recent_mmr_atomic_part(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    in_flight = tmp_path / ".mmr-atomic-handoff_head.mp3.cafebabe.part"
+    in_flight.write_bytes(b"partial audio")
+
+    pruned = prune_stale_tmp_files(tmp_path)
+
+    assert pruned == 0
+    assert in_flight.exists()
+
+
+def test_prune_stale_tmp_files_matches_atomic_writer_staging_contract(tmp_path):
+    import tempfile
+    from unittest.mock import patch
+
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+    from mammamiradio.web.mp3_frames import _write_bytes_atomically
+
+    real_mkstemp = tempfile.mkstemp
+    captured_prefix = ""
+
+    def capture_prefix(*args, **kwargs):
+        nonlocal captured_prefix
+        captured_prefix = kwargs["prefix"]
+        return real_mkstemp(*args, **kwargs)
+
+    with patch("mammamiradio.web.mp3_frames.tempfile.mkstemp", side_effect=capture_prefix):
+        _write_bytes_atomically(tmp_path / "published.mp3", b"complete")
+
+    crash_orphan = tmp_path / f"{captured_prefix}crash.part"
+    crash_orphan.write_bytes(b"partial")
+    _age_file(crash_orphan, hours=12)
+
+    assert prune_stale_tmp_files(tmp_path) == 1
+    assert not crash_orphan.exists()
+
+
 def test_prune_stale_tmp_files_ignores_non_mp3(tmp_path):
     from mammamiradio.playlist.downloader import prune_stale_tmp_files
 
     other = tmp_path / "leftover.txt"
     other.write_text("not audio")
     _age_file(other, hours=48)
+    unrelated_part = tmp_path / ".download.part"
+    unrelated_part.write_bytes(b"owned by another workflow")
+    _age_file(unrelated_part, hours=48)
 
     pruned = prune_stale_tmp_files(tmp_path)
 
     assert pruned == 0
-    assert other.exists()  # only *.mp3 is touched
+    assert other.exists()
+    assert unrelated_part.exists()
 
 
 def test_prune_stale_tmp_files_skips_symlinked_mp3(tmp_path):
@@ -1716,6 +1771,20 @@ def test_prune_stale_tmp_files_skips_symlinked_mp3(tmp_path):
     victim.write_bytes(b"x" * 2048)
     _age_file(victim, hours=12)
     scratch_link = tmp_path / "banter_link.mp3"
+    scratch_link.symlink_to(victim)
+
+    assert prune_stale_tmp_files(tmp_path) == 0
+    assert scratch_link.is_symlink()
+    assert victim.exists()
+
+
+def test_prune_stale_tmp_files_skips_symlinked_mmr_atomic_part(tmp_path):
+    from mammamiradio.playlist.downloader import prune_stale_tmp_files
+
+    victim = tmp_path / "victim.bin"
+    victim.write_bytes(b"do not delete")
+    _age_file(victim, hours=12)
+    scratch_link = tmp_path / ".mmr-atomic-handoff_tail.mp3.bad.part"
     scratch_link.symlink_to(victim)
 
     assert prune_stale_tmp_files(tmp_path) == 0

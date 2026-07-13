@@ -201,12 +201,12 @@ def test_prosody_for_host_neutral_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# reserved-tail crossfade — mocked ffmpeg
+# legacy full-track crossfade — mocked ffmpeg
 # ---------------------------------------------------------------------------
 
 
 def test_crossfade_voice_over_music_calls_ffmpeg():
-    """The compatibility spelling must mix a supplied tail without seeking."""
+    """The compatibility helper retains its historic full-track keyword."""
     from mammamiradio.audio.normalizer import crossfade_voice_over_music
 
     completed = MagicMock(spec=subprocess.CompletedProcess)
@@ -218,19 +218,23 @@ def test_crossfade_voice_over_music_calls_ffmpeg():
     output = Path("/fake/crossfade.mp3")
 
     with patch("mammamiradio.audio.normalizer.subprocess.run", return_value=completed) as mock_run:
-        result = crossfade_voice_over_music(music, voice, output, tail_seconds=10.0)
+        result = crossfade_voice_over_music(
+            music_path=music,
+            voice_path=voice,
+            output_path=output,
+            tail_seconds=10.0,
+        )
 
     assert result == output
     call_args = mock_run.call_args[0][0]
     assert "ffmpeg" in call_args[0]
-    filter_complex = call_args[call_args.index("-filter_complex") + 1]
-    assert "-sseof" not in call_args
-    assert "atrim=duration=10" in filter_complex
+    assert call_args[call_args.index("-sseof") + 1] == "-10"
+    assert call_args[call_args.index("-i") + 1] == str(music)
 
 
 @pytest.mark.parametrize("tail_seconds", [3.0, 8.0, 15.0])
 def test_crossfade_voice_over_music_various_tails(tail_seconds):
-    """The supplied tail duration controls the fade without end-seeking."""
+    """The legacy duration controls end-seeking and the fade together."""
     from mammamiradio.audio.normalizer import crossfade_voice_over_music
 
     completed = MagicMock(spec=subprocess.CompletedProcess)
@@ -244,8 +248,9 @@ def test_crossfade_voice_over_music_various_tails(tail_seconds):
 
     call_args = mock_run.call_args[0][0]
     filter_complex = call_args[call_args.index("-filter_complex") + 1]
-    assert "-sseof" not in call_args
-    assert f"atrim=duration={tail_seconds:g}" in filter_complex
+    assert call_args[call_args.index("-sseof") + 1] == f"-{tail_seconds:g}"
+    assert "atrim=" not in filter_complex
+    assert f"afade=t=out:st=0:d={tail_seconds:g}" in filter_complex
 
 
 # ---------------------------------------------------------------------------

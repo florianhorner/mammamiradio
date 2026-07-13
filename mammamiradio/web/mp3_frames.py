@@ -20,6 +20,11 @@ from uuid import uuid4
 _MPEG1_L3_BITRATES_KBPS = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
 _MPEG1_SAMPLE_RATES = (44100, 48000, 32000)
 _MAX_MPEG1_L3_FRAME_BYTES = 1441
+_MPEG1_L3_SAMPLES_PER_FRAME = 1152
+_MAX_DECODER_PREROLL_FRAMES = 10
+_ID3V1_TAG_BYTES = 128
+_ID3V2_HEADER_BYTES = 10
+_ATOMIC_PART_PREFIX = ".mmr-atomic-"
 
 
 class Mp3FrameIndexError(ValueError):
@@ -94,11 +99,16 @@ class Mp3FrameIndex:
 
 @dataclass(frozen=True)
 class Mp3HandoffSplit:
-    """A frame-aligned partition of one playable MP3 into head and tail artifacts.
+    """A frame-aligned partition plus a decoder-safe tail input.
 
-    The byte offsets describe the original source. Both artifact paths contain
-    only complete playable MPEG frames: ``head + tail`` is therefore exactly
-    ``source[playable_start_byte:playable_end_byte]`` with no duplicated frame.
+    The byte offsets describe ownership in the original source. ``head_path``
+    contains only frames before ``head_end_byte``. ``tail_path`` is a private
+    decoder input: it may prepend a bounded set of already-owned head frames so
+    Layer III's bit reservoir and synthesis state are available, but consumers
+    trim exactly ``tail_preroll_samples`` before the artifact can reach air.
+
+    ``tail_decode_path`` names that intent explicitly. It currently aliases
+    ``tail_path`` so older fixtures and cleanup code retain a single tail file.
     """
 
     head_path: Path
@@ -112,12 +122,24 @@ class Mp3HandoffSplit:
     frame_count: int
     head_frame_count: int
     tail_frame_count: int
+    tail_decode_path: Path | None = None
+    tail_decode_start_byte: int | None = None
+    tail_preroll_frame_count: int = 0
+    tail_preroll_samples: int = 0
+    tail_sample_count: int = 0
 
     @property
     def tail_start_byte(self) -> int:
-        """The source offset of the first frame owned by the tail artifact."""
+        """The source offset of the first frame owned by the audible tail."""
 
         return self.head_end_byte
+
+    @property
+    def tail_owned_offset_byte(self) -> int:
+        """Byte offset of the audible tail inside its decoder input."""
+
+        decode_start = self.tail_decode_start_byte
+        return self.head_end_byte - (self.head_end_byte if decode_start is None else decode_start)
 
 
 def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> bool:
@@ -135,6 +157,57 @@ def _is_mpeg1_l3_header(frame_header: bytes, *, allow_free_bitrate: bool) -> boo
     return not (not allow_free_bitrate and bitrate_idx == 0)
 
 
+def _decode_syncsafe_size(encoded: bytes) -> int | None:
+    """Decode one ID3 syncsafe integer, rejecting reserved high bits."""
+
+    if len(encoded) != 4 or any(byte & 0x80 for byte in encoded):
+        return None
+    return (encoded[0] << 21) | (encoded[1] << 14) | (encoded[2] << 7) | encoded[3]
+
+
+def _parse_id3v2_header(header: bytes, *, identifier: bytes) -> tuple[int, bool] | None:
+    """Return ``(payload_size, footer_present)`` for a supported ID3 header."""
+
+    if len(header) != _ID3V2_HEADER_BYTES or header[:3] != identifier:
+        return None
+    major, revision, flags = header[3], header[4], header[5]
+    allowed_flags = {2: 0xC0, 3: 0xE0, 4: 0xF0}.get(major)
+    size = _decode_syncsafe_size(header[6:10])
+    if allowed_flags is None or revision == 0xFF or flags & ~allowed_flags or size is None:
+        return None
+    footer_present = major == 4 and bool(flags & 0x10)
+    return size, footer_present
+
+
+def _trailing_metadata_start(data: bytes, *, lower_bound: int) -> int:
+    """Return the first byte of structurally proven EOF metadata.
+
+    Unknown trailers remain inside the strict frame run and therefore fail
+    closed. ID3v1 is peeled first because an appended ID3v2.4 tag is specified
+    to sit immediately before older tagging systems such as ID3v1.
+    """
+
+    end = len(data)
+    if end - lower_bound >= _ID3V1_TAG_BYTES and data[end - _ID3V1_TAG_BYTES : end - 125] == b"TAG":
+        end -= _ID3V1_TAG_BYTES
+
+    if end - lower_bound < 2 * _ID3V2_HEADER_BYTES:
+        return end
+    footer = data[end - _ID3V2_HEADER_BYTES : end]
+    parsed_footer = _parse_id3v2_header(footer, identifier=b"3DI")
+    if parsed_footer is None or not parsed_footer[1]:
+        return end
+    payload_size, _ = parsed_footer
+    tag_start = end - (2 * _ID3V2_HEADER_BYTES + payload_size)
+    if tag_start < lower_bound:
+        return end
+    header = data[tag_start : tag_start + _ID3V2_HEADER_BYTES]
+    parsed_header = _parse_id3v2_header(header, identifier=b"ID3")
+    if parsed_header == parsed_footer and header[3:] == footer[3:]:
+        return tag_start
+    return end
+
+
 def _skip_id3_and_xing_header(f) -> None:
     """Advance the file pointer past any leading ID3v2 tag and Xing/Info metadata frame.
 
@@ -149,10 +222,19 @@ def _skip_id3_and_xing_header(f) -> None:
     The helper is defensive: any unexpected header shape rewinds to the start,
     so the worst case is "did nothing" rather than "cut a real audio frame".
     """
-    header = f.read(10)
-    if len(header) == 10 and header[:3] == b"ID3":
-        size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) | ((header[8] & 0x7F) << 7) | (header[9] & 0x7F)
-        f.seek(10 + size)
+    header = f.read(_ID3V2_HEADER_BYTES)
+    if len(header) == _ID3V2_HEADER_BYTES and header[:3] == b"ID3":
+        parsed_header = _parse_id3v2_header(header, identifier=b"ID3")
+        if parsed_header is None:
+            f.seek(0)
+            return
+        size, footer_present = parsed_header
+        f.seek(_ID3V2_HEADER_BYTES + size)
+        if footer_present:
+            footer = f.read(_ID3V2_HEADER_BYTES)
+            if _parse_id3v2_header(footer, identifier=b"3DI") != parsed_header or footer[3:] != header[3:]:
+                f.seek(0)
+                return
     else:
         f.seek(0)
 
@@ -240,7 +322,13 @@ def _leading_complete_frame_start(data: bytes) -> int:
     raise Mp3FrameIndexError("no complete compatible MPEG-1 Layer III frame at retained edge")
 
 
-def _index_complete_mpeg1_l3_run(data: bytes, *, start: int, strict_end: bool) -> Mp3FrameIndex:
+def _index_complete_mpeg1_l3_run(
+    data: bytes,
+    *,
+    start: int,
+    strict_end: bool,
+    end: int | None = None,
+) -> Mp3FrameIndex:
     """Index a compatible frame run beginning at a known frame boundary.
 
     ``strict_end`` is for a complete source file: any bytes after the first
@@ -248,15 +336,16 @@ def _index_complete_mpeg1_l3_run(data: bytes, *, start: int, strict_end: bool) -
     ring snapshots set it false so a partial trailing edge can be discarded.
     """
 
-    if start < 0 or start >= len(data):
+    run_end = len(data) if end is None else end
+    if start < 0 or run_end > len(data) or start >= run_end:
         raise Mp3FrameIndexError("no playable MPEG-1 Layer III frame")
 
     offset = start
     frames: list[Mp3Frame] = []
     sample_rate: int | None = None
     elapsed = 0.0
-    while offset < len(data):
-        remaining = len(data) - offset
+    while offset < run_end:
+        remaining = run_end - offset
         if remaining < 4:
             if strict_end:
                 raise Mp3FrameIndexError("trailing partial MPEG-1 Layer III header")
@@ -269,11 +358,11 @@ def _index_complete_mpeg1_l3_run(data: bytes, *, start: int, strict_end: bool) -
             sample_rate = current_sample_rate
         elif current_sample_rate != sample_rate:
             raise Mp3FrameIndexError("incompatible MPEG-1 Layer III sample rate")
-        if offset + frame_length > len(data):
+        if offset + frame_length > run_end:
             if strict_end:
                 raise Mp3FrameIndexError("trailing partial MPEG-1 Layer III frame")
             break
-        duration = 1152 / current_sample_rate
+        duration = _MPEG1_L3_SAMPLES_PER_FRAME / current_sample_rate
         frames.append(
             Mp3Frame(
                 ordinal=len(frames),
@@ -321,7 +410,8 @@ def build_playable_mpeg1_layer3_frame_index(data: bytes) -> Mp3FrameIndex:
     with io.BytesIO(data) as source:
         _skip_id3_and_xing_header(source)
         playable_start = source.tell()
-    return _index_complete_mpeg1_l3_run(data, start=playable_start, strict_end=True)
+    playable_end = _trailing_metadata_start(data, lower_bound=playable_start)
+    return _index_complete_mpeg1_l3_run(data, start=playable_start, end=playable_end, strict_end=True)
 
 
 def _artifact_stem(source_path: Path, stem: str | None) -> str:
@@ -337,7 +427,11 @@ def _artifact_stem(source_path: Path, stem: str | None) -> str:
 def _write_bytes_atomically(destination: Path, payload: bytes) -> None:
     """Publish one generated artifact without exposing a partial MP3 file."""
 
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".part", dir=destination.parent)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f"{_ATOMIC_PART_PREFIX}{destination.name}.",
+        suffix=".part",
+        dir=destination.parent,
+    )
     temporary_path = Path(temporary_name)
     try:
         with os.fdopen(fd, "wb") as artifact:
@@ -360,14 +454,16 @@ def split_mpeg1_l3_handoff(
     *,
     stem: str | None = None,
 ) -> Mp3HandoffSplit:
-    """Write non-overlapping playable head/tail artifacts for a music handoff.
+    """Write a playable head and a decoder-safe tail input for a handoff.
 
     The tail begins at the first complete frame at or after the requested tail
     window. It can therefore be up to one MPEG frame shorter than requested,
     never longer, and the preceding head remains a valid standalone playable
-    stream. Invalid metadata, partial frames, unsupported MPEG variants,
-    too-short sources, and write failures all raise :class:`Mp3FrameIndexError`
-    without returning an artifact pair.
+    stream. The private tail input prepends at most ten frames for Layer III
+    bit-reservoir and synthesis context; its sample metadata makes that preroll
+    removable before mixing. Invalid metadata, partial frames, unsupported MPEG
+    variants, too-short sources, and write failures all raise
+    :class:`Mp3FrameIndexError` without returning an artifact pair.
     """
 
     try:
@@ -395,8 +491,11 @@ def split_mpeg1_l3_handoff(
     playable_start_byte = index.data_start
     head_end_byte = index.frames[tail_first].byte_start
     playable_end_byte = index.data_end
+    tail_decode_first = max(0, tail_first - _MAX_DECODER_PREROLL_FRAMES)
+    tail_decode_start_byte = index.frames[tail_decode_first].byte_start
+    tail_preroll_frame_count = tail_first - tail_decode_first
     head_payload = source_data[playable_start_byte:head_end_byte]
-    tail_payload = source_data[head_end_byte:playable_end_byte]
+    tail_payload = source_data[tail_decode_start_byte:playable_end_byte]
     if not head_payload or not tail_payload:
         raise Mp3FrameIndexError("handoff must retain complete head and tail frames")
 
@@ -428,4 +527,9 @@ def split_mpeg1_l3_handoff(
         frame_count=len(index.frames),
         head_frame_count=tail_first,
         tail_frame_count=len(index.frames) - tail_first,
+        tail_decode_path=tail_path,
+        tail_decode_start_byte=tail_decode_start_byte,
+        tail_preroll_frame_count=tail_preroll_frame_count,
+        tail_preroll_samples=tail_preroll_frame_count * _MPEG1_L3_SAMPLES_PER_FRAME,
+        tail_sample_count=(len(index.frames) - tail_first) * _MPEG1_L3_SAMPLES_PER_FRAME,
     )

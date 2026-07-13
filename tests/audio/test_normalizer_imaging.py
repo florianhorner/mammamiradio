@@ -343,18 +343,48 @@ def test_crossfade_voice_over_tail_probes_the_reserved_tail_duration(tmp_path, m
     assert "afade=t=out:st=0:d=5.25" in filter_complex
 
 
-def test_crossfade_voice_over_music_compatibility_wrapper_never_seeks_from_full_track(tmp_path, mock_run):
-    music = tmp_path / "reserved_tail.mp3"
+def test_crossfade_voice_over_tail_trims_decoder_preroll_by_exact_samples(tmp_path, mock_run):
+    music = tmp_path / "decoder_tail.mp3"
     voice = tmp_path / "voice.mp3"
     out = tmp_path / "mixed.mp3"
 
-    result = crossfade_voice_over_music(music, voice, out, tail_seconds=3.5)
+    result = crossfade_voice_over_tail(
+        music,
+        voice,
+        out,
+        tail_duration_sec=3.5,
+        decoder_preroll_samples=11_520,
+        tail_sample_count=168_000,
+    )
 
     assert result == out
     cmd = mock_run.call_args[0][0]
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
     assert "-sseof" not in cmd
-    assert "atrim=duration=3.5" in filter_complex
+    assert "atrim=start_sample=11520:end_sample=179520" in filter_complex
+    assert "asetpts=PTS-STARTPTS" in filter_complex
+    assert "afade=t=out:st=0:d=3.5" in filter_complex
+
+
+def test_crossfade_voice_over_music_preserves_full_track_keyword_semantics(tmp_path, mock_run):
+    music = tmp_path / "complete_music.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "mixed.mp3"
+
+    result = crossfade_voice_over_music(
+        music_path=music,
+        voice_path=voice,
+        output_path=out,
+        tail_seconds=3.5,
+    )
+
+    assert result == out
+    cmd = mock_run.call_args[0][0]
+    assert cmd[cmd.index("-sseof") + 1] == "-3.5"
+    assert cmd[cmd.index("-i") + 1] == str(music)
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "atrim=" not in filter_complex
+    assert "afade=t=out:st=0:d=3.5" in filter_complex
 
 
 def test_crossfade_voice_over_tail_rejects_unknown_or_non_positive_duration(tmp_path, mock_run):
@@ -369,6 +399,11 @@ def test_crossfade_voice_over_tail_rejects_unknown_or_non_positive_duration(tmp_
         pytest.raises(ValueError, match="positive tail duration"),
     ):
         crossfade_voice_over_tail(music, voice, out)
+
+    with pytest.raises(ValueError, match="tail sample count"):
+        crossfade_voice_over_tail(music, voice, out, tail_duration_sec=1, decoder_preroll_samples=1152)
+    with pytest.raises(ValueError, match="positive tail sample count"):
+        crossfade_voice_over_tail(music, voice, out, tail_duration_sec=1, tail_sample_count=0)
 
     mock_run.assert_not_called()
 

@@ -1690,21 +1690,33 @@ def crossfade_voice_over_tail(
     output_path: Path,
     *,
     tail_duration_sec: float | None = None,
+    decoder_preroll_samples: int = 0,
+    tail_sample_count: int | None = None,
     voice_volume: float = 1.0,
     music_fade_volume: float = 0.5,
     voice_delay_ms: int = 150,
 ) -> Path:
-    """Overlay voice on an already-reserved music tail, fading it underneath.
+    """Overlay voice on a reserved, optionally decoder-prefixed music tail.
 
-    ``music_tail_path`` must contain only the tail reserved for this successor;
-    this renderer never seeks back into a full, already-aired music file.  Passing
-    ``tail_duration_sec`` from the frame reservation keeps the fade aligned with
-    the exact frame boundary.  When it is unavailable, probe the supplied tail
-    itself rather than assuming the station's nominal handoff length.
+    This renderer never seeks back into a full, already-aired music file.
+    ``decoder_preroll_samples`` may describe bounded MPEG Layer III decoder
+    context prepended by the frame splitter; those samples are discarded exactly
+    before the audible tail is faded and mixed. When no explicit frame metadata
+    is supplied, the path remains compatible with an ordinary standalone tail.
     """
     duration = tail_duration_sec if tail_duration_sec is not None else probe_duration_sec(music_tail_path)
     if duration is None or not math.isfinite(duration) or duration <= 0:
         raise ValueError("crossfade_voice_over_tail requires a positive tail duration")
+    if not isinstance(decoder_preroll_samples, int) or decoder_preroll_samples < 0:
+        raise ValueError("crossfade_voice_over_tail requires non-negative decoder preroll samples")
+    if tail_sample_count is None:
+        if decoder_preroll_samples:
+            raise ValueError("crossfade_voice_over_tail requires a tail sample count with decoder preroll")
+        trim_expr = f"duration={_fmt_num(duration)}"
+    else:
+        if not isinstance(tail_sample_count, int) or tail_sample_count <= 0:
+            raise ValueError("crossfade_voice_over_tail requires a positive tail sample count")
+        trim_expr = f"start_sample={decoder_preroll_samples}:end_sample={decoder_preroll_samples + tail_sample_count}"
 
     duration_expr = _fmt_num(duration)
     delay_ms = max(0, int(voice_delay_ms))
@@ -1716,7 +1728,7 @@ def crossfade_voice_over_tail(
         "-i",
         str(voice_path),
         "-filter_complex",
-        f"[0:a]atrim=duration={duration_expr},asetpts=PTS-STARTPTS,"
+        f"[0:a]atrim={trim_expr},asetpts=PTS-STARTPTS,"
         f"afade=t=out:st=0:d={duration_expr},volume={_fmt_num(music_fade_volume)}[music];"
         f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
         f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
@@ -1732,7 +1744,7 @@ def crossfade_voice_over_tail(
 
 
 def crossfade_voice_over_music(
-    music_tail_path: Path,
+    music_path: Path,
     voice_path: Path,
     output_path: Path,
     tail_seconds: float = 8.0,
@@ -1740,22 +1752,36 @@ def crossfade_voice_over_music(
     music_fade_volume: float = 0.5,
     voice_delay_ms: int = 150,
 ) -> Path:
-    """Compatibility spelling for :func:`crossfade_voice_over_tail`.
+    """Overlay voice on the final ``tail_seconds`` of a complete music track.
 
-    The first path must already be a reserved tail.  This wrapper deliberately
-    retains the historic call shape while removing the old ``-sseof`` extraction
-    from a complete track; producer callers should use
-    :func:`crossfade_voice_over_tail` with their exact frame-derived duration.
+    This preserves the historic keyword and full-track behavior for callers of
+    the legacy helper. Production handoffs use :func:`crossfade_voice_over_tail`
+    so already-aired music is never re-extracted there.
     """
-    return crossfade_voice_over_tail(
-        music_tail_path,
-        voice_path,
-        output_path,
-        tail_duration_sec=tail_seconds,
-        voice_volume=voice_volume,
-        music_fade_volume=music_fade_volume,
-        voice_delay_ms=voice_delay_ms,
-    )
+    tail_expr = _fmt_num(tail_seconds)
+    delay_ms = max(0, int(voice_delay_ms))
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-sseof",
+        f"-{tail_expr}",
+        "-i",
+        str(music_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        f"[0:a]afade=t=out:st=0:d={tail_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+        f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "crossfade voice over music")
+    logger.info("Crossfade voice over music -> %s", output_path.name)
+    return output_path
 
 
 def generate_station_id_bed(

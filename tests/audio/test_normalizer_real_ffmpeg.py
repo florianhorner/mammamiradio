@@ -330,7 +330,14 @@ def test_music_head_plus_tail_successor_emits_final_marker_once_real_ffmpeg(tmp_
     _make_tone_mp3(voice, duration_sec=1.0, freq=660)
 
     split = split_mpeg1_l3_handoff(source, tmp_path / "handoff", tail_seconds=2.0)
-    crossfade_voice_over_tail(split.tail_path, voice, mixed, tail_duration_sec=split.tail_duration_sec)
+    crossfade_voice_over_tail(
+        split.tail_decode_path or split.tail_path,
+        voice,
+        mixed,
+        tail_duration_sec=split.tail_duration_sec,
+        decoder_preroll_samples=split.tail_preroll_samples,
+        tail_sample_count=split.tail_sample_count,
+    )
     concat_files([split.head_path, mixed], sequence, silence_ms=0, loudnorm=False)
 
     # The marker begins immediately inside the reserved tail. It is present at
