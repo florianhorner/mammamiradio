@@ -416,9 +416,7 @@ def compile_ad_cast(brands: list[AdBrand], voices: list[AdVoice]) -> AdCastRepor
         and not voice.direct_identity_quarantined
         and voice.name not in direct_identity_voice_names
     ]
-    for brand_name, (brand, voice, candidate_pool) in candidates.items():
-        if brand_name in excluded:
-            continue
+    for _brand_name, (brand, voice, candidate_pool) in candidates.items():
         required_support_roles = {
             role for ad_format in candidate_pool for role in _FORMAT_ROLES[ad_format] if role != voice.role
         }

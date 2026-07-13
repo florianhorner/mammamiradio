@@ -115,6 +115,18 @@ def test_compiler_quarantines_direct_identity_when_campaign_name_is_blank():
     assert "campaign name is malformed" in report.warnings[0]
 
 
+def test_compiler_excludes_malformed_or_ambiguous_legacy_campaign_names():
+    blank = _brand("", spokesperson_voice="", format_pool=["live_remote"])
+    first_duplicate = _brand("Repeated", spokesperson_voice="", format_pool=["live_remote"])
+    second_duplicate = _brand("Repeated", spokesperson_voice="", format_pool=["live_remote"])
+
+    report = compile_ad_cast([blank, first_duplicate, second_duplicate], [])
+
+    assert report.excluded_brands == frozenset({"", "Repeated"})
+    assert any("campaign name is malformed" in warning for warning in report.warnings)
+    assert any("campaign name is ambiguous" in warning for warning in report.warnings)
+
+
 def test_compiler_excludes_direct_campaign_without_house_supporting_role():
     report = compile_ad_cast(
         [_brand(format_pool=["classic_pitch"])],
