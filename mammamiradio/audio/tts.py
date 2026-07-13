@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import threading
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -262,6 +263,34 @@ def _get_elevenlabs_client(api_key: str) -> httpx.AsyncClient:
     return _elevenlabs_client
 
 
+def _notify_paid_provider_success(on_paid_provider_success: Callable[[], None] | None) -> None:
+    """Run best-effort paid-use accounting without affecting audio delivery."""
+    if on_paid_provider_success is None:
+        return
+    try:
+        on_paid_provider_success()
+    except Exception:
+        # Keep accounting failures out of the listener-audio path and avoid
+        # logging callback details that could contain application state.
+        logger.debug("Paid TTS accounting callback failed")
+
+
+def _schedule_paid_provider_success(
+    loop: asyncio.AbstractEventLoop,
+    on_paid_provider_success: Callable[[], None] | None,
+) -> None:
+    """Schedule paid-use accounting from an OpenAI executor worker."""
+    if on_paid_provider_success is None:
+        return
+    try:
+        loop.call_soon_threadsafe(_notify_paid_provider_success, on_paid_provider_success)
+    except RuntimeError:
+        # A late worker can finish while the owning loop is closing. Losing an
+        # in-memory estimate is preferable to surfacing a worker error or
+        # disrupting the existing Edge rescue path.
+        logger.debug("Paid TTS accounting callback skipped because the event loop is closed")
+
+
 async def synthesize_openai(
     text: str,
     voice: str,
@@ -270,6 +299,7 @@ async def synthesize_openai(
     instructions: str = "",
     loudnorm: bool = True,
     model: str | None = None,
+    on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with the registry-selected OpenAI speech model."""
     api_key = os.getenv("OPENAI_API_KEY", "")
@@ -289,6 +319,7 @@ async def synthesize_openai(
             input=text,
             instructions=instructions or _OPENAI_TTS_INSTRUCTIONS,
         )
+        _schedule_paid_provider_success(loop, on_paid_provider_success)
         return response.content
 
     raw_path = output_path.with_suffix(".raw.mp3")
@@ -317,6 +348,7 @@ async def synthesize_azure(
     rate: str | None = None,
     pitch: str | None = None,
     loudnorm: bool = True,
+    on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with Azure Speech TTS REST API, then normalize to station settings."""
     api_key = os.getenv("AZURE_SPEECH_KEY", "")
@@ -347,6 +379,7 @@ async def synthesize_azure(
         client = _get_azure_client(api_key, region)
         response = await client.post(url, headers=headers, content=ssml.encode("utf-8"))
         response.raise_for_status()
+        _notify_paid_provider_success(on_paid_provider_success)
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
@@ -377,6 +410,7 @@ async def synthesize_elevenlabs(
     *,
     loudnorm: bool = True,
     voice_settings: dict | None = None,
+    on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
 
@@ -404,6 +438,7 @@ async def synthesize_elevenlabs(
         client = _get_elevenlabs_client(api_key)
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
+        _notify_paid_provider_success(on_paid_provider_success)
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
@@ -440,17 +475,24 @@ async def synthesize(
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.
 
-    state: when provided, characters synthesized by a PAID cloud engine (OpenAI,
-    Azure, ElevenLabs) are added to state.tts_characters and the TTS cost bucket
-    for the operator's cost estimate. Edge-tts is free and never counted — so a voice that requests a cloud
-    engine but falls back to Edge (missing key, API error) is correctly NOT billed.
+    state: when provided, a confirmed PAID cloud-provider response (OpenAI,
+    Azure, ElevenLabs) adds characters to state.tts_characters and the TTS cost
+    bucket for the operator's estimate. Edge-tts is free and never counted;
+    missing credentials and provider failures remain zero, while a confirmed
+    response remains counted if local post-processing falls back to Edge.
     Best-effort only: never raises into the audio path.
     """
     engine = (engine or "edge").strip().lower()
     fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
 
+    billed = False
+
     def _bill_tts() -> None:
         # Rough by design — folded into a figure the UI labels an estimate.
+        nonlocal billed
+        if billed:
+            return
+        billed = True
         if state is not None:
             try:
                 if hasattr(state, "record_tts_usage"):
@@ -465,9 +507,13 @@ async def synthesize(
             try:
                 async with _HEAVY_SEM:
                     result = await synthesize_openai(
-                        text, voice, output_path, instructions=openai_instructions, loudnorm=loudnorm
+                        text,
+                        voice,
+                        output_path,
+                        instructions=openai_instructions,
+                        loudnorm=loudnorm,
+                        on_paid_provider_success=_bill_tts,
                     )
-                _bill_tts()
                 return result
             except Exception as e:
                 logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
@@ -491,8 +537,8 @@ async def synthesize(
                                 rate=rate,
                                 pitch=pitch,
                                 loudnorm=loudnorm,
+                                on_paid_provider_success=_bill_tts,
                             )
-                        _bill_tts()
                         return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
@@ -518,9 +564,13 @@ async def synthesize(
                     try:
                         async with _HEAVY_SEM:
                             result = await synthesize_elevenlabs(
-                                text, voice, output_path, loudnorm=loudnorm, voice_settings=voice_settings
+                                text,
+                                voice,
+                                output_path,
+                                loudnorm=loudnorm,
+                                voice_settings=voice_settings,
+                                on_paid_provider_success=_bill_tts,
                             )
-                        _bill_tts()
                         return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
