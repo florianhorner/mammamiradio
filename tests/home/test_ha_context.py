@@ -4719,3 +4719,58 @@ def test_build_scored_entities_char_budget_drops_overflow():
     assert len(rendered) <= 20
     assert len(scored) < len(states)
     assert all(entity.score > 0 for entity in scored), "scores must be populated"
+
+
+@pytest.mark.asyncio
+async def test_fetch_legacy_observer_exception_never_breaks_context(tmp_path):
+    """A raising entity-ids observer is swallowed; the fetch still returns fresh.
+
+    Bridge provenance persistence is best-effort recovery metadata and must
+    never block the context fetch or the audio path (leadership #2).
+    """
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _mock_ha_response()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    def _boom(_ids):
+        raise RuntimeError("provenance persistence down")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        # _fetch_home_context_outcome does not publish to module globals, so the
+        # observer path is exercised without polluting cross-test cache state.
+        outcome = await _fetch_home_context_outcome(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            cache_dir=tmp_path,
+            authorization=HomeAuthorization.legacy(),
+            observed_entity_ids_callback=_boom,
+        )
+
+    assert outcome.kind == "fresh"  # the raising observer did not break the fetch
+    assert outcome.context.authorization_mode == HomeAuthorizationMode.LEGACY.value
+
+
+def test_get_cached_home_context_rejects_cross_mode_and_returns_same_mode_cache():
+    """The module cache never crosses authorization modes, in both directions."""
+    narrow_cached = HomeContext(
+        summary="narrow ambient",
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.NARROW.value,
+    )
+    with patch("mammamiradio.home.ha_context._ha_cache", narrow_cached):
+        # A legacy install must not receive a narrow-stamped module cache.
+        assert get_cached_home_context(authorization=HomeAuthorization.legacy()) is None
+        # A matching-mode caller with no cache_dir receives the raw cache.
+        assert get_cached_home_context(authorization=HomeAuthorization.narrow()) is narrow_cached

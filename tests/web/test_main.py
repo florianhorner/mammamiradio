@@ -298,6 +298,44 @@ async def test_startup_disagreeing_durable_witnesses_fail_narrow(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_startup_transplanted_sidecar_with_cold_database_fails_narrow(tmp_path):
+    """A durable sidecar claiming a pre-existing DB while none exists is a
+    transplanted/leftover witness and must never promote a cold install to
+    legacy — the guard drops it to non-durable so persist never runs."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    # Deliberately NO mammamiradio.db file — this is a cold install.
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    persist = MagicMock()
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.persist_legacy_home_database_preflight_v1", persist),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    # The guard set the preflight non-durable, so the redundant DB witness is
+    # never seeded from the transplanted claim.
+    persist.assert_not_called()
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
 async def test_startup_database_origin_write_failure_fails_narrow(tmp_path):
     from mammamiradio.core.models import Track
     from mammamiradio.home.authorization import HomeAuthorizationMode

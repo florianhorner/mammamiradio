@@ -322,6 +322,17 @@ async def startup():
         logger.error("Home install-origin witnesses disagree; failing narrow for this boot")
         legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
 
+    # A durable sidecar claiming a pre-existing database while no database file
+    # exists is internally contradictory — a legacy install cannot have a cold
+    # database. This catches a transplanted/leftover sidecar (partial backup
+    # restore, cloned config) that would otherwise seed the fresh DB table from
+    # its own claim and self-agree into legacy. Fail narrow (privacy fail-closed).
+    if not database_preexisted and legacy_preflight.durable and legacy_preflight.database_preexisted:
+        logger.error(
+            "Legacy Home witness claims a pre-existing database but none existed; failing narrow for this boot"
+        )
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
     # Initialize persona database and store for compounding listener memory.
     init_db(db_path)
     if legacy_preflight.durable:
