@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import httpx
@@ -84,7 +85,7 @@ from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
 from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_recipe_match
 from mammamiradio.home.scene_namer import resolve_home_mood
-from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
+from mammamiradio.hosts.ad_creative import AdScript, _cast_voices, _pick_brand, _select_ad_creative
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
@@ -1980,7 +1981,10 @@ class _ProducerAttemptOwnership:
             self.own_path(path)
 
     def own_segment(self, segment: Segment) -> None:
-        if self.active and _is_tmp_render(segment, self.tmp_dir):
+        # Segment.ephemeral is the ownership contract. Cache and other shared
+        # audio can legitimately live under tmp_dir in tests or deployments;
+        # directory containment alone must never make it attempt-private.
+        if self.active and segment.ephemeral and _is_tmp_render(segment, self.tmp_dir):
             self.own_path(segment.path)
 
     def own_prepared(self, prepared: PreparedMusicHandoff | None) -> None:
@@ -3875,6 +3879,11 @@ async def _run_producer_inner(
                 producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
     while True:
+        # Close the previous iteration's private ownership before any stopped,
+        # idle, recovery-bridge, or full-queue path can enqueue and transfer an
+        # unrelated Segment. A real render activates a fresh owner below, after
+        # bridge-only admissions have had a chance to transfer their own audio.
+        attempt_owner.discard()
         if observed_continuity_epoch != state.continuity_epoch:
             # A streamer control rebuilt the queue outside this coroutine. Re-read
             # its final tail before producing again so a removed song cannot lend
@@ -4873,7 +4882,6 @@ async def _run_producer_inner(
                                 with _timed_render_stage(state, "tts"):
                                     return await synthesize_dialogue(_lines, _tmp_dir, state=state)
 
-                            banter_path: Path
                             transition_render_task = asyncio.create_task(_do_transition())
                             dialogue_render_task = asyncio.create_task(_do_dialogue())
                             try:
@@ -4881,14 +4889,11 @@ async def _run_producer_inner(
                                     [transition_render_task, dialogue_render_task],
                                     config.tmp_dir,
                                 )
-                                (
-                                    (
-                                        tail_transition_path,
-                                        rendered_handoff_tail,
-                                        prepared_handoff,
-                                    ),
-                                    banter_path,
-                                ) = (transition_result, dialogue_result)
+                                tail_transition_path, rendered_handoff_tail, prepared_handoff = cast(
+                                    tuple[Path, bool, PreparedMusicHandoff | None],
+                                    transition_result,
+                                )
+                                banter_path = cast(Path, dialogue_result)
                                 attempt_owner.own_paths(tail_transition_path, banter_path)
                                 attempt_owner.own_prepared(prepared_handoff)
                             except BaseException:
@@ -4902,12 +4907,12 @@ async def _run_producer_inner(
                             # the original full song and queues this alternative.
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
                             attempt_owner.own_path(audio_path)
-                            concat_tasks: list[asyncio.Task] = []
+                            banter_concat_tasks: list[asyncio.Task] = []
                             try:
                                 if rendered_handoff_tail and prepared_handoff is not None:
                                     fallback_audio_path = config.tmp_dir / f"banter_dry_{uuid4().hex[:8]}.mp3"
                                     attempt_owner.own_path(fallback_audio_path)
-                                    concat_tasks = [
+                                    banter_concat_tasks = [
                                         asyncio.create_task(
                                             _run_owned_thread(
                                                 concat_files,
@@ -4930,7 +4935,7 @@ async def _run_producer_inner(
                                         ),
                                     ]
                                     with _timed_render_stage(state, "mix"):
-                                        await _gather_owned_child_tasks(concat_tasks, config.tmp_dir)
+                                        await _gather_owned_child_tasks(banter_concat_tasks, config.tmp_dir)
                                 else:
                                     with _timed_render_stage(state, "mix"):
                                         await _run_owned_thread(
@@ -5008,6 +5013,7 @@ async def _run_producer_inner(
                             state.finish_render_timing("failed", reason="render_failure")
                             continue
 
+                audio_path = cast(Path, audio_path)
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
                         expected_min_duration_sec = None if canned else banter_expected_min_duration_sec
@@ -5777,11 +5783,12 @@ async def _run_producer_inner(
                             [intro_task, scripts_task, bumpers_task],
                             config.tmp_dir,
                         )
-                        (
-                            (tail_intro, dry_intro, intro_extra_parts, intro_text, prepared_handoff, intro_track_ref),
-                            scripts,
-                            (bumper_in, mid_bumpers),
-                        ) = (intro_result, scripts_result, bumpers_result)
+                        tail_intro, dry_intro, intro_extra_parts, intro_text, prepared_handoff, intro_track_ref = cast(
+                            tuple[Path, Path, list[Path], str, PreparedMusicHandoff | None, str | None],
+                            intro_result,
+                        )
+                        scripts = cast(list[AdScript], scripts_result)
+                        bumper_in, mid_bumpers = cast(tuple[Path, list[Path]], bumpers_result)
                     except BaseException:
                         await _discard_prepared_handoff_task(ad_handoff_task, config.tmp_dir)
                         for owned_path in (
@@ -5822,7 +5829,10 @@ async def _run_producer_inner(
                     for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
                 ]
                 with _timed_render_stage(state, "tts"):
-                    ad_paths = await _gather_owned_child_tasks(ad_tts_tasks, config.tmp_dir)
+                    ad_paths = cast(
+                        list[Path],
+                        await _gather_owned_child_tasks(ad_tts_tasks, config.tmp_dir),
+                    )
                 assert all(isinstance(path, Path) for path in ad_paths)
                 attempt_owner.own_paths(*ad_paths)
 

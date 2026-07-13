@@ -3871,6 +3871,117 @@ async def test_ordinary_enqueue_keeps_owner_on_post_capacity_stale_rejection(tmp
     assert not sentinel.exists()
 
 
+def test_attempt_owner_uses_ephemeral_contract_under_tmp_root(tmp_path):
+    """Directory overlap never converts shared cache audio into private scratch."""
+    from mammamiradio.scheduling.producer import _ProducerAttemptOwnership
+
+    cache_path = tmp_path / "norm_shared.mp3"
+    scratch_path = tmp_path / "banter_private.mp3"
+    cache_path.write_bytes(b"cached")
+    scratch_path.write_bytes(b"scratch")
+    owner = _ProducerAttemptOwnership.create(tmp_path)
+    owner.begin()
+    owner.own_segment(Segment(type=SegmentType.MUSIC, path=cache_path, ephemeral=False))
+    owner.own_segment(Segment(type=SegmentType.BANTER, path=scratch_path, ephemeral=True))
+
+    owner.discard()
+
+    assert cache_path.read_bytes() == b"cached"
+    assert not scratch_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_news_attempt_is_discarded_before_resume_bridge_transfer(tmp_path):
+    """A later bridge cannot inherit and silently release a failed attempt."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    host = config.hosts[0]
+    news_failed = asyncio.Event()
+    bridge_queued = asyncio.Event()
+    second_news_started = threading.Event()
+    release_second_news = threading.Event()
+    bridge_path = tmp_path / "resume_bridge.mp3"
+    synth_calls = 0
+
+    async def _write_then_fail(_text, _voice, output_path, **_kwargs) -> None:
+        nonlocal synth_calls
+        synth_calls += 1
+        if synth_calls == 1:
+            output_path.write_bytes(b"partial-news")
+            state.session_stopped = True
+            news_failed.set()
+            raise RuntimeError("news TTS failed after publication")
+
+        def _late_second_news() -> None:
+            second_news_started.set()
+            assert release_second_news.wait(timeout=2.0)
+            output_path.write_bytes(b"second-news")
+
+        await asyncio.get_running_loop().run_in_executor(None, _late_second_news)
+
+    async def _queue_bridge(queue_segment, *_args, **_kwargs) -> bool:
+        bridge_path.write_bytes(b"bridge")
+        admitted = await queue_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=bridge_path,
+                metadata={"resume_bridge": True, "rescue": True},
+                ephemeral=True,
+            )
+        )
+        bridge_queued.set()
+        return admitted
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Ultim'ora.", "general"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_then_fail),
+        patch(f"{PRODUCER_MODULE}._queue_continuity_bridge", side_effect=_queue_bridge),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(news_failed.wait(), timeout=2.0)
+            # Let the producer enter its stopped-state wait so the next live
+            # iteration deterministically takes the resume-bridge path.
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            state.resume_event.set()
+            await asyncio.wait_for(bridge_queued.wait(), timeout=2.0)
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not second_news_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("post-bridge render did not start")
+                await asyncio.sleep(0.01)
+            producer_task.cancel()
+            await asyncio.sleep(0.02)
+            assert not producer_task.done()
+            release_second_news.set()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+        finally:
+            state.session_stopped = False
+            state.resume_event.set()
+            release_second_news.set()
+            if not producer_task.done():
+                producer_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await producer_task
+
+    assert list(tmp_path.glob("flash_*.mp3")) == []
+    assert queue._queue and next(iter(queue._queue)).path == bridge_path
+    assert bridge_path.read_bytes() == b"bridge"
+
+
 @pytest.mark.asyncio
 async def test_apply_talk_bed_keeps_source_until_caller_adopts_replacement(tmp_path):
     from mammamiradio.scheduling.producer import _apply_talk_bed

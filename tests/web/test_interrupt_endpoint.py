@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -315,7 +316,8 @@ async def test_fire_interrupt_item_failure_still_drains_and_reconciles_handoff(
 
     assert fired is True
     assert queue.empty()
-    assert queue._unfinished_tasks == 0
+    unfinished_tasks_attr = "_unfinished_tasks"
+    assert cast(int, getattr(queue, unfinished_tasks_attr)) == 0
     assert state.queued_segments == []
     assert state.handoff_reservations == {}
     assert music.handoff_id is None
