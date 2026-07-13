@@ -217,10 +217,41 @@ async (page) => {
   const failedPoll = await page.evaluate(() => ({
     label: productionStateLabel.textContent,
     feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
   }));
-  assert(failedPoll.label.endsWith('reconnecting'), 'failed poll kept a stale production-state label');
+  assert(failedPoll.label.endsWith('update delayed'), 'failed poll kept a stale production-state label');
   assert(!failedPoll.feed.includes('Writing stale copy'), 'failed poll kept stale production copy');
-  assert(failedPoll.feed.includes('retry automatically'), 'failed poll did not give the operator a way out');
+  assert(failedPoll.feed.includes('keep trying automatically'), 'failed poll did not give the operator a way out');
+  assert(failedPoll.feed.includes('Try again now'), 'failed poll did not offer a manual retry control');
+  assert(
+    failedPoll.announcement === "Status update delayed. Can't update this panel right now. We'll keep trying automatically.",
+    'failed poll did not announce the delayed status through the persistent live region',
+  );
+
+  // Recover, then click the real "Try again now" control and prove it restores
+  // normal production content through the existing refreshFast() poll.
+  statusScenario = 'ok';
+  const retryStart = await page.evaluate(() => {
+    const btn = document.getElementById('productionRetryBtn');
+    if (!btn) return { existed: false, busy: false };
+    btn.click();
+    return { existed: true, busy: btn.disabled && btn.getAttribute('aria-busy') === 'true' };
+  });
+  assert(retryStart.existed, 'failed poll did not mount a Try again now control to click');
+  assert(retryStart.busy, 'manual retry did not report a busy state while polling');
+  await page.waitForFunction(
+    () => productionFeed.innerText.includes('Writing restored copy'),
+    null,
+    { timeout: 2000 },
+  );
+  const afterRetry = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
+  }));
+  assert(afterRetry.label.endsWith('building ahead'), 'manual retry left the update-delayed label after recovery');
+  assert(!afterRetry.feed.includes('Try again now'), 'manual retry left the fallback control after recovery');
+  assert(!afterRetry.announcement, 'manual retry left the delayed-status announcement behind after recovery');
 
   statusScenario = 'http_error';
   await page.evaluate(() => renderProduction({
@@ -234,7 +265,7 @@ async (page) => {
     label: productionStateLabel.textContent,
     feed: productionFeed.innerText,
   }));
-  assert(failedHttpPoll.label.endsWith('reconnecting'), 'HTTP error was treated as a valid production status');
+  assert(failedHttpPoll.label.endsWith('update delayed'), 'HTTP error was treated as a valid production status');
   assert(!failedHttpPoll.feed.includes('Writing stale HTTP copy'), 'HTTP error kept stale production copy');
 
   statusScenario = 'ok';
@@ -246,7 +277,7 @@ async (page) => {
   }));
   assert(restoredPoll.label.endsWith('building ahead'), 'listener-request failure replaced healthy production state');
   assert(restoredPoll.feed.includes('Writing restored copy'), 'listener-request failure discarded healthy production copy');
-  assert(!restoredPoll.feed.includes('reconnecting'), 'listener-request failure falsely marked the producer desk offline');
+  assert(!restoredPoll.feed.includes('Try again now'), 'listener-request failure falsely marked the producer desk offline');
   failListenerRequests = false;
 
   failHosts = true;
@@ -258,7 +289,7 @@ async (page) => {
   }));
   assert(hostsFailedPoll.label.endsWith('building ahead'), 'hosts failure replaced healthy production state');
   assert(hostsFailedPoll.feed.includes('Writing restored copy'), 'hosts failure discarded healthy production copy');
-  assert(!hostsFailedPoll.feed.includes('reconnecting'), 'hosts failure falsely marked the producer desk offline');
+  assert(!hostsFailedPoll.feed.includes('Try again now'), 'hosts failure falsely marked the producer desk offline');
   failHosts = false;
 
   statusPayload = {
@@ -284,7 +315,7 @@ async (page) => {
     hangingListenerPoll.feed.includes('Writing while requests hang'),
     'never-settling listener request blocked authoritative status',
   );
-  assert(!hangingListenerPoll.label.endsWith('reconnecting'), 'listener timeout falsely marked status unavailable');
+  assert(!hangingListenerPoll.label.endsWith('update delayed'), 'listener timeout falsely marked status unavailable');
 
   statusPayload = {
     ...restoredStatus,
@@ -351,7 +382,7 @@ async (page) => {
     feed: productionFeed.innerText,
   }));
   assert(afterStaleFailure.feed.includes('Healthy after stale failure'), 'stale status failure displaced healthy state');
-  assert(!afterStaleFailure.label.endsWith('reconnecting'), 'stale status failure showed a false reconnecting state');
+  assert(!afterStaleFailure.label.endsWith('update delayed'), 'stale status failure showed a false update-delayed state');
 
   await page.evaluate(() => {
     window.__adminSmokeToasts = [];
@@ -625,7 +656,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 16,
+    checks: 17,
     viewports: [320, 375],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

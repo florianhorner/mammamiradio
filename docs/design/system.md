@@ -578,6 +578,18 @@ entirely from existing canonical components — no new vocabulary:
   honesty). No timestamps.
 - **Idle:** the feed hides entirely when nothing is generating and the trail is empty —
   never a dead box.
+- **Update delayed:** when an authoritative `/status` poll fails, the panel must stop
+  claiming the frozen backstage work is current. It swaps the section label to
+  `In produzione · update delayed`, removes the stale production rows, and shows a
+  `.status-inline.working` line reading **Status update delayed** with the recovery
+  sentence *"Can't update this panel right now. We'll keep trying automatically."* It
+  never says the station audio stopped — only this panel is behind. A **Try again now**
+  button (`.prod-retry`, ≥44px touch target, stacked below the message on narrow
+  screens) reuses the existing `refreshFast()` poll, reports a busy state while it runs,
+  and stays available while the station is paused. A persistent, initially empty polite
+  atomic status (`role="status"`) announces the unavailable state once **on entry**, not
+  on every subsequent automatic polling failure. A successful automatic or manual poll
+  clears that announcement and restores the normal feed.
 
 **Hard rules learned here (do not regress):** status lines are **English utility copy**
 (`Writing` / `Voicing` / `Finding`), never engineer acronyms (`LLM` / `TTS` / `YTDL`)
