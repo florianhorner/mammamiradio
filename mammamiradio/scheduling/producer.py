@@ -52,6 +52,7 @@ from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
     GenerationWasteReason,
+    HostPersonality,
     InterruptSpec,
     Segment,
     SegmentType,
@@ -89,7 +90,14 @@ from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
 from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_recipe_match
 from mammamiradio.home.scene_namer import resolve_home_mood
-from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
+from mammamiradio.hosts.ad_creative import (
+    AdBrand,
+    AdVoice,
+    SonicWorld,
+    _cast_voices,
+    _pick_brand,
+    _select_ad_creative,
+)
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
@@ -106,6 +114,71 @@ from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_rest
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
+
+
+def _direct_campaign_default_voice(brand: AdBrand, voices: dict[str, AdVoice]) -> AdVoice | None:
+    """Keep roleless fallback copy on the selected campaign character."""
+
+    campaign = brand.campaign
+    direct_name = campaign.spokesperson_voice.strip() if campaign and campaign.spokesperson_voice else ""
+    if not direct_name:
+        return None
+    return next((voice for voice in voices.values() if voice.name.strip() == direct_name), None)
+
+
+def _safe_ad_promo_voice(voices: list[AdVoice]) -> AdVoice | None:
+    """Return a house voice that may speak a break-level promo tag.
+
+    The tag is not part of any campaign. It must therefore never consume a
+    staged, quarantined, supporting-only, or campaign-reserved character.
+    """
+
+    return next(
+        (
+            voice
+            for voice in voices
+            if voice.airtime_approved
+            and not voice.direct_identity_quarantined
+            and not voice.secondary_only
+            and not voice.reserved_for
+        ),
+        None,
+    )
+
+
+def _select_safe_ad_spot(
+    brands: list[AdBrand],
+    ad_history: list[AdHistoryEntry],
+    state: StationState,
+    voices: list[AdVoice],
+    hosts: list[HostPersonality],
+) -> tuple[AdBrand, str, SonicWorld, dict[str, AdVoice]] | None:
+    """Choose one ad slot, retrying another campaign if direct casting rejects it."""
+
+    remaining = list(brands)
+    # Pending audition candidates must not make a duo format look safe before
+    # they are eligible to be cast. ``_cast_voices`` applies the same gate;
+    # keeping the count aligned avoids selecting a multi-voice format whose
+    # second identity is only present on paper.
+    num_voices = sum(voice.airtime_approved for voice in voices) or 1
+    while remaining:
+        try:
+            brand = _pick_brand(remaining, ad_history)
+        except ValueError:
+            logger.warning("No safe ad campaign is available for this spot")
+            return None
+        try:
+            ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
+            voice_map = _cast_voices(brand, voices, hosts, roles_needed)
+        except ValueError as exc:
+            logger.warning("Skipping unsafe ad campaign %s for this spot: %s", brand.name, exc)
+            remaining = [candidate for candidate in remaining if candidate is not brand]
+            continue
+        return brand, ad_format, sonic, voice_map
+    logger.warning("No safe ad campaign remains after cast validation")
+    return None
+
+
 # Kept as a module-level compatibility seam for existing downstream test
 # fixtures.  The producer's live path uses _fetch_home_context_outcome above.
 _LEGACY_FETCH_HOME_CONTEXT = fetch_home_context
@@ -4838,15 +4911,19 @@ async def _run_producer_inner(
                 break_roles: list[list[str]] = []
                 spot_params = []
                 for spot_idx in range(num_spots):
-                    brand = _pick_brand(
+                    selection = _select_safe_ad_spot(
                         config.ads.brands,
                         list(state.ad_history)
                         + [AdHistoryEntry(brand=b, summary="", timestamp=0) for b in used_brands_this_break],
+                        state,
+                        config.ads.voices,
+                        _sw._regular_hosts(config),
                     )
+                    if selection is None:
+                        logger.warning("Skipping unavailable ad slot %d/%d", spot_idx + 1, num_spots)
+                        break
+                    brand, ad_format, sonic, voice_map = selection
                     used_brands_this_break.append(brand.name)
-                    num_voices = len(config.ads.voices) if config.ads.voices else 1
-                    ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
-                    voice_map = _cast_voices(brand, config.ads.voices, _sw._regular_hosts(config), roles_needed)
                     logger.info(
                         "  Spot %d/%d: %s (format=%s, roles=%s)",
                         spot_idx + 1,
@@ -4856,6 +4933,16 @@ async def _run_producer_inner(
                         list(voice_map.keys()),
                     )
                     spot_params.append((brand, ad_format, sonic, voice_map))
+
+                if not spot_params:
+                    logger.warning("No safe ad campaigns configured — skipping ad break")
+                    state.songs_since_ad = 0
+                    state.finish_render_timing("discarded", reason="no_safe_ad_campaigns")
+                    continue
+                # A single invalid direct campaign must not kill the preceding
+                # safe spots in this break. Downstream fan-out and metadata
+                # reflect the actual number of slots we will air.
+                num_spots = len(spot_params)
 
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
@@ -4888,8 +4975,8 @@ async def _run_producer_inner(
                     # Promo compliance tag
                     try:
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
-                        if config.ads.voices:
-                            promo_voice = config.ads.voices[0]
+                        promo_voice = _safe_ad_promo_voice(config.ads.voices)
+                        if promo_voice is not None:
                             pvoice = promo_voice.voice
                             pengine = promo_voice.engine
                             pfallback = promo_voice.edge_fallback_voice
@@ -5012,8 +5099,9 @@ async def _run_producer_inner(
                                 sfx_dir,
                                 state=state,
                                 cache_dir=config.cache_dir,
+                                default_voice=_direct_campaign_default_voice(brand, vm),
                             )
-                            for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                            for script, (brand, _, _, vm) in zip(scripts, spot_params, strict=False)
                         )
                     )
 

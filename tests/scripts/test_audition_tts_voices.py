@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -145,6 +146,51 @@ def test_expand_stability_variants_noop_when_empty() -> None:
     assert audition.expand_stability_variants(targets, []) is targets
 
 
+def test_configured_ad_targets_keep_their_selected_voice_settings() -> None:
+    config = _station_config()
+    tiziana = AdVoice(
+        name="Tiziana",
+        voice="RXoaSpLaWTEckJgPUBG3",
+        style="balanced and credible",
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-IsabellaNeural",
+    )
+    # This assignment works before and after the config dataclass grows the
+    # field, so the operator tool's contract is protected independently.
+    tiziana.voice_settings = {"stability": 0.6, "style": 0.2}
+    config.ads.voices.append(tiziana)
+
+    targets = audition.collect_configured_targets(config)
+
+    target = next(target for target in targets if target.label == "ad-Tiziana")
+    assert target.provider == "elevenlabs"
+    assert target.voice_settings == {"stability": 0.6, "style": 0.2}
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_target_uses_its_configured_voice_settings(tmp_path, monkeypatch) -> None:
+    calls: list[dict | None] = []
+
+    async def fake_elevenlabs(text, voice, output_path, *, voice_settings=None, **_kwargs):
+        calls.append(voice_settings)
+        output_path.write_bytes(b"fake mp3")
+        return output_path
+
+    monkeypatch.setattr(audition.tts_module, "synthesize_elevenlabs", fake_elevenlabs)
+    target = audition.VoiceAuditionTarget(
+        provider="elevenlabs",
+        voice="RXoaSpLaWTEckJgPUBG3",
+        label="ad-tiziana",
+        source="configured",
+        voice_settings={"stability": 0.6, "style": 0.2},
+    )
+
+    output = await audition._synthesize_target(target, tmp_path / "tiziana.mp3")
+
+    assert output.read_bytes() == b"fake mp3"
+    assert calls == [{"stability": 0.6, "style": 0.2}]
+
+
 def test_stability_arg_validates_range_and_finiteness() -> None:
     import argparse
 
@@ -249,6 +295,175 @@ def test_write_manifest_records_results_without_secret_values(tmp_path) -> None:
     assert "sk-test" not in manifest.read_text()
     with pytest.raises(FileExistsError, match="Refusing to overwrite"):
         audition.write_manifest([result], tmp_path, config_path=tmp_path / "radio.toml", timestamp="20260603T120000Z")
+
+
+def _selection_candidate(**overrides: object) -> dict[str, object]:
+    candidate: dict[str, object] = {
+        "candidate_id": "RXoaSpLaWTEckJgPUBG3",
+        "candidate_name": "Dottoressa Tiziana",
+        "profile": {
+            "engine": "elevenlabs",
+            "model": "eleven_multilingual_v2",
+            "voice_settings": {"stability": 0.6, "style": 0.2, "use_speaker_boost": True},
+        },
+        "text_sha256": "a" * 64,
+        "provider_result": "generated",
+        "audio_sha256": "b" * 64,
+        "audio_duration_seconds": 7.25,
+        "approval_status": "accepted",
+        "rationale": "accepted_balanced_brand_fit",
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def test_selection_receipt_writer_keeps_only_complete_safe_evidence(tmp_path) -> None:
+    receipt_path = tmp_path / "proof" / "selection.json"
+
+    written = audition.write_selection_receipt([_selection_candidate()], path=receipt_path)
+
+    assert written == receipt_path
+    payload = json.loads(receipt_path.read_text())
+    audition.validate_selection_receipt(payload)
+    assert set(payload) == {"schema_version", "candidates"}
+    assert payload["candidates"][0]["text_sha256"] == "a" * 64
+    assert "audio_path" not in receipt_path.read_text()
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        audition.write_selection_receipt([_selection_candidate()], path=receipt_path)
+
+
+@pytest.mark.parametrize(
+    ("extra_field", "value"),
+    [
+        ("text", "Questa e la copia integrale che non deve finire nel receipt"),
+        ("audio_path", "/tmp/voice-auditions/tiziana.mp3"),
+        ("credentials", "elevenlabs-secret"),
+    ],
+)
+def test_selection_receipt_rejects_raw_copy_paths_and_credentials(extra_field: str, value: str) -> None:
+    candidate = _selection_candidate(**{extra_field: value})
+
+    with pytest.raises(ValueError, match="prohibited fields"):
+        audition.selection_receipt([candidate])
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        "Questa offerta arriva adesso e la casa respira piano mentre tutti restano qui.",
+        "sk-example-secret-token",
+    ],
+)
+def test_selection_receipt_rejects_freeform_copy_or_credentials_in_rationale(rationale: str) -> None:
+    with pytest.raises(ValueError, match="controlled rationale code"):
+        audition.selection_receipt([_selection_candidate(rationale=rationale)])
+
+
+def test_selection_receipt_rejects_incomplete_generated_evidence() -> None:
+    candidate = _selection_candidate(audio_sha256=None)
+
+    with pytest.raises(ValueError, match="needs audio checksum and duration"):
+        audition.selection_receipt([candidate])
+
+
+def test_selection_receipt_from_manifest_keeps_human_decision_and_redacts_local_evidence(tmp_path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    decisions_path = tmp_path / "decisions.json"
+    receipt_path = tmp_path / "proof" / "selection.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "voice": "RXoaSpLaWTEckJgPUBG3",
+                        "used_by": ["ad:Dottoressa Tiziana"],
+                        "status": "generated",
+                        "output_path": "/tmp/voice-auditions/tiziana.mp3",
+                        "profile": {
+                            "engine": "elevenlabs",
+                            "model": "eleven_multilingual_v2",
+                            "voice_settings": {
+                                "stability": 0.42,
+                                "similarity_boost": 0.78,
+                                "style": 0.45,
+                                "use_speaker_boost": True,
+                            },
+                        },
+                        "text_sha256": "a" * 64,
+                        "audio_sha256": "b" * 64,
+                        "audio_duration_seconds": 7.25,
+                    }
+                ]
+            }
+        )
+    )
+    decisions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "candidate_id": "RXoaSpLaWTEckJgPUBG3",
+                    "candidate_name": "Dottoressa Tiziana",
+                    "approval_status": "accepted",
+                    "rationale": "accepted_balanced_brand_fit",
+                }
+            ]
+        )
+    )
+
+    written = audition.write_selection_receipt_from_manifest(
+        manifest_path=manifest_path,
+        decisions_path=decisions_path,
+        path=receipt_path,
+    )
+
+    assert written == receipt_path
+    payload = audition.load_selection_receipt(receipt_path)
+    candidates = payload["candidates"]
+    assert isinstance(candidates, list)
+    candidate = candidates[0]
+    assert isinstance(candidate, dict)
+    assert candidate["candidate_name"] == "Dottoressa Tiziana"
+    assert "/tmp/voice-auditions" not in receipt_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_generated_manifest_evidence_uses_the_exact_eleven_v2_profile(tmp_path, monkeypatch) -> None:
+    async def fake_synthesize(target: audition.VoiceAuditionTarget, output_path):
+        output_path.write_bytes(b"rendered")
+        return output_path
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+    monkeypatch.setattr(audition, "probe_duration_sec", lambda _path: 8.0)
+    target = audition.VoiceAuditionTarget(
+        provider="elevenlabs",
+        voice="RXoaSpLaWTEckJgPUBG3",
+        label="ad-Dottoressa-Tiziana",
+        source="configured",
+        used_by=("ad:Dottoressa Tiziana",),
+        text="Una prova di audizione.",
+    )
+
+    [result] = await audition.run_auditions([target], tmp_path, env={"ELEVENLABS_API_KEY": "test"})
+
+    assert result.status == audition.STATUS_GENERATED
+    assert result.text_sha256 == hashlib.sha256(target.text.encode("utf-8")).hexdigest()
+    assert result.audio_sha256 == hashlib.sha256(b"rendered").hexdigest()
+    assert result.audio_duration_seconds == 8.0
+    assert result.profile == {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.42, "similarity_boost": 0.78, "style": 0.45, "use_speaker_boost": True},
+    }
+
+
+def test_committed_selection_receipt_is_valid_when_human_approval_adds_it() -> None:
+    """The reviewed proof is intentionally absent until real provider/human gates run.
+
+    Once that tracked receipt exists, CI validates its full safe schema without
+    making a provider call or trying to infer an approval result.
+    """
+    if audition.SELECTION_RECEIPT_PATH.exists():
+        audition.load_selection_receipt()
 
 
 def test_cli_dry_run_lists_all_openai_catalog_without_writing_files(tmp_path, monkeypatch, capsys) -> None:

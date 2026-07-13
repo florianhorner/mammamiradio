@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mammamiradio.scheduling.producer as producer
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import (
@@ -88,6 +89,73 @@ def test_pick_brand_weights_recurring():
     picks = [_pick_brand(brands, []) for _ in range(50)]
     recurring_count = sum(1 for p in picks if p.name == "Recurring")
     assert recurring_count > 25  # Should be weighted 3:1
+
+
+def test_direct_campaign_cast_failure_uses_another_safe_brand(monkeypatch):
+    invalid = AdBrand(
+        name="Invalid direct campaign",
+        tagline="nope",
+        campaign=CampaignSpine(
+            spokesperson_voice="Missing Character",
+            spokesperson_role="hammer",
+            format_pool=["live_remote"],
+        ),
+    )
+    safe = AdBrand(name="Safe campaign", tagline="yes")
+    voice = AdVoice(name="House Hammer", voice="it-IT-DiegoNeural", style="safe", role="hammer")
+
+    monkeypatch.setattr(producer, "_pick_brand", lambda brands, _history: brands[0])
+
+    selected = producer._select_safe_ad_spot(
+        [invalid, safe],
+        [],
+        StationState(),
+        [voice],
+        [],
+    )
+
+    assert selected is not None
+    assert selected[0].name == "Safe campaign"
+
+
+def test_direct_campaign_roleless_fallback_normalizes_character_name() -> None:
+    brand = AdBrand(
+        name="Scarpe Volanti",
+        tagline="T",
+        campaign=CampaignSpine(spokesperson_voice="Il Razzo", spokesperson_role="disclaimer_goblin"),
+    )
+    hammer = AdVoice(name="House Hammer", voice="hammer", style="safe", role="hammer")
+    razzo = AdVoice(name=" Il Razzo ", voice="razzo", style="fast", role="disclaimer_goblin")
+
+    selected = producer._direct_campaign_default_voice(
+        brand,
+        {"hammer": hammer, "disclaimer_goblin": razzo},
+    )
+
+    assert selected is razzo
+
+
+def test_ad_break_promo_uses_only_an_unreserved_approved_house_voice() -> None:
+    staged = AdVoice(name="Staged", voice="staged", style="x", role="hammer", airtime_approved=False)
+    quarantined = AdVoice(
+        name="Quarantined",
+        voice="quarantined",
+        style="x",
+        role="hammer",
+        direct_identity_quarantined=True,
+    )
+    reserved = AdVoice(
+        name="Reserved",
+        voice="reserved",
+        style="x",
+        role="hammer",
+        reserved_for=frozenset({"Owned Brand"}),
+    )
+    support = AdVoice(name="Support", voice="support", style="x", role="hammer", secondary_only=True)
+    house = AdVoice(name="House", voice="house", style="x", role="hammer")
+
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support, house]) is house
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support]) is None
 
 
 # ---------------------------------------------------------------------------

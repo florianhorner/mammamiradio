@@ -128,6 +128,36 @@ scripts/validate-addon.sh
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
 
+### Auditioning a new ad voice
+
+New ad identities are staged by default. Keep `airtime_approved = false` until
+a provider render and human review approve them; only then set it explicitly to
+`true`. Run configured samples with real credentials; audio and manifests remain
+ignored under `tmp/voice-auditions/`:
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict
+```
+
+Listen before changing `airtime_approved`. Record the human decision with the
+receipt mode, supplying the ignored manifest and a local JSON array containing
+only `candidate_id`, `candidate_name`, `approval_status`, and a controlled
+`rationale` code. Accepted codes are `accepted_clear_natural_delivery`,
+`accepted_distinct_character`, and `accepted_balanced_brand_fit`; rejected
+codes are `rejected_provider_failure`, `rejected_unintelligible_delivery`,
+`rejected_unconvincing_character`, `rejected_off_brand_delivery`, and
+`rejected_profile_mismatch`:
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py \
+  --selection-manifest tmp/voice-auditions/audition-YYYYMMDDTHHMMSSZ/manifest.json \
+  --selection-decisions /tmp/ad-voice-decisions.json
+```
+
+The tracked proof stores hashes, the selected profile, provider result,
+duration, and the human rationale code only. It never stores raw audition copy,
+audio, local paths, or credentials.
+
 For Home Context Director changes, first run the credential-free contract path:
 
 ```bash

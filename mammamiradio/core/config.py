@@ -16,7 +16,7 @@ import math
 import os
 import re
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
 from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
 from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
-from mammamiradio.hosts.ad_creative import AdBrand, AdVoice, CampaignSpine
+from mammamiradio.hosts.ad_creative import AdBrand, AdCastReport, AdVoice, CampaignSpine, compile_ad_cast
 
 load_dotenv()
 
@@ -53,6 +53,13 @@ PACING_BOUNDS: dict[str, tuple[int, int]] = {
     "songs_between_ads": (1, 60),
     "ad_spots_per_break": (1, 5),
 }
+
+_ELEVENLABS_V2_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "stability": (0.0, 1.0),
+    "similarity_boost": (0.0, 1.0),
+    "style": (0.0, 1.0),
+}
+_ELEVENLABS_V2_BOOL_SETTINGS = frozenset({"use_speaker_boost"})
 
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
@@ -560,6 +567,9 @@ class AdsSection:
 
     brands: list[AdBrand] = field(default_factory=list)
     voices: list[AdVoice] = field(default_factory=list)
+    # Derived at load time from campaign.spokesperson_voice. The report keeps
+    # unsafe campaigns visible to status/reporting while selection skips them.
+    cast_report: AdCastReport = field(default_factory=AdCastReport)
     sfx_dir: str = "sfx"
 
 
@@ -991,6 +1001,49 @@ def _normalize_tts_voices(config: StationConfig) -> None:
             log.info("Sonic brand sweeper uses Azure voice '%s' outside the curated local catalog", sb.sweeper_voice)
 
     config.tts_degraded_voices = degraded
+
+
+def _compile_ad_cast(config: StationConfig) -> None:
+    """Attach the derived direct-cast report to the loaded ad inventory.
+
+    Invalid direct campaigns remain inspectable through ``cast_report`` but are
+    marked ineligible before producer selection. This is intentionally after
+    TTS normalization: an approved character can retain its explicit safe
+    provider fallback without being replaced by another roster character.
+    """
+
+    report = compile_ad_cast(config.ads.brands, config.ads.voices)
+    config.ads.cast_report = report
+    config.ads.voices = [
+        replace(
+            voice,
+            reserved_for=report.reserved_voice_owners.get(voice.name, frozenset()),
+            direct_identity_quarantined=voice.name in report.quarantined_voice_names,
+        )
+        for voice in config.ads.voices
+    ]
+    config.ads.brands = [
+        replace(
+            brand,
+            cast_eligible=brand.name not in report.excluded_brands,
+            campaign=(
+                replace(
+                    brand.campaign,
+                    spokesperson_role=report.primary_roles.get(brand.name, ""),
+                )
+                if brand.campaign is not None
+                else None
+            ),
+        )
+        for brand in config.ads.brands
+    ]
+    if report.warnings:
+        import logging
+
+        log = logging.getLogger(__name__)
+        for warning in report.warnings:
+            # ``compile_ad_cast`` deliberately omits provider voice IDs.
+            log.warning("ads.cast: %s", warning)
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -1442,6 +1495,91 @@ def _clean_str(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _parse_ad_voice_settings(value: object, *, index: int, engine: object) -> dict[str, float | bool]:
+    """Validate explicit Eleven v2 ad tuning without copying TTS defaults.
+
+    ``audio.tts`` remains the source of the house defaults. This parser only
+    accepts deliberate per-character overrides, so a typo cannot silently turn
+    into an ineffective API field or a non-Eleven engine's ignored setting.
+    """
+
+    field_name = f"ads.voices[{index}].voice_settings"
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(_err(field_name, "must be a TOML table"))
+    if not value:
+        return {}
+
+    engine_name = _clean_str(engine).lower() or "edge"
+    if engine_name != "elevenlabs":
+        raise ValueError(_err(field_name, "is supported only for engine = 'elevenlabs'"))
+
+    parsed: dict[str, float | bool] = {}
+    for key, raw_value in value.items():
+        if key in _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float) or not math.isfinite(raw_value):
+                raise ValueError(_err(f"{field_name}.{key}", "must be a finite number between 0 and 1"))
+            lower, upper = _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS[key]
+            if not lower <= raw_value <= upper:
+                raise ValueError(_err(f"{field_name}.{key}", "must be between 0 and 1"))
+            parsed[key] = float(raw_value)
+        elif key in _ELEVENLABS_V2_BOOL_SETTINGS:
+            if not isinstance(raw_value, bool):
+                raise ValueError(_err(f"{field_name}.{key}", "must be true or false"))
+            parsed[key] = raw_value
+        else:
+            allowed = sorted((*_ELEVENLABS_V2_FLOAT_SETTING_BOUNDS, *_ELEVENLABS_V2_BOOL_SETTINGS))
+            raise ValueError(_err(f"{field_name}.{key}", f"must be one of {allowed}"))
+    return parsed
+
+
+def _parse_ad_voice_name(value: object, *, index: int) -> str:
+    """Normalize the character key used by direct-cast ownership."""
+
+    name = _clean_str(value)
+    if not name:
+        raise ValueError(_err(f"ads.voices[{index}].name", "must be a non-empty string"))
+    return name
+
+
+def _parse_ad_brand_name(value: object, *, index: int) -> str:
+    """Normalize the campaign key used by direct-cast ownership."""
+
+    name = _clean_str(value)
+    if not name:
+        raise ValueError(_err(f"ads.brands[{index}].name", "must be a non-empty string"))
+    return name
+
+
+def _parse_spokesperson_voice(value: object) -> tuple[str, bool]:
+    """Preserve malformed explicit direct mappings for fail-closed compilation."""
+
+    if value is None:
+        return "", False
+    return (_clean_str(value), True)
+
+
+def _parse_ad_voice_airtime_approved(value: object, *, index: int) -> bool:
+    """Parse the explicit approval gate; unmarked config voices stay staged."""
+
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(_err(f"ads.voices[{index}].airtime_approved", "must be true or false"))
+    return value
+
+
+def _parse_ad_voice_secondary_only(value: object, *, index: int) -> bool:
+    """Keep the house-support role opt-in and impossible to mistype."""
+
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(_err(f"ads.voices[{index}].secondary_only", "must be true or false"))
+    return value
+
+
 def sanitize_station_name(value: object) -> str:
     """Return a safe, bounded station name for human-facing surfaces."""
     if not isinstance(value, str):
@@ -1687,42 +1825,60 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     ads_raw = raw.get("ads", {})
     if "brand_pool" in ads_raw:
         # Backward compat: convert flat string list to AdBrand objects
-        brands = [AdBrand(name=s, tagline="", category="general") for s in ads_raw["brand_pool"]]
-        voices = []
+        brands: list[AdBrand] = [
+            AdBrand(name=_parse_ad_brand_name(name, index=index), tagline="", category="general")
+            for index, name in enumerate(ads_raw["brand_pool"])
+        ]
+        voices: list[AdVoice] = []
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
     else:
         brands = []
-        for b in ads_raw.get("brands", []):
+        for brand_index, b in enumerate(ads_raw.get("brands", [])):
             campaign_raw = b.get("campaign")
             campaign = None
             if campaign_raw and isinstance(campaign_raw, dict):
+                spokesperson_voice, spokesperson_voice_declared = _parse_spokesperson_voice(
+                    campaign_raw.get("spokesperson_voice")
+                )
                 campaign = CampaignSpine(
                     premise=campaign_raw.get("premise", ""),
                     sonic_signature=campaign_raw.get("sonic_signature", ""),
                     format_pool=campaign_raw.get("format_pool", []),
-                    spokesperson=campaign_raw.get("spokesperson", ""),
+                    spokesperson_voice=spokesperson_voice,
+                    spokesperson_voice_declared=spokesperson_voice_declared,
+                    # Transitional compatibility only: a later gated migration
+                    # replaces this role hint with the authoritative direct
+                    # character mapping.
+                    spokesperson=_clean_str(campaign_raw.get("spokesperson")),
                     escalation_rule=campaign_raw.get("escalation_rule", ""),
                 )
             brands.append(
                 AdBrand(
-                    name=b["name"],
+                    name=_parse_ad_brand_name(b.get("name"), index=brand_index),
                     tagline=b.get("tagline", ""),
                     category=b.get("category", "general"),
                     recurring=b.get("recurring", True),
                     campaign=campaign,
                 )
             )
-        voices = [
-            AdVoice(
-                name=v["name"],
-                voice=v["voice"],
-                style=v.get("style", ""),
-                role=v.get("role", ""),
-                engine=v.get("engine", "edge"),
-                edge_fallback_voice=v.get("edge_fallback_voice", ""),
+        voices = []
+        for index, raw_voice in enumerate(ads_raw.get("voices", [])):
+            engine = raw_voice.get("engine", "edge")
+            voices.append(
+                AdVoice(
+                    name=_parse_ad_voice_name(raw_voice.get("name"), index=index),
+                    voice=raw_voice["voice"],
+                    style=raw_voice.get("style", ""),
+                    role=raw_voice.get("role", ""),
+                    engine=engine,
+                    edge_fallback_voice=raw_voice.get("edge_fallback_voice", ""),
+                    voice_settings=_parse_ad_voice_settings(
+                        raw_voice.get("voice_settings", {}), index=index, engine=engine
+                    ),
+                    airtime_approved=_parse_ad_voice_airtime_approved(raw_voice.get("airtime_approved"), index=index),
+                    secondary_only=_parse_ad_voice_secondary_only(raw_voice.get("secondary_only"), index=index),
+                )
             )
-            for v in ads_raw.get("voices", [])
-        ]
         sfx_dir = ads_raw.get("sfx_dir", "sfx")
 
     # Legacy: station.bitrate → audio.bitrate migration
@@ -2045,6 +2201,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
             config.ha_token = ""
 
     _normalize_tts_voices(config)
+    _compile_ad_cast(config)
     _validate(config)
     from mammamiradio.hosts.persona import set_arc_thresholds
 

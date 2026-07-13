@@ -26,7 +26,7 @@ import argparse
 import asyncio
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,8 +40,10 @@ from mammamiradio.audio.audio_quality import (  # noqa: E402
     _probe_duration_sec,
     _probe_volume,
 )
+from mammamiradio.core.config import StationConfig, load_config  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "mammamiradio" / "assets" / "demo" / "welcome"
+DEFAULT_CONFIG_PATH = REPO_ROOT / "radio.toml"
 
 STATUS_GENERATED = "generated"
 STATUS_SKIPPED = "skipped"
@@ -64,27 +66,30 @@ STAGING_DIRNAME = ".staging"
 
 @dataclass(frozen=True)
 class WelcomeClip:
-    """One welcome clip: output filename, TTS voice, and the line to speak."""
+    """One welcome clip: output filename, configured host, and line to speak."""
 
     filename: str
-    voice: str
+    host_name: str
     text: str
+    # Filled from the configured host immediately before synthesis. Keeping it
+    # out of the contract prevents stale hard-coded Edge voices from drifting
+    # away from the actual on-air host identity.
+    voice: str = ""
 
 
 # The contract. Italian-only by design — these match the station identity and
 # its two house hosts (Marco / Giulia). Keep filenames stable: the runtime globs
 # welcome/*.mp3, but committing predictable names keeps regeneration idempotent.
+# Voice IDs are deliberately resolved from radio.toml below, never frozen here.
 WELCOME_CLIPS: tuple[WelcomeClip, ...] = (
     WelcomeClip(
         "marco_welcome_1.mp3",
-        "it-IT-GiuseppeMultilingualNeural",
+        "Marco",
         "Eyyy, qualcuno si e collegato! Benvenuto, benvenuto!",
     ),
-    WelcomeClip(
-        "marco_welcome_2.mp3", "it-IT-GiuseppeMultilingualNeural", "Eccolo! Un nuovo ascoltatore! Che bello, che bello!"
-    ),
-    WelcomeClip("giulia_welcome_1.mp3", "it-IT-ElsaNeural", "Benvenuto... vediamo cosa ci hai portato oggi."),
-    WelcomeClip("giulia_welcome_2.mp3", "it-IT-ElsaNeural", "Oh, qualcuno si e sintonizzato. Finalmente."),
+    WelcomeClip("marco_welcome_2.mp3", "Marco", "Eccolo! Un nuovo ascoltatore! Che bello, che bello!"),
+    WelcomeClip("giulia_welcome_1.mp3", "Giulia", "Benvenuto... vediamo cosa ci hai portato oggi."),
+    WelcomeClip("giulia_welcome_2.mp3", "Giulia", "Oh, qualcuno si e sintonizzato. Finalmente."),
 )
 
 
@@ -96,6 +101,31 @@ class ClipResult:
     output_path: Path
     status: str
     error: str = ""
+
+
+def resolve_welcome_clips(
+    config: StationConfig,
+    clips: tuple[WelcomeClip, ...] = WELCOME_CLIPS,
+) -> tuple[WelcomeClip, ...]:
+    """Resolve each welcome line through its configured host's usable Edge voice.
+
+    The asset generator remains deliberately free and deterministic, so it
+    renders with Edge even when the live host uses a paid engine. In that case,
+    use the host's explicit Edge rescue voice rather than a stale, unrelated
+    hard-coded default. A missing/ambiguous host is a configuration error rather
+    than an opportunity to create a greeting in the wrong character.
+    """
+    resolved: list[WelcomeClip] = []
+    for clip in clips:
+        matches = [host for host in config.hosts if host.name.casefold() == clip.host_name.casefold()]
+        if len(matches) != 1:
+            raise ValueError(f"Welcome clip host '{clip.host_name}' must resolve to exactly one configured host")
+        host = matches[0]
+        voice = host.voice if (host.engine or "edge").lower() == "edge" else host.edge_fallback_voice
+        if not voice:
+            raise ValueError(f"Welcome clip host '{host.name}' has no usable Edge voice")
+        resolved.append(replace(clip, voice=voice))
+    return tuple(resolved)
 
 
 def _discard(path: Path) -> str:
@@ -165,18 +195,24 @@ async def generate_clips(
     clips: tuple[WelcomeClip, ...],
     output_dir: Path,
     *,
+    config: StationConfig | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
 ) -> list[ClipResult]:
     """Synthesize each welcome clip into output_dir, skipping ones that exist.
 
-    Always renders through the Edge engine: the contract voices are Edge voice
-    IDs, so any cloud engine would fall back to a default voice (wrong speaker)
-    without signalling it. Returns one ClipResult per clip. Best-effort per clip:
+    Always renders through Edge. If a configured host uses a cloud engine, its
+    explicit Edge fallback is selected before rendering. Returns one ClipResult
+    per clip. Best-effort per clip:
     a single failure (a flaky voice, an unwritable output dir, a silent fallback,
     or a substituted voice) is recorded as STATUS_FAILED and does not abort the
     remaining clips.
     """
+    if config is not None:
+        clips = resolve_welcome_clips(config, clips)
+    elif any(not clip.voice for clip in clips):
+        clips = resolve_welcome_clips(load_config(str(DEFAULT_CONFIG_PATH)), clips)
+
     results: list[ClipResult] = []
     staging_dir_ready = False
     try:
@@ -280,6 +316,12 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Directory to write clips into (default: {DEFAULT_OUTPUT_DIR}).",
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Station config used to resolve Marco and Giulia (default: {DEFAULT_CONFIG_PATH}).",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Rebuild clips that already exist (default: skip existing).",
@@ -291,14 +333,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    results = asyncio.run(
-        generate_clips(
-            WELCOME_CLIPS,
-            args.output_dir,
-            overwrite=args.overwrite,
-            dry_run=args.dry_run,
+    try:
+        clips = resolve_welcome_clips(load_config(str(args.config)))
+        results = asyncio.run(
+            generate_clips(
+                clips,
+                args.output_dir,
+                overwrite=args.overwrite,
+                dry_run=args.dry_run,
+            )
         )
-    )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     _print_summary(results, args.output_dir)
     return 1 if any(r.status == STATUS_FAILED for r in results) else 0
 

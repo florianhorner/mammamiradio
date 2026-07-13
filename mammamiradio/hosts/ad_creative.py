@@ -55,7 +55,18 @@ class CampaignSpine:
     premise: str = ""
     sonic_signature: str = ""  # e.g. "ice_clink+startup_synth"
     format_pool: list[str] = field(default_factory=list)
-    spokesperson: str = ""  # speaker role name
+    # The configured character identity. This is an ``AdVoice.name`` rather
+    # than a provider ID, so a character stays the same through a TTS rescue.
+    spokesperson_voice: str = ""
+    # Distinguish an omitted direct mapping from a malformed explicit one. The
+    # latter must remain visible and fail closed instead of silently becoming a
+    # legacy role-only campaign.
+    spokesperson_voice_declared: bool = False
+    # Derived from ``spokesperson_voice`` at config load; never read from TOML.
+    spokesperson_role: str = ""
+    # Compatibility-only role hint for pre-direct-cast radio.toml files. New
+    # identity ownership must use ``spokesperson_voice``.
+    spokesperson: str = ""
     escalation_rule: str = ""  # natural language for prompt
 
 
@@ -68,6 +79,9 @@ class AdBrand:
     category: str = "general"
     recurring: bool = True
     campaign: CampaignSpine | None = None
+    # Derived at config load. Invalid directly-owned campaigns stay visible in
+    # inventory but are never selected for airtime.
+    cast_eligible: bool = True
 
 
 @dataclass
@@ -80,6 +94,39 @@ class AdVoice:
     role: str = ""  # speaker role: "hammer", "seductress", etc.
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
+    # Empty means use the unchanged house defaults in ``audio.tts``.
+    voice_settings: dict[str, float | bool] = field(default_factory=dict)
+    # Candidate voices stay completely out of ordinary casting until an
+    # operator has reviewed the provider audition. The config loader defaults
+    # this to false for new TOML rows; the dataclass default keeps legacy
+    # programmatic fixtures compatible.
+    airtime_approved: bool = True
+    # House support is deliberately a separate casting tier.  Such a voice may
+    # answer a directly owned character, but never front a generic/legacy spot
+    # or become a campaign's named spokesperson.
+    secondary_only: bool = False
+    # Derived from campaign ownership at config load; never read from TOML.
+    # A recurring character may intentionally own several campaigns.
+    reserved_for: frozenset[str] = field(default_factory=frozenset)
+    # Derived from direct-cast compilation. An identity named by an invalid
+    # direct campaign is withheld from every cast rather than leaking into a
+    # different brand as a supposedly unreserved partner.
+    direct_identity_quarantined: bool = False
+
+
+@dataclass(frozen=True)
+class AdCastReport:
+    """Validated direct-character ownership derived from ad config.
+
+    This is intentionally a narrow ad-specific compile result, not a generic
+    eligibility framework. Keys are character names, never provider voice IDs.
+    """
+
+    reserved_voice_owners: dict[str, frozenset[str]] = field(default_factory=dict)
+    quarantined_voice_names: frozenset[str] = field(default_factory=frozenset)
+    primary_roles: dict[str, str] = field(default_factory=dict)
+    excluded_brands: frozenset[str] = field(default_factory=frozenset)
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass
@@ -239,17 +286,180 @@ _FORMAT_ROLES: dict[str, list[str]] = {
 ALL_FORMATS = [f.value for f in AdFormat]
 
 
+def compile_ad_cast(brands: list[AdBrand], voices: list[AdVoice]) -> AdCastReport:
+    """Compile direct campaign identities into safe, character-owned casting.
+
+    A direct identity is valid only when it names exactly one configured
+    character, that character's role is available in *every* declared format,
+    and each supporting role can be supplied by an unreserved house voice.  A
+    bad campaign is excluded from rotation rather than silently clamped to a
+    different role or borrowing another brand's character.
+
+    Legacy ``CampaignSpine.spokesperson`` deliberately does not participate in
+    this compiler.  A later, audition-gated migration moves those role hints
+    to direct character names once every required house support exists.
+    """
+
+    voices_by_name: dict[str, list[AdVoice]] = {}
+    for voice in voices:
+        name = voice.name.strip()
+        if name:
+            voices_by_name.setdefault(name, []).append(voice)
+
+    brand_name_counts: dict[str, int] = {}
+    for brand in brands:
+        if isinstance(brand.name, str) and brand.name and brand.name == brand.name.strip():
+            brand_name_counts[brand.name] = brand_name_counts.get(brand.name, 0) + 1
+    duplicate_brand_names = {name for name, count in brand_name_counts.items() if count > 1}
+    warnings: list[str] = []
+    excluded: set[str] = set()
+    candidates: dict[str, tuple[AdBrand, AdVoice, tuple[str, ...]]] = {}
+    # Any configured direct identity is permanently unavailable as a generic
+    # or partner actor. This deliberately includes identities on invalid
+    # campaigns: a bad campaign must not release its character into another
+    # brand's cast.
+    direct_identity_voice_names: set[str] = set()
+
+    def exclude(brand: AdBrand, reason: str) -> None:
+        """Record a listener-safe warning without exposing a provider ID."""
+        if brand.name in excluded:
+            return
+        excluded.add(brand.name)
+        warnings.append(f"campaign {brand.name!r} excluded from ad rotation: {reason}")
+
+    for brand in brands:
+        valid_brand_name = isinstance(brand.name, str) and bool(brand.name) and brand.name == brand.name.strip()
+        campaign = brand.campaign
+        if campaign is None:
+            if not valid_brand_name:
+                exclude(brand, "campaign name is malformed")
+            elif brand.name in duplicate_brand_names:
+                exclude(brand, "campaign name is ambiguous")
+            continue
+        direct_name = campaign.spokesperson_voice.strip() if isinstance(campaign.spokesperson_voice, str) else ""
+        direct_declared = campaign.spokesperson_voice_declared or bool(direct_name)
+        if not direct_declared:
+            if not valid_brand_name:
+                exclude(brand, "campaign name is malformed")
+            elif brand.name in duplicate_brand_names:
+                exclude(brand, "campaign name is ambiguous")
+            continue
+        if not direct_name:
+            exclude(brand, "configured character is malformed")
+            continue
+
+        configured_matches = voices_by_name.get(direct_name, [])
+        # Quarantine every matching row before deciding whether the mapping is
+        # usable. Duplicate IDs must not leak through a role fallback either.
+        direct_identity_voice_names.update(voice.name for voice in configured_matches)
+        if not valid_brand_name:
+            exclude(brand, "campaign name is malformed")
+            continue
+        if brand.name in duplicate_brand_names:
+            exclude(brand, "campaign name is ambiguous")
+            continue
+        if len(configured_matches) != 1:
+            exclude(
+                brand,
+                "configured character is ambiguous" if configured_matches else "configured character is unavailable",
+            )
+            continue
+        configured_voice = configured_matches[0]
+        if configured_voice.role not in SPEAKER_ROLES:
+            exclude(brand, "configured character has no supported ad role")
+            continue
+        if configured_voice.secondary_only:
+            exclude(brand, "configured character is supporting-only")
+            continue
+
+        if not configured_voice.airtime_approved:
+            # An existing legacy role pin may continue serving this campaign
+            # while a replacement is auditioned. A brand with no prior safe
+            # identity is withheld rather than silently recast at random.
+            if campaign.spokesperson in SPEAKER_ROLES:
+                warnings.append(f"campaign {brand.name!r} keeps its existing mapping: character awaits approval")
+                continue
+            exclude(brand, "configured character awaits approval")
+            continue
+
+        pool = campaign.format_pool
+        if not isinstance(pool, list) or not pool:
+            exclude(brand, "direct character requires an explicit compatible format pool")
+            continue
+        if any(not isinstance(ad_format, str) or ad_format not in ALL_FORMATS for ad_format in pool):
+            exclude(brand, "format pool contains an unsupported format")
+            continue
+        if any(configured_voice.role not in _FORMAT_ROLES[ad_format] for ad_format in pool):
+            exclude(brand, "format pool is incompatible with its character")
+            continue
+
+        candidates[brand.name] = (brand, configured_voice, tuple(pool))
+
+    # A recurring character may own several explicit campaigns (for example,
+    # the same announcer can front three brands). Ownership is therefore
+    # many-to-many: the selected brand must be one of those owners, never just
+    # the first config claimant.
+    def reservation_map() -> dict[str, frozenset[str]]:
+        owners: dict[str, set[str]] = {}
+        for brand_name, (_brand, voice, _pool) in candidates.items():
+            if brand_name not in excluded:
+                owners.setdefault(voice.name, set()).add(brand_name)
+        return {voice_name: frozenset(brand_names) for voice_name, brand_names in owners.items()}
+
+    # Supporting actors are drawn only from house voices that are not named by
+    # any direct campaign, valid or invalid. That fixed pool avoids a
+    # one-pass/reservation-release race and enforces the single ownership rule.
+    unreserved_voices = [
+        voice
+        for voice in voices
+        if voice.airtime_approved
+        and not voice.direct_identity_quarantined
+        and voice.name not in direct_identity_voice_names
+    ]
+    for brand_name, (brand, voice, candidate_pool) in candidates.items():
+        if brand_name in excluded:
+            continue
+        required_support_roles = {
+            role for ad_format in candidate_pool for role in _FORMAT_ROLES[ad_format] if role != voice.role
+        }
+        missing_support = [
+            role
+            for role in required_support_roles
+            if not any(candidate.role == role for candidate in unreserved_voices)
+        ]
+        if missing_support:
+            exclude(brand, "no unreserved supporting character can perform every configured format")
+
+    reserved_voice_owners = reservation_map()
+    quarantined_voice_names = direct_identity_voice_names - set(reserved_voice_owners)
+    primary_roles = {
+        brand_name: voice.role
+        for brand_name, (_brand, voice, _pool) in candidates.items()
+        if brand_name not in excluded
+    }
+    return AdCastReport(
+        reserved_voice_owners=reserved_voice_owners,
+        quarantined_voice_names=frozenset(quarantined_voice_names),
+        primary_roles=primary_roles,
+        excluded_brands=frozenset(excluded),
+        warnings=tuple(warnings),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Selection helpers
 # ---------------------------------------------------------------------------
 
 
 def _pick_brand(brands: list[AdBrand], ad_history: list[AdHistoryEntry]) -> AdBrand:
-    """Pick a brand, avoiding the last 3 aired and weighting recurring brands higher."""
+    """Pick a safe brand, avoiding the last 3 and weighting recurring brands."""
+    safe_brands = [brand for brand in brands if brand.cast_eligible]
+    if not safe_brands:
+        raise ValueError("No safe ad campaigns are configured")
     recent_names = {e.brand for e in list(ad_history)[-3:]}
-    eligible = [b for b in brands if b.name not in recent_names]
+    eligible = [brand for brand in safe_brands if brand.name not in recent_names]
     if not eligible:
-        eligible = list(brands)  # allow repeats if pool exhausted
+        eligible = safe_brands  # allow safe repeats if pool exhausted
     weights = [3 if b.recurring else 1 for b in eligible]
     return random.choices(eligible, weights=weights, k=1)[0]
 
@@ -264,18 +474,36 @@ def _select_ad_creative(
     Voice-count guard: if fewer than 2 distinct voices are available, multi-voice
     formats (duo_scene, testimonial) are excluded from candidates.
     """
-    # Pick format — filter format_pool to known formats to avoid ValueError at AdFormat(f)
-    if brand.campaign and brand.campaign.format_pool:
-        candidates = [f for f in brand.campaign.format_pool if f in ALL_FORMATS]
+    if not brand.cast_eligible:
+        raise ValueError(f"Campaign {brand.name!r} is excluded from ad rotation")
+
+    campaign = brand.campaign
+    # The derived role is populated only after the character has passed config
+    # validation and its human/provider audition gate.  A staged replacement
+    # can therefore retain its legacy safe mapping without becoming a random
+    # unapproved voice in the live rotation.
+    direct_identity = bool(campaign and campaign.spokesperson_role)
+
+    # A direct identity must keep its declared format pool intact.  Generic and
+    # legacy campaigns retain the historical graceful fallback while a later
+    # gated migration moves every campaign identity to ``spokesperson_voice``.
+    if campaign and campaign.format_pool:
+        candidates = [f for f in campaign.format_pool if f in ALL_FORMATS]
         if not candidates:
+            if direct_identity:
+                raise ValueError(f"Campaign {brand.name!r} has no safe configured format")
             candidates = list(ALL_FORMATS)
     else:
+        if direct_identity:
+            raise ValueError(f"Campaign {brand.name!r} has no explicit format pool")
         candidates = list(ALL_FORMATS)
 
     # Voice-count guard: exclude multi-voice formats if < 2 voices
     if num_voices < 2:
         candidates = [f for f in candidates if AdFormat(f).voice_count < 2]
         if not candidates:
+            if direct_identity:
+                raise ValueError(f"Campaign {brand.name!r} has no safe single-voice format")
             candidates = [f.value for f in AdFormat if f.voice_count < 2]
 
     # Avoid last-used format for this brand
@@ -302,20 +530,32 @@ def _select_ad_creative(
         ] or sonic_variants
     cat_sonic = replace(random.choice(sonic_variants))
 
-    if brand.campaign and brand.campaign.sonic_signature:
+    if campaign and campaign.sonic_signature:
         sonic = SonicWorld(
             environment=cat_sonic.environment,
             music_bed=cat_sonic.music_bed,
-            transition_motif=brand.campaign.sonic_signature.split("+")[0],
-            sonic_signature=brand.campaign.sonic_signature,
+            transition_motif=campaign.sonic_signature.split("+")[0],
+            sonic_signature=campaign.sonic_signature,
         )
     else:
         sonic = cat_sonic
 
-    # Determine needed roles — validate spokesperson against known roles
-    if brand.campaign and brand.campaign.spokesperson and brand.campaign.spokesperson in SPEAKER_ROLES:
+    # Preserve the format's speaker order for script structure. A direct
+    # character occupies its own role slot, so Il Razzo remains the disclaimer
+    # goblin in [hammer, disclaimer_goblin] rather than being recast as hammer.
+    if direct_identity:
+        assert campaign is not None
         default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
-        primary_role = brand.campaign.spokesperson
+        primary_role = campaign.spokesperson_role
+        if primary_role not in default_roles:
+            raise ValueError(f"Campaign {brand.name!r} direct character is incompatible with {ad_format!r}")
+        roles = list(default_roles)
+    # Transitional compatibility for existing role-pinned config.  This branch
+    # deliberately reserves no character and is removed by the later gated
+    # migration once every required house support has been approved.
+    elif campaign and campaign.spokesperson and campaign.spokesperson in SPEAKER_ROLES:
+        default_roles = _FORMAT_ROLES.get(ad_format, ["hammer"])
+        primary_role = campaign.spokesperson
         if primary_role not in default_roles:
             primary_role = default_roles[0]
         if AdFormat(ad_format).voice_count >= 2:
@@ -335,11 +575,33 @@ def _cast_voices(
     hosts: list[HostPersonality],
     roles_needed: list[str],
 ) -> dict[str, AdVoice]:
-    """Map needed speaker roles to actual AdVoice instances.
+    """Map roles to safe ad voices without crossing character ownership.
 
-    Falls back to random voice from pool if no voice matches a needed role.
+    A directly owned campaign always receives its configured character in its
+    declared role slot. Its partners may only be unreserved house voices;
+    generic/legacy campaigns
+    may use only unreserved voices and retain their historical fallback path.
     """
-    if not voices:
+    campaign = brand.campaign
+    direct_name = (
+        campaign.spokesperson_voice.strip() if campaign and isinstance(campaign.spokesperson_voice, str) else ""
+    )
+    direct_identity = bool(campaign and campaign.spokesperson_role)
+    if direct_identity and not brand.cast_eligible:
+        raise ValueError(f"Campaign {brand.name!r} is excluded from ad rotation")
+
+    usable_voices = [
+        voice
+        for voice in voices
+        if (
+            voice.airtime_approved
+            and not voice.direct_identity_quarantined
+            and (not voice.reserved_for or brand.name in voice.reserved_for)
+        )
+    ]
+    if not usable_voices:
+        if direct_identity:
+            raise ValueError(f"Campaign {brand.name!r} has no safe character voice")
         if not hosts:
             raise ValueError("At least one host or ad voice is required to cast ad voices")
         # No voices configured — assign the same host voice to every needed role
@@ -357,20 +619,72 @@ def _cast_voices(
     # "hammer" announcers from different engines); casting picks one at random
     # so ad breaks vary instead of always using the same timbre per role.
     role_index: dict[str, list[AdVoice]] = {}
-    for v in voices:
+    for v in usable_voices:
         if v.role:
             role_index.setdefault(v.role, []).append(v)
+
+    # Generic/legacy spots never receive the house-support tier as their main
+    # identity.  Direct campaigns use the complete role index below only for a
+    # non-identity partner role.
+    primary_usable_voices = [voice for voice in usable_voices if not voice.secondary_only]
+
+    primary_voice: AdVoice | None = None
+    primary_role = ""
+    if direct_identity:
+        assert campaign is not None
+        matches = [voice for voice in usable_voices if voice.name.strip() == direct_name]
+        if len(matches) != 1:
+            raise ValueError(f"Campaign {brand.name!r} has no safe configured character")
+        primary_voice = matches[0]
+        primary_role = campaign.spokesperson_role or primary_voice.role
+        if primary_role not in roles_needed:
+            raise ValueError(f"Campaign {brand.name!r} direct character is not assigned a format role")
 
     result: dict[str, AdVoice] = {}
     used_voices: set[str] = set()
 
     for role in roles_needed:
-        candidates = role_index.get(role, [])
+        if direct_identity and role == primary_role:
+            if primary_voice is None or primary_voice.role != role:
+                raise ValueError(f"Campaign {brand.name!r} direct character does not match the requested role")
+            result[role] = primary_voice
+            used_voices.add(primary_voice.name)
+            continue
+
+        # Direct campaigns may use an unreserved house voice only for the
+        # non-identity roles. There is intentionally no random cross-brand
+        # fallback when a partner is unavailable.
+        if direct_identity:
+            pool = [
+                voice for voice in role_index.get(role, []) if not voice.reserved_for and voice.name not in used_voices
+            ]
+            if not pool:
+                raise ValueError(f"Campaign {brand.name!r} has no safe supporting character for role {role!r}")
+            pick = random.choice(pool)
+            result[role] = pick
+            used_voices.add(pick.name)
+            continue
+
+        candidates = [voice for voice in role_index.get(role, []) if not voice.secondary_only]
         # Prefer a voice not already cast in this spot; fall back to reusing one
         # of the role's voices, then to any voice in the pool.
         pool = [v for v in candidates if v.name not in used_voices] or candidates
         if not pool:
-            pool = [v for v in voices if v.name not in used_voices] or list(voices)
+            pool = [v for v in primary_usable_voices if v.name not in used_voices] or list(primary_usable_voices)
+        if not pool:
+            if not hosts:
+                raise ValueError("At least one non-supporting host or ad voice is required to cast ad voices")
+            host = random.choice(hosts)
+            pick = AdVoice(
+                name=host.name,
+                voice=host.voice,
+                style=host.style,
+                engine=host.engine,
+                edge_fallback_voice=host.edge_fallback_voice,
+            )
+            result[role] = pick
+            used_voices.add(pick.name)
+            continue
         pick = random.choice(pool)
         result[role] = pick
         used_voices.add(pick.name)

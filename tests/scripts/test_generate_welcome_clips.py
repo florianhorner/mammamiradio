@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
 
+from mammamiradio.core.config import StationConfig
+from mammamiradio.core.models import HostPersonality
 from scripts import generate_welcome_clips as gen
 
 FAKE_MP3_BYTES = b"fake mp3" * 200
@@ -21,8 +26,37 @@ def _loud_by_default(monkeypatch):
     monkeypatch.setattr(gen, "_probe_duration_sec", lambda _path: 2.0)
 
 
+def _welcome_config() -> StationConfig:
+    """Small source-of-truth host roster used by the free Edge generator."""
+    return cast(
+        StationConfig,
+        SimpleNamespace(
+            hosts=[
+                HostPersonality(
+                    name="Marco",
+                    voice="paid-marco-voice",
+                    style="host",
+                    engine="elevenlabs",
+                    edge_fallback_voice="it-IT-GiuseppeMultilingualNeural",
+                ),
+                HostPersonality(
+                    name="Giulia",
+                    voice="it-IT-IsabellaNeural",
+                    style="host",
+                    engine="edge",
+                ),
+            ]
+        ),
+    )
+
+
+@pytest.fixture
+def configured_clips() -> tuple[gen.WelcomeClip, ...]:
+    return gen.resolve_welcome_clips(_welcome_config())
+
+
 def test_welcome_clip_contract_is_italian_and_well_formed() -> None:
-    """The contract must stay non-empty, .mp3-named, and free of empty text/voice.
+    """The contract must stay non-empty, .mp3-named, and free of empty text/host.
 
     The runtime globs welcome/*.mp3, so a clip with a non-mp3 name or blank text
     would silently never air. This guards the shape the generator promises.
@@ -33,11 +67,21 @@ def test_welcome_clip_contract_is_italian_and_well_formed() -> None:
     for clip in gen.WELCOME_CLIPS:
         assert clip.filename.endswith(".mp3")
         assert clip.text.strip()
-        assert clip.voice.startswith("it-IT-"), "welcome clips are Italian-only by design"
+        assert clip.host_name in {"Marco", "Giulia"}
+        assert not clip.voice, "voice IDs must come from the configured host"
+
+
+def test_resolve_welcome_clips_uses_configured_edge_or_cloud_fallback() -> None:
+    by_host = {clip.host_name: clip.voice for clip in gen.resolve_welcome_clips(_welcome_config())}
+
+    assert by_host == {
+        "Marco": "it-IT-GiuseppeMultilingualNeural",
+        "Giulia": "it-IT-IsabellaNeural",
+    }
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch, configured_clips) -> None:
     calls: list[tuple[str, str, str]] = []
 
     async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
@@ -47,10 +91,10 @@ async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch) ->
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert [r.status for r in results] == [gen.STATUS_GENERATED] * len(gen.WELCOME_CLIPS)
-    assert len(calls) == len(gen.WELCOME_CLIPS)
+    assert [r.status for r in results] == [gen.STATUS_GENERATED] * len(configured_clips)
+    assert len(calls) == len(configured_clips)
     # Every clip lands on disk under its declared filename, and the result
     # reports the exact path it wrote to.
     for result in results:
@@ -61,7 +105,7 @@ async def test_generate_clips_writes_each_clip_via_tts(tmp_path, monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_skips_existing_unless_overwrite(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_skips_existing_unless_overwrite(tmp_path, monkeypatch, configured_clips) -> None:
     calls: list[str] = []
 
     async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
@@ -72,27 +116,27 @@ async def test_generate_clips_skips_existing_unless_overwrite(tmp_path, monkeypa
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
 
     # Pre-seed one clip so it is already present.
-    existing = gen.WELCOME_CLIPS[0]
+    existing = configured_clips[0]
     (tmp_path / existing.filename).write_bytes(ORIGINAL_MP3_BYTES)
 
-    skipped = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    skipped = await gen.generate_clips(configured_clips, tmp_path)
     by_name = {r.clip.filename: r for r in skipped}
     assert by_name[existing.filename].status == gen.STATUS_SKIPPED
     assert existing.filename not in calls
     assert (tmp_path / existing.filename).read_bytes() == ORIGINAL_MP3_BYTES
 
     # --overwrite rebuilds everything, including the pre-existing clip.
-    rebuilt = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, overwrite=True)
-    assert len(rebuilt) == len(gen.WELCOME_CLIPS)
+    rebuilt = await gen.generate_clips(configured_clips, tmp_path, overwrite=True)
+    assert len(rebuilt) == len(configured_clips)
     assert all(r.status == gen.STATUS_GENERATED for r in rebuilt)
     assert (tmp_path / existing.filename).read_bytes() == REGENERATED_MP3_BYTES
 
 
 @pytest.mark.asyncio
-async def test_overwrite_failure_preserves_existing_clip(tmp_path, monkeypatch) -> None:
+async def test_overwrite_failure_preserves_existing_clip(tmp_path, monkeypatch, configured_clips) -> None:
     """A failed rebuild must not delete the last known-good committed clip."""
 
-    existing = gen.WELCOME_CLIPS[0]
+    existing = configured_clips[0]
     dest = tmp_path / existing.filename
     dest.write_bytes(ORIGINAL_MP3_BYTES)
 
@@ -111,7 +155,7 @@ async def test_overwrite_failure_preserves_existing_clip(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatch) -> None:
+async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatch, configured_clips) -> None:
     """No partial or raw render may surface under the runtime-globbed clip dir.
 
     The playback loop serves any ``*.mp3`` directly under welcome/ (Path.glob
@@ -134,35 +178,35 @@ async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatc
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
     assert all(r.status == gen.STATUS_GENERATED for r in results)
     # Mid-generation, the clip dir's glob exposes ONLY already-published contract
     # clips — never a staging/raw/tmp intermediate, under any naming scheme.
-    contract_names = {clip.filename for clip in gen.WELCOME_CLIPS}
+    contract_names = {clip.filename for clip in configured_clips}
     for names in mid_run_globs:
         assert set(names) <= contract_names, f"non-published artifact in globbed dir: {names}"
     # Final state: only the published clips, and the staging dir is gone.
-    assert sorted(p.name for p in tmp_path.glob("*.mp3")) == sorted(c.filename for c in gen.WELCOME_CLIPS)
+    assert sorted(p.name for p in tmp_path.glob("*.mp3")) == sorted(c.filename for c in configured_clips)
     assert not (tmp_path / gen.STAGING_DIRNAME).exists()
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_dry_run_writes_nothing(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_dry_run_writes_nothing(tmp_path, monkeypatch, configured_clips) -> None:
     async def fail_if_called(*_args, **_kwargs):
         raise AssertionError("dry-run must not synthesize")
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fail_if_called)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, dry_run=True)
+    results = await gen.generate_clips(configured_clips, tmp_path, dry_run=True)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_PLANNED for r in results)
     assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_rejects_short_nonsilent_render(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_rejects_short_nonsilent_render(tmp_path, monkeypatch, configured_clips) -> None:
     """A loud but truncated render must not be accepted as a welcome clip."""
 
     async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
@@ -172,16 +216,16 @@ async def test_generate_clips_rejects_short_nonsilent_render(tmp_path, monkeypat
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
     monkeypatch.setattr(gen, "_probe_duration_sec", lambda _path: 0.1)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("too short" in r.error for r in results)
     assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.asyncio
-async def test_dry_run_reports_existing_clips_as_skipped(tmp_path, monkeypatch) -> None:
+async def test_dry_run_reports_existing_clips_as_skipped(tmp_path, monkeypatch, configured_clips) -> None:
     """A preview must reflect what a real run would do: existing clips are skipped.
 
     Without the existence check running before the dry-run short-circuit, an
@@ -193,13 +237,13 @@ async def test_dry_run_reports_existing_clips_as_skipped(tmp_path, monkeypatch) 
         raise AssertionError("dry-run must not synthesize")
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fail_if_called)
-    existing = gen.WELCOME_CLIPS[0]
+    existing = configured_clips[0]
     (tmp_path / existing.filename).write_bytes(b"already here")
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path, dry_run=True)
+    results = await gen.generate_clips(configured_clips, tmp_path, dry_run=True)
     by_name = {r.clip.filename: r for r in results}
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert by_name[existing.filename].status == gen.STATUS_SKIPPED
     # The rest are previewed as planned; the dry run writes nothing new.
     planned = [r for r in results if r.clip.filename != existing.filename]
@@ -208,8 +252,8 @@ async def test_dry_run_reports_existing_clips_as_skipped(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeypatch) -> None:
-    fail_for = gen.WELCOME_CLIPS[0]
+async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeypatch, configured_clips) -> None:
+    fail_for = configured_clips[0]
 
     async def flaky_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
         if text == fail_for.text:
@@ -219,10 +263,10 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
 
     monkeypatch.setattr(gen.tts_module, "synthesize", flaky_synthesize)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
     by_name = {r.clip.filename: r for r in results}
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert by_name[fail_for.filename].status == gen.STATUS_FAILED
     assert by_name[fail_for.filename].error == "voice unavailable"
     # Every other clip still got written despite the one failure.
@@ -231,7 +275,7 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch, configured_clips) -> None:
     """synthesize() returns silence (not an error) when the voice backend is down.
 
     The generator must treat that as a failure and discard the file, so an
@@ -246,9 +290,9 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
     # Simulate the silence fallback: every rendered file measures near the floor.
     monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-91.0, -91.0))
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("silence" in r.error for r in results)
     # Silent files are discarded, not left on disk for an operator to commit.
@@ -256,7 +300,7 @@ async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_failed_render_partial_artifact_is_removed(tmp_path, monkeypatch) -> None:
+async def test_failed_render_partial_artifact_is_removed(tmp_path, monkeypatch, configured_clips) -> None:
     """A synth failure after a partial write must not leave a corrupt file behind.
 
     Otherwise the next default run would see it via dest.exists() and report the
@@ -269,16 +313,16 @@ async def test_failed_render_partial_artifact_is_removed(tmp_path, monkeypatch) 
 
     monkeypatch.setattr(gen.tts_module, "synthesize", synth_then_fail)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     # No partial files survive to be mis-reported as "skipped" on a rerun.
     assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_rejects_fallback_voice_substitution(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_rejects_fallback_voice_substitution(tmp_path, monkeypatch, configured_clips) -> None:
     """synthesize() silently swaps in a default voice when the requested one fails.
 
     A non-silent render in the wrong speaker (Giulia's line in a male voice) must
@@ -292,12 +336,12 @@ async def test_generate_clips_rejects_fallback_voice_substitution(tmp_path, monk
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
     # Every requested voice has failed this session → synthesize would substitute
     # the default Edge fallback voice. (_loud_by_default keeps it non-silent.)
-    failed = {clip.voice for clip in gen.WELCOME_CLIPS}
+    failed = {clip.voice for clip in configured_clips}
     monkeypatch.setattr(gen.tts_module, "_failed_edge_voices", failed)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("fallback voice" in r.error for r in results)
     # Wrong-speaker renders are discarded, not left for an operator to commit.
@@ -305,7 +349,7 @@ async def test_generate_clips_rejects_fallback_voice_substitution(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monkeypatch) -> None:
+async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monkeypatch, configured_clips) -> None:
     """If discarding a silent clip fails, the batch records it and keeps going.
 
     A locked/permission-denied unlink must not escape and abort the remaining
@@ -324,16 +368,16 @@ async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monk
 
     monkeypatch.setattr(gen.Path, "unlink", boom)
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, tmp_path)
+    results = await gen.generate_clips(configured_clips, tmp_path)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
     assert all("silence" in r.error for r in results)
     assert all("could not delete" in r.error for r in results)
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatch) -> None:
+async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatch, configured_clips) -> None:
     """A filesystem error creating the output dir is recorded, not raised.
 
     Placing a regular file where the output directory should be makes
@@ -348,9 +392,9 @@ async def test_generate_clips_handles_unwritable_output_dir(tmp_path, monkeypatc
     blocker = tmp_path / "welcome"
     blocker.write_text("i am a file, not a directory")
 
-    results = await gen.generate_clips(gen.WELCOME_CLIPS, blocker)
+    results = await gen.generate_clips(configured_clips, blocker)
 
-    assert len(results) == len(gen.WELCOME_CLIPS)
+    assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
 
 
@@ -359,6 +403,7 @@ def test_main_dry_run_returns_zero_and_writes_nothing(tmp_path, monkeypatch, cap
         raise AssertionError("dry-run must not synthesize")
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fail_if_called)
+    monkeypatch.setattr(gen, "load_config", lambda _path: _welcome_config())
 
     rc = gen.main(["--dry-run", "--output-dir", str(tmp_path)])
 
@@ -373,6 +418,7 @@ def test_main_returns_nonzero_when_a_clip_fails(tmp_path, monkeypatch) -> None:
         raise RuntimeError("no engine")
 
     monkeypatch.setattr(gen.tts_module, "synthesize", always_fail)
+    monkeypatch.setattr(gen, "load_config", lambda _path: _welcome_config())
 
     rc = gen.main(["--output-dir", str(tmp_path)])
 
