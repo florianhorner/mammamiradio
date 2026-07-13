@@ -9,11 +9,14 @@ tests deliberately scale wall-clock values down; their relationships mirror the
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 import time
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,7 +24,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.entity_policy import set_entity_muted
-from mammamiradio.home.ha_context import HomeContext, _HomeContextFetchOutcome
+from mammamiradio.home.ha_context import HomeContext, HomeRegistrySnapshot, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.scheduling import producer
@@ -62,6 +65,156 @@ def _outcome(
 
 def _snapshot(summary: str, *, age: float = 0.0, **kwargs) -> HomeContext:
     return HomeContext(summary=summary, timestamp=time.time() - age, **kwargs)
+
+
+def _states_response(states: list[dict]) -> MagicMock:
+    response = MagicMock()
+    response.content = json.dumps(states).encode("utf-8")
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.asyncio
+async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordinator_drains(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
+    state = StationState(home_authorization=HomeAuthorization.legacy())
+    observer = MagicMock()
+    state.home_entity_ids_observer = observer
+    prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
+    response = _states_response(
+        [
+            {
+                "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                "state": "on",
+                "attributes": {},
+            }
+        ]
+    )
+    client = AsyncMock()
+    client.get.return_value = response
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def _blocked_catalog(cache_dir):
+        assert threading.current_thread().name.startswith("ha-projection")
+        worker_started.set()
+        release_worker.wait(timeout=1.0)
+        try:
+            return {}
+        finally:
+            worker_finished.set()
+
+    ticks = 0
+
+    async def _heartbeat() -> None:
+        nonlocal ticks
+        deadline = asyncio.get_running_loop().time() + 0.02
+        while asyncio.get_running_loop().time() < deadline:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(
+            ha_context,
+            "_fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch.object(ha_context, "fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch.object(ha_context, "load_catalog_snapshot", side_effect=_blocked_catalog),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            fallback, fresh = await coordinator.prepare_for_segment()
+            assert worker_started.wait(timeout=0.2)
+            assert fallback.summary == "old ambient"
+            assert not fresh
+            assert state.ha_context_refresh_stage == "projection"
+
+            await _heartbeat()
+            assert ticks > 1
+            assert coordinator.current_context is prior
+            publish.assert_not_called()
+
+            release_worker.set()
+            retained = coordinator.in_flight_task
+            assert retained is not None
+            await asyncio.wait_for(asyncio.shield(retained), timeout=0.5)
+            assert state.ha_context_refresh_stage == "idle"
+            publish.assert_not_called()
+            observer.assert_not_called()
+
+            adopted, fresh = await coordinator.prepare_for_segment()
+            assert fresh
+            assert "switch.bar_kaffeemaschine_steckdose" in adopted.raw_states
+            publish.assert_called_once()
+            observer.assert_called_once_with(frozenset({"switch.bar_kaffeemaschine_steckdose"}))
+        finally:
+            release_worker.set()
+            await coordinator.close()
+    assert worker_finished.wait(timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_close_while_projection_worker_runs_ignores_late_candidate_and_clears_stage(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    config = _config(tmp_path, timeout=0.004, poll_interval=0.01)
+    state = StationState(home_authorization=HomeAuthorization.legacy())
+    prior = _snapshot("safe", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
+    client = AsyncMock()
+    client.get.return_value = _states_response(
+        [{"entity_id": "switch.bar_kaffeemaschine_steckdose", "state": "on", "attributes": {}}]
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+    real_projection = ha_context._project_home_context
+
+    def _blocked_projection(projection_input):
+        worker_started.set()
+        release_worker.wait(timeout=1.0)
+        try:
+            return real_projection(projection_input)
+        finally:
+            worker_finished.set()
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(
+            ha_context,
+            "_fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+            return_value=HomeRegistrySnapshot(source="empty_fallback"),
+        ),
+        patch.object(ha_context, "fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
+        patch.object(ha_context, "_project_home_context", side_effect=_blocked_projection),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        await coordinator.prepare_for_segment()
+        assert worker_started.wait(timeout=0.2)
+        assert state.ha_context_refresh_stage == "projection"
+
+        await coordinator.close()
+        assert state.ha_context_refresh_stage == "idle"
+        assert not state.ha_context_refresh_in_flight
+        assert coordinator.current_context is prior
+        publish.assert_not_called()
+
+        release_worker.set()
+        assert worker_finished.wait(timeout=0.5)
+        await asyncio.sleep(0)
+        assert state.ha_context_refresh_stage == "idle"
+        assert coordinator.current_context is prior
+        publish.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -612,3 +765,88 @@ async def test_narrow_coordinator_discards_legacy_stamped_fresh_result(tmp_path)
 
     assert "PRIVATE LEGACY RESULT" not in (ctx.summary or "")
     assert ctx.authorization_mode != HomeAuthorizationMode.LEGACY.value
+
+
+@pytest.mark.asyncio
+async def test_inflight_mute_then_unmute_discards_the_pre_mute_candidate(tmp_path):
+    """A hard mute is a temporal boundary, not merely the current policy view."""
+    import mammamiradio.home.ha_context as ha_context
+
+    config = _config(tmp_path, poll_interval=1.0)
+    state = StationState(home_authorization=HomeAuthorization.legacy())
+    private_id = "switch.private"
+    live_id = "switch.live"
+    prior = _snapshot(
+        "safe prior",
+        raw_states={private_id: {"state": "off", "attributes": {}}},
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _gated_legacy_fetch(**_kwargs):
+        started.set()
+        await release.wait()
+        now = time.time()
+        private_event = HomeEvent(private_id, "Private", "off", "on", now)
+        live_event = HomeEvent(live_id, "Live", "off", "on", now)
+        private_radio = RadioEventMatch("private", "directive", "private cue", private_event, 60, now)
+        live_radio = RadioEventMatch("live", "directive", "live cue", live_event, 60, now)
+        private_ritual = SimpleNamespace(
+            entity_id=private_id,
+            recipe=SimpleNamespace(public_family_label="Private ritual"),
+        )
+        live_ritual = SimpleNamespace(
+            entity_id=live_id,
+            recipe=SimpleNamespace(public_family_label="Live ritual"),
+        )
+        return HomeContext(
+            raw_states={
+                private_id: {"state": "on", "attributes": {}},
+                live_id: {"state": "on", "attributes": {}},
+            },
+            events=deque([private_event, live_event], maxlen=20),
+            radio_events=[private_radio, live_radio],
+            ritual_recipe_matches=[private_ritual, live_ritual],
+            ritual_public_families=["Private ritual", "Live ritual"],
+            timestamp=now,
+            authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        )
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(producer, "fetch_home_context", _gated_legacy_fetch),
+        patch.object(ha_context, "_ha_cache", None),
+        patch.object(ha_context, "_radio_event_state_cache", {}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {}),
+        patch.object(ha_context, "_home_context_invalidation_generation", 0),
+        patch.object(ha_context, "_home_context_entity_invalidation_generations", {}),
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            fallback, first_handoff = await coordinator.prepare_for_segment()
+            assert fallback.summary == ""
+            assert not first_handoff
+            await asyncio.wait_for(started.wait(), timeout=0.1)
+
+            set_entity_muted(tmp_path, private_id, True, label="Private switch")
+            ha_context.invalidate_home_context_entity_baselines({private_id})
+            coordinator.invalidate_muted_entities({private_id})
+            # The physical state changes while the hard mute is active; opening
+            # the policy again must not replay this in-flight transition.
+            set_entity_muted(tmp_path, private_id, False)
+
+            release.set()
+            task = coordinator.in_flight_task
+            assert task is not None
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+            adopted, fresh_handoff = await coordinator.prepare_for_segment()
+        finally:
+            await coordinator.close()
+
+    assert fresh_handoff
+    assert private_id not in adopted.raw_states
+    assert [event.entity_id for event in adopted.events] == [live_id]
+    assert [match.event.entity_id for match in adopted.radio_events] == [live_id]
+    assert [match.entity_id for match in adopted.ritual_recipe_matches] == [live_id]
+    assert adopted.ritual_public_families == ["Live ritual"]
