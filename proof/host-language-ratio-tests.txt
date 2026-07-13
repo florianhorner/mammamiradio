@@ -1,16 +1,16 @@
 host-language-ratio — mode-true host language (100% Italian / 75-25 target)
-Branch: florianhorner/feat/host-language-ratio
-Commit: e9f7ce56 (+ this proof commit)
+Branch: florianhorner/feat/english-italian-ratio
+Commits: 674a9bc, d384d62, 61c9b7d (bisectable host, ad, and docs changes)
 
 $ make check   (ruff + ruff format + mypy + full pytest + coverage ratchet)
 
 ruff check .            : pass
 ruff format --check .   : pass
 mypy mammamiradio/ tests/ : Success
-pytest                  : 3813 passed, 2 skipped, 19 deselected
+pytest                  : 5026 passed, 3 skipped, 21 deselected
 coverage                : Total 93% (floor 92%) — all per-module floors held
 
-Language-mode subset (tests/hosts/): 30 tests pass in 0.4s
+Focused language-policy subset (tests/hosts/): 38 tests pass in 0.5s
 - test_scriptwriter_mode.py: ON=100% Italian marker, OFF=75/25 target markers,
   cache-invalidates-on-flip, unmapped-code fallback degrades (no KeyError).
 - test_scriptwriter.py: both-flags coverage for news / ad / transition / weather
