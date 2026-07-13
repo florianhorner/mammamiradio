@@ -11,6 +11,10 @@ The current version source of truth is `pyproject.toml`.
 - **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the station is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
 - **Home references now rotate like radio, not a dashboard.** Casual host breaks receive at most one privacy-safe ambient cue, and the station holds that topic out until it has actually aired and rested. Weather, climate, vacuum, sun, and curated coffee cues can vary naturally without extra Home Assistant polling; room-presence moments stay off until explicitly enabled for that sensor. The control room shows a fact-free rotation state, and private director bookkeeping never reaches listener or public-status payloads.
 
+### Changed
+
+- **Fresh installations now start with a deliberately small Home Assistant context.** Hosts can use only coarse daylight and—when there is exactly one unambiguous source—coarse weather; household entities, generated labels, moods, reactive moments, timers, running gags, and saved moment trails stay out. Existing stations retain their current Home behavior through a fail-closed continuity bridge, so an update does not suddenly silence a house that already chose it.
+
 ### Fixed
 
 - **The control room's estimated AI spend now counts a paid voice the moment the provider confirms it.** A cloud voice that is billed but then hits a snag while mixing no longer vanishes from the session estimate, and the estimate line appears whenever there is real paid usage to report — including voice-only sessions with no other AI calls.

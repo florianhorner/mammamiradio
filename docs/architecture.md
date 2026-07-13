@@ -29,19 +29,20 @@ Charts / Jamendo / classic eras / local files / demo tracks
 
 ## Startup flow
 
-`mammamiradio.main:startup()` does nine things:
+`mammamiradio.main:startup()` does ten things:
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10KB, likely failed downloads) and evicts old cache entries.
-4. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
-5. Initializes the clip ring buffer for WTF clip sharing.
-6. Restores persisted `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or HA add-on `/data/options.json` without arming a first strike.
-7. Creates shared app state, then synchronously admits any safe `cache/restart_handoff/` music segments straight into the queue (see "Restart handoff spool" below) — before the background producer/playback tasks start, so a listener connecting right after an update can reach an already-normalized track instead of an empty queue.
-8. Launches:
+4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
+5. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
+6. Initializes the clip ring buffer for WTF clip sharing.
+7. Restores persisted `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or HA add-on `/data/options.json` without arming a first strike.
+8. Creates shared app state, then synchronously admits any safe `cache/restart_handoff/` music segments straight into the queue (see "Restart handoff spool" below) — before the background producer/playback tasks start, so a listener connecting right after an update can reach an already-normalized track instead of an empty queue.
+9. Launches:
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
-9. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
+10. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
 
 ### Restart handoff spool
 
@@ -525,6 +526,12 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 ## Optional Home Assistant context
 
 If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
+
+- `home/authorization.py` is the R0 choke point. A cold install receives only synthetic `sun.ambient` plus `weather.ambient` when exactly one raw `weather.*` source exists and has a valid condition, explicit C/F unit, and temperature; temperature is converted to Celsius and grouped into 5-degree bands. Zero or multiple weather sources yield no weather. Source labels, exact readings, forecasts, locations, areas, residents, and every other HA entity are discarded before downstream matching.
+- a pre-R0 database keeps the established household feature set through a bounded legacy bridge. `home/migration.py` requires matching durable sidecar and DB-local install-origin witnesses; after an exact migration-only 35-ID manifest is observed, it seals only manifest version/digest, app version, and time. It never persists raw states or labels. Sidecar loss is recovered from the DB witness, while malformed or disagreeing witnesses and transplanted provenance fail narrow.
+- authorization mode travels with every `HomeContext`. Fresh, stale, timeout, and module-cache paths reject a context stamped for the other mode. Hard mutes apply both to a raw ambient source and to its synthetic ID.
+- narrow mode skips registry/name loading, generated labels, event diffs, radio-event and ritual matchers, timer interrupts, mood derivation, weather forecast arcs, first-home directives, evening gags, and Moment Receipt projections. `/public-status` and `/status` do not replay persisted household moments, and the manual label-regeneration route reports no candidates.
+- exact-manifest sealing runs once at a time in a tracked background thread so file and directory `fsync` calls never stall the producer event loop. Only an authoritative legacy install receives that observer.
 
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly

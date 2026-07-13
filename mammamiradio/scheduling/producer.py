@@ -60,6 +60,11 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.home.authorization import (
+    HomeAuthorization,
+    HomeAuthorizationMode,
+    expand_muted_with_ambient_sources,
+)
 from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.context_director import DirectorObservation, PromptFact
 from mammamiradio.home.entity_policy import (
@@ -239,6 +244,8 @@ async def _fetch_producer_context_outcome(
     cache: HomeContext | None,
     cache_dir: Path,
     radio_event_rules: list[RadioEventRule] | None,
+    authorization: HomeAuthorization | None = None,
+    observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
 ) -> _HomeContextFetchOutcome:
     """Fetch the typed mailbox outcome, preserving the legacy injected seam."""
     if not _uses_injected_legacy_fetch():
@@ -249,6 +256,8 @@ async def _fetch_producer_context_outcome(
             _cache=cache,
             cache_dir=cache_dir,
             radio_event_rules=radio_event_rules,
+            authorization=authorization,
+            observed_entity_ids_callback=observed_entity_ids_callback,
         )
 
     started_at = time.time()
@@ -261,6 +270,8 @@ async def _fetch_producer_context_outcome(
             _cache=cache,
             cache_dir=cache_dir,
             radio_event_rules=radio_event_rules,
+            authorization=authorization,
+            observed_entity_ids_callback=observed_entity_ids_callback,
         )
     )
     # Fixture contexts sometimes omit a timestamp.  It is still a completed
@@ -2402,10 +2413,17 @@ def _observe_home_context_director(state: StationState, config: StationConfig, c
         policy = load_entity_policy(config.cache_dir)
         muted = policy.get("muted", {})
         opt_ins = policy.get("personal_moment_opt_ins", {})
+        # Narrow-mode observations carry the synthetic ambient id, but an operator
+        # may mute the real HA source. Expand so a muted real source suppresses its
+        # synthetic projection the same way the fetch layer already does.
+        muted_ids = expand_muted_with_ambient_sources(
+            set(muted) if isinstance(muted, dict) else set(),
+            context.ambient_sources,
+        )
         director.observe(
             observations,
             policy_revision=int(policy.get("policy_revision", 0) or 0),
-            muted_entity_ids=set(muted) if isinstance(muted, dict) else set(),
+            muted_entity_ids=muted_ids,
             personal_moment_opt_ins=set(opt_ins) if isinstance(opt_ins, dict) else set(),
         )
     except Exception:
@@ -2458,7 +2476,11 @@ class _HAContextRefreshCoordinator:
         # An explicitly injected legacy fetch owns its synthetic snapshot; do
         # not let a previous module cache turn that test/integration response
         # into an accidental stale-gap resynchronization.
-        self._context = None if _uses_injected_legacy_fetch() else get_cached_home_context(config.cache_dir)
+        self._context = (
+            None
+            if _uses_injected_legacy_fetch()
+            else get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
+        )
         self._task: asyncio.Task[_HomeContextFetchOutcome] | None = None
         self._attempt_baseline_timestamp = 0.0
         self._attempt_started_at = 0.0
@@ -2665,6 +2687,8 @@ class _HAContextRefreshCoordinator:
                     cache=self._context,
                     cache_dir=self._config.cache_dir,
                     radio_event_rules=self._config.radio_events,
+                    authorization=self._state.home_authorization,
+                    observed_entity_ids_callback=self._state.home_entity_ids_observer,
                 ),
                 name="ha-context-fetch",
             )
@@ -2731,6 +2755,23 @@ class _HAContextRefreshCoordinator:
         if not outcome.is_adoptable_from(self._attempt_baseline_timestamp):
             # Cached/failed outcomes and snapshots no newer than the request's
             # starting baseline must not overwrite a safe adopted snapshot.
+            self._record_terminal_result("failed", duration_seconds, used_background=used_background)
+            return None
+
+        active_mode = (self._state.home_authorization or HomeAuthorization.narrow()).mode.value
+        # The injected-legacy fetch seam (tests/embedding) normalizes a mocked
+        # context through _legacy_mock_home_context and does not preserve the
+        # authorization stamp; it is trusted test input and never active in
+        # production, where the real fetch always stamps the requested mode.
+        if not _uses_injected_legacy_fetch() and outcome.context.authorization_mode != active_mode:
+            # Authorization is install-scoped: a fetch that returns a context
+            # stamped for the other mode (a bug or a reused cross-mode cache)
+            # must never be adopted. Fail closed to the last safe snapshot.
+            logger.error(
+                "HA context authorization mismatch (%s != %s); discarding refreshed context",
+                outcome.context.authorization_mode,
+                active_mode,
+            )
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
 
@@ -3048,6 +3089,15 @@ async def _run_producer_inner(
         policy = load_entity_policy(config.cache_dir)
         muted = policy.get("muted", {})
         muted_ids = set(muted) if isinstance(muted, dict) else set()
+        # A narrow break is tagged with the synthetic ambient id; expand the muted
+        # set with the synthetic projection of any muted real source (cheap raw
+        # module-cache read, no-op in legacy mode where ambient_sources is empty)
+        # so muting the real HA source rejects the break at admission too.
+        if muted_ids:
+            cached = get_cached_home_context(authorization=state.home_authorization)
+            ambient_sources = getattr(cached, "ambient_sources", None) if cached is not None else None
+            if ambient_sources:
+                muted_ids = expand_muted_with_ambient_sources(muted_ids, ambient_sources)
         return (
             isinstance(revision, int)
             and not isinstance(revision, bool)
@@ -3121,6 +3171,7 @@ async def _run_producer_inner(
         _ha_tasks.add(task)
         task.add_done_callback(_ha_tasks.discard)
 
+    home_authorization = state.home_authorization or HomeAuthorization.narrow()
     if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
 
         async def _ha_heartbeat() -> None:
@@ -3152,7 +3203,7 @@ async def _run_producer_inner(
 
         # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
         # Only fetches the timer entity states, not the full 200+ entity context.
-        if config.homeassistant.timer_interrupts:
+        if config.homeassistant.timer_interrupts and home_authorization.allows_household_moments:
             _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
             # Pre-populate old_states for timer entities with "idle" so the first
             # active→idle transition is detected correctly (cold-start fix).
@@ -3501,16 +3552,21 @@ async def _run_producer_inner(
             # The coordinator keeps exactly one request alive for up to 30s and
             # drains an accepted late result here, immediately before prompt
             # construction.  It never touches already-rendering/queued audio.
+            # Authorization (narrow vs legacy) is threaded through the coordinator
+            # from state.home_authorization at fetch time.
             ha_cache, fresh_one_shot_handoff = await context_coordinator.prepare_for_segment()
             # Fail-soft: the scene namer is a mood garnish, and this block runs
             # OUTSIDE the segment-render try below — an exception here would
             # kill the producer task itself (INSTANT AUDIO). Same posture as
             # the schedule_label_generation wrap further down.
-            try:
-                mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
-            except Exception:
-                logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
-                mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
+            if home_authorization.mode is HomeAuthorizationMode.NARROW:
+                mood_it, mood_en = "", ""
+            else:
+                try:
+                    mood_it, mood_en = resolve_home_mood(config, state, ha_cache)
+                except Exception:
+                    logger.warning("HA mood resolution failed (non-fatal)", exc_info=True)
+                    mood_it, mood_en = ha_cache.mood, ha_cache.mood_en
             state.ha_context = ha_cache.summary
             state.ha_events_summary = ha_cache.events_summary
             state.ha_home_mood = mood_it
@@ -3534,7 +3590,7 @@ async def _run_producer_inner(
             ][:8]
             state.ha_ritual_recipe_audit = list(getattr(ha_cache, "ritual_recipe_audit", []) or [])[:16]
             raw_states = getattr(ha_cache, "raw_states", {})
-            if isinstance(raw_states, dict):
+            if isinstance(raw_states, dict) and home_authorization.mode is not HomeAuthorizationMode.NARROW:
                 # Fail-soft: scheduling does synchronous preflight work before
                 # creating the background task; an exception here must never
                 # stop segment production (INSTANT AUDIO).
@@ -3630,19 +3686,23 @@ async def _run_producer_inner(
                         status="dropped",
                         drop_reason="interrupt_cooldown",
                     )
-            _maybe_arm_first_home_context_moment(
-                state,
-                ha_cache,
-                seg_type,
-                can_generate_banter=_sw.has_script_llm(config),
-            )
+            if home_authorization.mode is not HomeAuthorizationMode.NARROW:
+                _maybe_arm_first_home_context_moment(
+                    state,
+                    ha_cache,
+                    seg_type,
+                    can_generate_banter=_sw.has_script_llm(config),
+                )
 
             # Impossible Moments v2 (A): fold new events into the evening ledger
             # (watermark-deduped) and, for banter only, surface one eligible
             # running-gag. Ads stay gag-free in v0. The ledger persists across
             # the addon's frequent restarts.
-            if state.evening_ledger is not None and (
-                not state.ha_context_refresh_stale and context_coordinator.home_event_handoffs_allowed
+            if (
+                state.evening_ledger is not None
+                and home_authorization.mode is not HomeAuthorizationMode.NARROW
+                and not state.ha_context_refresh_stale
+                and context_coordinator.home_event_handoffs_allowed
             ):
                 _now = time.time()
                 state.evening_ledger.observe([*ha_cache.events, *radio_gag_events, *ritual_gag_events], now=_now)
@@ -3682,6 +3742,13 @@ async def _run_producer_inner(
                     state.ha_running_gag_key = ""
                     state.ha_running_gag_moment_id = ""
                 state.evening_ledger.save_if_dirty(config.cache_dir)
+            elif home_authorization.mode is HomeAuthorizationMode.NARROW:
+                # A copied/restored cache can contain buckets elected by an
+                # older install. Narrow mode may retain that file for explicit
+                # future recovery, but it never offers or airs those callbacks.
+                state.ha_running_gag = ""
+                state.ha_running_gag_key = ""
+                state.ha_running_gag_moment_id = ""
             elif state.evening_ledger is not None:
                 # A stale/resync prompt must not bypass its blank context via a
                 # previously observed home-event running gag.

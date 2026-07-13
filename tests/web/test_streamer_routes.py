@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
@@ -3472,6 +3473,7 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 @pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_schedules_once(tmp_path):
     app = _make_test_app()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
@@ -3524,9 +3526,11 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
                 summary_line="Counter light: on",
             )
         ],
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
     app = _make_test_app()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
 
@@ -3580,8 +3584,30 @@ async def test_homeassistant_labels_regenerate_no_key_returns_unscheduled():
 
 
 @pytest.mark.asyncio
+async def test_homeassistant_labels_regenerate_has_no_candidates_in_narrow_mode():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-test"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+
+    with (
+        patch("mammamiradio.web.streamer.generation_in_progress", return_value=False),
+        patch("mammamiradio.web.streamer.get_cached_home_context") as cached_context,
+        patch("mammamiradio.web.streamer.schedule_label_generation") as schedule,
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 9999))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/homeassistant/labels/regenerate")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"scheduled": False, "reason": "no_candidates"}
+    cached_context.assert_not_called()
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_no_home_context_returns_unscheduled():
     app = _make_test_app()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
     app.state.config.anthropic_api_key = "sk-ant-test"
 
     with (
@@ -3603,6 +3629,7 @@ async def test_homeassistant_labels_regenerate_no_candidates_is_not_a_conflict()
     # schedule_label_generation returns False with nothing to label; the route
     # must report a successful no-op, not a bogus 409 "already in progress".
     app = _make_test_app()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
         raw_states={"light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},

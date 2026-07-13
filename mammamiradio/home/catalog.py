@@ -51,6 +51,10 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 # Italian-friendly labels for entity states
 ENTITY_LABELS = {
+    # Synthetic, privacy-safe R0 ambient projections. These IDs never identify
+    # the operator's real HA source entity.
+    "weather.ambient": "Meteo",
+    "sun.ambient": "Luce del giorno",
     "switch.bar_kaffeemaschine_steckdose": "La macchina del caffè",
     "input_select.kaffee_dad_jokes": "Dad joke del caffè",
     "vacuum.goldstaubsucher": "Robot aspirapolvere Goldstaubsucher",
@@ -93,6 +97,8 @@ ENTITY_LABELS = {
 
 # English entity labels for admin UI display (parallel to ENTITY_LABELS)
 ENTITY_LABELS_EN: dict[str, str] = {
+    "weather.ambient": "Weather",
+    "sun.ambient": "Daylight",
     "switch.bar_kaffeemaschine_steckdose": "Coffee machine",
     "input_select.kaffee_dad_jokes": "Coffee dad joke",
     "vacuum.goldstaubsucher": "Robot vacuum Goldstaubsucher",

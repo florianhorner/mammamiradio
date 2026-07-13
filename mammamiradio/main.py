@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import logging
 import os
 import secrets
 import shutil
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,9 +20,19 @@ from mammamiradio.audio.normalizer import norm_cache_duration_sec
 from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.entity_policy import muted_entity_ids
 from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.migration import (
+    LegacyHomePreflightV1,
+    capture_legacy_home_preflight_v1,
+    load_authoritative_legacy_home_preflight_v1,
+    load_legacy_home_database_preflight_v1,
+    persist_legacy_home_database_preflight_v1,
+    rewrite_legacy_home_preflight_cold_v1,
+    seal_legacy_home_provenance_v1,
+)
 from mammamiradio.home.moment_receipts import MomentStore
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
@@ -267,9 +279,6 @@ async def startup():
     if pruned_handoff_tmp:
         logger.info("Restart handoff cleanup: pruned %d stale scratch file(s)", pruned_handoff_tmp)
 
-    if config.homeassistant.enabled and config.ha_token and config.anthropic_api_key:
-        logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
-
     # Purge suspect cache files (likely failed downloads) before serving
     purged = purge_suspect_cache_files(config.cache_dir)
     if purged:
@@ -280,10 +289,117 @@ async def startup():
     # Evict old cached tracks if the cache exceeds the configured size limit
     evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
 
-    # Initialize persona database and store for compounding listener memory
+    # R0 privacy bridge: capture the ORIGINAL pre-init database fact before
+    # init_db can make every later restart look like an upgrade. The first
+    # durable answer is immutable. A cold first-write failure must stop before
+    # database creation or the next boot could falsely become legacy-eligible.
     db_path = config.cache_dir / "mammamiradio.db"
+    database_preexisted = db_path.exists()
+    database_preflight = load_legacy_home_database_preflight_v1(db_path)
+    observed_database_preexisted = (
+        database_preflight.database_preexisted if database_preflight is not None else database_preexisted
+    )
+    if database_preflight is not None and not database_preflight.durable:
+        logger.error("Database Home install origin is unreadable; failing narrow without repairing witnesses")
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+    else:
+        try:
+            legacy_preflight = capture_legacy_home_preflight_v1(
+                config.cache_dir / "state",
+                database_preexisted=observed_database_preexisted,
+            )
+        except OSError as exc:
+            if not database_preexisted:
+                logger.critical("Cannot establish cold-install Home context boundary before database creation: %s", exc)
+                raise RuntimeError("cannot establish cold-install Home context boundary") from exc
+            logger.error("Could not persist legacy Home preflight; failing narrow for this boot: %s", exc)
+            legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    if (
+        database_preflight is not None
+        and legacy_preflight.durable
+        and database_preflight.database_preexisted != legacy_preflight.database_preexisted
+    ):
+        logger.error("Home install-origin witnesses disagree; failing narrow for this boot")
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # A durable sidecar claiming a pre-existing database while no database file
+    # exists is internally contradictory — a legacy install cannot have a cold
+    # database. This catches a transplanted/leftover sidecar (partial backup
+    # restore, cloned config) that would otherwise seed the fresh DB table from
+    # its own claim and self-agree into legacy. Fail narrow (privacy fail-closed).
+    if not database_preexisted and legacy_preflight.durable and legacy_preflight.database_preexisted:
+        logger.error(
+            "Legacy Home witness claims a pre-existing database but none existed; failing narrow for this boot"
+        )
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # The database provably did not exist at process start, so the only truthful
+    # durable witness is a cold one. A transplanted/malformed sidecar was demoted
+    # in memory above, but it must also be corrected on disk: otherwise the NEXT
+    # boot — where the database now exists — trusts the stale witness, the guards
+    # above no longer fire, and both witnesses self-agree into legacy (household
+    # context leak). Correcting to False can only ever narrow (privacy fail-closed).
+    if not database_preexisted:
+        try:
+            legacy_preflight = rewrite_legacy_home_preflight_cold_v1(config.cache_dir / "state")
+        except OSError as exc:
+            logger.error("Could not correct cold Home preflight witness; failing narrow for this boot: %s", exc)
+            legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # Initialize persona database and store for compounding listener memory.
     init_db(db_path)
+    if legacy_preflight.durable:
+        try:
+            persist_legacy_home_database_preflight_v1(db_path, legacy_preflight)
+        except (OSError, sqlite3.DatabaseError, RuntimeError, ValueError) as exc:
+            logger.error("Could not verify redundant Home install origin; failing narrow for this boot: %s", exc)
+    home_authorization = (
+        HomeAuthorization.legacy()
+        if load_authoritative_legacy_home_preflight_v1(config.cache_dir / "state", db_path) is not None
+        else HomeAuthorization.narrow()
+    )
+    logger.info("Home context authorization: %s", home_authorization.mode.value)
+    if (
+        home_authorization.allows_label_generation
+        and config.homeassistant.enabled
+        and config.ha_token
+        and config.anthropic_api_key
+    ):
+        logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
     persona_store = PersonaStore(db_path)
+
+    try:
+        bridge_app_version = importlib.metadata.version("mammamiradio")
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover - editable installs provide metadata
+        bridge_app_version = "0+unknown"
+    provenance_announced = False
+    provenance_task: asyncio.Task | None = None
+
+    async def _seal_home_provenance(entity_ids: frozenset[str]) -> None:
+        nonlocal provenance_announced
+        try:
+            provenance = await asyncio.to_thread(
+                seal_legacy_home_provenance_v1,
+                config.cache_dir / "state",
+                entity_ids,
+                db_path=db_path,
+                bridge_app_version=bridge_app_version,
+            )
+        except Exception:
+            logger.warning("Legacy Home continuity provenance write failed", exc_info=True)
+            return
+        if provenance is not None and not provenance_announced:
+            provenance_announced = True
+            logger.info("Legacy Home continuity provenance is ready")
+
+    def _observe_home_entity_ids(entity_ids: frozenset[str]) -> None:
+        nonlocal provenance_task
+        if provenance_announced or (provenance_task is not None and not provenance_task.done()):
+            return
+        provenance_task = asyncio.create_task(_seal_home_provenance(entity_ids))
+        app.state.legacy_home_provenance_task = provenance_task
+        _register_background_task(app.state, provenance_task)
 
     # Dependency checks with install hints
     _ffmpeg_found = bool(shutil.which("ffmpeg"))
@@ -473,6 +589,8 @@ async def startup():
         verbal_gag_ledger=verbal_gag_ledger,
         release_campaign=release_campaign,
         home_context_director=HomeContextDirector(),
+        home_authorization=home_authorization,
+        home_entity_ids_observer=_observe_home_entity_ids if home_authorization.allows_household_moments else None,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
         immediate_audio_index=_build_immediate_audio_index(

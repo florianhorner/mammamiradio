@@ -19,6 +19,7 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.entity_policy import set_entity_muted
 from mammamiradio.home.ha_context import HomeContext, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
@@ -78,7 +79,7 @@ async def test_warm_two_second_foreground_fallback_keeps_one_late_request_and_ad
         return _outcome(_snapshot("late fresh"), duration=0.025)
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: stale_but_prompt_safe),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: stale_but_prompt_safe),
         patch.object(producer, "_fetch_home_context_outcome", _late_fetch),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
     ):
@@ -131,7 +132,7 @@ async def test_cold_start_keeps_the_longer_foreground_wait_then_recovers_late_re
         return _outcome(_snapshot("first snapshot"), duration=0.025)
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: None),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: None),
         patch.object(producer, "_fetch_home_context_outcome", _late_fetch),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
         patch.object(producer, "_HA_CONTEXT_COLD_LOAD_TIMEOUT", 0.02),
@@ -174,7 +175,7 @@ async def test_total_cap_cancels_owned_request_and_retries_only_after_poll_caden
             raise
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _hung_fetch),
         patch.object(producer, "_HA_CONTEXT_BACKGROUND_TIMEOUT", 0.012),
     ):
@@ -228,7 +229,7 @@ async def test_late_success_started_before_the_stale_threshold_keeps_its_one_sho
         return _outcome(_snapshot("fresh", events=deque([event], maxlen=20), radio_events=[match]), duration=0.016)
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _late_fetch),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
     ):
@@ -287,7 +288,7 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
 
     with (
         patch.object(producer.time, "time", side_effect=lambda: clock[0]),
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _completed_then_held),
         patch.object(producer, "_publish_home_context_outcome", side_effect=_record_published),
     ):
@@ -362,7 +363,7 @@ async def test_normal_late_success_hands_unmuted_one_shots_to_exactly_one_bounda
         )
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _late_fetch),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
     ):
@@ -409,7 +410,7 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
         )
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _fresh_after_gap),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
     ):
@@ -450,7 +451,7 @@ async def test_stale_fallback_withholds_pending_ha_directives_and_running_gags(t
         await asyncio.Event().wait()
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _hung_fetch),
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
@@ -487,7 +488,7 @@ async def test_stale_fallback_preserves_non_ha_directive_sources(tmp_path, direc
         await asyncio.Event().wait()
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _hung_fetch),
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
@@ -514,7 +515,7 @@ async def test_shutdown_cancels_and_awaits_late_task_without_post_shutdown_state
             raise
 
     with (
-        patch.object(producer, "get_cached_home_context", lambda *_args: prior),
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _slow_fetch),
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
@@ -544,3 +545,70 @@ def test_has_real_home_context():
     assert not producer._has_real_home_context(HomeContext())
     assert producer._has_real_home_context(HomeContext(timestamp=1.0))
     assert producer._has_real_home_context(HomeContext(summary="something"))
+
+
+@pytest.mark.asyncio
+async def test_narrow_coordinator_never_adopts_legacy_module_cache(tmp_path):
+    """A cold/narrow install must not seed its coordinator from a legacy-stamped
+    module cache, nor surface it as a timeout fallback."""
+    import mammamiradio.home.ha_context as ha_context_mod
+
+    config = _config(tmp_path)
+    state = StationState()
+    state.home_authorization = HomeAuthorization.narrow()
+    legacy_module = HomeContext(
+        summary="PRIVATE MODULE CACHE",
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _hung_fetch(**_kwargs):
+        await asyncio.sleep(1.0)
+        return _outcome(_snapshot("late"))
+
+    with (
+        patch.object(ha_context_mod, "_ha_cache", legacy_module),
+        patch.object(producer, "_fetch_home_context_outcome", _hung_fetch),
+        patch.object(producer, "_HA_CONTEXT_COLD_LOAD_TIMEOUT", 0.01),
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            ctx, _fresh = await coordinator.prepare_for_segment()
+        finally:
+            await coordinator.close()
+
+    # get_cached_home_context() rejects the wrong-mode cache, so the coordinator
+    # starts empty and the foreground timeout falls back to an empty context.
+    assert "PRIVATE MODULE CACHE" not in (ctx.summary or "")
+    assert ctx.authorization_mode != HomeAuthorizationMode.LEGACY.value
+
+
+@pytest.mark.asyncio
+async def test_narrow_coordinator_discards_legacy_stamped_fresh_result(tmp_path):
+    """Even a *successful* fetch whose result is stamped for the other mode must
+    be discarded — authorization is install-scoped and never crosses."""
+    config = _config(tmp_path)
+    state = StationState()
+    state.home_authorization = HomeAuthorization.narrow()
+    wrong_mode = HomeContext(
+        summary="PRIVATE LEGACY RESULT",
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _wrong_mode_fetch(**_kwargs):
+        return _outcome(wrong_mode)
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_a, **_k: None),
+        patch.object(producer, "_fetch_home_context_outcome", _wrong_mode_fetch),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True),
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            ctx, _fresh = await coordinator.prepare_for_segment()
+        finally:
+            await coordinator.close()
+
+    assert "PRIVATE LEGACY RESULT" not in (ctx.summary or "")
+    assert ctx.authorization_mode != HomeAuthorizationMode.LEGACY.value

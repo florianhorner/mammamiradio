@@ -55,6 +55,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
 )
+from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
     load_entity_policy,
@@ -90,6 +91,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
@@ -784,59 +786,21 @@ HEADING_SEEDS = {
 }
 
 
-def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple[str, str]]) -> int:
-    """Drop not-yet-started music segments whose track was just banned (D4-A).
+def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[str]) -> int:
+    """Remove unstarted banter tied to newly muted home entities.
 
-    The current/airing segment has already left the queue, so it finishes normally
-    (never interrupt mid-segment, never a gap). Synchronous drain + filter + repush:
-    no ``await`` between draining the real queue and rebuilding the shadow, so the
-    producer and streamer cannot interleave (same discipline as queue_remove_item).
-    Returns the number of queued segments dropped.
-    """
-    items: list = []
-    while not q.empty():
-        try:
-            items.append(q.get_nowait())
-            q.task_done()
-        except asyncio.QueueEmpty:
-            break
-    dropped_ids: set[str] = set()
-    survivors: list = []
-    for seg in items:
-        meta = getattr(seg, "metadata", {}) or {}
-        if seg.type == SegmentType.MUSIC:
-            key = (
-                str(meta.get("artist", "")).strip().lower(),
-                str(meta.get("title_only", "")).strip().lower(),
-            )
-            if key in banned_keys:
-                qid = meta.get("queue_id")
-                if isinstance(qid, str):
-                    dropped_ids.add(qid)
-                state.record_discard(seg, reason=GenerationWasteReason.OPERATOR_BAN, already_counted_in_produced=True)
-                _unlink_ephemeral_best_effort(seg)
-                continue
-        survivors.append(seg)
-    for seg in survivors:
-        q.put_nowait(seg)
-    if dropped_ids:
-        state.queued_segments = [s for s in state.queued_segments if s.get("id") not in dropped_ids]
-    return len(dropped_ids)
-
-
-def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -> int:
-    """Remove unstarted banter tied to a newly muted home entity.
-
-    The current segment is no longer in ``q`` and deliberately finishes. Every
-    removed queued segment travels through ``record_discard`` so its director
-    reservation is released by the same central lifecycle boundary.
+    ``entity_ids`` is the tightened set: the muted id plus, in narrow mode, the
+    synthetic ambient id(s) a break may be tagged with when its real HA source is
+    muted. The current segment is no longer in ``q`` and deliberately finishes.
+    Every removed queued segment travels through ``record_discard`` so its
+    director reservation is released by the same central lifecycle boundary.
     """
     items = _drain_segment_queue(q)
     survivors: list = []
     dropped_ids: set[str] = set()
     for segment in items:
         metadata = getattr(segment, "metadata", {}) or {}
-        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") == entity_id:
+        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") in entity_ids:
             queue_id = metadata.get("queue_id")
             if isinstance(queue_id, str):
                 dropped_ids.add(queue_id)
@@ -893,7 +857,28 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         pin_cleared = True
     if removed or pin_cleared:
         state.playlist_revision += 1
-    purged = _purge_blocklisted_from_queue(queue, state, banned_keys) if queue is not None else 0
+
+    def _matches_blocklist(segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        # Producer music carries `title_only` (bare title); norm-cache bridge and
+        # rescue fills stamp only `title`. Fall back so a banned song queued via
+        # either shape is still purged.
+        key = (
+            str(metadata.get("artist", "")).strip().lower(),
+            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+        )
+        return segment.type is SegmentType.MUSIC and key in banned_keys
+
+    purged = (
+        drop_matching_segments(
+            queue,
+            state,
+            should_drop=_matches_blocklist,
+            reason=GenerationWasteReason.OPERATOR_BAN,
+        )
+        if queue is not None
+        else 0
+    )
     return {
         "ok": True,
         "banned": [state.blocklist[k].get("display") or f"{k[0]} - {k[1]}" for k in keys],
@@ -1634,7 +1619,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
     muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
     muted_ids = set(muted_map)
     personal_moment_ids = personal_moment_opt_in_entity_ids(config.cache_dir)
-    ctx = get_cached_home_context(config.cache_dir)
+    ctx = get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
     rows: dict[str, dict] = {}
     if ctx is not None:
         for entity in getattr(ctx, "scored", [])[:24]:
@@ -1733,7 +1718,7 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
 
 def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[str, str]:
     """Resolve best-effort display metadata without depending on preview shape."""
-    ctx = get_cached_home_context(config.cache_dir)
+    ctx = get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
     if ctx is not None:
         for entity in getattr(ctx, "scored", []):
             status = entity.to_status_dict()
@@ -1755,7 +1740,7 @@ def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[s
 
 def _personal_moment_entity_is_eligible(state: StationState, config, entity_id: str) -> bool:
     """Allow consent only for a current, room-scoped presence candidate."""
-    ctx = get_cached_home_context(config.cache_dir)
+    ctx = get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
     candidates = list(getattr(ctx, "scored", []) or []) if ctx is not None else []
     for entity in candidates:
         status = entity.to_status_dict()
@@ -1835,7 +1820,7 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
     needs `save_if_dirty()` — the caller owns persistence so this stays a
     plain in-memory mutator (no synchronous disk I/O in an async route).
     """
-    context = get_cached_home_context(config.cache_dir)
+    context = get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
     if context is not None:
         _copy_home_context_to_state(state, context)
     else:
@@ -3256,7 +3241,11 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         raise HTTPException(status_code=409, detail="HA label generation already in progress")
     if not config.anthropic_api_key:
         return {"scheduled": False, "reason": "anthropic_key_missing"}
-    context = get_cached_home_context(config.cache_dir)
+    state = request.app.state.station_state
+    authorization = state.home_authorization or HomeAuthorization.narrow()
+    if not authorization.allows_label_generation:
+        return {"scheduled": False, "reason": "no_candidates"}
+    context = get_cached_home_context(config.cache_dir, authorization=authorization)
     if context is None or not context.raw_states:
         return {"scheduled": False, "reason": "home_context_unavailable"}
     scheduled = schedule_label_generation(
@@ -3347,6 +3336,20 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     # so an in-flight render for the entity is rejected. Consent revocation
     # previously did neither, so a queued presence break could still air.
     privacy_tightened = (action == "muted" and value) or (action == "personal_moment_enabled" and not value)
+    # In narrow mode a queued/in-flight break is tagged with the synthetic ambient
+    # id (sun.ambient / weather.ambient); an operator may instead mute the real
+    # underlying HA source. Expand the tightened id to its synthetic projection so
+    # the purge and director invalidation honor a real-source mute exactly like the
+    # fetch layer (no-op in legacy mode, where ambient_sources is empty).
+    tightened_ids = {entity_id}
+    # Read the RAW module cache (no cache_dir): passing cache_dir would apply the
+    # mute we just wrote and strip this source's synthetic mapping before we read
+    # it, defeating the expansion. ambient_sources is stable, non-sensitive routing.
+    _ctx = get_cached_home_context(authorization=state.home_authorization)
+    if _ctx is not None:
+        tightened_ids |= {
+            synthetic for synthetic, source in getattr(_ctx, "ambient_sources", {}).items() if source == entity_id
+        }
     if action == "muted" and value:
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
@@ -3354,7 +3357,7 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
     if privacy_tightened:
-        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, entity_id)
+        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, tightened_ids)
     # The mutation already returned the authoritative just-written policy; read
     # the revision off it instead of re-reading the file we just wrote.
     current_policy_revision = int(policy.get("policy_revision", 0) or 0)
@@ -3368,8 +3371,9 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             # in-flight race — a fact reserved at admission but not yet enqueued —
             # which the physical-queue scan cannot see. release() is a no-op on
             # any id already cleared, so this cannot double-release.
-            for pending_queue_id in invalidate(entity_id, policy_revision=current_policy_revision):
-                director.release(pending_queue_id, fact_id=None)
+            for tightened_id in tightened_ids:
+                for pending_queue_id in invalidate(tightened_id, policy_revision=current_policy_revision):
+                    director.release(pending_queue_id, fact_id=None)
     muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
     personal_moment = entity_id in (
         policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}
@@ -4600,7 +4604,7 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     ban deliberately lets the airing song finish).
 
     Identity comes from ``now_streaming.metadata`` (the same ``artist`` / ``title_only``
-    keys ``_purge_blocklisted_from_queue`` matches), so this also works for a song that
+    keys the queue-mutation predicate matches), so this also works for a song that
     is on air from the rescue cache or a one-off download and is not in ``state.playlist``
     at all — a win over the index-based row ban. Starvation-exempt like the per-row ✕ Ban:
     the operator asked for THIS song gone, now. Best-effort persistence is surfaced
@@ -6040,7 +6044,8 @@ def _public_status_payload(request: Request) -> dict:
     recent_moments: list[dict] = []
     ha_capable = bool(config.ha_token and config.homeassistant.enabled)
     moment_store = getattr(state, "moment_store", None)
-    if ha_capable and moment_store is not None:
+    authorization = state.home_authorization or HomeAuthorization.narrow()
+    if ha_capable and moment_store is not None and authorization.allows_household_moments:
         try:
             _ns_meta = (state.now_streaming or {}).get("metadata") or {}
             _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
@@ -6427,8 +6432,13 @@ async def status(
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
+    authorization = state.home_authorization or HomeAuthorization.narrow()
     try:
-        moments_admin = state.moment_store.to_admin_rows(limit=25) if state.moment_store is not None else None
+        moments_admin = (
+            state.moment_store.to_admin_rows(limit=25)
+            if state.moment_store is not None and authorization.allows_household_moments
+            else None
+        )
     except Exception:  # pragma: no cover - receipts must never break admin polling
         logger.debug("Moment receipt admin rows failed", exc_info=True)
         moments_admin = []

@@ -20,6 +20,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.ha_context import HomeContext, ScoredEntity, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
@@ -64,6 +65,9 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,  # simulate a live listener so the producer gate passes
+        # Most tests in this pre-R0 suite exercise the established household
+        # feature set. New narrow-mode tests override this explicitly.
+        home_authorization=HomeAuthorization.legacy(),
     )
 
 
@@ -115,6 +119,7 @@ def _first_home_context(*, scored_count: int = 3, summary: str = "Home context r
         summary=summary,
         timestamp=time.time(),
         scored=[_scored_home_entity(idx) for idx in range(scored_count)],
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
 
@@ -510,6 +515,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     banter_lines = [(host, "Che bella giornata!")]
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
     mock_context.mood = "Caffe in preparazione"
@@ -624,6 +630,7 @@ async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
     banter_lines = [(host, "Che bella giornata!")]
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = ""
     mock_context.mood = "Caffe in preparazione"
@@ -673,6 +680,7 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
         "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}
     }
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = ""
     mock_context.mood = ""
@@ -737,6 +745,7 @@ async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path
         "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}
     }
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = ""
     mock_context.mood = ""
@@ -766,6 +775,67 @@ async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path
         await _run_until_queued(queue, state, config)
 
     mock_schedule.assert_called_once()
+    assert not queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_narrow_home_context_skips_household_derived_and_reactive_consumers(tmp_path):
+    from mammamiradio.core.config import TimerInterruptConfig
+
+    state = _make_state()
+    state.home_authorization = HomeAuthorization.narrow()
+    state.ha_running_gag = "PRIVATE PERSISTED GAG"
+    state.ha_running_gag_key = "private|on"
+    state.ha_running_gag_moment_id = "private-moment"
+    state.evening_ledger = MagicMock()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id="timer.private_pasta",
+            directive="PRIVATE TIMER DIRECTIVE",
+            urgency="pissed",
+            cooldown=60,
+        )
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
+    context = HomeContext(
+        raw_states={"sun.ambient": {"entity_id": "sun.ambient", "state": "above_horizon", "attributes": {}}},
+        summary="- Luce del giorno: sopra l'orizzonte",
+        timestamp=1234.5,
+        authorization_mode=HomeAuthorizationMode.NARROW.value,
+    )
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.get_cached_home_context", return_value=None),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=context) as fetch,
+        patch(f"{MODULE}.resolve_home_mood") as resolve_mood,
+        patch(f"{MODULE}.schedule_label_generation") as schedule_labels,
+        patch(f"{MODULE}._maybe_arm_first_home_context_moment") as arm_first_moment,
+        patch(f"{MODULE}.httpx.AsyncClient") as timer_client,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert fetch.call_args.kwargs["authorization"] == HomeAuthorization.narrow()
+    resolve_mood.assert_not_called()
+    schedule_labels.assert_not_called()
+    arm_first_moment.assert_not_called()
+    timer_client.assert_not_called()
+    state.evening_ledger.observe.assert_not_called()
+    state.evening_ledger.offer_gag.assert_not_called()
+    assert state.ha_home_mood == ""
+    assert state.ha_home_mood_en == ""
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
     assert not queue.empty()
 
 
@@ -866,6 +936,7 @@ async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = "- Hallway Motion: spento/a -> acceso/a (1 min fa)"
     mock_context.mood = ""
@@ -1948,6 +2019,7 @@ async def test_producer_calls_fire_interrupt_when_check_reactive_returns_spec(tm
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
@@ -1992,6 +2064,7 @@ async def test_producer_sets_ha_directive_when_check_reactive_returns_str(tmp_pa
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
@@ -2035,6 +2108,7 @@ async def test_producer_consumes_fresh_ha_one_shots_once_then_uses_safe_cache_vi
         summary="lamp is on",
         timestamp=time.time(),
         events=deque([event], maxlen=20),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
     async def _fetch_once(**_kwargs):
@@ -2082,12 +2156,17 @@ async def test_producer_stale_gap_resync_suppresses_delayed_event_consumers(tmp_
     config.homeassistant.poll_interval = 0.01
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     host = config.hosts[0]
-    stale_context = HomeContext(summary="old", timestamp=time.time() - 121.0)
+    stale_context = HomeContext(
+        summary="old",
+        timestamp=time.time() - 121.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
     delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
     fresh_context = HomeContext(
         summary="resynchronized ambient",
         timestamp=time.time(),
         events=deque([delayed_event], maxlen=20),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
     async def _fresh_after_gap(**_kwargs):
@@ -2139,6 +2218,7 @@ async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
@@ -2196,6 +2276,7 @@ async def test_timer_interrupt_poll_skips_muted_entity(tmp_path):
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
@@ -2268,6 +2349,7 @@ async def test_timer_interrupt_poll_does_not_replay_finish_after_unmute(tmp_path
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
@@ -2358,6 +2440,7 @@ async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = ""
     mock_context.events_summary = ""
     mock_context.events = []
