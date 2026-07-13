@@ -776,7 +776,11 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.AD
-    promo_call = next(call for call in mock_synthesize.await_args_list if call.args[0] == "Messaggio promozionale.")
+    # Normal Mode is English-led even though this station's identity language
+    # is Italian.  The promo tag is selected through the shared fallback seam.
+    promo_call = next(
+        call for call in mock_synthesize.await_args_list if call.args[0] == "A word from our sponsors, amici."
+    )
     assert promo_call.args[1] == "elevenlabs-voice-id"
     assert promo_call.kwargs["engine"] == "elevenlabs"
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
@@ -3870,12 +3874,24 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     cannot silently drop these fields from the dashboard state.
     """
     state = _make_state()
+
+    class _Ledger:
+        enabled = True
+
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    state.ledger = _Ledger()
     config = _make_config()
     config.pacing.ad_spots_per_break = 1
     queue: asyncio.Queue = asyncio.Queue()
 
     fake_script = AdScript(
         brand="Prezzoforte",
+        parts=[AdPart(type="voice", text="Try Prezzoforte today.", role="hammer")],
         summary="Great deals at Prezzoforte",
         format="classic_pitch",
         sonic=SonicWorld(music_bed="cinematic", environment="piazza", transition_motif="fanfare"),
@@ -3907,6 +3923,18 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     assert "roles_used" in seg.metadata, "roles_used missing from segment.metadata"
     assert seg.metadata["sonic_worlds"] == ["cinematic"]
     assert seg.metadata["roles_used"] == [["hammer", "disclaimer_goblin"]]
+
+    prepared = [row for row in state.ledger.rows if row.get("record") == "segment_prepared"]
+    assert len(prepared) == 1
+    final_script = prepared[0]["final_script"]
+    # Tier-2 describes the complete spoken ad break, while last_ad_script/texts
+    # above remains spot-only for the dashboard contract.
+    assert final_script[0] == final_script[0].strip()
+    assert final_script[1] == "A word from our sponsors, amici."
+    assert "Great deals at Prezzoforte" not in final_script  # summary is not spoken copy
+    assert final_script[-1] == final_script[-1].strip()
+    assert len(final_script) == 4  # intro, promo, one spot, outro
+    assert "language_assessment" in prepared[0]
 
 
 # ---------------------------------------------------------------------------
