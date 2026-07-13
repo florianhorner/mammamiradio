@@ -97,12 +97,12 @@ HA Supervisor
 
 ## Failure modes and recovery
 
-### Stream plays silence indefinitely
+### Stream is repeatedly playing recovery audio
 
-**Symptom**: Ingress URL loads but no audio. Log shows repeated `Failed to produce segment` or `silence placeholder`.
+**Symptom**: Ingress URL loads, but logs show repeated source-acquisition failures and recovery/continuity clips rather than music.
 
 **Causes**:
-1. yt-dlp rate-limited on first boot — silence placeholder cached instead of real audio
+1. yt-dlp rate-limited or denied by YouTube — the failed track is marked unavailable and the station uses its non-silent recovery ladder
 2. FFmpeg not found on PATH
 3. Network blocks outbound connections to YouTube
 

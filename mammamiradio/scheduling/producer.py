@@ -103,8 +103,10 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
+    accept_recovered_download,
     download_track,
     evict_cache_lru,
+    has_fresh_concrete_track_source,
     is_rejected_cache_key,
     reject_cached_download,
     validate_download,
@@ -384,9 +386,19 @@ class RenderedMusicTrack:
     cache_hit: bool
 
 
+def _is_session_rejected_without_concrete_source(track: Track, config: StationConfig) -> bool:
+    """Keep failed remote sources excluded unless concrete recovery media appeared."""
+    cache_dir = getattr(config, "cache_dir", Path("cache"))
+    return is_rejected_cache_key(track.cache_key) and not has_fresh_concrete_track_source(
+        track, cache_dir, Path("music")
+    )
+
+
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
-    rejected_keys = {track.cache_key for track in state.playlist if is_rejected_cache_key(track.cache_key)}
-    if state.pinned_track is not None and is_rejected_cache_key(state.pinned_track.cache_key):
+    rejected_keys = {
+        track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
+    }
+    if state.pinned_track is not None and _is_session_rejected_without_concrete_source(state.pinned_track, config):
         rejected_keys.add(state.pinned_track.cache_key)
     try:
         candidate = state.select_next_track(
@@ -584,6 +596,13 @@ async def _render_music_track(
             return None
         if actual_duration_ms is not None:
             track.duration_ms = actual_duration_ms
+
+    # A concrete local/cache fallback is allowed through the selection gate
+    # while still session-denied, then clears that denial only after the full
+    # source admission above succeeds. This avoids retry loops yet lets a newly
+    # synced recovery file heal a transient source failure without a restart.
+    if is_rejected_cache_key(track.cache_key):
+        accept_recovered_download(config.cache_dir, track.cache_key)
 
     # The producer's existing ``finding`` phase owns source/download timing.
     # Close it before normalization so a slow Pi encode cannot be misreported as
@@ -2103,9 +2122,10 @@ async def _prefetch_next(
     that slow-hardware normalization (~75s on Pi) completes during the current
     track's playback (~3-4 min) rather than after the queue drains.
 
-    Uses a non-mutating peek: finds the first track outside the repeat-cooldown
-    window without calling select_next_track (which has weighted-random side
-    effects). Falls back to playlist[0] if all tracks are in cooldown.
+    Uses a non-mutating peek: finds the first accepted track outside the
+    repeat-cooldown window without calling select_next_track (which has
+    weighted-random side effects). Falls back to the first accepted track if all
+    accepted tracks are in cooldown.
     Non-fatal — any failure is swallowed after a DEBUG log.
 
     _failed_keys: caller-owned set; on failure the candidate's cache_key is added
@@ -2119,23 +2139,23 @@ async def _prefetch_next(
             return
         cooldown = config.playlist.repeat_cooldown
         recent_keys = {t.cache_key for t in list(state.played_tracks)[-cooldown:]}
+        eligible_tracks = [
+            t
+            for t in state.playlist
+            if not _is_session_rejected_without_concrete_source(t, config)
+            and (_failed_keys is None or t.cache_key not in _failed_keys)
+        ]
+        if not eligible_tracks:
+            logger.debug("Prefetch: no accepted music candidates remain")
+            return
         candidate = next(
-            (
-                t
-                for t in state.playlist
-                if t.cache_key not in recent_keys and (_failed_keys is None or t.cache_key not in _failed_keys)
-            ),
-            state.playlist[0],
+            (t for t in eligible_tracks if t.cache_key not in recent_keys),
+            eligible_tracks[0],
         )
         candidate_key = candidate.cache_key
-        if _failed_keys is not None and candidate_key in _failed_keys:
-            return  # all candidates have failed — nothing useful to prefetch
         norm_cached = _normalized_cache_path(candidate, config)
         if norm_cached.exists():
             logger.debug("Prefetch: norm already cached for %s", candidate.display)
-            return
-        if is_rejected_cache_key(candidate.cache_key):
-            logger.debug("Prefetch: skipping denylisted candidate %s", candidate.display)
             return
         logger.info("Prefetch: pre-normalizing %s in background", candidate.display)
         rendered = await _render_music_track(
@@ -2198,10 +2218,9 @@ async def prewarm_first_segment(
         return None
 
     try:
-        track = state.select_next_track(
-            repeat_cooldown=config.playlist.repeat_cooldown,
-            artist_cooldown=config.playlist.artist_cooldown,
-        )
+        track = _select_accepted_music_track(state, config)
+        if track is None:
+            return False
         logger.info("Pre-warming first track: %s", track.display)
         rendered = await _render_music_track(
             track,
@@ -2229,6 +2248,10 @@ async def prewarm_first_segment(
                     duration_sec=(track.duration_ms or 0) / 1000.0,
                     ephemeral=not rendered.cache_hit,
                 )
+                # A quality rejection means this normalization is not safe
+                # recovery media either. Remove the cache copy as well as the
+                # transient render so a later rescue path cannot select it.
+                rendered.cache_path.unlink(missing_ok=True)
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
@@ -3885,10 +3908,10 @@ async def _run_producer_inner(
                 track = _select_accepted_music_track(state, config)
                 playlist_idx: int = -1
                 if track is None:
-                    # All recent candidates denylisted — yield to event loop and retry.
-                    state.finish_render_timing("discarded", reason=GenerationWasteReason.BLOCKLIST_GATE)
-                    await asyncio.sleep(0.1)
-                    continue
+                    # Do not spin while every candidate is unavailable. Route
+                    # through the same audible recovery ladder as a hard music
+                    # rendering failure; the source denylist clears at restart.
+                    raise RuntimeError("No eligible music tracks remain after unavailable-source rejections")
                 logger.info("Producing MUSIC: %s", track.display)
                 playlist_idx = next(
                     (i for i, t in enumerate(state.playlist) if t is track),
@@ -3921,7 +3944,7 @@ async def _run_producer_inner(
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
                 # packaged recovery clip (when the rejection is due to silence — i.e. all
-                # tracks are silence placeholders and playing them would cause dead air) or
+                # available audio is silent and playing it would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
@@ -3939,9 +3962,15 @@ async def _run_producer_inner(
                         if _music_qg_rejections >= MUSIC_QUALITY_GATE_REJECTION_LIMIT:
                             _music_qg_rejections = 0
                             if "silence" in str(exc).lower():
-                                # All available tracks are silence placeholders.  Playing
+                                # All available tracks are silent. Playing
                                 # them would break the illusion with dead air.  Insert a
                                 # packaged recovery clip instead so the stream stays alive.
+                                # The rejected normalization is not safe recovery media
+                                # either. Remove both its durable cache copy and its
+                                # transient render before selecting a fallback.
+                                norm_cached.unlink(missing_ok=True)
+                                if not norm_is_cached:
+                                    norm_path.unlink(missing_ok=True)
                                 fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
@@ -3951,8 +3980,6 @@ async def _run_producer_inner(
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.BANTER,
@@ -3974,15 +4001,13 @@ async def _run_producer_inner(
                                 # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
-                                if last_good:
+                                if last_good and last_good != norm_cached:
                                     logger.warning(
                                         "Quality gate circuit breaker: silence with no banter fallback — "
                                         "recycling last-known-good music (%s: %s)",
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.MUSIC,
@@ -4001,21 +4026,19 @@ async def _run_producer_inner(
                                         "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
                                     )
                                     continue
-                                # No recovery clip, no last-known-good.  Drop this track and let
-                                # the streamer's rescue path handle the gap — queueing a
-                                # silent file would break the illusion.
+                                # No recovery clip and no distinct last-known-good file.
+                                # Route through the broad producer recovery ladder so its
+                                # sweeper and emergency-tone rungs can keep the station
+                                # audible without ever queueing this rejected silent file.
                                 logger.error(
                                     "Quality gate circuit breaker: silence, no banter, "
-                                    "no last-known-good music — dropping track (%s: %s)",
+                                    "no distinct last-known-good music — entering recovery ladder (%s: %s)",
                                     norm_path.name,
                                     exc,
                                 )
-                                if not norm_is_cached:
-                                    norm_path.unlink(missing_ok=True)
-                                state.finish_render_timing(
-                                    "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
-                                )
-                                continue
+                                raise RuntimeError(
+                                    "Music quality circuit breaker exhausted direct recovery media"
+                                ) from exc
                             else:
                                 # Short/quiet track — likely a real file that just barely
                                 # missed the threshold.  Let it through; it's better than silence.

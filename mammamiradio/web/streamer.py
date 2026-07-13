@@ -5229,7 +5229,11 @@ async def _commit_external_download(
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
-    from mammamiradio.playlist.downloader import download_external_track, reject_cached_download
+    from mammamiradio.playlist.downloader import (
+        accept_recovered_download,
+        download_external_track,
+        reject_cached_download,
+    )
 
     state = app_state.station_state
     config = app_state.config
@@ -5279,6 +5283,10 @@ async def _commit_external_download(
         if not rejected_download_reason:
             if normalized_track_key(track) in state.blocklist:
                 return "banned"
+            # A previously failed source can be retried explicitly by an admin
+            # or listener request. Once this download is admitted, it is real
+            # playable media again rather than a session-denied cache key.
+            accept_recovered_download(config.cache_dir, track.cache_key)
             _reserve_continuity_runway(app_state, state, config)
             state.playlist.append(track)
             state.playlist_revision += 1

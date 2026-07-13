@@ -791,7 +791,7 @@ This repo is biased toward "keep the station on air."
 
 The rich path is richer, but the failure path still produces a stream.
 
-**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. `mammamiradio/playlist/downloader.py`'s `_generate_silence()` (writing `_silence_*.mp3` placeholders when a track download fails) is a similar out-of-scope path. Both are deliberately out of scope for the producer-exception rescue ladder above; closing them is separate follow-up work.
+**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. Closing that separate TTS path remains follow-up work.
 
 ## File map
 
@@ -804,7 +804,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/setup_status.py` | First-run setup status classification (legacy; retained for `/api/setup/status` compat) |
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
-| `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and placeholder music fallback |
+| `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and unavailable-source music handling |
 | `mammamiradio/hosts/memory_extractor.py` | Post-air banter memory extraction for persona updates and LLM reaction cues |
 | `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, stored reaction cues |
 | `mammamiradio/playlist/track_rationale.py` | "Why this track?" rationale generation for listener UI |
