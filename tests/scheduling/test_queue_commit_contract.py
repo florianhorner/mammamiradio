@@ -1124,6 +1124,9 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
     """A banned song dropped at the enqueue funnel must not leave a ghost up-next row
     or overwrite the prior valid music bed used by speech-bed adjacency (#660, #664)."""
     state = _make_state()
+    # This test asserts against the rendered cache for the selected song, so
+    # keep the producer's weighted choice deterministic under pytest-randomly.
+    state.playlist = state.playlist[:1]
     previous_song = tmp_path / "previous_song.mp3"
     previous_song.write_bytes(b"prior-music")
     state.last_music_file = previous_song
