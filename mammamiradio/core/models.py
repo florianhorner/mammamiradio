@@ -22,6 +22,7 @@ from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
+    from mammamiradio.home.authorization import HomeAuthorization
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.home.moment_receipts import MomentStore
@@ -609,6 +610,13 @@ class StationState:
     # Session-only ambient Home Assistant fact rotation. The director is owned
     # by main.py and deliberately resets when the add-on restarts.
     home_context_director: HomeContextDirector | None = None
+    # R0 install-scoped authorization. Cold installs get only normalized
+    # weather/daylight; pre-existing databases retain legacy behavior until the
+    # provenance-gated Home Profile migration lands.
+    home_authorization: HomeAuthorization | None = None
+    # R0 migration bridge callback. Receives IDs only (never raw states or
+    # labels) after a successful full HA snapshot.
+    home_entity_ids_observer: Callable[[frozenset[str]], None] | None = None
     # Handoff from the scriptwriter to the producer's queue-admission seam.
     # It is cleared on every new banter attempt so a failed render cannot attach
     # an older fact to unrelated speech.

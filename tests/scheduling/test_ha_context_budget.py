@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.config import load_config
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.ha_context import HomeContext
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
@@ -72,7 +73,7 @@ async def test_refresh_falls_back_to_empty_when_no_cache_anywhere():
     # the fully-hung-HA-at-startup case where even the warm-up deadline blows.
     with (
         patch.object(producer, "fetch_home_context", _slow),
-        patch.object(producer, "get_cached_home_context", lambda: None),
+        patch.object(producer, "get_cached_home_context", lambda **_kwargs: None),
         patch.object(producer, "_HA_CONTEXT_COLD_LOAD_TIMEOUT", 0.01),
     ):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), None)
@@ -91,7 +92,7 @@ async def test_cold_load_gets_longer_budget_than_steady_state():
 
     with (
         patch.object(producer, "fetch_home_context", _slow),
-        patch.object(producer, "get_cached_home_context", lambda: None),
+        patch.object(producer, "get_cached_home_context", lambda **_kwargs: None),
     ):
         warm = await _refresh_home_context_budgeted(_config(timeout=0.01), HomeContext(summary="stale"))
         assert warm.summary == "stale"  # tight budget timed out, aired on stale
@@ -120,7 +121,7 @@ async def test_empty_fallback_does_not_poison_cold_budget():
 
     with (
         patch.object(producer, "fetch_home_context", _slow),
-        patch.object(producer, "get_cached_home_context", lambda: None),
+        patch.object(producer, "get_cached_home_context", lambda **_kwargs: None),
     ):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), HomeContext())
     assert out.summary == "fresh"  # empty cache still gets the cold warm-up budget
@@ -138,7 +139,7 @@ async def test_refresh_uses_module_cache_when_passed_cache_is_none():
     # budget) and the timeout fallback returns the module cache, not empty.
     with (
         patch.object(producer, "fetch_home_context", _slow),
-        patch.object(producer, "get_cached_home_context", lambda: module_cache),
+        patch.object(producer, "get_cached_home_context", lambda **_kwargs: module_cache),
     ):
         out = await _refresh_home_context_budgeted(_config(timeout=0.01), None)
     assert out is not module_cache
@@ -171,3 +172,60 @@ async def test_refresh_timeout_fallback_still_honors_a_mute_applied_mid_flight(t
 
     assert muted_entity not in out.raw_states
     assert "caff" not in out.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_narrow_timeout_never_reuses_legacy_passed_or_module_cache():
+    legacy_passed = HomeContext(
+        summary="PRIVATE PASSED CACHE",
+        timestamp=1.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+    legacy_module = HomeContext(
+        summary="PRIVATE MODULE CACHE",
+        timestamp=1.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _slow(**_kwargs):
+        await asyncio.sleep(1.0)
+        return HomeContext(summary="fresh")
+
+    with (
+        patch.object(producer, "fetch_home_context", _slow),
+        patch.object(producer, "get_cached_home_context", return_value=legacy_module),
+        patch.object(producer, "_HA_CONTEXT_COLD_LOAD_TIMEOUT", 0.01),
+    ):
+        out = await _refresh_home_context_budgeted(
+            _config(timeout=0.01),
+            legacy_passed,
+            authorization=HomeAuthorization.narrow(),
+        )
+
+    assert out.authorization_mode == HomeAuthorizationMode.NARROW.value
+    assert out.summary == ""
+
+
+@pytest.mark.asyncio
+async def test_narrow_refresh_discards_successful_legacy_stamped_result():
+    wrong_mode = HomeContext(
+        summary="PRIVATE LEGACY RESULT",
+        timestamp=1.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _wrong_mode(**_kwargs):
+        return wrong_mode
+
+    with (
+        patch.object(producer, "fetch_home_context", _wrong_mode),
+        patch.object(producer, "get_cached_home_context", return_value=None),
+    ):
+        out = await _refresh_home_context_budgeted(
+            _config(),
+            None,
+            authorization=HomeAuthorization.narrow(),
+        )
+
+    assert out.authorization_mode == HomeAuthorizationMode.NARROW.value
+    assert out.summary == ""

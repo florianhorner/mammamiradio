@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from mammamiradio.core.config import RadioEventRule
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.ha_context import (
     _DEFAULT_STATION_ARTWORK_URL,
     _HA_SEGMENT_TYPE_FALLBACK_ICON,
@@ -525,7 +526,13 @@ async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
         patch("mammamiradio.home.ha_context.fetch_weather_forecast", new_callable=AsyncMock, return_value=""),
         patch("mammamiradio.home.ha_context._ha_cache", None),
     ):
-        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            authorization=HomeAuthorization.legacy(),
+        )
 
     scored_presence = _uncurated_presence_ids(result.scored)
     relevant_presence = [entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.room_")]
@@ -731,6 +738,272 @@ def _mock_ha_response():
 
 
 @pytest.mark.asyncio
+async def test_fetch_narrow_projects_only_normalized_ambient_basics_and_skips_household_consumers():
+    states = [
+        {
+            "entity_id": "sun.sun",
+            "state": "above_horizon",
+            "attributes": {"friendly_name": "Private terrace sun", "next_rising": "PRIVATE"},
+        },
+        {
+            "entity_id": "weather.my_secret_home",
+            "state": "partlycloudy",
+            "attributes": {
+                "friendly_name": "Private rooftop weather",
+                "temperature": 22,
+                "temperature_unit": "°C",
+                "forecast": [{"condition": "rainy", "temperature": 18}],
+            },
+        },
+        {
+            "entity_id": "person.private_resident",
+            "state": "home",
+            "attributes": {"friendly_name": "PRIVATE PERSON"},
+        },
+        {
+            "entity_id": "switch.private_coffee_machine",
+            "state": "on",
+            "attributes": {"friendly_name": "PRIVATE COFFEE"},
+        },
+        {
+            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "state": "on",
+            "attributes": {"friendly_name": "PRIVATE FRIDGE", "device_class": "door"},
+        },
+        {
+            "entity_id": "script.kitchen_tts",
+            "state": "on",
+            "attributes": {"friendly_name": "PRIVATE SCRIPT"},
+        },
+    ]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = states
+    client = AsyncMock()
+    client.get.return_value = response
+    observer = MagicMock()
+    rule = RadioEventRule(
+        id="private_script",
+        entity_glob="script.*",
+        trigger="state",
+        mode="directive",
+        directive="PRIVATE DIRECTIVE",
+    )
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+        patch(
+            "mammamiradio.home.ha_context._fetch_ha_registry_snapshot",
+            new_callable=AsyncMock,
+        ) as registry,
+        patch(
+            "mammamiradio.home.ha_context.fetch_weather_forecast",
+            new_callable=AsyncMock,
+        ) as forecast,
+        patch("mammamiradio.home.ha_context.match_radio_events") as radio_matcher,
+        patch("mammamiradio.home.ha_context.match_ritual_recipes") as ritual_matcher,
+        patch("mammamiradio.home.ha_context.audit_ritual_recipes") as ritual_audit,
+        patch("mammamiradio.home.ha_context.classify_home_mood") as mood_classifier,
+        patch("mammamiradio.home.ha_context.classify_home_mood_en") as mood_classifier_en,
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            radio_event_rules=[rule],
+            authorization=HomeAuthorization.narrow(),
+            observed_entity_ids_callback=observer,
+        )
+
+    assert result.authorization_mode == HomeAuthorizationMode.NARROW.value
+    assert set(result.raw_states) == {"sun.ambient", "weather.ambient"}
+    assert result.raw_states["sun.ambient"] == {
+        "entity_id": "sun.ambient",
+        "state": "above_horizon",
+        "attributes": {},
+    }
+    assert result.raw_states["weather.ambient"] == {
+        "entity_id": "weather.ambient",
+        "state": "cloudy",
+        "attributes": {"temperature": 20, "temperature_unit": "°C"},
+    }
+    assert {entity.entity_id for entity in result.scored} == {"sun.ambient", "weather.ambient"}
+    assert result.registry_source == "narrow_not_loaded"
+    assert result.events == deque(maxlen=64)
+    assert result.radio_events == []
+    assert result.ritual_recipe_matches == []
+    assert result.ritual_public_families == []
+    assert result.ritual_recipe_audit == []
+    assert result.events_summary == ""
+    assert result.events_summary_en == ""
+    assert result.mood == ""
+    assert result.mood_en == ""
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert "PRIVATE" not in result.summary
+    assert "my_secret_home" not in result.summary
+    assert "my_secret_home" not in repr(result)
+    registry.assert_not_awaited()
+    forecast.assert_not_awaited()
+    radio_matcher.assert_not_called()
+    ritual_matcher.assert_not_called()
+    ritual_audit.assert_not_called()
+    mood_classifier.assert_not_called()
+    mood_classifier_en.assert_not_called()
+    observer.assert_called_once_with(frozenset(state["entity_id"] for state in states))
+
+
+@pytest.mark.asyncio
+async def test_fetch_narrow_omits_ambiguous_weather_sources():
+    states = [
+        {
+            "entity_id": "sun.sun",
+            "state": "below_horizon",
+            "attributes": {},
+        },
+        {
+            "entity_id": "weather.one",
+            "state": "sunny",
+            "attributes": {"temperature": 20, "temperature_unit": "°C"},
+        },
+        {
+            "entity_id": "weather.two",
+            "state": "rainy",
+            "attributes": {"temperature": 18, "temperature_unit": "°C"},
+        },
+    ]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = states
+    client = AsyncMock()
+    client.get.return_value = response
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            authorization=HomeAuthorization.narrow(),
+        )
+
+    assert set(result.raw_states) == {"sun.ambient"}
+    assert "Meteo" not in result.summary
+
+
+@pytest.mark.parametrize(
+    ("muted_id", "expected_ids"),
+    [
+        ("weather.ambient", {"sun.ambient"}),
+        ("weather.local", {"sun.ambient"}),
+        ("sun.ambient", {"weather.ambient"}),
+        ("sun.sun", {"weather.ambient"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_fetch_narrow_honors_synthetic_and_source_hard_mutes(tmp_path, muted_id, expected_ids):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, muted_id, True, label="Ambient basic")
+    states = [
+        {"entity_id": "sun.sun", "state": "above_horizon", "attributes": {}},
+        {
+            "entity_id": "weather.local",
+            "state": "sunny",
+            "attributes": {"temperature": 20, "temperature_unit": "°C"},
+        },
+    ]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = states
+    client = AsyncMock()
+    client.get.return_value = response
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            cache_dir=tmp_path,
+            authorization=HomeAuthorization.narrow(),
+        )
+
+    assert set(result.raw_states) == expected_ids
+    assert {entity.entity_id for entity in result.scored} == expected_ids
+    assert muted_id not in result.ambient_sources
+
+
+@pytest.mark.asyncio
+async def test_fetch_narrow_never_falls_back_to_legacy_cache_on_api_failure():
+    legacy_cache = HomeContext(
+        raw_states={"person.private_resident": {"state": "home", "attributes": {}}},
+        summary="PRIVATE LEGACY SUMMARY",
+        timestamp=time.time() - 300.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+    client = AsyncMock()
+    client.get.side_effect = RuntimeError("HA unavailable")
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=legacy_cache,
+            authorization=HomeAuthorization.narrow(),
+        )
+
+    assert result.authorization_mode == HomeAuthorizationMode.NARROW.value
+    assert result.raw_states == {}
+    assert result.summary == ""
+
+
+def test_narrow_cached_hard_mute_does_not_reenable_derived_mood(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.ambient", True, label="Weather")
+    cached = HomeContext(
+        raw_states={
+            "weather.ambient": {
+                "entity_id": "weather.ambient",
+                "state": "rainy",
+                "attributes": {"temperature": 15, "temperature_unit": "°C"},
+            },
+            "sun.ambient": {"entity_id": "sun.ambient", "state": "above_horizon", "attributes": {}},
+        },
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.NARROW.value,
+        ambient_sources={"weather.ambient": "weather.local", "sun.ambient": "sun.sun"},
+    )
+
+    with (
+        patch("mammamiradio.home.ha_context._ha_cache", cached),
+        patch("mammamiradio.home.ha_context.classify_home_mood") as classify_it,
+        patch("mammamiradio.home.ha_context.classify_home_mood_en") as classify_en,
+    ):
+        filtered = get_cached_home_context(tmp_path, authorization=HomeAuthorization.narrow())
+
+    assert filtered is not None
+    assert set(filtered.raw_states) == {"sun.ambient"}
+    assert filtered.mood == ""
+    assert filtered.mood_en == ""
+    classify_it.assert_not_called()
+    classify_en.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_fetch_returns_cached_if_fresh():
     cache = HomeContext(
         raw_states={"person.florian_horner": {"state": "home", "attributes": {}}},
@@ -765,6 +1038,7 @@ async def test_fetch_calls_api_when_stale():
         raw_states={"switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}}},
         summary="old",
         timestamp=time.time() - 120.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
     mock_resp = MagicMock()
@@ -786,7 +1060,13 @@ async def test_fetch_calls_api_when_stale():
         patch("mammamiradio.home.ha_context._ha_cache", None),
         patch("mammamiradio.home.ha_context._weather_forecast_fetched_at", 0.0),
     ):
-        result = await fetch_home_context("http://ha:8123", "token", poll_interval=60.0, _cache=stale_cache)
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=stale_cache,
+            authorization=HomeAuthorization.legacy(),
+        )
 
     assert result is not stale_cache
     assert result.timestamp > stale_cache.timestamp
@@ -1012,13 +1292,21 @@ def test_get_cached_home_context_user_muted_count_is_stable_across_serves(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path):
+@pytest.mark.parametrize("weather_entity_id", ["weather.forecast_home", "weather.garden"])
+async def test_fetch_home_context_any_weather_mute_skips_weather_forecast(tmp_path, weather_entity_id):
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    set_entity_muted(tmp_path, "weather.forecast_home", True, label="Weather")
+    set_entity_muted(tmp_path, weather_entity_id, True, label="Weather")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = _mock_ha_response()
+    mock_resp.json.return_value = [
+        *_mock_ha_response(),
+        {
+            "entity_id": "weather.garden",
+            "state": "cloudy",
+            "attributes": {"temperature": 18, "temperature_unit": "°C"},
+        },
+    ]
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
 
@@ -1038,12 +1326,13 @@ async def test_fetch_home_context_muted_weather_skips_weather_forecast(tmp_path)
             poll_interval=0.0,
             _cache=None,
             cache_dir=tmp_path,
+            authorization=HomeAuthorization.legacy(),
         )
 
     weather.assert_not_called()
     assert result.weather_arc == ""
     assert result.weather_arc_en == ""
-    assert "weather.forecast_home" not in result.raw_states
+    assert weather_entity_id not in result.raw_states
 
 
 def test_apply_entity_mute_policy_clears_stale_weather_arc_without_entity(tmp_path):
@@ -1057,6 +1346,28 @@ def test_apply_entity_mute_policy_clears_stale_weather_arc_without_entity(tmp_pa
         scored=[],
         events=deque(maxlen=64),
         timestamp=time.time(),
+    )
+
+    result = apply_entity_mute_policy(context, tmp_path)
+
+    assert result.weather_arc == ""
+    assert result.weather_arc_en == ""
+    assert context.weather_arc == "Pioggia in arrivo"
+    assert context.weather_arc_en == "Rain incoming"
+
+
+def test_apply_entity_mute_policy_clears_stale_weather_arc_for_any_weather_entity(tmp_path):
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    set_entity_muted(tmp_path, "weather.garden", True, label="Garden weather")
+    context = HomeContext(
+        weather_arc="Pioggia in arrivo",
+        weather_arc_en="Rain incoming",
+        raw_states={},
+        scored=[],
+        events=deque(maxlen=64),
+        timestamp=time.time(),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
     )
 
     result = apply_entity_mute_policy(context, tmp_path)
@@ -1112,6 +1423,7 @@ async def test_fetch_matches_radio_events_without_ambient_script_visibility():
             poll_interval=0.0,
             _cache=None,
             radio_event_rules=[rule],
+            authorization=HomeAuthorization.legacy(),
         )
 
     assert "script.kitchen_tts" not in result.raw_states
@@ -1213,7 +1525,13 @@ async def test_fetch_matches_ritual_recipes_and_public_family_label():
             },
         ),
     ):
-        result = await fetch_home_context("http://ha:8123", "token", poll_interval=0.0, _cache=None)
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=0.0,
+            _cache=None,
+            authorization=HomeAuthorization.legacy(),
+        )
 
     assert len(result.ritual_recipe_matches) == 1
     assert result.ritual_recipe_matches[0].recipe.id == "fridge_freezer_raid"
@@ -1267,6 +1585,7 @@ async def test_fetch_home_context_computes_catalog_hit_rate(tmp_path):
             poll_interval=0.0,
             _cache=None,
             cache_dir=tmp_path,
+            authorization=HomeAuthorization.legacy(),
         )
 
     assert result.label_stats["curated"] == 2
