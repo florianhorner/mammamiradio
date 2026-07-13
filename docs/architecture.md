@@ -324,6 +324,13 @@ queue rather than retained from discarded work. Recovery audio and the emergency
 tone are continuity breaks, so a following spoken segment cannot inherit a bed
 or crossfade from music that the control action removed.
 
+Last-known-good recovery and speech-bed candidates belong to the active
+`StationState`. Normally rendered music becomes eligible only after successful,
+current-epoch queue admission; discarded or stale renders never populate its
+recovery index. Direct rescue or recycled fills become candidates only when their
+own enqueue succeeds. A fresh or replacement station therefore starts without a
+candidate and never inherits the producer's legacy process cache.
+
 ### Dynamic LLM routing (which model voices each task)
 
 Script generation never names a model in code. Each call site asks for a model by

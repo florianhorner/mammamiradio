@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -855,7 +856,7 @@ async def test_ha_context_refreshed_for_news_flash(tmp_path, category):
     mock_context.mood_en = "Coffee brewing"
     mock_context.weather_arc = "Meteo: soleggiato, 22C."
     mock_context.weather_arc_en = "Weather: sunny, 22C."
-    mock_context.timestamp = 1234.5
+    mock_context.timestamp = time.time()
     mock_context.scored = []
     mock_context.denylist_hits = {}
     mock_context.catalog_hit_rate = 0.0

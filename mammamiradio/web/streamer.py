@@ -1836,6 +1836,7 @@ def _clear_home_context_usage(state: StationState, config, entity_id: str | None
             logger.debug("Moment receipt mute drop failed", exc_info=True)
     state.ha_pending_directive = ""
     state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = ""
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
     state.ha_running_gag_moment_id = ""
@@ -2769,6 +2770,7 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
             "reagisci in modo complice, scherzoso. Fai notare che la skippa sempre."
         )
         state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
+        state.ha_pending_directive_source = "skip_bit"
         state.pending_actions.append(
             {
                 "type": "ha_directive",
@@ -2835,6 +2837,9 @@ def _listener_context(request: Request, config, prefix: str) -> dict:
     state = getattr(request.app.state, "station_state", None)
     return {
         "brand": config.brand,
+        # Keep listener-facing format copy aligned with /public-status and
+        # /stream headers; this helper is the canonical audio-format source.
+        "stream_bitrate_kbps": stream_audio_metadata(config)["bitrate_kbps"],
         "ingress_prefix": _sanitize_ingress_prefix(prefix),
         "csrf_token": _get_csrf_token(request.app),
         "asset_version": _ASSET_VERSION,
@@ -2929,9 +2934,9 @@ async def og_card(request: Request):
 
 @router.get("/favicon.ico")
 async def favicon():
-    """Serve the browser default favicon path from the station icon."""
+    """Serve the canonical app logo at the browser's default favicon path."""
     return FileResponse(
-        _STATIC_DIR / "icon-192.svg",
+        _STATIC_DIR / "favicon.svg",
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=3600"},
     )
@@ -3735,6 +3740,7 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
         skip_event,
         enforce_global_cooldown=True,
         bridge_tmp_dir=request.app.state.config.tmp_dir,
+        directive_source="operator",
     )
     if not fired:
         # _fire_interrupt's global cooldown gate beat us (concurrent caller).

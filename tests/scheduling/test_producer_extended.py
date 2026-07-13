@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +21,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
-from mammamiradio.home.ha_context import HomeContext, ScoredEntity
+from mammamiradio.home.ha_context import HomeContext, ScoredEntity, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
@@ -116,9 +117,21 @@ def _scored_home_entity(
 def _first_home_context(*, scored_count: int = 3, summary: str = "Home context ready") -> HomeContext:
     return HomeContext(
         summary=summary,
-        timestamp=1234.5,
+        timestamp=time.time(),
         scored=[_scored_home_entity(idx) for idx in range(scored_count)],
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+
+def _fresh_ha_outcome(context: HomeContext) -> _HomeContextFetchOutcome:
+    now = time.time()
+    return _HomeContextFetchOutcome(
+        kind="fresh",
+        context=context,
+        snapshot_timestamp=context.timestamp,
+        attempt_started_at=now,
+        attempt_finished_at=now,
+        duration_seconds=0.0,
     )
 
 
@@ -507,7 +520,8 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context.events_summary = "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
     mock_context.mood = "Caffe in preparazione"
     mock_context.weather_arc = "Meteo: soleggiato, 22C."
-    mock_context.timestamp = 1234.5
+    context_timestamp = time.time()
+    mock_context.timestamp = context_timestamp
     mock_context.mood_en = "Coffee brewing"
     mock_context.weather_arc_en = "Weather: sunny, 22C."
     mock_context.events_summary_en = "- Coffee machine: off -> on (1 min ago)"
@@ -552,7 +566,10 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
         await _run_until_queued(queue, state, config)
 
     mock_fetch.assert_called_once()
-    mock_resolve_mood.assert_called_once_with(config, state, mock_context)
+    mock_resolve_mood.assert_called_once()
+    mood_context = mock_resolve_mood.call_args.args[2]
+    assert isinstance(mood_context, HomeContext)
+    assert mood_context.summary == mock_context.summary
     assert state.ha_context == "Il tempo e' bello"
     assert state.ha_events_summary == "- La macchina del caffe: spento/a -> acceso/a (1 min fa)"
     assert state.ha_home_mood == "Scena LLM"
@@ -561,7 +578,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     assert state.ha_denylist_hits == {"privacy:person": 1}
     assert state.ha_context_entity_count == 1
     assert state.ha_context_char_count == len("Il tempo e' bello")
-    assert state.ha_context_last_updated == 1234.5
+    assert state.ha_context_last_updated == context_timestamp
     assert state.ha_last_event_label == "La macchina del caffe"
     assert state.ha_last_event_label_en == "Coffee machine"
 
@@ -618,7 +635,7 @@ async def test_mood_resolution_failure_never_stops_segment_production(tmp_path):
     mock_context.events_summary = ""
     mock_context.mood = "Caffe in preparazione"
     mock_context.weather_arc = ""
-    mock_context.timestamp = 1234.5
+    mock_context.timestamp = time.time()
     mock_context.mood_en = "Coffee brewing"
     mock_context.weather_arc_en = ""
     mock_context.events_summary_en = ""
@@ -668,7 +685,7 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
     mock_context.events_summary = ""
     mock_context.mood = ""
     mock_context.weather_arc = ""
-    mock_context.timestamp = 1234.5
+    mock_context.timestamp = time.time()
     mock_context.mood_en = ""
     mock_context.weather_arc_en = ""
     mock_context.events_summary_en = ""
@@ -733,7 +750,7 @@ async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path
     mock_context.events_summary = ""
     mock_context.mood = ""
     mock_context.weather_arc = ""
-    mock_context.timestamp = 1234.5
+    mock_context.timestamp = time.time()
     mock_context.mood_en = ""
     mock_context.weather_arc_en = ""
     mock_context.events_summary_en = ""
@@ -2075,6 +2092,109 @@ async def test_producer_sets_ha_directive_when_check_reactive_returns_str(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_producer_consumes_fresh_ha_one_shots_once_then_uses_safe_cache_views(tmp_path):
+    """The real producer gate, not just the coordinator, prevents replay."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.url = "http://ha.local:8123"
+    config.ha_token = "fake-token"
+    config.homeassistant.poll_interval = 300.0
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
+    fresh_context = HomeContext(
+        summary="lamp is on",
+        timestamp=time.time(),
+        events=deque([event], maxlen=20),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _fetch_once(**_kwargs):
+        return _fresh_ha_outcome(fresh_context)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.get_cached_home_context", return_value=None),
+        patch(f"{MODULE}._fetch_home_context_outcome", side_effect=_fetch_once) as fetch_outcome,
+        patch(f"{MODULE}._publish_home_context_outcome", return_value=True),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None) as reactive,
+        patch(f"{MODULE}._apply_radio_event_matches", return_value=[]) as radio_matches,
+        patch(f"{MODULE}._apply_ritual_recipe_matches", return_value=([], None)) as ritual_matches,
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while queue.qsize() < 2:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue two banter segments")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert fetch_outcome.await_count == 1
+    assert reactive.call_count == 1
+    assert radio_matches.call_count == 1
+    assert ritual_matches.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_producer_stale_gap_resync_suppresses_delayed_event_consumers(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.url = "http://ha.local:8123"
+    config.ha_token = "fake-token"
+    config.homeassistant.poll_interval = 0.01
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    stale_context = HomeContext(
+        summary="old",
+        timestamp=time.time() - 121.0,
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+    delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
+    fresh_context = HomeContext(
+        summary="resynchronized ambient",
+        timestamp=time.time(),
+        events=deque([delayed_event], maxlen=20),
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+    )
+
+    async def _fresh_after_gap(**_kwargs):
+        return _fresh_ha_outcome(fresh_context)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Ciao!")], None)),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora", None)),
+        patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{MODULE}.get_cached_home_context", return_value=stale_context),
+        patch(f"{MODULE}._fetch_home_context_outcome", side_effect=_fresh_after_gap),
+        patch(f"{MODULE}._publish_home_context_outcome", return_value=True),
+        patch(f"{MODULE}.check_reactive_triggers", return_value=None) as reactive,
+        patch(f"{MODULE}._apply_radio_event_matches", return_value=[]) as radio_matches,
+        patch(f"{MODULE}._apply_ritual_recipe_matches", return_value=([], None)) as ritual_matches,
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert state.ha_context == "resynchronized ambient"
+    assert reactive.call_count == 0
+    assert radio_matches.call_count == 0
+    assert ritual_matches.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_timer_interrupt_poll_task_starts_when_configured(tmp_path):
     """Timer poll task is created and runs when timer_interrupts are configured."""
     from mammamiradio.core.config import TimerInterruptConfig
@@ -2298,8 +2418,9 @@ async def test_timer_interrupt_poll_does_not_replay_finish_after_unmute(tmp_path
 
 @pytest.mark.asyncio
 async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
-    """Timer poll events must use wall-clock time so reactive age checks can see them."""
+    """Timer polls use wall-clock events and retain their separate provenance."""
     from mammamiradio.core.config import TimerInterruptConfig
+    from mammamiradio.core.models import InterruptSpec
 
     state = _make_state()
     config = _make_config(tmp_path)
@@ -2335,13 +2456,22 @@ async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
     mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock(), json=MagicMock(return_value=[])))
     mock_client.aclose = AsyncMock()
 
-    seen = asyncio.Event()
+    fired = asyncio.Event()
     captured_now: list[float | None] = []
+    timer_event = HomeEvent("timer.pasta_timer", "Pasta timer", "active", "idle", time.time())
+    interrupt_spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
     def _capture_diff_states(*_args, now=None, **_kwargs):
         captured_now.append(now)
-        seen.set()
-        return deque(maxlen=20)
+        return deque([timer_event], maxlen=20)
+
+    def _timer_interrupt(events, *_args, **_kwargs):
+        return interrupt_spec if events else None
+
+    async def _capture_fire(*_args, **kwargs):
+        assert kwargs["directive_source"] == "timer"
+        fired.set()
+        return True
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.BANTER),
@@ -2351,13 +2481,14 @@ async def test_timer_interrupt_poll_uses_wall_clock_timestamps(tmp_path):
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=mock_context),
-        patch(f"{MODULE}.check_reactive_triggers", return_value=None),
+        patch(f"{MODULE}.check_reactive_triggers", side_effect=_timer_interrupt),
+        patch(f"{MODULE}._fire_interrupt", side_effect=_capture_fire),
         patch("mammamiradio.home.ha_enrichment.diff_states", side_effect=_capture_diff_states),
         patch("mammamiradio.scheduling.producer.httpx.AsyncClient", return_value=mock_client),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await asyncio.wait_for(seen.wait(), timeout=2.0)
+            await asyncio.wait_for(fired.wait(), timeout=2.0)
         finally:
             task.cancel()
             try:

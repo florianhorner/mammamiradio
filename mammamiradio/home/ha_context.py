@@ -19,7 +19,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -406,6 +406,35 @@ class HomeContext:
     @property
     def age_seconds(self) -> float:
         return time.time() - self.timestamp if self.timestamp else float("inf")
+
+
+@dataclass(frozen=True)
+class _HomeContextFetchOutcome:
+    """Private fetch result for the producer's single-flight refresh mailbox.
+
+    ``fresh`` is the only result created from a completed HA state fetch.  A
+    coordinator must still compare ``snapshot_timestamp`` with the baseline it
+    started from before adopting it.  ``cached`` and ``failed`` carry a
+    prompt-safe context for compatibility/fallback callers but are never
+    adoptable as a new snapshot.
+
+    Candidate event baselines deliberately travel with the fresh result rather
+    than updating module state in the background task.  The producer publishes
+    them only when it accepts the outcome at a safe segment boundary.
+    """
+
+    kind: Literal["fresh", "cached", "failed"]
+    context: HomeContext
+    snapshot_timestamp: float
+    attempt_started_at: float
+    attempt_finished_at: float
+    duration_seconds: float
+    radio_event_state_baseline: dict[str, dict] = field(default_factory=dict)
+    ritual_recipe_state_baseline: dict[str, dict] = field(default_factory=dict)
+
+    def is_adoptable_from(self, baseline_timestamp: float) -> bool:
+        """Whether this represents a genuinely newer fetched snapshot."""
+        return self.kind == "fresh" and self.snapshot_timestamp > baseline_timestamp
 
 
 def _copy_raw_state(state_data: dict) -> dict:
@@ -873,6 +902,38 @@ def apply_entity_mute_policy(context: HomeContext, cache_dir: Path | None) -> Ho
     return _serve_filtered_home_context(context, muted_ids, cache_dir=cache_dir, now=time.time())
 
 
+def revalidate_home_context_mutes(context: HomeContext, cache_dir: Path | None) -> HomeContext:
+    """Apply live mutes to a fresh handoff without discarding unmuted one-shots.
+
+    ``apply_entity_mute_policy`` serves a reusable cache and therefore clears
+    radio-event and ritual one-shots to prevent replay.  A just-completed late
+    refresh is different: its one-shots are safe to hand to exactly one next
+    eligible segment, provided a mute added while the request was in flight is
+    applied before that handoff.
+    """
+    if cache_dir is None:
+        return context
+
+    muted_ids = muted_entity_ids(Path(cache_dir))
+    served = _copy_home_context(context)
+    served = _apply_muted_policy_to_context(served, muted_ids, cache_dir=cache_dir, now=time.time())
+    muted_radio_event_ids = {
+        match.event.entity_id for match in served.radio_events if match.event.entity_id in muted_ids
+    }
+    muted_ritual_ids = {match.entity_id for match in served.ritual_recipe_matches if match.entity_id in muted_ids}
+    served.radio_events = [match for match in served.radio_events if match.event.entity_id not in muted_ids]
+    served.ritual_recipe_matches = [match for match in served.ritual_recipe_matches if match.entity_id not in muted_ids]
+    served.ritual_public_families = public_family_labels(served.ritual_recipe_matches)
+    muted_one_shot_ids = muted_radio_event_ids | muted_ritual_ids
+    if muted_one_shot_ids:
+        served.denylist_hits = dict(served.denylist_hits)
+        served.denylist_hits["user_muted"] = max(
+            served.denylist_hits.get("user_muted", 0),
+            len(muted_one_shot_ids),
+        )
+    return served
+
+
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
     eligible = len(scored)
     curated = sum(1 for entity in scored if entity.label_tier == "curated")
@@ -1310,6 +1371,28 @@ _HA_REGISTRY_TTL = 6 * 60 * 60
 _HA_REGISTRY_FAILURE_TTL = 60
 _HA_REGISTRY_STALE_TTL = 7 * 24 * 60 * 60
 _HA_REGISTRY_FILENAME = "ha_registry.json"
+# The producer owns the outer 30-second refresh cap. The state request itself
+# must not retain the client's historical 10-second default and throw away a
+# reply that the late-recovery contract explicitly allows us to adopt.
+_HA_CONTEXT_TOTAL_FETCH_TIMEOUT = 30.0
+# Registry labels and forecast are enrichment, not a reason to discard an
+# already-received `/api/states` snapshot near the total deadline.
+_HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT = 5.0
+
+
+async def _cancel_and_await_enrichment_tasks(*tasks: asyncio.Task) -> None:
+    """Cancel optional enrichment work and observe every terminal result.
+
+    A state-fetch failure or producer shutdown must not leave registry/weather
+    work running after the owned refresh has finished.  ``gather`` with
+    ``return_exceptions`` both awaits cancellation and retrieves a racing
+    ordinary exception, avoiding an unobserved-task warning.
+    """
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _get_ha_client() -> httpx.AsyncClient:
@@ -1579,7 +1662,7 @@ def _apply_registry_snapshot(entity_id: str, state_data: dict, snapshot: HomeReg
     return enriched
 
 
-async def fetch_home_context(
+async def _fetch_home_context_outcome(
     ha_url: str,
     ha_token: str,
     poll_interval: float = 60.0,
@@ -1588,15 +1671,37 @@ async def fetch_home_context(
     radio_event_rules: list[RadioEventRule] | None = None,
     authorization: HomeAuthorization | None = None,
     observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
-) -> HomeContext:
-    """Fetch current home state from HA REST API.
+) -> _HomeContextFetchOutcome:
+    """Fetch HA context without publishing it to module-level state.
 
-    Returns cached result if fresher than poll_interval seconds.
-    Uses module-level cache for persistence across calls, with the
-    _cache parameter as a fallback for backward compatibility.
+    The producer can retain this coroutine after its foreground budget expires.
+    Keeping publication outside the task prevents a late result from changing
+    event baselines or the visible snapshot before the next safe segment
+    boundary accepts it.
     """
-    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
     active_authorization = authorization or HomeAuthorization.narrow()
+    attempt_started_at = time.time()
+    started_monotonic = time.monotonic()
+
+    def outcome(
+        kind: Literal["fresh", "cached", "failed"],
+        context: HomeContext,
+        *,
+        radio_event_state_baseline: dict[str, dict] | None = None,
+        ritual_recipe_state_baseline: dict[str, dict] | None = None,
+    ) -> _HomeContextFetchOutcome:
+        attempt_finished_at = time.time()
+        return _HomeContextFetchOutcome(
+            kind=kind,
+            context=context,
+            snapshot_timestamp=context.timestamp,
+            attempt_started_at=attempt_started_at,
+            attempt_finished_at=attempt_finished_at,
+            duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+            radio_event_state_baseline=radio_event_state_baseline or {},
+            ritual_recipe_state_baseline=ritual_recipe_state_baseline or {},
+        )
+
     # Prefer explicitly passed cache, then module-level cache. A context built
     # under the legacy bridge is never a valid stale fallback for a cold/narrow
     # install (and vice versa), including in process-reuse tests.
@@ -1605,15 +1710,67 @@ async def fetch_home_context(
         effective_cache = None
     muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
-        return _serve_filtered_home_context(
-            effective_cache,
-            muted_ids,
-            cache_dir=cache_dir,
-            now=time.time(),
-            update_global=cache_dir is None,
+        return outcome(
+            "cached",
+            _serve_filtered_home_context(
+                effective_cache,
+                muted_ids,
+                cache_dir=cache_dir,
+                now=time.time(),
+                update_global=False,
+            ),
         )
 
+    enrichment_tasks: list[asyncio.Task] = []
     try:
+
+        async def _optional_registry_snapshot() -> HomeRegistrySnapshot:
+            try:
+                return await asyncio.wait_for(
+                    _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir),
+                    timeout=_HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT,
+                )
+            except TimeoutError:
+                logger.debug("HA registry enrichment exceeded %.1fs", _HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT)
+                return HomeRegistrySnapshot(fetched_at=time.time(), source="empty_fallback")
+            except Exception as exc:
+                logger.debug("HA registry enrichment unavailable: %s", exc)
+                return HomeRegistrySnapshot(fetched_at=time.time(), source="empty_fallback")
+
+        async def _optional_weather_arc() -> str:
+            try:
+                return await asyncio.wait_for(
+                    fetch_weather_forecast(ha_url, ha_token),
+                    timeout=_HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT,
+                )
+            except TimeoutError:
+                logger.debug("HA weather enrichment exceeded %.1fs", _HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT)
+                return ""
+            except Exception as exc:
+                logger.debug("HA weather enrichment unavailable: %s", exc)
+                return ""
+
+        # Start enrichment before awaiting `/api/states`, so its independent
+        # five-second caps overlap the full state request instead of consuming
+        # the tail of the producer-owned 30-second refresh budget.
+        # Narrow (cold-install) mode never loads registry names or the weather
+        # forecast arc — the projection would discard both — so skip the network
+        # work entirely and mark the registry as deliberately not loaded.
+        registry_task: asyncio.Task | None = None
+        weather_task: asyncio.Task | None = None
+        if active_authorization.mode is not HomeAuthorizationMode.NARROW:
+            registry_task = asyncio.create_task(
+                _optional_registry_snapshot(),
+                name="ha-context-registry-enrichment",
+            )
+            enrichment_tasks.append(registry_task)
+            if "weather.forecast_home" not in muted_ids:
+                weather_task = asyncio.create_task(
+                    _optional_weather_arc(),
+                    name="ha-context-weather-enrichment",
+                )
+                enrichment_tasks.append(weather_task)
+
         client = _get_ha_client()
         resp = await client.get(
             f"{ha_url.rstrip('/')}/api/states",
@@ -1621,17 +1778,24 @@ async def fetch_home_context(
                 "Authorization": f"Bearer {ha_token}",
                 "Content-Type": "application/json",
             },
+            timeout=_HA_CONTEXT_TOTAL_FETCH_TIMEOUT,
         )
         resp.raise_for_status()
         all_states = resp.json()
 
+        # Optional enrichment errors and timeouts have already degraded to
+        # fallback values.  Await their tasks only after the state reply so a
+        # slow but valid `/api/states` response is never serialized behind
+        # registry/weather work.
+        registry_snapshot = (
+            await registry_task
+            if registry_task is not None
+            else HomeRegistrySnapshot(source="narrow_not_loaded")
+        )
+        fetched_weather_arc = await weather_task if weather_task is not None else ""
+
         timestamp = time.time()
         denylist_hits: dict[str, int] = {}
-        registry_snapshot = (
-            HomeRegistrySnapshot(source="narrow_not_loaded")
-            if active_authorization.mode is HomeAuthorizationMode.NARROW
-            else await _fetch_ha_registry_snapshot(ha_url, ha_token, cache_dir=cache_dir)
-        )
         # Re-read the mute policy after the awaited HA/registry calls above so an
         # operator mute applied mid-refresh isn't served by a stale pre-await
         # snapshot (TOCTOU — codex adversarial review).
@@ -1683,12 +1847,12 @@ async def fetch_home_context(
                 logger.warning("Failed to match configured HA radio events: %s", exc)
                 radio_events = []
             try:
-                _radio_event_state_cache = build_radio_event_baseline(authorized_entity_map, radio_event_rules)
+                radio_event_state_baseline = build_radio_event_baseline(authorized_entity_map, radio_event_rules)
             except Exception as exc:  # pragma: no cover - defensive continuity guard
                 logger.warning("Failed to update configured HA radio-event baseline: %s", exc)
-                _radio_event_state_cache = {}
+                radio_event_state_baseline = {}
         else:
-            _radio_event_state_cache = {}
+            radio_event_state_baseline = {}
         ritual_recipe_matches: list[RitualRecipeMatch] = []
         if active_authorization.allows_household_moments:
             try:
@@ -1702,12 +1866,12 @@ async def fetch_home_context(
                 logger.warning("Failed to match HA ritual recipes: %s", exc)
                 ritual_recipe_matches = []
             try:
-                _ritual_recipe_state_cache = build_ritual_recipe_baseline(authorized_entity_map)
+                ritual_recipe_state_baseline = build_ritual_recipe_baseline(authorized_entity_map)
             except Exception as exc:  # pragma: no cover - defensive continuity guard
                 logger.warning("Failed to update HA ritual recipe baseline: %s", exc)
-                _ritual_recipe_state_cache = {}
+                ritual_recipe_state_baseline = {}
         else:
-            _ritual_recipe_state_cache = {}
+            ritual_recipe_state_baseline = {}
         relevant = {
             entity_id: filtered
             for entity_id, state_data in authorized_entity_map.items()
@@ -1754,7 +1918,7 @@ async def fetch_home_context(
         weather_arc = (
             ""
             if weather_muted or active_authorization.mode is HomeAuthorizationMode.NARROW
-            else await fetch_weather_forecast(ha_url, ha_token)
+            else fetched_weather_arc
         )
         summary = _build_budgeted_summary(scored)
         events_summary = build_events_summary(events, now=timestamp)
@@ -1796,7 +1960,6 @@ async def fetch_home_context(
             authorization_mode=active_authorization.mode.value,
             ambient_sources=ambient_sources,
         )
-        _ha_cache = context
         logger.info(
             "Fetched HA context: %d/%d entities, %d scored, %d events, %d ritual matches, mood=%r",
             len(relevant),
@@ -1806,21 +1969,85 @@ async def fetch_home_context(
             len(ritual_recipe_matches),
             mood or "none",
         )
-        return context
+        return outcome(
+            "fresh",
+            context,
+            radio_event_state_baseline=radio_event_state_baseline,
+            ritual_recipe_state_baseline=ritual_recipe_state_baseline,
+        )
 
+    except asyncio.CancelledError:
+        await _cancel_and_await_enrichment_tasks(*enrichment_tasks)
+        raise
     except Exception as e:
+        await _cancel_and_await_enrichment_tasks(*enrichment_tasks)
         logger.warning("Failed to fetch HA context: %s", e)
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
-            return _serve_filtered_home_context(
-                effective_cache,
-                muted_ids,
-                cache_dir=cache_dir,
-                now=timestamp,
-                update_global=cache_dir is None,
+            return outcome(
+                "failed",
+                _serve_filtered_home_context(
+                    effective_cache,
+                    muted_ids,
+                    cache_dir=cache_dir,
+                    now=timestamp,
+                    update_global=False,
+                ),
             )
-        return HomeContext(authorization_mode=active_authorization.mode.value)
+        return outcome("failed", HomeContext(authorization_mode=active_authorization.mode.value))
+
+
+def _publish_home_context_outcome(outcome: _HomeContextFetchOutcome) -> bool:
+    """Publish a producer-accepted fresh result and its candidate baselines.
+
+    Cached and failed outcomes intentionally leave all module caches untouched.
+    Returning whether publication occurred lets a coordinator reject stale or
+    otherwise ineligible fresh outcomes without a second state mutation path.
+    """
+    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
+    if outcome.kind != "fresh":
+        return False
+    _ha_cache = outcome.context
+    _radio_event_state_cache = outcome.radio_event_state_baseline
+    _ritual_recipe_state_cache = outcome.ritual_recipe_state_baseline
+    return True
+
+
+async def fetch_home_context(
+    ha_url: str,
+    ha_token: str,
+    poll_interval: float = 60.0,
+    _cache: HomeContext | None = None,
+    cache_dir: Path | None = None,
+    radio_event_rules: list[RadioEventRule] | None = None,
+    authorization: HomeAuthorization | None = None,
+    observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+) -> HomeContext:
+    """Fetch current home state from HA REST API (legacy context-only surface).
+
+    Existing callers receive the same ``HomeContext`` fallback contract.  New
+    producer code should use ``_fetch_home_context_outcome`` and publish only a
+    safe-boundary-adopted fresh result.
+    """
+    global _ha_cache
+    result = await _fetch_home_context_outcome(
+        ha_url,
+        ha_token,
+        poll_interval=poll_interval,
+        _cache=_cache,
+        cache_dir=cache_dir,
+        radio_event_rules=radio_event_rules,
+        authorization=authorization,
+        observed_entity_ids_callback=observed_entity_ids_callback,
+    )
+    if result.kind == "fresh":
+        _publish_home_context_outcome(result)
+    elif result.context.timestamp and cache_dir is None:
+        # Preserve the legacy cache-only/failure fallback behaviour for direct
+        # callers without allowing the background outcome helper to publish.
+        _ha_cache = result.context
+    return result.context
 
 
 def get_cached_home_context(
