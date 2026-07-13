@@ -110,6 +110,25 @@
     if (diff < 60) return Math.round(diff) + ' ' + _t('minutes_ago', 'min ago');
     return Math.round(diff / 60) + ' ' + _t('hours_ago', 'hr ago');
   }
+  function casaMomentAgeMinutes(agoMin) {
+    const minutes = Number(agoMin);
+    return Number.isFinite(minutes) && minutes >= 0 ? Math.floor(minutes) : null;
+  }
+  function formatCasaMomentAge(agoMin) {
+    // Public receipts carry only a coarse minute count. Keep the raw field in
+    // the API, but give listeners a natural, localized description.
+    const minutes = Math.max(1, casaMomentAgeMinutes(agoMin) || 0);
+    if (minutes < 60) {
+      return _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+    }
+    if (minutes < 24 * 60) {
+      return _t('casa_moment_hours_ago', '{h} hr ago').replace('{h}', String(Math.floor(minutes / 60)));
+    }
+    if (minutes < 48 * 60) {
+      return _t('casa_moment_yesterday', 'yesterday');
+    }
+    return _t('casa_moment_days_ago', '{d} days ago').replace('{d}', String(Math.floor(minutes / (24 * 60))));
+  }
   function segmentKindLabel(type) {
     switch ((type || '').toLowerCase()) {
       case 'music': return _t('seg_music', 'Music');
@@ -583,7 +602,11 @@
       el.setAttribute('hidden', '');
       return;
     }
-    const recent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    const rawRecent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    // Defense in depth: the public API already projects only aired/airing
+    // receipts, and the listener keeps that privacy promise if a malformed
+    // payload ever reaches the browser.
+    const recent = rawRecent.filter((m) => m && (m.status === 'airing' || m.status === 'aired'));
     if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label && !recent.length)) {
       el.setAttribute('hidden', '');
       return;
@@ -607,13 +630,24 @@
        from the wire is ever interpreted as HTML. */
     const momentsWrap = $('casa-moments');
     const momentsRows = $('casa-moments-rows');
+    const staleNote = $('casa-moments-stale');
     if (momentsWrap && momentsRows) {
       if (!recent.length) {
         momentsWrap.setAttribute('hidden', '');
         momentsRows.textContent = '';
+        if (staleNote) staleNote.setAttribute('hidden', '');
       } else {
         momentsWrap.removeAttribute('hidden');
         momentsRows.textContent = '';
+        const hasAiring = recent.some((m) => m.status === 'airing');
+        const latestReceiptAge = recent.reduce((newest, m) => {
+          const age = casaMomentAgeMinutes(m.ago_min);
+          return age !== null && (newest === null || age < newest) ? age : newest;
+        }, null);
+        if (staleNote) {
+          const showStaleNote = !hasAiring && latestReceiptAge !== null && latestReceiptAge >= 24 * 60;
+          staleNote.toggleAttribute('hidden', !showStaleNote);
+        }
         recent.forEach((m) => {
           const row = document.createElement('div');
           row.className = 'row' + (m.status === 'airing' ? '' : ' dim');
@@ -621,10 +655,9 @@
           ico.className = 'ico';
           ico.textContent = m.status === 'airing' ? '●' : '·';
           const text = document.createElement('span');
-          const minutes = m.ago_min || 1;
           text.textContent = m.status === 'airing'
             ? (m.label || '') + ' · ' + _t('casa_moment_airing', 'on air now')
-            : (m.label || '') + ' · ' + _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+            : (m.label || '') + ' · ' + formatCasaMomentAge(m.ago_min);
           row.appendChild(ico);
           row.appendChild(text);
           momentsRows.appendChild(row);

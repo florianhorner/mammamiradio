@@ -120,8 +120,10 @@
       <div id="casa-weather"></div>
       <div id="casa-event"></div>
       <div id="casa-moments" hidden>
-        <div class="eyebrow casa-moments-eyebrow">{{ copy.get('casa_moments_title', 'Live from your home') }}</div>
+        <div class="eyebrow casa-moments-eyebrow">{{ copy.get('casa_moments_title', 'On-air moments from your home') }}</div>
+        <p class="casa-moments-helper">{{ copy.get('casa_moments_helper', 'This is a record of home moments that made it on air—not every change at home.') }}</p>
         <div id="casa-moments-rows"></div>
+        <p class="casa-moments-stale" id="casa-moments-stale" hidden>{{ copy.get('casa_moment_stale', 'Nothing newer has made it on air yet.') }}</p>
       </div>
     </aside>
   </div>

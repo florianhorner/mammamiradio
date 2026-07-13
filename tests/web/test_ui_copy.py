@@ -108,13 +108,53 @@ def test_clip_copy_keys_present():
 
 
 def test_listener_moment_receipt_copy_is_localized():
+    keys = (
+        "casa_moments_title",
+        "casa_moments_helper",
+        "casa_moment_airing",
+        "casa_moment_minutes_ago",
+        "casa_moment_hours_ago",
+        "casa_moment_yesterday",
+        "casa_moment_days_ago",
+        "casa_moment_stale",
+    )
     for lang in ("en", "it"):
-        assert COPY[lang].get("casa_moment_airing"), f"missing casa_moment_airing in {lang}"
+        for key in keys:
+            assert COPY[lang].get(key), f"missing {key} in {lang}"
         assert "{m}" in COPY[lang].get("casa_moment_minutes_ago", "")
+        assert "{h}" in COPY[lang].get("casa_moment_hours_ago", "")
+        assert "{d}" in COPY[lang].get("casa_moment_days_ago", "")
+    assert COPY["en"]["casa_moments_title"] == "On-air moments from your home"
+    assert "not every change at home" in COPY["en"]["casa_moments_helper"]
+
     text = _LISTENER_JS.read_text(encoding="utf-8")
     assert "_t('casa_moment_airing'" in text
     assert "_t('casa_moment_minutes_ago'" in text
+    assert "_t('casa_moment_hours_ago'" in text
+    assert "_t('casa_moment_yesterday'" in text
+    assert "_t('casa_moment_days_ago'" in text
     assert "in onda ora" not in text
+
+
+def test_listener_moment_receipts_stay_private_and_readable():
+    """The browser renders only public receipts with human time and no HTML sink."""
+    text = _LISTENER_JS.read_text(encoding="utf-8")
+    html = _LISTENER_HTML.read_text(encoding="utf-8")
+    age_fn = text[text.index("function formatCasaMomentAge(") : text.index("function segmentKindLabel(")]
+    casa_fn = text[text.index("function updateCasa(") : text.index("function renderPalinsestoDate(")]
+
+    assert "m.status === 'airing' || m.status === 'aired'" in casa_fn
+    assert "if (minutes < 60)" in age_fn
+    assert "if (minutes < 24 * 60)" in age_fn
+    assert "if (minutes < 48 * 60)" in age_fn
+    assert "Math.floor(minutes / (24 * 60))" in age_fn
+    assert "!hasAiring" in casa_fn
+    assert "latestReceiptAge >= 24 * 60" in casa_fn
+    assert "textContent" in casa_fn
+    assert "innerHTML" not in casa_fn
+    assert 'id="casa-moments-stale"' in html
+    assert "casa_moments_helper" in html
+    assert "casa_moment_stale" in html
 
 
 def test_no_tech_lingo_reaches_the_listener():

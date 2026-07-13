@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Changed
 
+- **Casa now makes its on-air receipt honest.** The listener card explains that it records only home moments that made it on air, not every change at home. Recent moments now read naturally as minutes, hours, yesterday, or whole days; when nothing newer has aired, Casa says so. The public view remains receipt-only, while the control room gives operators clearer reasons when a moment was held back by a playlist, music-source, or Chaos Mode change.
 - **Fresh installations now start with a deliberately small Home Assistant context.** Hosts can use only coarse daylight and—when there is exactly one unambiguous source—coarse weather; household entities, generated labels, moods, reactive moments, timers, running gags, and saved moment trails stay out. Existing stations retain their current Home behavior through a fail-closed continuity bridge, so an update does not suddenly silence a house that already chose it.
 
 ### Fixed

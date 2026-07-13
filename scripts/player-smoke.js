@@ -8,6 +8,28 @@ async (page) => {
   let requestScenario = 'success_shoutout';
   let streamScenario = 'audio';
   let sessionStopped = false;
+  let casaScenario = 'recent';
+  const casaReceipts = {
+    recent: [
+      { label: 'One minute ritual', ago_min: 1, status: 'aired' },
+      { label: 'Fifty-nine minute ritual', ago_min: 59, status: 'aired' },
+      { label: 'One hour ritual', ago_min: 60, status: 'aired' },
+      { label: 'Twenty-three hour ritual', ago_min: 1439, status: 'aired' },
+      { label: 'Yesterday ritual', ago_min: 1440, status: 'aired' },
+      { label: 'Late-yesterday ritual', ago_min: 2879, status: 'aired' },
+      { label: 'Two-day ritual', ago_min: 2880, status: 'aired' },
+      { label: 'Private dropped ritual', ago_min: 2, status: 'dropped' },
+    ],
+    stale: [
+      { label: 'Yesterday ritual', ago_min: 1440, status: 'aired' },
+      { label: 'Two-day ritual', ago_min: 2880, status: 'aired' },
+      { label: 'Private dropped ritual', ago_min: 2, status: 'dropped' },
+    ],
+    airing: [
+      { label: 'Live ritual', ago_min: 3000, status: 'airing' },
+      { label: 'Private dropped ritual', ago_min: 2, status: 'dropped' },
+    ],
+  };
 
   function assert(condition, message) {
     if (!condition) throw new Error(`player-smoke: ${message}`);
@@ -59,7 +81,7 @@ async (page) => {
       body: JSON.stringify({
         identity: { station_name: authoritativeName, source: 'player-smoke' },
         brand: { station_name: authoritativeName },
-        capabilities: {},
+        capabilities: { ha: true },
         session_stopped: sessionStopped,
         uptime_sec: 90,
         tracks_played: 1,
@@ -70,7 +92,12 @@ async (page) => {
         upcoming_mode: 'building',
         current_progress_sec: 3,
         current_duration_sec: 180,
-        ha_moments: null,
+        ha_moments: {
+          mood: '',
+          weather: '',
+          last_event_label: '',
+          recent: casaReceipts[casaScenario],
+        },
       }),
     });
   });
@@ -142,6 +169,54 @@ async (page) => {
     const el = document.getElementById('mmr-copy-bootstrap');
     return el ? JSON.parse(el.textContent) : {};
   });
+
+  async function casaState() {
+    await page.waitForFunction(
+      () => {
+        const card = document.getElementById('casa-moments');
+        return card && !card.hasAttribute('hidden') && document.querySelectorAll('#casa-moments-rows .row').length > 0;
+      },
+      null,
+      { timeout: 5000 },
+    );
+    return page.evaluate(() => ({
+      title: document.querySelector('.casa-moments-eyebrow')?.textContent.trim(),
+      helper: document.querySelector('.casa-moments-helper')?.textContent.trim(),
+      rows: Array.from(document.querySelectorAll('#casa-moments-rows .row')).map((row) => row.textContent.trim()),
+      staleHidden: document.getElementById('casa-moments-stale')?.hasAttribute('hidden'),
+    }));
+  }
+
+  const recentCasa = await casaState();
+  assert(recentCasa.title === copy.casa_moments_title, 'Casa receipt title did not use active-language copy');
+  assert(recentCasa.helper === copy.casa_moments_helper, 'Casa receipt helper did not explain the on-air-only record');
+  assert(recentCasa.rows.length === 7, `Casa receipt exposed a non-on-air row: ${JSON.stringify(recentCasa.rows)}`);
+  assert(!recentCasa.rows.some((row) => row.includes('Private dropped ritual')), 'Casa receipt exposed a dropped private row');
+  assert(recentCasa.rows.some((row) => row.includes(copy.casa_moment_minutes_ago.replace('{m}', '1'))), 'Casa one-minute boundary was not humanized');
+  assert(recentCasa.rows.some((row) => row.includes(copy.casa_moment_minutes_ago.replace('{m}', '59'))), 'Casa 59-minute boundary was not humanized');
+  assert(recentCasa.rows.some((row) => row.includes(copy.casa_moment_hours_ago.replace('{h}', '1'))), 'Casa one-hour boundary was not humanized');
+  assert(recentCasa.rows.some((row) => row.includes(copy.casa_moment_hours_ago.replace('{h}', '23'))), 'Casa 23-hour boundary was not humanized');
+  assert(recentCasa.rows.filter((row) => row.includes(copy.casa_moment_yesterday)).length === 2, 'Casa yesterday boundaries were not humanized');
+  assert(recentCasa.rows.some((row) => row.includes(copy.casa_moment_days_ago.replace('{d}', '2'))), 'Casa whole-day boundary was not humanized');
+  assert(recentCasa.staleHidden, 'Casa stale note appeared despite a newer receipt');
+
+  casaScenario = 'stale';
+  await loadFreshPage();
+  const staleCasa = await casaState();
+  assert(!staleCasa.staleHidden, 'Casa stale note did not appear after a day without an on-air receipt');
+  assert(
+    await page.locator('#casa-moments-stale').textContent() === copy.casa_moment_stale,
+    'Casa stale note did not use active-language copy',
+  );
+
+  casaScenario = 'airing';
+  await loadFreshPage();
+  const airingCasa = await casaState();
+  assert(airingCasa.rows.length === 1 && airingCasa.rows[0].includes(copy.casa_moment_airing), 'Casa on-air receipt did not render');
+  assert(airingCasa.staleHidden, 'Casa stale note remained while a receipt was on air');
+
+  casaScenario = 'recent';
+  await loadFreshPage();
   const playCount = () => streamRequests.length;
   const initialPlayCount = playCount();
   await page.locator('#req-name').click();
