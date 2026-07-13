@@ -13,6 +13,7 @@ The current version source of truth is `pyproject.toml`.
 
 ### Fixed
 
+- **The backup writer now steps in sooner when the main AI writer is briefly busy.** A short pause sends the next host break straight to the backup writer instead of making listeners wait through the same failed request again. The main writer returns automatically once it is ready.
 - **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. Songs already banned or removed when the reserve is rebuilt are excluded from that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
 
 ## [2.17.0] - 2026-07-12

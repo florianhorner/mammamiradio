@@ -13,6 +13,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -93,6 +94,12 @@ _anthropic_auth_blocked_until: float = 0.0
 _anthropic_blocked_reason: str = "provider error"
 _anthropic_blocked_model: str = ""
 _ANTHROPIC_AUTH_BACKOFF_SECONDS = 600
+# Short breaker for temporary provider pressure. Keep this bounded: OpenAI is the
+# immediate writer fallback, and a later generation should get a fair chance to
+# return to Anthropic after a brief overload clears.
+_ANTHROPIC_TRANSIENT_BACKOFF_SECONDS = 20
+_ANTHROPIC_TRANSIENT_BACKOFF_FLOOR = 5
+_ANTHROPIC_TRANSIENT_BACKOFF_MAX = 60
 # gpt-5.x reasoning models bill hidden reasoning tokens against
 # `max_completion_tokens`. We request `reasoning_effort="minimal"` for these
 # short radio snippets (see _call_openai) so reasoning is near-zero — that keeps
@@ -519,11 +526,18 @@ def _is_anthropic_auth_error(exc: Exception) -> bool:
     return "invalid x-api-key" in text or "authentication_error" in text or "unauthorized" in text or "401" in text
 
 
+def _is_anthropic_transient_error(exc: Exception) -> bool:
+    """Return True for temporary Anthropic pressure that can safely self-recover."""
+    return isinstance(exc, anthropic.APIStatusError) and getattr(exc, "status_code", None) in (429, 529)
+
+
 def _is_anthropic_nonretryable_provider_error(exc: Exception) -> bool:
     """Return True for provider errors that require config changes, not retries."""
     exc_type = type(exc).__name__.lower()
     text = str(exc).lower()
     if _is_anthropic_auth_error(exc):
+        return False
+    if _is_anthropic_transient_error(exc):
         return False
     if "notfound" in exc_type or "not_found" in exc_type:
         return True
@@ -536,14 +550,35 @@ def _is_anthropic_usage_limit_error(exc: Exception) -> bool:
     """Return True for account-wide quota/credit exhaustion errors."""
     if _is_anthropic_auth_error(exc) or _is_anthropic_nonretryable_provider_error(exc):
         return False
+    if _is_anthropic_transient_error(exc):
+        return False
+    if isinstance(exc, anthropic.APIStatusError) and getattr(exc, "type", None) == "billing_error":
+        return True
     text = str(exc).lower()
     return "usage limit" in text or "usage_limit" in text or "insufficient_quota" in text or "credit balance" in text
+
+
+def _anthropic_transient_backoff_seconds(exc: Exception) -> int:
+    """Return a bounded Retry-After delay for transient Anthropic failures."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    raw = headers.get("retry-after") if headers is not None else None
+    if not isinstance(raw, str):
+        return _ANTHROPIC_TRANSIENT_BACKOFF_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return _ANTHROPIC_TRANSIENT_BACKOFF_SECONDS
+    if not math.isfinite(seconds) or seconds < 0:
+        return _ANTHROPIC_TRANSIENT_BACKOFF_SECONDS
+    return int(max(_ANTHROPIC_TRANSIENT_BACKOFF_FLOOR, min(_ANTHROPIC_TRANSIENT_BACKOFF_MAX, seconds)))
 
 
 def _anthropic_blocked_fallback_reason() -> str:
     """Return the OpenAI fallback reason for the active Anthropic circuit block."""
     if _anthropic_blocked_reason == "usage limit":
         return "anthropic_usage_limit_blocked"
+    if _anthropic_blocked_reason == "provider overloaded":
+        return "anthropic_transient_blocked"
     return "anthropic_auth_blocked"
 
 
@@ -556,12 +591,15 @@ def _trip_anthropic_circuit_and_fallback(
     reason: str,
     log_message: str,
     count_auth_failure: bool,
+    backoff_seconds: int = _ANTHROPIC_AUTH_BACKOFF_SECONDS,
 ) -> None:
     """Set Anthropic block globals + session state, then log fallback or re-raise."""
     global _anthropic_auth_blocked_key, _anthropic_auth_blocked_until
     global _anthropic_blocked_reason, _anthropic_blocked_model, _anthropic_block_expired_logged
     _anthropic_auth_blocked_key = config.anthropic_api_key
-    _anthropic_auth_blocked_until = time.time() + _ANTHROPIC_AUTH_BACKOFF_SECONDS
+    # Concurrent model-scoped 404 and transient blocks share this one mirror;
+    # last writer wins, and both bounded cooldowns self-heal.
+    _anthropic_auth_blocked_until = time.time() + backoff_seconds
     _anthropic_blocked_reason = reason
     _anthropic_blocked_model = model_scope
     _anthropic_block_expired_logged = False
@@ -572,7 +610,7 @@ def _trip_anthropic_circuit_and_fallback(
         state.anthropic_auth_failures += 1
     if not config.openai_api_key:
         raise exc
-    logger.warning(log_message, _ANTHROPIC_AUTH_BACKOFF_SECONDS, exc)
+    logger.warning(log_message, backoff_seconds, exc)
 
 
 def _get_anthropic_attempt_lock() -> asyncio.Lock:
@@ -683,7 +721,7 @@ async def _generate_json_response(
                     try:
                         client = _get_client(config.anthropic_api_key)
                         resp = await asyncio.wait_for(
-                            client.messages.create(
+                            client.with_options(max_retries=0).messages.create(
                                 model=model,
                                 max_tokens=current_max_tokens,
                                 system=system_prompt,
@@ -700,18 +738,17 @@ async def _generate_json_response(
                             _anthropic_out = resp.usage.output_tokens
                             state.record_llm_usage(cost_category, model, _anthropic_in, _anthropic_out)
                         raw = _anthropic_text(resp.content).strip()
-                        # Receipt of a response proves provider HEALTH (auth, quota,
-                        # availability) — clear the circuit here, before parse. A
-                        # truncated-but-received response is a budget problem, not a
-                        # provider problem; clearing post-parse would let it pin
-                        # healthy-Anthropic traffic onto OpenAI.
-                        state.anthropic_disabled_until = 0.0
-                        state.anthropic_last_error = ""
+                        # Receipt of a response proves this provider/model is healthy
+                        # before parse. A truncated-but-received response is a budget
+                        # problem, not a provider problem; clearing post-parse would
+                        # let it pin healthy-Anthropic traffic onto OpenAI.
                         clears_current_block = not _anthropic_auth_blocked_key or (
                             _anthropic_auth_blocked_key == config.anthropic_api_key
                             and (not _anthropic_blocked_model or _anthropic_blocked_model == model or block_expired)
                         )
                         if clears_current_block:
+                            state.anthropic_disabled_until = 0.0
+                            state.anthropic_last_error = ""
                             _anthropic_auth_blocked_key = ""
                             _anthropic_auth_blocked_until = 0.0
                             _anthropic_blocked_reason = "provider error"
@@ -825,6 +862,24 @@ async def _generate_json_response(
                                 count_auth_failure=True,
                             )
                             fallback_reason = "anthropic_auth_failed"
+                        elif _is_anthropic_transient_error(exc):
+                            if not config.openai_api_key:
+                                raise
+                            transient_scope = model if getattr(exc, "status_code", None) == 429 else ""
+                            _trip_anthropic_circuit_and_fallback(
+                                exc,
+                                config=config,
+                                state=state,
+                                model_scope=transient_scope,
+                                reason="provider overloaded",
+                                log_message=(
+                                    "Anthropic overloaded/rate-limited; pausing Anthropic for %ds "
+                                    "and falling back to OpenAI: %s"
+                                ),
+                                count_auth_failure=False,
+                                backoff_seconds=_anthropic_transient_backoff_seconds(exc),
+                            )
+                            fallback_reason = "anthropic_transient"
                         elif _is_anthropic_usage_limit_error(exc):
                             _trip_anthropic_circuit_and_fallback(
                                 exc,

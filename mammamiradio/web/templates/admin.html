@@ -3210,7 +3210,8 @@ function runtimeProviderRow(title,item){
     label=item?.fallback_active?'Fallback':'Primary';
   }
   const reasonLine=item?.action_guidance||item?.switch_reason||'';
-  const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':'';
+  const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0);
+  const retryLine=retrySeconds>0?'Retrying in '+(retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'):'';
   const detail=[
     'Current: '+(item?.current_label||item?.current_provider||'—'),
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
@@ -4967,7 +4968,7 @@ function updateEngineRoom(st,caps){
     }else if(c.anthropic_degraded){
       const secs=Math.max(0,c.anthropic_retry_after_s||0);
       const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
-      anthropicLine=statusInline('degraded','suspended'+retry,'Auth failed; OpenAI fallback');
+      anthropicLine=statusInline('degraded','suspended'+retry,'Temporarily unavailable; OpenAI fallback');
     }else{
       anthropicLine=statusInline('ready','connected');
     }
