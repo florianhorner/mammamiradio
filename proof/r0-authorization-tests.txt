@@ -1,0 +1,30 @@
+R0 fail-closed Home Assistant authorization — local verification evidence
+Branch: florianhorner/fix/remove-hardcoded-defaults
+Commit: dc681fc4 (before this proof commit)
+
+## make check (lint + format-check + typecheck + full suite + coverage ratchet)
+Required test coverage of 92.0% reached. Total coverage: 92.57%
+4842 passed, 3 skipped, 21 deselected, 1 warning in 172.39s
+All checks passed
+  - ruff check: All checks passed
+  - ruff format --check: clean
+  - mypy mammamiradio/ tests/: Success
+  - coverage-ratchet check: all per-module floors met
+    (mammamiradio.home.ha_context restored to 97% via added coverage tests)
+
+## scripts/check-release-invariants.sh
+Passed: 10  Failed: 0 — All invariants passed.
+
+## Pre-ship review squad (3 agents: adversarial, test-coverage, docs/config-consistency)
+No P0/P1 findings on any axis.
+- P2-1 (privacy fail-open: transplanted legacy sidecar promoting a cold install
+  to legacy) FIXED in main.py startup R0 bridge + regression test.
+- P2-2 (cold-install hard-abort on unwritable state dir) accepted as a deliberate
+  privacy-over-cold-boot tradeoff (no live listener; broken FS breaks everything).
+- P2-3 (drop_matching_segments return-count semantics) cosmetic, no action.
+
+## Merge integration
+Merged origin/main (which introduced the single-flight _HAContextRefreshCoordinator);
+resolved conflicts in ha_context.py, producer.py, and two test files by weaving R0
+authorization into the coordinator (deferred publication preserved, mode-mismatch
+discard guard added). Reconciled test suites green.
