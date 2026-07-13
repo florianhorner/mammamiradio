@@ -1,0 +1,24 @@
+Local verification — scriptwriter transient circuit breaker
+commit: 8cafe9487c6ca7409928f4561f3e8f51f5919384
+date(UTC): 2026-07-13T10:05:41Z
+
+== full test suite ==
+4797 passed, 3 skipped, 21 deselected in 210.66s (python -m pytest tests/)
+
+== affected test files ==
+475 passed (tests/hosts/test_scriptwriter.py tests/hosts/test_new_features.py tests/web/test_admin_status_invariants.py tests/web/test_shadow_queue_sync.py)
+
+== ruff check mammamiradio/ tests/ ==
+All checks passed!
+
+== ruff format --check (changed modules) ==
+2 files already formatted
+
+== mypy (changed modules) ==
+Success: no issues found in 2 source files
+
+== release invariants ==
+  Passed: 10  Failed: 0
+
+== changelog lint ==
+Changelog lint clean.
