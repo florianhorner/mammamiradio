@@ -160,6 +160,31 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
     assert ".catch(() => {})" not in code, "smoke assertions must never suppress browser failures."
 
 
+def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
+    """The opt-in browser smoke protects the listener-facing receipt meaning.
+
+    It uses the actual page and listener.js with only the public-status boundary
+    mocked, so the status filter, localized relative time, and stale-state note
+    are exercised together rather than duplicated in Python.
+    """
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "casaScenario = 'recent'",
+        "capabilities: { ha: true }",
+        "Private dropped ritual",
+        "Casa receipt title did not use active-language copy",
+        "Casa receipt helper did not explain the on-air-only record",
+        "Casa receipt exposed a dropped private row",
+        "Casa one-minute boundary was not humanized",
+        "Casa one-hour boundary was not humanized",
+        "Casa yesterday boundaries were not humanized",
+        "Casa whole-day boundary was not humanized",
+        "Casa stale note did not appear after a day without an on-air receipt",
+        "Casa on-air receipt did not render",
+    ):
+        assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
+
+
 def test_default_listener_identity_fixture_is_canonical() -> None:
     config = tomllib.loads(RADIO_CONFIG.read_text(encoding="utf-8"))
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"

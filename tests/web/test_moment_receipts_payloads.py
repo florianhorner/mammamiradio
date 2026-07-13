@@ -63,8 +63,11 @@ async def test_public_status_recent_moments_generic_labels_only():
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        body = (await client.get("/public-status")).json()
+    # The endpoint continues to expose the coarse raw minute count; listener.js
+    # owns human wording such as "yesterday" and must not change this contract.
+    with patch("mammamiradio.web.streamer.time.time", return_value=NOW + 30 + 25 * 60):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            body = (await client.get("/public-status")).json()
 
     recent = body["ha_moments"]["recent"]
     assert len(recent) == 1
@@ -72,6 +75,7 @@ async def test_public_status_recent_moments_generic_labels_only():
     # no raw ids may ever cross the unauthenticated boundary.
     assert set(recent[0]) == {"label", "ago_min", "status"}
     assert recent[0]["label"] == "Morning launch"
+    assert recent[0]["ago_min"] == 25
     assert recent[0]["status"] == "aired"
 
 
