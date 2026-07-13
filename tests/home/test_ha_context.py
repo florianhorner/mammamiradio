@@ -1630,6 +1630,44 @@ async def test_fetch_returns_empty_on_failure_no_cache():
 
 
 @pytest.mark.asyncio
+async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
+    """A hard mute applied while an about-to-fail refresh is in flight must still
+    filter the stale fallback the failed path serves (re-read, not the pre-await
+    snapshot)."""
+    stale_cache = HomeContext(
+        summary="stale",
+        raw_states={"switch.muted": {"state": "on", "attributes": {}}},
+        timestamp=time.time() - 300.0,
+    )
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = RuntimeError("connection refused")
+
+    calls = {"n": 0}
+
+    def _fake_muted(_dir):
+        # First (pre-await) read sees no mute; the mute lands while the refresh is
+        # in flight, so every later read — including the except-path re-read — sees it.
+        calls["n"] += 1
+        return set() if calls["n"] == 1 else {"switch.muted"}
+
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        patch("mammamiradio.home.ha_context._ha_cache", None),
+        patch("mammamiradio.home.ha_context.muted_entity_ids", side_effect=_fake_muted),
+    ):
+        result = await fetch_home_context(
+            "http://ha:8123",
+            "token",
+            poll_interval=60.0,
+            _cache=stale_cache,
+            cache_dir=tmp_path,
+        )
+
+    assert calls["n"] >= 2
+    assert "switch.muted" not in result.raw_states
+
+
+@pytest.mark.asyncio
 async def test_fetch_outcome_defers_cache_and_event_baseline_publication():
     """A background task must not publish its result before the producer adopts it."""
     import mammamiradio.home.ha_context as ha_mod

@@ -174,6 +174,29 @@ async def test_ban_purges_not_yet_started_queued_music_segment(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ban_purges_queued_segment_stamped_with_title_only_key(tmp_path):
+    """Norm-cache bridge / rescue fills stamp `title` (not `title_only`); the ban
+    purge must still drop such a queued segment for the banned song."""
+    app = _make_app(tmp_path, [_track("Volare", "Modugno")])
+    state = app.state.station_state
+    q = app.state.queue
+    # A rescue-shaped music segment: `title` set, no `title_only`.
+    seg_banned = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/volare-rescue.mp3"),
+        ephemeral=False,
+        metadata={"artist": "Modugno", "title": "Volare", "queue_id": "q-ban"},
+    )
+    q.put_nowait(seg_banned)
+    state.queued_segments = [{"id": "q-ban", "label": "Volare"}]
+
+    result = _apply_ban(state, app.state.config, [_track("Volare", "Modugno")], queue=q)
+    assert result["purged"] == 1
+    assert state.queued_segments == []
+    assert q.empty()
+
+
+@pytest.mark.asyncio
 async def test_commit_external_download_drops_banned_song(tmp_path):
     """4th ingest doorway: an admin queue-from-search / listener request for a
     banned song must be refused, not committed to rotation. The status is the

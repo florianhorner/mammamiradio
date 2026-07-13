@@ -1984,6 +1984,11 @@ async def _fetch_home_context_outcome(
         # Return stale cache if available, otherwise empty
         if effective_cache:
             timestamp = time.time()
+            # A hard mute applied while this now-failed refresh was in flight must
+            # still filter the stale fallback we serve — re-read the live policy so
+            # the failed path does not expose an entity muted mid-refresh.
+            if cache_dir is not None:
+                muted_ids = muted_entity_ids(Path(cache_dir))
             return outcome(
                 "failed",
                 _serve_filtered_home_context(

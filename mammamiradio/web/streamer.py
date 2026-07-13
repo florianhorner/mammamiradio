@@ -860,9 +860,12 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
 
     def _matches_blocklist(segment: Segment) -> bool:
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        # Producer music carries `title_only` (bare title); norm-cache bridge and
+        # rescue fills stamp only `title`. Fall back so a banned song queued via
+        # either shape is still purged.
         key = (
             str(metadata.get("artist", "")).strip().lower(),
-            str(metadata.get("title_only", "")).strip().lower(),
+            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
         )
         return segment.type is SegmentType.MUSIC and key in banned_keys
 
