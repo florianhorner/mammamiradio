@@ -10,6 +10,7 @@ import pytest
 
 from mammamiradio.audio.normalizer import (
     crossfade_voice_over_music,
+    crossfade_voice_over_tail,
     generate_sfx,
     generate_transition_sting,
     mix_ad_with_bed,
@@ -304,22 +305,72 @@ def test_transition_sting_uses_custom_motif_notes(tmp_path, mock_run):
 
 
 # ---------------------------------------------------------------------------
-# crossfade_voice_over_music
+# crossfade_voice_over_tail
 # ---------------------------------------------------------------------------
 
 
-def test_crossfade_voice_over_music_starts_voice_without_music_only_replay(tmp_path, mock_run):
-    music = tmp_path / "music.mp3"
+def test_crossfade_voice_over_tail_starts_voice_without_music_only_replay(tmp_path, mock_run):
+    music = tmp_path / "reserved_tail.mp3"
     voice = tmp_path / "voice.mp3"
     out = tmp_path / "mixed.mp3"
 
-    result = crossfade_voice_over_music(music, voice, out)
+    result = crossfade_voice_over_tail(music, voice, out, tail_duration_sec=7.625)
 
     assert result == out
     cmd = mock_run.call_args[0][0]
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "-sseof" not in cmd
+    assert cmd[cmd.index("-i") + 1] == str(music)
+    assert "atrim=duration=7.625" in filter_complex
+    assert "afade=t=out:st=0:d=7.625" in filter_complex
     assert "adelay=1500|1500" not in filter_complex
     assert "adelay=150|150" in filter_complex
+
+
+def test_crossfade_voice_over_tail_probes_the_reserved_tail_duration(tmp_path, mock_run):
+    music = tmp_path / "reserved_tail.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "mixed.mp3"
+
+    with patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=5.25) as probe:
+        crossfade_voice_over_tail(music, voice, out)
+
+    probe.assert_called_once_with(music)
+    cmd = mock_run.call_args[0][0]
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "-sseof" not in cmd
+    assert "atrim=duration=5.25" in filter_complex
+    assert "afade=t=out:st=0:d=5.25" in filter_complex
+
+
+def test_crossfade_voice_over_music_compatibility_wrapper_never_seeks_from_full_track(tmp_path, mock_run):
+    music = tmp_path / "reserved_tail.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "mixed.mp3"
+
+    result = crossfade_voice_over_music(music, voice, out, tail_seconds=3.5)
+
+    assert result == out
+    cmd = mock_run.call_args[0][0]
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "-sseof" not in cmd
+    assert "atrim=duration=3.5" in filter_complex
+
+
+def test_crossfade_voice_over_tail_rejects_unknown_or_non_positive_duration(tmp_path, mock_run):
+    music = tmp_path / "reserved_tail.mp3"
+    voice = tmp_path / "voice.mp3"
+    out = tmp_path / "mixed.mp3"
+
+    with pytest.raises(ValueError, match="positive tail duration"):
+        crossfade_voice_over_tail(music, voice, out, tail_duration_sec=0)
+    with (
+        patch("mammamiradio.audio.normalizer.probe_duration_sec", return_value=None),
+        pytest.raises(ValueError, match="positive tail duration"),
+    ):
+        crossfade_voice_over_tail(music, voice, out)
+
+    mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

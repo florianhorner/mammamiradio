@@ -304,7 +304,7 @@ async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
-        patch(f"{MODULE}.crossfade_voice_over_music") as mock_xfade,
+        patch(f"{MODULE}.crossfade_voice_over_tail") as mock_xfade,
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)

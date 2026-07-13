@@ -12,6 +12,7 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import HostPersonality, Segment, SegmentType, StationState, Track
+from mammamiradio.scheduling.handoff import PreparedMusicHandoff
 from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
     _crosses_music_speech_boundary,
@@ -19,6 +20,7 @@ from mammamiradio.scheduling.producer import (
     _make_imaging_lib,
     run_producer,
 )
+from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -91,6 +93,32 @@ def _mix_bed_side_effect(_voice_path, _bed_path, output_path, _bed_db=-18.0):
 
 async def _write_async_file(_text, _voice, path, **_kwargs):
     path.write_bytes(b"voice")
+
+
+def _prepared_handoff(segment: Segment, tmp_path: Path, *, tail_seconds: float = 8.0) -> PreparedMusicHandoff:
+    """Build a lightweight reserved split for producer-control tests."""
+
+    head = tmp_path / f"{segment.path.stem}_head.mp3"
+    tail = tmp_path / f"{segment.path.stem}_tail.mp3"
+    head.write_bytes(b"head")
+    tail.write_bytes(b"tail")
+    return PreparedMusicHandoff(
+        music_segment=segment,
+        source_path=segment.path,
+        split=Mp3HandoffSplit(
+            head_path=head,
+            tail_path=tail,
+            playable_start_byte=0,
+            head_end_byte=4,
+            playable_end_byte=8,
+            head_duration_sec=120.0,
+            tail_duration_sec=tail_seconds,
+            source_duration_sec=120.0 + tail_seconds,
+            frame_count=10,
+            head_frame_count=8,
+            tail_frame_count=2,
+        ),
+    )
 
 
 def test_music_speech_boundary_includes_voice_led_imaging_segments():
@@ -258,7 +286,7 @@ async def test_continuity_epoch_refreshes_producer_predecessor_from_reserved_tai
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=dialogue),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as crossfade,
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail") as crossfade,
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -365,7 +393,7 @@ async def test_banter_talk_bed_severed_after_ad_no_stale_bleed(tmp_path):
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as mock_xfade,
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail") as mock_xfade,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
@@ -475,9 +503,8 @@ async def test_error_recovery_sweeper_does_not_get_transition_stinger(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
-    """Positive (no over-fix): a direct MUSIC -> BANTER still beds the just-played
-    song — the legitimate 'host over the outro' direction is preserved."""
+async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
+    """A direct MUSIC -> BANTER owns only a pre-split tail, never the song path."""
     song = tmp_path / "adjacent_song.mp3"
     song.write_bytes(b"music")
     state = _make_state()
@@ -485,8 +512,9 @@ async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
     config = _make_config(tmp_path)
     config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    # A song is the immediately-previous aired segment.
-    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=song, ephemeral=False))
+    music = Segment(type=SegmentType.MUSIC, path=song, duration_sec=128.0, ephemeral=False)
+    queue.put_nowait(music)
+    handoff = _prepared_handoff(music, tmp_path)
     host = config.hosts[0]
     banter_lines = [(host, "Che pezzo!")]
 
@@ -507,7 +535,9 @@ async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=_xfade_writes_output),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=handoff),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_xfade_writes_output),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _config: segment),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -519,18 +549,19 @@ async def test_banter_talk_bed_uses_song_when_music_adjacent(tmp_path):
 
         await _run_until_queued(queue, state, config, target_qsize=2)
 
-    queue.get_nowait()  # the seeded MUSIC
+    head = queue.get_nowait()
     seg = queue.get_nowait()
+    assert head is music
+    assert head.path == handoff.split.head_path
     assert seg.type == SegmentType.BANTER
-    # The adjacent song IS used as the bed AND crossfaded under the opener —
-    # the legitimate "host over the outro" direction still works.
-    assert imaging.pick_talk_bed.call_args.args[2] == song
-    assert xfade_sources == [song]
+    assert seg.metadata["has_music_tail"] is True
+    assert all(call.args[2] is None for call in imaging.pick_talk_bed.call_args_list)
+    assert xfade_sources == [handoff.split.tail_path]
 
 
 @pytest.mark.asyncio
-async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_path):
-    """Residual #641: a rescue song queued through the funnel becomes the bed source."""
+async def test_banter_after_rescue_song_uses_generic_bed_not_any_song(tmp_path):
+    """Rescue audio is never a handoff candidate or a replayable talk bed."""
     prior_render = tmp_path / "prior_render_a.mp3"
     prior_render.write_bytes(b"old music")
     rescue_song = tmp_path / "norm_rescue_b_192k.mp3"
@@ -574,7 +605,7 @@ async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=_xfade_writes_output),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_xfade_writes_output),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -589,8 +620,8 @@ async def test_banter_talk_bed_uses_norm_cache_rescue_song_not_prior_render(tmp_
     queue.get_nowait()  # the rescue MUSIC
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
-    assert imaging.pick_talk_bed.call_args.args[2] == rescue_song
-    assert xfade_sources == [rescue_song]
+    assert imaging.pick_talk_bed.call_args.args[2] is None
+    assert xfade_sources == []
 
 
 @pytest.mark.asyncio
@@ -769,7 +800,7 @@ async def test_news_flash_crossfade_severed_after_ad(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as mock_xfade,
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail") as mock_xfade,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
@@ -786,8 +817,8 @@ async def test_news_flash_crossfade_severed_after_ad(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_news_flash_crossfade_uses_adjacent_song(tmp_path):
-    """A news flash directly after a song crossfades over THAT song (preserved)."""
+async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
+    """A news flash commits only against a supplied tail from its queued song."""
     song = tmp_path / "adjacent_song.mp3"
     song.write_bytes(b"music")
     state = _make_state()
@@ -795,7 +826,9 @@ async def test_news_flash_crossfade_uses_adjacent_song(tmp_path):
     config = _make_config(tmp_path)
     config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=song, ephemeral=False))
+    music = Segment(type=SegmentType.MUSIC, path=song, duration_sec=128.0, ephemeral=False)
+    queue.put_nowait(music)
+    handoff = _prepared_handoff(music, tmp_path, tail_seconds=6.0)
     host = config.hosts[0]
     xfade_sources: list[Path] = []
 
@@ -813,7 +846,10 @@ async def test_news_flash_crossfade_uses_adjacent_song(tmp_path):
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
-        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=_xf),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=handoff),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_xf),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _config: segment),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
@@ -822,10 +858,13 @@ async def test_news_flash_crossfade_uses_adjacent_song(tmp_path):
 
         await _run_until_queued(queue, state, config, target_qsize=2)
 
-    queue.get_nowait()  # the seeded MUSIC
+    head = queue.get_nowait()
     seg = queue.get_nowait()
+    assert head is music
+    assert head.path == handoff.split.head_path
     assert seg.type == SegmentType.NEWS_FLASH
-    assert xfade_sources == [song]
+    assert seg.metadata["has_music_tail"] is True
+    assert xfade_sources == [handoff.split.tail_path]
 
 
 @pytest.mark.asyncio

@@ -90,6 +90,11 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.handoff import (
+    cancel_active_music_handoff,
+    reconcile_handoff_queue_items,
+    retire_handoff_for_started_segment,
+)
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
@@ -351,6 +356,40 @@ def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> 
         logger.debug("Moment receipt discard drop failed", exc_info=True)
 
 
+def _discard_handoff_orphans(state: StationState, segments: list[Segment], reason: str) -> int:
+    """Account for tail successors invalidated by a synchronous queue rewrite."""
+
+    seen: set[int] = set()
+    discarded = 0
+    for segment in segments:
+        if id(segment) in seen:
+            continue
+        seen.add(id(segment))
+        state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, segment, reason)
+        _unlink_ephemeral_best_effort(segment)
+        discarded += 1
+    return discarded
+
+
+def _cancel_active_handoff_from_queue(q, state: StationState, *, reason: str) -> int:
+    """Remove the queued successor when a currently airing music head is cut.
+
+    The currently streaming head has already left ``q`` and can never be made
+    whole again.  This no-await drain/rebuild removes only its paired successor
+    before the normal control action makes a skip visible to playback.
+    """
+
+    active = getattr(state, "active_playback_segment", None)
+    if active is None or not getattr(active, "handoff_id", None):
+        return 0
+    items = _drain_segment_queue(q)
+    orphaned = cancel_active_music_handoff(state, items)
+    discarded = _discard_handoff_orphans(state, orphaned, reason)
+    _rebuild_queue_shadow(q, state, items)
+    return discarded
+
+
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
@@ -367,6 +406,10 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     no-await stretch and no reader can observe the two views disagreeing.
     """
     items = _drain_segment_queue(q)
+    # The final queue is deliberately empty.  Releasing against that topology
+    # removes any tail successor (including one paired with the current music
+    # head) and prevents a stop/purge/source switch from reviving it later.
+    reconcile_handoff_queue_items(state, [])
     for seg in items:
         if reason is not None:
             state.record_discard(seg, reason=reason, already_counted_in_produced=True)
@@ -753,6 +796,13 @@ def _reserve_continuity_runway(
             return 0
         state.continuity_slot = planned_slot
 
+    # Only mutate private handoff ownership once this control has decided to
+    # replace the real queue. A count-bound proposal that we abandon above must
+    # leave its pair untouched; a committed rewrite restores an unstarted music
+    # predecessor or folds an orphaned successor into the ordinary discard set.
+    for orphaned in reconcile_handoff_queue_items(state, combined):
+        if not any(existing is orphaned for existing in dropped):
+            dropped.append(orphaned)
     for segment in dropped:
         if discard_reason is not None:
             state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
@@ -817,11 +867,16 @@ def _purge_blocklisted_from_queue(q, state: StationState, banned_keys: set[tuple
                 _unlink_ephemeral_best_effort(seg)
                 continue
         survivors.append(seg)
-    for seg in survivors:
-        q.put_nowait(seg)
-    if dropped_ids:
-        state.queued_segments = [s for s in state.queued_segments if s.get("id") not in dropped_ids]
-    return len(dropped_ids)
+    # A ban can remove the music half of a pair.  The speech successor is then
+    # no longer truthful and must not remain queued behind unrelated audio.
+    orphaned = reconcile_handoff_queue_items(state, survivors)
+    orphaned_count = _discard_handoff_orphans(state, orphaned, GenerationWasteReason.OPERATOR_BAN)
+    if dropped_ids or orphaned_count:
+        _rebuild_queue_shadow(q, state, survivors)
+    else:
+        for seg in survivors:
+            q.put_nowait(seg)
+    return len(dropped_ids) + orphaned_count
 
 
 def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -> int:
@@ -849,11 +904,17 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -
             _unlink_ephemeral_best_effort(segment)
             continue
         survivors.append(segment)
-    for segment in survivors:
-        q.put_nowait(segment)
-    if dropped_ids:
-        state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
-    return len(dropped_ids)
+    # A muted home fact can be carried by a tail-bearing banter successor.  If
+    # it is removed before the song starts, reconciliation restores the whole
+    # predecessor instead of airing a shortened song with no tail.
+    orphaned = reconcile_handoff_queue_items(state, survivors)
+    orphaned_count = _discard_handoff_orphans(state, orphaned, GenerationWasteReason.OPERATOR_PURGE)
+    if dropped_ids or orphaned_count:
+        _rebuild_queue_shadow(q, state, survivors)
+    else:
+        for segment in survivors:
+            q.put_nowait(segment)
+    return len(dropped_ids) + orphaned_count
 
 
 def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "operator", queue=None) -> dict:
@@ -1963,6 +2024,11 @@ def _apply_loaded_source(
     # The queue replacement and its reservation happen before the source
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
+    _cancel_active_handoff_from_queue(
+        request.app.state.queue,
+        state,
+        reason=GenerationWasteReason.SOURCE_SWITCH,
+    )
     purged = _reserve_continuity_runway(
         request.app.state,
         state,
@@ -2379,12 +2445,26 @@ async def run_playback_loop(app) -> None:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
                         continue
 
+        # Keep a private object reference while this Segment is selected or
+        # airing. ``now_streaming`` is deliberately just a public projection,
+        # so it cannot identify the exact tail-bearing successor that a live
+        # Skip/Panic must retract.
+        state.active_playback_segment = segment
         prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
         if state.session_stopped:
             # Stop landed mid-selection: drop this segment instead of airing it.
             # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
             # bridge captured just before the stop) and balance the queue
             # bookkeeping — the normal finally calls task_done for pulled segments.
+            _cancel_active_handoff_from_queue(
+                segment_queue,
+                state,
+                reason=GenerationWasteReason.SESSION_STOPPED,
+            )
+            # A tail successor may itself have been pulled just before Stop
+            # landed. It never starts streaming, but its private predecessor
+            # ownership must still be released with the discarded selection.
+            retire_handoff_for_started_segment(state, segment)
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.SESSION_STOPPED,
@@ -2397,9 +2477,12 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
+            if state.active_playback_segment is segment:
+                state.active_playback_segment = None
             state.queue_empty_since = None
             gap_clips_served = 0
             continue
+        retire_handoff_for_started_segment(state, segment)
         state.last_air_monotonic = _runtime_monotonic()
         state.on_stream_segment(segment)
         if state.runtime_events:
@@ -2478,6 +2561,12 @@ async def run_playback_loop(app) -> None:
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
+            if was_skipped:
+                _cancel_active_handoff_from_queue(
+                    segment_queue,
+                    state,
+                    reason=GenerationWasteReason.OPERATOR_PURGE,
+                )
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
             # already playing again) still captures it. Single extract at the
@@ -2534,6 +2623,8 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
+            if state.active_playback_segment is segment:
+                state.active_playback_segment = None
 
 
 def _schedule_banter_memory_extraction_after_send(
@@ -3420,6 +3511,11 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
     was forced.
     """
+    _cancel_active_handoff_from_queue(
+        app_state.queue,
+        state,
+        reason=GenerationWasteReason.OPERATOR_PURGE,
+    )
     _reserve_continuity_runway(app_state, state, config, discard_reason=GenerationWasteReason.OPERATOR_PURGE)
     now_seg = state.now_streaming or {}
     skipped_music_metadata: dict | None = None
@@ -3511,6 +3607,11 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
             "ok": False,
             "error": "The station is paused. Press Start before using Panic Cut.",
         }
+    _cancel_active_handoff_from_queue(
+        request.app.state.queue,
+        state,
+        reason=GenerationWasteReason.OPERATOR_PANIC,
+    )
     purged = _reserve_continuity_runway(
         request.app.state,
         state,
@@ -3615,6 +3716,11 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
         _drop_segment_moment_receipts(state, removed_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
         _unlink_ephemeral_best_effort(removed_segment)
 
+    # Removing either half of a private handoff pair must not leave a stale
+    # successor in the real queue.  If the user removed only the successor,
+    # the still-unstarted predecessor is restored before the shadow rebuild.
+    orphaned = reconcile_handoff_queue_items(state, items)
+    _discard_handoff_orphans(state, orphaned, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
     state.queued_segments.pop(index)
     _rebuild_queue_shadow(q, state, items)
     excluded_paths = {removed_segment.path} if removed_segment is not None else set()
@@ -3634,6 +3740,11 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
 async def stop_session(request: Request, _: None = Depends(require_admin_access)):
     """Gracefully stop the station: skip current, purge queue, cancel producer."""
     state = request.app.state.station_state
+    _cancel_active_handoff_from_queue(
+        request.app.state.queue,
+        state,
+        reason=GenerationWasteReason.OPERATOR_STOP,
+    )
     # Purge queued segments
     purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
     # Drop any pending interrupt/forced segment so it can't fire as stale audio on

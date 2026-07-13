@@ -314,6 +314,10 @@ class Segment:
     duration_sec: float = 0.0
     metadata: dict = field(default_factory=dict)
     ephemeral: bool = True
+    # Private queue-lifecycle marker for a music-head / speech-tail handoff.
+    # It deliberately lives outside ``metadata`` because metadata is projected
+    # through public/admin status payloads.
+    handoff_id: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -545,6 +549,15 @@ class StationState:
     now_streaming: dict = field(default_factory=dict)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
     queued_segments: list[dict] = field(default_factory=list)
+    # Private exact-once music→speech handoffs.  Entries are owned by
+    # ``scheduling.handoff`` and are never serialized into status payloads or
+    # restart-handoff manifests.
+    handoff_reservations: dict[str, object] = field(default_factory=dict, repr=False, compare=False)
+    # The playback loop owns the actual Segment while ``now_streaming`` remains
+    # a public projection.  Keeping this private pointer lets a Skip/Panic
+    # cancel the matching tail-bearing successor without leaking internal
+    # handoff state into the wire contract.
+    active_playback_segment: Segment | None = field(default=None, repr=False, compare=False)
     # Every live control-plane change that can invalidate queued/in-flight audio
     # bumps this generation. Producer commits compare it before admission.
     continuity_epoch: int = 0

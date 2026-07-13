@@ -3183,8 +3183,8 @@ def test_latest_music_file_uses_cache():
 
 
 @pytest.mark.asyncio
-async def test_try_crossfade_no_music_file():
-    """_try_crossfade returns voice_path when no music file exists."""
+async def test_try_crossfade_no_reserved_tail():
+    """_try_crossfade returns voice_path when no reserved tail exists."""
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _try_crossfade
 
@@ -3206,50 +3206,44 @@ async def test_try_crossfade_no_music_file():
 @pytest.mark.asyncio
 async def test_try_crossfade_success(tmp_path):
     """_try_crossfade returns output_path on successful crossfade."""
-    from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _try_crossfade
 
     voice = tmp_path / "voice.mp3"
     voice.write_bytes(b"voice")
-    music = tmp_path / "music_test.mp3"
-    music.write_bytes(b"music")
+    tail = tmp_path / "reserved_tail.mp3"
+    tail.write_bytes(b"tail")
     output = tmp_path / "output.mp3"
 
-    producer._last_music_file = music
     config = _make_config()
     config.tmp_dir = tmp_path
 
     def fake_crossfade(*args, **kwargs):
         output.write_bytes(b"crossfaded")
 
-    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=fake_crossfade):
-        result = await _try_crossfade(voice, config, output, music)
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=fake_crossfade):
+        result = await _try_crossfade(voice, config, output, tail)
 
     assert result == output
-    producer._last_music_file = None
 
 
 @pytest.mark.asyncio
 async def test_try_crossfade_failure_returns_voice(tmp_path):
     """_try_crossfade returns voice_path when crossfade fails."""
-    from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _try_crossfade
 
     voice = tmp_path / "voice.mp3"
     voice.write_bytes(b"voice")
-    music = tmp_path / "music_test.mp3"
-    music.write_bytes(b"music")
+    tail = tmp_path / "reserved_tail.mp3"
+    tail.write_bytes(b"tail")
     output = tmp_path / "output.mp3"
 
-    producer._last_music_file = music
     config = _make_config()
     config.tmp_dir = tmp_path
 
-    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music", side_effect=RuntimeError("ffmpeg failed")):
-        result = await _try_crossfade(voice, config, output, music)
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=RuntimeError("ffmpeg failed")):
+        result = await _try_crossfade(voice, config, output, tail)
 
     assert result == voice
-    producer._last_music_file = None
 
 
 # ---------------------------------------------------------------------------
@@ -3321,25 +3315,24 @@ async def test_synthesize_impossible_moment(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesize_impossible_moment_forwards_music_path(tmp_path):
-    """The eligible (adjacent-only) song the caller computes must reach the
-    crossfade — so an impossible moment never beds over a stale track."""
+async def test_synthesize_impossible_moment_forwards_reserved_tail(tmp_path):
+    """An impossible moment can only receive an already-reserved tail path."""
     from mammamiradio.scheduling.producer import _synthesize_impossible_moment
 
     config = _make_config()
     config.tmp_dir = tmp_path
     state = _make_state()
-    song = tmp_path / "adjacent_song.mp3"
-    song.write_bytes(b"music")
+    tail = tmp_path / "reserved_tail.mp3"
+    tail.write_bytes(b"tail")
 
     with (
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda *a, **kw: _fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()) as mock_xf,
     ):
-        await _synthesize_impossible_moment("Che succede!", config, state, song)
+        await _synthesize_impossible_moment("Che succede!", config, state, tail)
 
-    # 4th positional arg to _try_crossfade is the music source.
-    assert mock_xf.call_args.args[3] == song
+    # 4th positional arg to _try_crossfade is the reserved tail source.
+    assert mock_xf.call_args.args[3] == tail
 
 
 @pytest.mark.asyncio
@@ -3480,14 +3473,12 @@ async def test_record_motif_exception_is_swallowed():
 
 
 @pytest.mark.asyncio
-async def test_try_crossfade_success_with_music_file(tmp_path):
-    """_try_crossfade returns the crossfade output when last music exists."""
-    from mammamiradio.scheduling.producer import _set_last_music_file, _try_crossfade
+async def test_try_crossfade_success_with_reserved_tail(tmp_path):
+    """_try_crossfade returns the crossfade output for a reserved tail."""
+    from mammamiradio.scheduling.producer import _try_crossfade
 
-    # Create fake music file and voice file
-    music = tmp_path / "last_music.mp3"
-    music.write_bytes(b"\x00" * 1000)
-    _set_last_music_file(music)
+    tail = tmp_path / "reserved_tail.mp3"
+    tail.write_bytes(b"\x00" * 1000)
 
     voice = tmp_path / "voice.mp3"
     voice.write_bytes(b"\x00" * 500)
@@ -3496,10 +3487,10 @@ async def test_try_crossfade_success_with_music_file(tmp_path):
     config = _make_config()
     config.tmp_dir = tmp_path
 
-    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_music") as mock_xf:
+    with patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail") as mock_xf:
         mock_xf.return_value = output
         output.write_bytes(b"\x00" * 800)  # simulate ffmpeg output
-        result = await _try_crossfade(voice, config, output, music)
+        result = await _try_crossfade(voice, config, output, tail)
     assert result == output
     mock_xf.assert_called_once()
 

@@ -1684,33 +1684,41 @@ def generate_brand_motif(output_path: Path, sonic_signature: str, sfx_dir: Path 
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def crossfade_voice_over_music(
-    music_path: Path,
+def crossfade_voice_over_tail(
+    music_tail_path: Path,
     voice_path: Path,
     output_path: Path,
-    tail_seconds: float = 8.0,
+    *,
+    tail_duration_sec: float | None = None,
     voice_volume: float = 1.0,
     music_fade_volume: float = 0.5,
     voice_delay_ms: int = 150,
 ) -> Path:
-    """Overlay voice on the tail of a music track, fading music down underneath.
+    """Overlay voice on an already-reserved music tail, fading it underneath.
 
-    Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
-    and mixes the voice on top. The result is a "DJ talking over the outro" effect.
+    ``music_tail_path`` must contain only the tail reserved for this successor;
+    this renderer never seeks back into a full, already-aired music file.  Passing
+    ``tail_duration_sec`` from the frame reservation keeps the fade aligned with
+    the exact frame boundary.  When it is unavailable, probe the supplied tail
+    itself rather than assuming the station's nominal handoff length.
     """
+    duration = tail_duration_sec if tail_duration_sec is not None else probe_duration_sec(music_tail_path)
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("crossfade_voice_over_tail requires a positive tail duration")
+
+    duration_expr = _fmt_num(duration)
     delay_ms = max(0, int(voice_delay_ms))
     cmd = [
         "ffmpeg",
         "-y",
-        "-sseof",
-        f"-{tail_seconds}",
         "-i",
-        str(music_path),
+        str(music_tail_path),
         "-i",
         str(voice_path),
         "-filter_complex",
-        f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
-        f"[1:a]volume={voice_volume},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[0:a]atrim=duration={duration_expr},asetpts=PTS-STARTPTS,"
+        f"afade=t=out:st=0:d={duration_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
         f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
         f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
@@ -1719,8 +1727,35 @@ def crossfade_voice_over_music(
         str(output_path),
     ]
     _run_ffmpeg(cmd, "crossfade voice over music")
-    logger.info("Crossfade voice over music -> %s", output_path.name)
+    logger.info("Crossfade voice over reserved tail -> %s", output_path.name)
     return output_path
+
+
+def crossfade_voice_over_music(
+    music_tail_path: Path,
+    voice_path: Path,
+    output_path: Path,
+    tail_seconds: float = 8.0,
+    voice_volume: float = 1.0,
+    music_fade_volume: float = 0.5,
+    voice_delay_ms: int = 150,
+) -> Path:
+    """Compatibility spelling for :func:`crossfade_voice_over_tail`.
+
+    The first path must already be a reserved tail.  This wrapper deliberately
+    retains the historic call shape while removing the old ``-sseof`` extraction
+    from a complete track; producer callers should use
+    :func:`crossfade_voice_over_tail` with their exact frame-derived duration.
+    """
+    return crossfade_voice_over_tail(
+        music_tail_path,
+        voice_path,
+        output_path,
+        tail_duration_sec=tail_seconds,
+        voice_volume=voice_volume,
+        music_fade_volume=music_fade_volume,
+        voice_delay_ms=voice_delay_ms,
+    )
 
 
 def generate_station_id_bed(

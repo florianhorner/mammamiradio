@@ -158,6 +158,37 @@ always remains best-effort and never blocks or delays audio.
   - builds a break from host intro, bumpers, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
+### Exact-once music-to-speech handoffs
+
+When a generated banter, impossible moment, news flash, or ad intro follows a
+queued normal music segment, the station may keep the host-over-outro effect
+without replaying the song. The invariant is deliberately strict: **every
+playable music frame belongs to exactly one emitted segment**.
+
+1. Before touching the queue, the producer indexes the actual queued/egressed
+   MP3 with the same ID3/Xing-skipping boundary used by playback. It writes a
+   frame-aligned head and tail; malformed, short, stale, rescue, fallback, and
+   unsupported files fail closed to ordinary dry/generic speech.
+2. It renders both the tail-mixed speech and a dry/generic fallback. At one
+   no-await queue mutation, it rechecks that the exact unstarted music object
+   is still the queue tail, replaces it with the shortened head (including its
+   real queue-shadow duration), and appends the tail-bearing speech successor.
+   `has_music_tail` becomes true only at this paired commit, not when a render
+   happened to find a song file.
+3. The private pair is reconciled by every queue rewrite. Removing or
+   reordering an unstarted member restores the full music predecessor and drops
+   the successor; skipping/cutting an already-airing head drops its successor.
+   Source/chaos changes, bans, purges, Air Next, and Stop therefore cannot
+   leave a tail-bearing break behind. The pair and its scratch artifacts are
+   never serialized into public status or restart state.
+
+The normalizer receives only the reserved tail artifact and mixes it from byte
+zero; it never uses `-sseof` or `last_music_file` to seek back into a full song.
+The rest of a host break uses a packaged or synthetic talk bed, never the
+outgoing song from its beginning. Restart-handoff spooling also ignores a
+shortened private head, preserving only ordinary full music entries for a
+future boot.
+
 Every finished segment then passes a final **loudness-reconciliation** step: it is
 measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
 gain so music, hosts, beds, and ads all air at one integrated-LUFS target

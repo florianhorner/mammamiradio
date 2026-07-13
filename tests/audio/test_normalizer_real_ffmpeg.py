@@ -21,11 +21,12 @@ from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
     concat_files,
     configure_broadcast_chain,
-    crossfade_voice_over_music,
+    crossfade_voice_over_tail,
     generate_transition_sting,
     normalize,
     probe_duration_sec,
 )
+from mammamiradio.web.mp3_frames import split_mpeg1_l3_handoff
 
 # Use the project-wide `requires_ffmpeg` marker (registered in pyproject.toml)
 # instead of skipif. The default `addopts = "-m 'not requires_ffmpeg'"` means
@@ -168,6 +169,33 @@ def _measure_rms(path, start_sec: float, window_sec: float) -> float:
     return 10 ** (db / 20.0)
 
 
+def _measure_band_rms(path, start_sec: float, window_sec: float, frequency: int) -> float:
+    """Return RMS around one distinctive marker frequency from an MP3 window."""
+
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-ss",
+            f"{start_sec}",
+            "-i",
+            str(path),
+            "-t",
+            f"{window_sec}",
+            "-filter:a",
+            f"bandpass=f={frequency}:w=120,volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    import re
+
+    match = re.search(r"mean_volume:\s*(-?[\d.]+)\s*dB", result.stderr.decode(errors="ignore"))
+    return 10 ** (float(match.group(1)) / 20.0) if match else 0.0
+
+
 def test_normalize_music_eq_chain_does_not_crash_real_ffmpeg(tmp_path):
     """The music_eq filter chain must not crash ffmpeg (no SIGABRT, exit 0).
 
@@ -237,19 +265,81 @@ def test_transition_sting_variants_render_with_real_ffmpeg(tmp_path):
             assert probe_duration_sec(out) > 0.2
 
 
-def test_crossfade_voice_over_music_renders_with_short_voice_delay_real_ffmpeg(tmp_path):
-    """The 150ms talkover path must execute against real FFmpeg without clipping output away."""
-    music = tmp_path / "music.mp3"
+def test_crossfade_voice_over_tail_renders_with_short_voice_delay_real_ffmpeg(tmp_path):
+    """The reserved-tail talkover path must execute against real FFmpeg without clipping output away."""
+    music = tmp_path / "reserved_tail.mp3"
     voice = tmp_path / "voice.mp3"
     out = tmp_path / "talkover.mp3"
     _make_tone_mp3(music, duration_sec=2.0, freq=330)
     _make_tone_mp3(voice, duration_sec=1.0, freq=880)
 
-    crossfade_voice_over_music(music, voice, out, tail_seconds=1.0, voice_delay_ms=150)
+    crossfade_voice_over_tail(music, voice, out, tail_duration_sec=2.0, voice_delay_ms=150)
 
     assert out.exists()
     assert out.stat().st_size > 0
-    assert probe_duration_sec(out) >= 1.1
+    # The 2s reserved tail remains the entire first input; the delayed voice
+    # must not cause the mix to cut it down to its shorter duration.
+    assert probe_duration_sec(out) >= 1.9
+
+
+def test_music_head_plus_tail_successor_emits_final_marker_once_real_ffmpeg(tmp_path):
+    """A final-tail marker must not recur after the shortened music head.
+
+    This is the listener-visible #798 regression: the old renderer streamed a
+    complete song and then extracted its final seconds again for the host
+    transition. The sequence below uses a 2 kHz marker at the beginning of the
+    final two seconds; it is audible once in the reserved successor, but would
+    appear a second time at ``source_duration`` if the full song were replayed.
+    """
+
+    source = tmp_path / "source.mp3"
+    voice = tmp_path / "voice.mp3"
+    mixed = tmp_path / "tail_talkover.mp3"
+    sequence = tmp_path / "emitted_sequence.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=2000:sample_rate=48000:duration=0.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1.5",
+            "-filter_complex",
+            "[0:a][1:a][2:a]concat=n=3:v=0:a=1[out]",
+            "-map",
+            "[out]",
+            "-ac",
+            "2",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    _make_tone_mp3(voice, duration_sec=1.0, freq=660)
+
+    split = split_mpeg1_l3_handoff(source, tmp_path / "handoff", tail_seconds=2.0)
+    crossfade_voice_over_tail(split.tail_path, voice, mixed, tail_duration_sec=split.tail_duration_sec)
+    concat_files([split.head_path, mixed], sequence, silence_ms=0, loudnorm=False)
+
+    # The marker begins immediately inside the reserved tail. It is present at
+    # the new head/successor boundary, but absent one full-source duration later
+    # where the legacy full-song-plus-tail path would have replayed it.
+    first_marker = _measure_band_rms(sequence, split.head_duration_sec + 0.08, 0.2, 2000)
+    replay_slot = _measure_band_rms(sequence, split.source_duration_sec + 0.08, 0.2, 2000)
+    assert first_marker > 0.001
+    assert replay_slot < first_marker * 0.2
 
 
 def _measure_lufs_real(path) -> float | None:
