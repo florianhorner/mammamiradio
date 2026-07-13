@@ -478,6 +478,8 @@ def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
     banner = _declarations_for_selector(css, ".course-banner")
     truth = _declarations_for_selector(css, ".record-hunt-truth")
     stage = _declarations_for_selector(css, ".record-hunt-stage")
+    phone_row = _declarations_for_selector(phone_css, ".pl-row")
+    phone_meta = _declarations_for_selector(phone_css, ".pl-meta")
     chips = _declarations_for_selector(css, ".pl-chips")
     phone_chips = _declarations_for_selector(phone_css, ".pl-chips")
     phone_actions = _declarations_for_selector(phone_css, ".pl-a")
@@ -492,12 +494,32 @@ def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
     assert truth.get("min-width") == "0"
     assert stage.get("min-width") == "0"
     assert chips.get("min-width") == "0"
-    assert phone_chips.get("grid-column") == "4 / 6"
-    assert phone_chips.get("grid-row") == "2"
+    assert phone_row.get("display") == "grid"
+    assert phone_row.get("grid-template-columns") == "44px 44px 32px minmax(0, 1fr)"
+    assert phone_row.get("column-gap") == "4px"
+    assert phone_meta.get("grid-column") == "4 / -1"
+    assert phone_meta.get("grid-row") == "2"
+    assert phone_meta.get("display") == "flex"
+    assert phone_meta.get("flex-wrap") == "wrap"
+    assert phone_meta.get("min-width") == "0"
+    assert phone_chips.get("margin-left") == "0"
+    assert phone_chips.get("max-width") == "100%"
     assert phone_chips.get("flex-wrap") == "wrap"
     assert phone_actions.get("grid-row") == "3"
     assert phone_ban.get("grid-row") == "3"
+    assert "grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto" not in phone_css
     assert "white-space: nowrap" in css[css.index(".hunt-pick") : css.index(".pl-a {")]
+
+
+def test_rotation_rows_group_metadata_without_dropping_actions() -> None:
+    """Responsive rows must keep metadata and preference/action controls in one card."""
+    text = _read_admin_html()
+    update_block = text[text.index("function updatePl") : text.index("async function loadMorePlaylist")]
+
+    assert '<div class="pl-meta"><div class="pl-chips">' in update_block
+    assert '${prefControls}</div><div class="pl-a">' in update_block
+    assert "pl-ban" in update_block
+    assert "renderPreferenceControls(idx,Number(t.preference||0))" in update_block
 
 
 def test_on_air_idle_state_compacts_dead_space() -> None:

@@ -448,7 +448,8 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
 .pl-art-empty { width: 18px; height: 18px; border-radius: 3px; background: rgba(245,237,216,0.05); border: 1px solid rgba(245,237,216,0.12); flex-shrink: 0; position: relative; }
 .pl-art-empty::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; border-top: 1px solid rgba(245,237,216,0.28); transform: rotate(-35deg); }
-.pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; min-width: 0; flex-shrink: 0; }
+.pl-meta { display: flex; gap: 4px; align-items: center; margin-left: auto; min-width: 0; flex-shrink: 0; }
+.pl-chips { display: flex; gap: 4px; align-items: center; min-width: 0; flex-shrink: 0; }
 .pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
 .pl-src.classic { color: var(--sun); background: rgba(244,208,72,0.10); border: 1px solid rgba(244,208,72,0.20); }
@@ -1215,11 +1216,40 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
-  /* 481-768px = two-pane desktop column. Keep action buttons on the track
-   * line; never wrap them below — that looks broken. The ≤480px phone block
-   * below switches to a stacked touch-target grid instead. */
-  .pl-a { opacity: 1; }
-  .pl-btn, .sr-add { min-height: 36px; }
+  /* Catalogue rows use one explicit stacked grid through 768px. Every direct
+   * child has a placement so metadata and actions cannot create an implicit
+   * overflow column when the viewport is narrow or split-screen. */
+  .pl-row {
+    display: grid;
+    grid-template-columns: 44px 44px 32px minmax(0, 1fr);
+    gap: 8px;
+    column-gap: 4px;
+    align-items: center;
+  }
+  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
+  .pl-grip { grid-column: 2; grid-row: 1; }
+  .pl-n { display: none; }
+  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; width: 32px; height: 32px; }
+  .pl-t { grid-column: 4; grid-row: 1; }
+  .pl-meta {
+    grid-column: 4 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    min-width: 0;
+  }
+  .pl-chips {
+    margin-left: 0;
+    max-width: 100%;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
+  .pl-ban { grid-column: 4 / -1; grid-row: 3; justify-self: end; margin-left: 0; }
+  .pl-btn, .sr-add { min-height: 44px; }
   .undo-stack {
     left: 12px;
     right: 12px;
@@ -1231,27 +1261,6 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
   .a-topbar { flex-wrap: wrap; }
-}
-
-/* Real phones (≤480px): stack the row into a deliberate touch-target grid —
- * action buttons drop to a second row with full 44px hit areas. The two-pane
- * desktop column (481-768px, above) keeps them inline instead. */
-@media (max-width: 480px) {
-  .pl-row {
-    display: grid;
-    grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-  }
-  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
-  .pl-grip { grid-column: 2; grid-row: 1; }
-  .pl-n { display: none; }
-  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; }
-  .pl-t { grid-column: 4; grid-row: 1; }
-  .pl-chips { grid-column: 4 / 6; grid-row: 2; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
-  .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
-  .pl-ban { grid-column: 4 / 6; grid-row: 3; justify-self: end; margin-left: 0; }
-  .pl-btn, .sr-add { min-height: 44px; }
 }
 
 @media (max-width: 768px) {
@@ -4102,7 +4111,7 @@ function updatePl(tracks,page,force){
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
