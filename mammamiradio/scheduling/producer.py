@@ -60,7 +60,11 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
-from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
+from mammamiradio.home.authorization import (
+    HomeAuthorization,
+    HomeAuthorizationMode,
+    expand_muted_with_ambient_sources,
+)
 from mammamiradio.home.catalog import schedule_label_generation
 from mammamiradio.home.context_director import DirectorObservation, PromptFact
 from mammamiradio.home.entity_policy import (
@@ -2409,10 +2413,17 @@ def _observe_home_context_director(state: StationState, config: StationConfig, c
         policy = load_entity_policy(config.cache_dir)
         muted = policy.get("muted", {})
         opt_ins = policy.get("personal_moment_opt_ins", {})
+        # Narrow-mode observations carry the synthetic ambient id, but an operator
+        # may mute the real HA source. Expand so a muted real source suppresses its
+        # synthetic projection the same way the fetch layer already does.
+        muted_ids = expand_muted_with_ambient_sources(
+            set(muted) if isinstance(muted, dict) else set(),
+            context.ambient_sources,
+        )
         director.observe(
             observations,
             policy_revision=int(policy.get("policy_revision", 0) or 0),
-            muted_entity_ids=set(muted) if isinstance(muted, dict) else set(),
+            muted_entity_ids=muted_ids,
             personal_moment_opt_ins=set(opt_ins) if isinstance(opt_ins, dict) else set(),
         )
     except Exception:
@@ -3078,6 +3089,15 @@ async def _run_producer_inner(
         policy = load_entity_policy(config.cache_dir)
         muted = policy.get("muted", {})
         muted_ids = set(muted) if isinstance(muted, dict) else set()
+        # A narrow break is tagged with the synthetic ambient id; expand the muted
+        # set with the synthetic projection of any muted real source (cheap raw
+        # module-cache read, no-op in legacy mode where ambient_sources is empty)
+        # so muting the real HA source rejects the break at admission too.
+        if muted_ids:
+            cached = get_cached_home_context(authorization=state.home_authorization)
+            ambient_sources = getattr(cached, "ambient_sources", None) if cached is not None else None
+            if ambient_sources:
+                muted_ids = expand_muted_with_ambient_sources(muted_ids, ambient_sources)
         return (
             isinstance(revision, int)
             and not isinstance(revision, bool)

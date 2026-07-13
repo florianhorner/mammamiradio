@@ -60,6 +60,26 @@ class AuthorizedHomeProjection:
     ambient_sources: dict[str, str] = field(repr=False)
 
 
+def expand_muted_with_ambient_sources(muted_ids: set[str], ambient_sources: Mapping[str, str]) -> set[str]:
+    """Expand real-source hard mutes to their synthetic ambient projection ids.
+
+    In narrow mode a downstream break is tagged with the synthetic ambient id
+    (``weather.ambient`` / ``sun.ambient``) whose real HA source (e.g.
+    ``weather.forecast_home``) an operator may mute directly.  The fetch layer
+    already honors a real-source mute via ``ambient_sources``; this lets every
+    other consumer of the muted set (director observation, queue purge, segment
+    admission) do the same without holding the projection itself.  Returns a new
+    set; never mutates the input.
+    """
+    expanded = set(muted_ids)
+    if not muted_ids or not ambient_sources:
+        return expanded
+    for synthetic_id, source_id in ambient_sources.items():
+        if source_id in muted_ids:
+            expanded.add(synthetic_id)
+    return expanded
+
+
 @dataclass(frozen=True)
 class HomeAuthorization:
     """Coarse R0 authorization selected from immutable install provenance."""

@@ -30,6 +30,7 @@ from mammamiradio.home.migration import (
     load_authoritative_legacy_home_preflight_v1,
     load_legacy_home_database_preflight_v1,
     persist_legacy_home_database_preflight_v1,
+    rewrite_legacy_home_preflight_cold_v1,
     seal_legacy_home_provenance_v1,
 )
 from mammamiradio.home.moment_receipts import MomentStore
@@ -332,6 +333,19 @@ async def startup():
             "Legacy Home witness claims a pre-existing database but none existed; failing narrow for this boot"
         )
         legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # The database provably did not exist at process start, so the only truthful
+    # durable witness is a cold one. A transplanted/malformed sidecar was demoted
+    # in memory above, but it must also be corrected on disk: otherwise the NEXT
+    # boot — where the database now exists — trusts the stale witness, the guards
+    # above no longer fire, and both witnesses self-agree into legacy (household
+    # context leak). Correcting to False can only ever narrow (privacy fail-closed).
+    if not database_preexisted:
+        try:
+            legacy_preflight = rewrite_legacy_home_preflight_cold_v1(config.cache_dir / "state")
+        except OSError as exc:
+            logger.error("Could not correct cold Home preflight witness; failing narrow for this boot: %s", exc)
+            legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
 
     # Initialize persona database and store for compounding listener memory.
     init_db(db_path)

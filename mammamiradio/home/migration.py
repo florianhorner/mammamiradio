@@ -220,7 +220,11 @@ def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflight
         return None
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+        # Build the read-only URI via as_uri() so a cache path containing a URI
+        # metacharacter (``?``/``#``/space) is percent-encoded — a raw f-string
+        # would truncate the filename at the first ``?`` and open the wrong DB,
+        # stranding a genuine legacy install in narrow mode forever.
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         row = connection.execute(
             f"SELECT database_preexisted FROM {DATABASE_ORIGIN_TABLE} WHERE singleton = 1"
         ).fetchone()
@@ -331,6 +335,30 @@ def capture_legacy_home_preflight_v1(
 
         _atomic_write_json(path, {"database_preexisted": database_preexisted})
         return LegacyHomePreflightV1(database_preexisted=database_preexisted)
+
+
+def rewrite_legacy_home_preflight_cold_v1(state_dir: Path) -> LegacyHomePreflightV1:
+    """Force the sidecar witness to the only truthful cold value, overwriting poison.
+
+    Called when the database provably did not exist at process start: the sole
+    correct durable answer is ``database_preexisted=False``.  A transplanted or
+    malformed sidecar claiming a pre-existing database is demoted in memory by the
+    startup guards, but unless it is also corrected on disk the *next* boot — where
+    the database now exists — trusts the stale witness and self-agrees into legacy.
+
+    Overwriting here does not violate first-answer immutability: that rule exists to
+    stop a *legacy* claim from being silently rewritten.  Writing ``False`` can only
+    ever narrow, so this is privacy fail-closed.  A witness that already parses as a
+    valid cold answer is left untouched (idempotent, no needless disk churn).
+    """
+    path = preflight_path(state_dir)
+    with _LOCK:
+        data = _read_json(path)
+        existing = _parse_preflight(data) if isinstance(data, dict) else None
+        if existing is not None and existing.database_preexisted is False:
+            return existing
+        _atomic_write_json(path, {"database_preexisted": False})
+        return LegacyHomePreflightV1(database_preexisted=False)
 
 
 def observes_legacy_home_manifest_v1(observed: Mapping[str, object] | Iterable[str]) -> bool:

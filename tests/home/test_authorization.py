@@ -7,7 +7,31 @@ from mammamiradio.home.authorization import (
     NARROW_WEATHER_ENTITY_ID,
     HomeAuthorization,
     HomeAuthorizationMode,
+    expand_muted_with_ambient_sources,
 )
+
+
+def test_expand_muted_adds_synthetic_id_for_muted_real_source() -> None:
+    ambient_sources = {NARROW_WEATHER_ENTITY_ID: "weather.forecast_home", NARROW_DAYLIGHT_ENTITY_ID: "sun.sun"}
+
+    expanded = expand_muted_with_ambient_sources({"weather.forecast_home"}, ambient_sources)
+
+    assert expanded == {"weather.forecast_home", NARROW_WEATHER_ENTITY_ID}
+
+
+def test_expand_muted_is_a_noop_without_mapping_or_mutes() -> None:
+    assert expand_muted_with_ambient_sources(set(), {NARROW_WEATHER_ENTITY_ID: "weather.forecast_home"}) == set()
+    assert expand_muted_with_ambient_sources({"sun.sun"}, {}) == {"sun.sun"}
+
+
+def test_expand_muted_does_not_mutate_input_and_keeps_unrelated_ids() -> None:
+    muted = {"sun.sun", "light.kitchen"}
+    ambient_sources = {NARROW_DAYLIGHT_ENTITY_ID: "sun.sun"}
+
+    expanded = expand_muted_with_ambient_sources(muted, ambient_sources)
+
+    assert expanded == {"sun.sun", "light.kitchen", NARROW_DAYLIGHT_ENTITY_ID}
+    assert muted == {"sun.sun", "light.kitchen"}
 
 
 def _weather(entity_id: str, *, state: str = "sunny", temperature=22.4, unit: str = "°C") -> tuple[str, dict]:

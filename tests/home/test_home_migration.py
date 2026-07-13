@@ -15,6 +15,7 @@ from mammamiradio.home.migration import (
     LEGACY_HOME_MANIFEST_V1,
     PREFLIGHT_FILENAME,
     PROVENANCE_FILENAME,
+    LegacyHomePreflightV1,
     capture_legacy_home_preflight_v1,
     load_legacy_home_database_preflight_v1,
     load_legacy_home_preflight_v1,
@@ -23,6 +24,7 @@ from mammamiradio.home.migration import (
     persist_legacy_home_database_preflight_v1,
     preflight_path,
     provenance_path,
+    rewrite_legacy_home_preflight_cold_v1,
     seal_legacy_home_provenance_v1,
 )
 
@@ -378,3 +380,49 @@ def test_paths_are_directly_below_caller_provided_state_dir(tmp_path):
     assert preflight_path(tmp_path) == tmp_path / PREFLIGHT_FILENAME
     assert provenance_path(tmp_path) == tmp_path / PROVENANCE_FILENAME
     assert os.path.dirname(preflight_path(tmp_path)) == str(tmp_path)
+
+
+def test_rewrite_cold_corrects_a_poisoned_true_sidecar(tmp_path):
+    preflight_path(tmp_path).write_text('{"database_preexisted": true}\n', encoding="utf-8")
+
+    corrected = rewrite_legacy_home_preflight_cold_v1(tmp_path)
+
+    assert corrected.database_preexisted is False
+    assert corrected.durable is True
+    reloaded = load_legacy_home_preflight_v1(tmp_path)
+    assert reloaded is not None and reloaded.database_preexisted is False
+
+
+def test_rewrite_cold_corrects_a_malformed_sidecar(tmp_path):
+    preflight_path(tmp_path).write_text("{ this is not valid json", encoding="utf-8")
+
+    corrected = rewrite_legacy_home_preflight_cold_v1(tmp_path)
+
+    assert corrected.database_preexisted is False
+    reloaded = load_legacy_home_preflight_v1(tmp_path)
+    assert reloaded is not None and reloaded.database_preexisted is False
+
+
+def test_rewrite_cold_leaves_a_valid_cold_sidecar_untouched(tmp_path):
+    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=False)
+    before = preflight_path(tmp_path).read_bytes()
+
+    corrected = rewrite_legacy_home_preflight_cold_v1(tmp_path)
+
+    assert corrected.database_preexisted is False
+    assert preflight_path(tmp_path).read_bytes() == before
+
+
+def test_database_witness_reads_back_through_uri_special_char_path(tmp_path):
+    # A cache path containing a URI metacharacter must not truncate the filename
+    # and open the wrong DB (which would strand a legacy install in narrow mode).
+    weird_dir = tmp_path / "cache?with#meta chars"
+    weird_dir.mkdir()
+    db_path = weird_dir / "mammamiradio.db"
+    persist_legacy_home_database_preflight_v1(db_path, LegacyHomePreflightV1(database_preexisted=True))
+
+    witness = load_legacy_home_database_preflight_v1(db_path)
+
+    assert witness is not None
+    assert witness.durable is True
+    assert witness.database_preexisted is True

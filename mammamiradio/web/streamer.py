@@ -786,19 +786,21 @@ HEADING_SEEDS = {
 }
 
 
-def _purge_home_fact_banter_from_queue(q, state: StationState, entity_id: str) -> int:
-    """Remove unstarted banter tied to a newly muted home entity.
+def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[str]) -> int:
+    """Remove unstarted banter tied to newly muted home entities.
 
-    The current segment is no longer in ``q`` and deliberately finishes. Every
-    removed queued segment travels through ``record_discard`` so its director
-    reservation is released by the same central lifecycle boundary.
+    ``entity_ids`` is the tightened set: the muted id plus, in narrow mode, the
+    synthetic ambient id(s) a break may be tagged with when its real HA source is
+    muted. The current segment is no longer in ``q`` and deliberately finishes.
+    Every removed queued segment travels through ``record_discard`` so its
+    director reservation is released by the same central lifecycle boundary.
     """
     items = _drain_segment_queue(q)
     survivors: list = []
     dropped_ids: set[str] = set()
     for segment in items:
         metadata = getattr(segment, "metadata", {}) or {}
-        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") == entity_id:
+        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") in entity_ids:
             queue_id = metadata.get("queue_id")
             if isinstance(queue_id, str):
                 dropped_ids.add(queue_id)
@@ -3325,6 +3327,20 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     # so an in-flight render for the entity is rejected. Consent revocation
     # previously did neither, so a queued presence break could still air.
     privacy_tightened = (action == "muted" and value) or (action == "personal_moment_enabled" and not value)
+    # In narrow mode a queued/in-flight break is tagged with the synthetic ambient
+    # id (sun.ambient / weather.ambient); an operator may instead mute the real
+    # underlying HA source. Expand the tightened id to its synthetic projection so
+    # the purge and director invalidation honor a real-source mute exactly like the
+    # fetch layer (no-op in legacy mode, where ambient_sources is empty).
+    tightened_ids = {entity_id}
+    # Read the RAW module cache (no cache_dir): passing cache_dir would apply the
+    # mute we just wrote and strip this source's synthetic mapping before we read
+    # it, defeating the expansion. ambient_sources is stable, non-sensitive routing.
+    _ctx = get_cached_home_context(authorization=state.home_authorization)
+    if _ctx is not None:
+        tightened_ids |= {
+            synthetic for synthetic, source in getattr(_ctx, "ambient_sources", {}).items() if source == entity_id
+        }
     if action == "muted" and value:
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
         if ledger_dirty and state.evening_ledger is not None:
@@ -3332,7 +3348,7 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
     if privacy_tightened:
-        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, entity_id)
+        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, tightened_ids)
     # The mutation already returned the authoritative just-written policy; read
     # the revision off it instead of re-reading the file we just wrote.
     current_policy_revision = int(policy.get("policy_revision", 0) or 0)
@@ -3346,8 +3362,9 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             # in-flight race — a fact reserved at admission but not yet enqueued —
             # which the physical-queue scan cannot see. release() is a no-op on
             # any id already cleared, so this cannot double-release.
-            for pending_queue_id in invalidate(entity_id, policy_revision=current_policy_revision):
-                director.release(pending_queue_id, fact_id=None)
+            for tightened_id in tightened_ids:
+                for pending_queue_id in invalidate(tightened_id, policy_revision=current_policy_revision):
+                    director.release(pending_queue_id, fact_id=None)
     muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
     personal_moment = entity_id in (
         policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}

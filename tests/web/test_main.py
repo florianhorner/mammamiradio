@@ -301,7 +301,9 @@ async def test_startup_disagreeing_durable_witnesses_fail_narrow(tmp_path):
 async def test_startup_transplanted_sidecar_with_cold_database_fails_narrow(tmp_path):
     """A durable sidecar claiming a pre-existing DB while none exists is a
     transplanted/leftover witness and must never promote a cold install to
-    legacy — the guard drops it to non-durable so persist never runs."""
+    legacy. The guard demotes the in-memory claim; the cold-correction then
+    rewrites the poisoned sidecar and seeds the redundant DB witness as False,
+    so persist runs with the corrected COLD preflight (never the true claim)."""
     from mammamiradio.core.models import Track
     from mammamiradio.home.authorization import HomeAuthorizationMode
     from mammamiradio.home.migration import LegacyHomePreflightV1
@@ -329,10 +331,80 @@ async def test_startup_transplanted_sidecar_with_cold_database_fails_narrow(tmp_
 
         await startup()
 
-    # The guard set the preflight non-durable, so the redundant DB witness is
-    # never seeded from the transplanted claim.
-    persist.assert_not_called()
+    # The redundant DB witness is seeded from the CORRECTED cold preflight
+    # (database_preexisted=False), not the transplanted true claim — this is
+    # what stops a second boot from self-agreeing into legacy.
+    assert persist.call_count == 1
+    _, persisted_preflight = persist.call_args.args
+    assert persisted_preflight.database_preexisted is False
     assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_correction_write_failure_fails_narrow(tmp_path):
+    """If correcting the cold witness on disk fails, the boot still fails narrow
+    rather than proceeding on an uncorrected sidecar."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    # Cold install — no database file present at process start.
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.rewrite_legacy_home_preflight_cold_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_transplanted_sidecar_stays_narrow_across_two_boots(tmp_path):
+    """End-to-end regression: a transplanted sidecar lying about a pre-existing
+    database on a cold install must stay narrow on BOTH boots. Boot 1 creates the
+    DB and corrects the poisoned witness; boot 2 (DB now exists, transplant guard
+    no longer fires) must not self-agree into legacy off the stale claim."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import load_legacy_home_preflight_v1, preflight_path
+
+    config = _privacy_startup_config(tmp_path)
+    state_dir = config.cache_dir / "state"
+    state_dir.mkdir(parents=True)
+    # Seed a transplanted/leftover durable sidecar (partial backup restore / cloned
+    # config) claiming a pre-existing DB, with NO database file present (cold).
+    preflight_path(state_dir).write_text('{"database_preexisted": true}\n', encoding="utf-8")
+
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert (config.cache_dir / "mammamiradio.db").exists()
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+        corrected = load_legacy_home_preflight_v1(state_dir)
+        assert corrected is not None and corrected.database_preexisted is False
+
+        # Second boot with the DB now present — the promotion path the fix closes.
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    final = load_legacy_home_preflight_v1(state_dir)
+    assert final is not None and final.database_preexisted is False
 
 
 @pytest.mark.asyncio
