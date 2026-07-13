@@ -2104,6 +2104,75 @@ def test_revalidate_home_context_outcome_mutes_filters_both_baselines_and_synthe
     assert outcome.radio_event_state_baseline[synthetic_id] == {"state": "sunny"}
 
 
+def test_revalidate_outcome_discards_an_entity_muted_and_unmuted_while_in_flight(tmp_path):
+    """A hard mute invalidates an older candidate even after the policy is reopened."""
+    import mammamiradio.home.ha_context as ha_context
+    from mammamiradio.home.entity_policy import set_entity_muted
+
+    source_id = "weather.private_source"
+    synthetic_id = "weather.ambient"
+    live_id = "switch.live"
+    private_radio = SimpleNamespace(event=SimpleNamespace(entity_id=synthetic_id))
+    live_radio = SimpleNamespace(event=SimpleNamespace(entity_id=live_id))
+    private_ritual = SimpleNamespace(
+        entity_id=synthetic_id,
+        recipe=SimpleNamespace(public_family_label="Private ritual"),
+    )
+    live_ritual = SimpleNamespace(
+        entity_id=live_id,
+        recipe=SimpleNamespace(public_family_label="Live ritual"),
+    )
+    context = HomeContext(
+        raw_states={
+            synthetic_id: {"state": "sunny", "attributes": {}},
+            live_id: {"state": "on", "attributes": {}},
+        },
+        ambient_sources={synthetic_id: source_id},
+        radio_events=[private_radio, live_radio],
+        ritual_recipe_matches=[private_ritual, live_ritual],
+        ritual_public_families=["Private ritual", "Live ritual"],
+        timestamp=time.time(),
+    )
+    now = time.time()
+
+    with (
+        patch.object(ha_context, "_ha_cache", None),
+        patch.object(ha_context, "_radio_event_state_cache", {}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {}),
+        patch.object(ha_context, "_home_context_invalidation_generation", 0),
+        patch.object(ha_context, "_home_context_entity_invalidation_generations", {}),
+    ):
+        outcome = _HomeContextFetchOutcome(
+            kind="fresh",
+            context=context,
+            snapshot_timestamp=context.timestamp,
+            attempt_started_at=now - 0.1,
+            attempt_finished_at=now,
+            duration_seconds=0.1,
+            radio_event_state_baseline={
+                synthetic_id: {"state": "sunny"},
+                live_id: {"state": "on"},
+            },
+            ritual_recipe_state_baseline={
+                synthetic_id: {"state": "sunny"},
+                live_id: {"state": "on"},
+            },
+            invalidation_generation=0,
+        )
+        set_entity_muted(tmp_path, source_id, True, label="Private weather")
+        ha_context.invalidate_home_context_entity_baselines({source_id})
+        set_entity_muted(tmp_path, source_id, False)
+
+        filtered = revalidate_home_context_outcome_mutes(outcome, tmp_path)
+
+    assert synthetic_id not in filtered.context.raw_states
+    assert filtered.context.radio_events == [live_radio]
+    assert filtered.context.ritual_recipe_matches == [live_ritual]
+    assert filtered.context.ritual_public_families == ["Live ritual"]
+    assert filtered.radio_event_state_baseline == {live_id: {"state": "on"}}
+    assert filtered.ritual_recipe_state_baseline == {live_id: {"state": "on"}}
+
+
 def test_mute_revalidation_is_a_noop_when_persistent_policy_is_unavailable():
     """Callers without a cache directory must retain their candidate unchanged."""
     context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})

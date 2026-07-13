@@ -464,6 +464,9 @@ class _HomeContextFetchOutcome:
     radio_event_state_baseline: dict[str, dict] = field(default_factory=dict)
     ritual_recipe_state_baseline: dict[str, dict] = field(default_factory=dict)
     observed_entity_ids: frozenset[str] = field(default_factory=frozenset)
+    # Captured at request start so a mute → unmute that completes while this
+    # candidate is in flight still invalidates its pre-mute event history.
+    invalidation_generation: int | None = None
 
     def is_adoptable_from(self, baseline_timestamp: float) -> bool:
         """Whether this represents a genuinely newer fetched snapshot."""
@@ -1046,6 +1049,22 @@ def _filter_matcher_baseline(baseline: dict[str, dict], muted_ids: set[str]) -> 
     return {entity_id: state for entity_id, state in baseline.items() if entity_id not in muted_ids}
 
 
+def _home_context_entities_invalidated_since(generation: int | None) -> set[str]:
+    """Return hard-muted entity ids recorded after a fetch began.
+
+    ``None`` preserves manually constructed legacy outcomes.  Every production
+    fetch stamps the current generation at coroutine entry, before it can await
+    network or projection work.
+    """
+    if generation is None:
+        return set()
+    return {
+        entity_id
+        for entity_id, invalidated_generation in _home_context_entity_invalidation_generations.items()
+        if invalidated_generation > generation
+    }
+
+
 def revalidate_home_context_outcome_mutes(
     outcome: _HomeContextFetchOutcome,
     cache_dir: Path | None,
@@ -1057,16 +1076,24 @@ def revalidate_home_context_outcome_mutes(
     baseline would let a later unmute turn a private transition into a delayed
     radio event.  The final adopter therefore filters both baseline families
     using the same live policy, including narrow-mode synthetic aliases.
+
+    An operator can also mute and unmute an entity before the worker finishes.
+    The current policy then has no muted id to filter, so the outcome carries a
+    request-start invalidation generation.  Any entity invalidated after that
+    boundary is still removed from this candidate; the next poll establishes a
+    post-unmute baseline instead of replaying private history.
     """
     if outcome.kind != "fresh" or cache_dir is None:
         return outcome
     muted_ids = muted_entity_ids(Path(cache_dir))
-    if not muted_ids:
+    invalidated_ids = _home_context_entities_invalidated_since(outcome.invalidation_generation)
+    filtered_ids = muted_ids | invalidated_ids
+    if not filtered_ids:
         return outcome
-    effective_muted_ids = expand_muted_with_ambient_sources(muted_ids, outcome.context.ambient_sources)
+    effective_muted_ids = expand_muted_with_ambient_sources(filtered_ids, outcome.context.ambient_sources)
     return replace(
         outcome,
-        context=_filter_fresh_home_context_mutes(outcome.context, muted_ids, cache_dir=cache_dir),
+        context=_filter_fresh_home_context_mutes(outcome.context, filtered_ids, cache_dir=cache_dir),
         radio_event_state_baseline=_filter_matcher_baseline(
             outcome.radio_event_state_baseline,
             effective_muted_ids,
@@ -1092,13 +1119,17 @@ def discard_home_context_entities(context: HomeContext | None, entity_ids: set[s
 
 def invalidate_home_context_entity_baselines(entity_ids: set[str]) -> None:
     """Forget muted entities from module caches and both matcher baselines."""
-    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache
+    global _ha_cache, _radio_event_state_cache, _ritual_recipe_state_cache, _home_context_invalidation_generation
     if not entity_ids:
         return
+    _home_context_invalidation_generation += 1
+    invalidation_generation = _home_context_invalidation_generation
     effective_entity_ids = set(entity_ids)
     if _ha_cache is not None:
         effective_entity_ids = expand_muted_with_ambient_sources(effective_entity_ids, _ha_cache.ambient_sources)
         _ha_cache = discard_home_context_entities(_ha_cache, effective_entity_ids)
+    for entity_id in effective_entity_ids:
+        _home_context_entity_invalidation_generations[entity_id] = invalidation_generation
     _radio_event_state_cache = _filter_matcher_baseline(_radio_event_state_cache, effective_entity_ids)
     _ritual_recipe_state_cache = _filter_matcher_baseline(_ritual_recipe_state_cache, effective_entity_ids)
 
@@ -1535,9 +1566,21 @@ _ha_client: httpx.AsyncClient | None = None
 _ha_cache: HomeContext | None = None
 _radio_event_state_cache: dict[str, dict] = {}
 _ritual_recipe_state_cache: dict[str, dict] = {}
+# Hard mutes are temporal invalidation boundaries.  A worker snapshots this
+# generation at request start; the per-entity map identifies only candidates
+# that began before a particular hard mute, without penalizing future polls.
+_home_context_invalidation_generation = 0
+_home_context_entity_invalidation_generations: dict[str, int] = {}
 _ha_registry_snapshot_cache: HomeRegistrySnapshot | None = None
 _ha_registry_fetched_at: float = 0.0
 _HA_REGISTRY_TTL = 6 * 60 * 60
+
+
+def home_context_invalidation_generation() -> int:
+    """Return the current hard-mute generation for an in-flight fetch snapshot."""
+    return _home_context_invalidation_generation
+
+
 _HA_REGISTRY_FAILURE_TTL = 60
 _HA_REGISTRY_STALE_TTL = 7 * 24 * 60 * 60
 _HA_REGISTRY_FILENAME = "ha_registry.json"
@@ -2025,6 +2068,7 @@ async def _fetch_home_context_outcome(
     active_authorization = authorization or HomeAuthorization.narrow()
     attempt_started_at = time.time()
     started_monotonic = time.monotonic()
+    attempt_invalidation_generation = _home_context_invalidation_generation
 
     def outcome(
         kind: Literal["fresh", "cached", "failed"],
@@ -2045,6 +2089,7 @@ async def _fetch_home_context_outcome(
             radio_event_state_baseline=radio_event_state_baseline or {},
             ritual_recipe_state_baseline=ritual_recipe_state_baseline or {},
             observed_entity_ids=observed_entity_ids or frozenset(),
+            invalidation_generation=attempt_invalidation_generation,
         )
 
     # Prefer explicitly passed cache, then module-level cache. A context built

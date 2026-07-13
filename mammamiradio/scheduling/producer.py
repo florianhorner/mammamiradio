@@ -84,6 +84,7 @@ from mammamiradio.home.ha_context import (
     discard_home_context_entities,
     fetch_home_context,
     get_cached_home_context,
+    home_context_invalidation_generation,
     push_state_to_ha,
     revalidate_home_context_outcome_mutes,
 )
@@ -340,6 +341,7 @@ async def _fetch_producer_context_outcome(
 
     started_at = time.time()
     started_monotonic = time.monotonic()
+    invalidation_generation = home_context_invalidation_generation()
     context = _legacy_mock_home_context(
         await fetch_home_context(
             ha_url=ha_url,
@@ -364,6 +366,7 @@ async def _fetch_producer_context_outcome(
         attempt_started_at=started_at,
         attempt_finished_at=time.time(),
         duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+        invalidation_generation=invalidation_generation,
     )
 
 
