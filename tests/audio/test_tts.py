@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1789,6 +1791,386 @@ async def test_synthesize_ad_normalize_ad_empty_falls_back_to_unprocessed(_mock_
 # ---------------------------------------------------------------------------
 # TTS cost accounting (state.tts_characters) — paid cloud chars only
 # ---------------------------------------------------------------------------
+
+
+def test_cloud_helpers_keep_paid_success_callback_optional() -> None:
+    """Direct audition callers may keep omitting the station-only callback."""
+    from mammamiradio.audio import tts
+
+    for helper in (tts.synthesize_openai, tts.synthesize_azure, tts.synthesize_elevenlabs):
+        callback = inspect.signature(helper).parameters["on_paid_provider_success"]
+        assert callback.kind is inspect.Parameter.KEYWORD_ONLY
+        assert callback.default is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_counts_confirmed_paid_response_before_normalize_failure(
+    _mock_all, tmp_path, monkeypatch, engine, voice
+):
+    """A paid response counts once even when local normalization needs Edge rescue."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    normalizer_calls = 0
+
+    def _fail_first_normalize(*args, **kwargs):
+        nonlocal normalizer_calls
+        normalizer_calls += 1
+        if normalizer_calls == 1:
+            raise RuntimeError("cloud normalizer failed")
+        return _normalize_side_effect(*args, **kwargs)
+
+    _mock_all["normalize"].side_effect = _fail_first_normalize
+    output = tmp_path / f"{engine}.mp3"
+    synthesize_kwargs = {
+        "engine": engine,
+        "state": state,
+        "edge_fallback_voice": "it-IT-DiegoNeural",
+    }
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        response = MagicMock(content=b"\x00" * 512)
+        client = MagicMock()
+        client.audio.speech.create.return_value = response
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+
+    assert result == output
+    assert _mock_all["normalize"].call_count == 2
+    _mock_all["Communicate"].assert_called_once()
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_counts_confirmed_paid_response_before_raw_write_failure(
+    _mock_all, tmp_path, monkeypatch, engine, voice
+):
+    """A paid response counts once even when raw-file I/O needs Edge rescue."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    output = tmp_path / f"{engine}-write-failure.mp3"
+    raw_path = output.with_suffix(".raw.mp3")
+    real_write_bytes = Path.write_bytes
+    cloud_raw_write_failed = False
+
+    def _fail_first_cloud_raw_write(path, data):
+        nonlocal cloud_raw_write_failed
+        if path == raw_path and not cloud_raw_write_failed:
+            cloud_raw_write_failed = True
+            raise OSError("cloud raw write failed")
+        return real_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _fail_first_cloud_raw_write)
+    synthesize_kwargs = {
+        "engine": engine,
+        "state": state,
+        "edge_fallback_voice": "it-IT-DiegoNeural",
+    }
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        response = MagicMock(content=b"\x00" * 512)
+        client = MagicMock()
+        client.audio.speech.create.return_value = response
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+
+    assert cloud_raw_write_failed
+    assert result == output
+    assert output.exists()
+    assert _mock_all["normalize"].call_count == 1
+    _mock_all["Communicate"].assert_called_once()
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_billing_guard_prevents_double_count(_mock_all, tmp_path, monkeypatch):
+    """The billed idempotency guard counts a confirmed paid response once even if the
+    provider's success callback fires more than once."""
+    from mammamiradio.audio import tts
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    output = tmp_path / "azure-double-bill.mp3"
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+
+    async def _double_notify(_text, _voice, output_path, *, on_paid_provider_success=None, **_kwargs):
+        # A hypothetical double-wired provider path fires the paid-success callback twice;
+        # the nonlocal `billed` guard must collapse it to a single billed response.
+        if on_paid_provider_success is not None:
+            on_paid_provider_success()
+            on_paid_provider_success()
+        output_path.write_bytes(b"\x00" * 512)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize_azure", _double_notify)
+    result = await synthesize(
+        text,
+        "it-IT-IsabellaNeural",
+        output,
+        engine="azure",
+        state=state,
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    # Guard collapses the double callback into a single billed response.
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+    # Confirmed paid response — no Edge fallback.
+    _mock_all["Communicate"].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_does_not_count_before_paid_provider_response(_mock_all, tmp_path, monkeypatch, engine, voice):
+    """Missing/failed provider responses stay out of the paid session estimate."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Nessuna risposta a pagamento"
+    state = StationState(playlist=[])
+    output = tmp_path / f"{engine}-failed.mp3"
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        client = MagicMock()
+        client.audio.speech.create.side_effect = RuntimeError("provider unavailable")
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, engine=engine, state=state)
+    else:
+        response = httpx.Response(
+            503,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, engine=engine, state=state)
+
+    assert result == output
+    _mock_all["Communicate"].assert_called_once()
+    assert state.tts_characters == 0
+    assert state.tts_characters_by_category.get("tts", 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_cloud_helpers_ignore_paid_success_callback_errors(_mock_all, tmp_path, monkeypatch, provider, voice):
+    """A bookkeeping callback failure cannot turn a successful cloud render into fallback audio."""
+    from mammamiradio.audio import tts
+
+    callback = MagicMock(side_effect=RuntimeError("accounting unavailable"))
+    output = tmp_path / f"{provider}-callback.mp3"
+    text = "Audio remains available"
+
+    if provider == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        client = MagicMock()
+        client.audio.speech.create.return_value = MagicMock(content=b"\x00" * 512)
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await tts.synthesize_openai(
+                text,
+                voice,
+                output,
+                model="test-tts",
+                on_paid_provider_success=callback,
+            )
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{provider}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if provider == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            helper = tts.synthesize_azure
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            helper = tts.synthesize_elevenlabs
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await helper(text, voice, output, on_paid_provider_success=callback)
+
+    await asyncio.sleep(0)
+    assert result == output
+    assert output.exists()
+    callback.assert_called_once_with()
+    _mock_all["Communicate"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_continues_when_paid_callback_cannot_schedule(_mock_all, tmp_path, monkeypatch):
+    """A closing owner loop cannot turn a confirmed cloud response into an audio failure."""
+    from mammamiradio.audio.tts import synthesize_openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    real_loop = asyncio.get_running_loop()
+
+    class _ClosedSchedulingLoop:
+        def run_in_executor(self, *args, **kwargs):
+            return real_loop.run_in_executor(*args, **kwargs)
+
+        def call_soon_threadsafe(self, *args, **kwargs):
+            raise RuntimeError("Event loop is closed")
+
+    callback = MagicMock()
+    client = MagicMock()
+    client.audio.speech.create.return_value = MagicMock(content=b"\x00" * 512)
+    with (
+        patch("mammamiradio.audio.tts._get_openai_client", return_value=client),
+        patch("mammamiradio.audio.tts.asyncio.get_running_loop", return_value=_ClosedSchedulingLoop()),
+    ):
+        result = await synthesize_openai(
+            "Audio keeps flowing",
+            "onyx",
+            tmp_path / "closed-loop.mp3",
+            model="test-tts",
+            on_paid_provider_success=callback,
+        )
+
+    assert result.exists()
+    callback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_records_late_openai_success_after_outer_timeout(_mock_all, tmp_path, monkeypatch):
+    """A late OpenAI worker response is counted after Edge has already returned."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    billing_seen = asyncio.Event()
+    original_wait_for = asyncio.wait_for
+
+    class _TrackingState:
+        tts_characters = 0
+
+        def record_tts_usage(self, characters):
+            self.tts_characters += characters
+            billing_seen.set()
+
+    response = MagicMock(content=b"\x00" * 512)
+    client = MagicMock()
+
+    def _late_create(**kwargs):
+        worker_started.set()
+        assert release_worker.wait(timeout=2), "test did not release the OpenAI worker"
+        return response
+
+    async def _timeout_only_openai(awaitable, timeout):
+        if timeout == 30.0:
+            for _ in range(1000):
+                if worker_started.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            assert worker_started.is_set(), "OpenAI executor worker did not start"
+            raise TimeoutError
+        return await original_wait_for(awaitable, timeout)
+
+    client.audio.speech.create.side_effect = _late_create
+    state = _TrackingState()
+    try:
+        with (
+            patch("mammamiradio.audio.tts._get_openai_client", return_value=client),
+            patch("mammamiradio.audio.tts.asyncio.wait_for", new=_timeout_only_openai),
+        ):
+            result = await synthesize(
+                "Risposta in ritardo", "onyx", tmp_path / "late.mp3", engine="openai", state=state
+            )
+            assert result.exists()
+            assert state.tts_characters == 0
+            _mock_all["Communicate"].assert_called_once()
+    finally:
+        release_worker.set()
+
+    await original_wait_for(billing_seen.wait(), timeout=1.0)
+    assert state.tts_characters == len("Risposta in ritardo")
 
 
 @pytest.mark.asyncio
