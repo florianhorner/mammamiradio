@@ -1,4 +1,4 @@
-"""Track acquisition helpers: local files, yt-dlp, and placeholder fallback."""
+"""Track acquisition helpers: local files, yt-dlp, and unavailable-source markers."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
 
 from mammamiradio.audio.admission import ffmpeg_slot
-from mammamiradio.audio.normalizer import _run_ffmpeg
 from mammamiradio.core.models import Track
 from mammamiradio.core.path_safety import safe_path_within
 
@@ -98,7 +97,38 @@ def reject_cached_download(cache_dir: Path, cache_key: str, reason: str) -> bool
                 logger.warning("Purged rejected cache artifact %s: %s", path.name, reason)
         except OSError as exc:
             logger.warning("Failed to purge rejected cache artifact %s: %s", path, exc)
+    failed_path = cache_dir / f"_failed_{cache_key}.mp3"
+    try:
+        # A marker also gives a rejected local/demo fallback a timestamped
+        # recovery boundary. If it later fails admission, refresh the marker so
+        # the same corrupt file cannot restart a retry loop until replaced.
+        failed_path.write_text(reason)
+    except OSError as exc:
+        logger.warning("Failed to update rejected-download marker %s: %s", failed_path, exc)
     return removed
+
+
+def accept_recovered_download(cache_dir: Path, cache_key: str) -> None:
+    """Clear a transient rejection after an external retry is admitted.
+
+    Call this only once a later explicit download has passed the caller's
+    admission checks.  A failed acquisition is intentionally session-denied to
+    stop a retry loop, but a newly admitted replacement for that same key must
+    be selectable and must not leave its stale unavailable marker behind.
+    """
+    if not cache_key:
+        return
+    was_rejected = cache_key in _REJECTED_CACHE_KEYS
+    _REJECTED_CACHE_KEYS.discard(cache_key)
+    failed_path = cache_dir / f"_failed_{cache_key}.mp3"
+    had_marker = failed_path.exists()
+    try:
+        failed_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed to clear recovered-download marker %s: %s", failed_path, exc)
+    else:
+        if was_rejected or had_marker:
+            logger.info("Cleared recovered download rejection: %s", cache_key)
 
 
 def is_rejected_cache_key(cache_key: str) -> bool:
@@ -154,13 +184,12 @@ def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool
 def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> int:
     """Delete cached files smaller than *min_size_bytes* (likely failed downloads).
 
-    A failed yt-dlp run can cache a silence placeholder that's only a few KB.
-    Subsequent boots serve silence from cache without re-downloading.  Purging
-    these on startup forces a fresh download.
+    A failed acquisition can leave a partial file or an unavailable-source
+    marker. Purging those on startup permits a fresh transient-error retry.
 
-    Also purges ``_silence_*.mp3`` and ``_failed_*.mp3`` files unconditionally.
-    These placeholders must not persist across restarts or they will be re-queued
-    by the producer and trigger an endless quality-gate rejection loop.
+    Also purges legacy ``_silence_*.mp3`` and current ``_failed_*.mp3`` files
+    unconditionally. Neither is eligible music and neither should survive a
+    restart.
     """
     if not cache_dir.is_dir():
         return 0
@@ -168,7 +197,7 @@ def purge_suspect_cache_files(cache_dir: Path, min_size_bytes: int = 10240) -> i
     for f in cache_dir.glob("*.mp3"):
         if f.name in _CACHE_PROTECTED:
             continue
-        # Silence placeholders always get purged regardless of size.
+        # Legacy silence placeholders always get purged regardless of size.
         if f.name.startswith("_silence_"):
             logger.info("Purging silence placeholder: %s", f.name)
             f.unlink(missing_ok=True)
@@ -311,33 +340,6 @@ def _find_demo_asset(track: Track) -> Path | None:
     return None
 
 
-def _generate_silence(track: Track, out_path: Path, *, background: bool = False) -> Path:
-    """Generate silence as last-resort fallback (no sine wave tone)."""
-    # Keep fallback audio above the producer's minimum music-duration gate so
-    # demo/degraded boot can still fill the queue instead of looping forever.
-    duration_s = max(35, int((track.duration_ms or 0) / 1000) if track.duration_ms else 0)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "anullsrc=r=48000:cl=stereo",
-        "-t",
-        str(duration_s),
-        "-b:a",
-        "192k",
-        "-write_xing",
-        "0",
-        "-f",
-        "mp3",
-        str(out_path),
-    ]
-    _run_ffmpeg(cmd, f"silence for {track.display}", background=background)
-    logger.info("Generated silence placeholder for: %s", track.display)
-    return out_path
-
-
 def _find_local(track: Track, music_dir: Path) -> Path | None:
     """Check if a local MP3 exists in the music/ directory."""
     if not music_dir.exists():
@@ -464,10 +466,6 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)
         return out_path
-    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
-    if failed_path.exists():
-        logger.info("Failed-download marker hit, skipping: %s", track.display)
-        return failed_path
     if track.source == "youtube":
         legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
         if legacy_path.exists():
@@ -487,11 +485,40 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
         logger.info("Local file: %s -> %s", track.display, local)
         return local
 
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if failed_path.exists():
+        logger.info("Failed-download marker hit, skipping: %s", track.display)
+        return failed_path
+
     return None
 
 
+def has_fresh_concrete_track_source(track: Track, cache_dir: Path, music_dir: Path) -> bool:
+    """Return whether newer concrete media can heal an unavailable-source marker.
+
+    The producer uses this narrow escape hatch only for already-denied keys. A
+    newly synced local, demo, legacy, or raw-cache file deserves one fresh
+    admission attempt; after it fails, ``reject_cached_download`` refreshes the
+    marker timestamp so the same corrupt file cannot restart a retry loop.
+    """
+    failed_path = cache_dir / f"_failed_{track.cache_key}.mp3"
+    if not failed_path.exists():
+        return False
+    # A marker is the exceptional recovery path. Refresh the ordinarily cached
+    # local directory listing so an operator-synced music/ file is visible now,
+    # not after the normal 60-second lookup TTL.
+    _local_files_cache.pop(str(music_dir), None)
+    resolved = _resolve_cached_or_local(track, cache_dir, music_dir)
+    if resolved is None or resolved == failed_path:
+        return False
+    try:
+        return resolved.stat().st_mtime_ns > failed_path.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
 def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:
-    """Resolve a track from cache, local files, yt-dlp, or a placeholder tone."""
+    """Resolve a track from cache, local files, yt-dlp, or an unavailable marker."""
     existing = _resolve_cached_or_local(track, cache_dir, music_dir)
     if existing is not None:
         return existing
@@ -515,20 +542,17 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
         try:
             return _download_ytdlp(track, cache_dir)
         except Exception as e:
-            logger.warning("yt-dlp failed for %s: %s — using silence", track.display, e)
+            reason = f"yt-dlp failed: {e}"
+            logger.warning("yt-dlp failed for %s: %s — marking track unavailable", track.display, e)
+            return _failed_download_path(track, cache_dir, reason)
     else:
-        logger.info("yt-dlp disabled for %s (set MAMMAMIRADIO_ALLOW_YTDLP=true to enable)", track.display)
-
-    # 4. Fallback: brief silence (never a sine wave tone).
-    # Write to a _silence_ prefixed path so it is NOT treated as a real cached download
-    # on the next iteration or the next boot — it will always be regenerated rather than
-    # being served as a "Cache hit" that loops through the quality gate forever.
-    silence_path = cache_dir / f"_silence_{track.cache_key}.mp3"
-    return _generate_silence(track, silence_path, background=background)
+        reason = "yt-dlp disabled"
+        logger.info("yt-dlp disabled for %s — marking track unavailable", track.display)
+        return _failed_download_path(track, cache_dir, reason)
 
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
-    """Resolve an explicit external request without silently falling back to silence."""
+    """Resolve an explicit external request without a silent fallback."""
     out_path = cache_dir / f"{track.cache_key}.mp3"
     if out_path.exists():
         logger.info("Cache hit: %s", track.display)

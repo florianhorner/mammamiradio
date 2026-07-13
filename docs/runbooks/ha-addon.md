@@ -395,7 +395,7 @@ Use these to tell intentional degradation from a real regression during post-mer
 
 **Chart content filter (intentional)**: `INFO Rejecting non-music chart entry: …` and `INFO Chart ingest: filtered N non-music entries` each time the chart is refreshed. Normal values are 0-3 rejections per refresh.
 
-**Session track denylist (intentional)**: `WARNING Skipping track due to invalid download (…): …` plus `WARNING Purged rejected cache file …` when a download fails validation. Subsequent reselections log `DEBUG Skipping denylisted track (already rejected this session)` instead of retrying.
+**Session track denylist (intentional)**: `WARNING Skipping music track due to invalid download (…): …` plus `WARNING Purged rejected cache artifact …` when a download fails validation. If every source key is denied, the producer logs `DEBUG No eligible music tracks remain after excluding session-rejected cache keys` and queues its normal recovery ladder instead of retrying the same sources.
 
 **Queue starvation rescue (intentional)**: `Queue empty Ns - rescuing with canned clip` or `… with norm cache` or `… with demo asset` within 30-60s of silence. A forced-banter `force_next = BANTER` after 60s is the last-resort escape.
 

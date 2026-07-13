@@ -11,14 +11,14 @@ This repo supports three deployment models: Docker container, Home Assistant add
 
 Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from one packaged recovery clip per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. Packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, not temp renders: producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges pre-seed both pieces when they can: a short branded continuity clip first, then one cached song as real runway while the producer renders the next live segment. Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
 
-Downloads that fail `validate_download` (missing file, too-short duration, corrupt) are purged from the cache directory and added to a process-local denylist so the same track is not re-selected endlessly. The main producer loop, prefetch, and prewarm all short-circuit on denylisted keys via a bounded retry around `select_next_track`. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they drop the cached normalization only and rely on the 3-consecutive-rejection circuit breaker to recover. Log signatures:
+Acquisition failures from yt-dlp or a direct source create a small `_failed_<cache-key>.mp3` marker rather than synthesized silence. That marker deliberately fails `validate_download` before FFprobe or normalization; the producer deny-lists the source key for the current process, while the marker prevents another acquisition attempt until startup purges it for a fresh retry. A newly synced raw, legacy, local, or bundled-demo file can receive one fresh admission attempt; if it fails, the marker refreshes so that same corrupt file cannot loop. A later explicit external download clears the stale marker and session denial only after it is admitted to rotation. If all music candidates are unavailable, the producer enters its bounded recovery ladder so the sweeper and emergency-tone rungs can keep the station audible. Downloads that otherwise fail `validate_download` (missing file, too-short duration, corrupt) follow the same purge-and-denylist path so the same track is not re-selected endlessly. The main producer loop and prewarm use a bounded retry around `select_next_track`; prefetch filters denied candidates from its non-mutating lookahead. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they remove the cached normalization, including on the circuit-breaker path, and use the same producer recovery ladder when direct recovery media is exhausted. Log signatures:
 
 ```
 INFO Rejecting non-music chart entry: BBC Studios - <title>
 INFO Chart ingest: filtered N non-music entries
-WARNING Skipping track due to invalid download (<track>): <reason>
-WARNING Purged rejected cache file <key>.mp3: <reason>
-DEBUG Skipping denylisted track (already rejected this session): <track>
+WARNING Skipping <context> track due to invalid download (<track>): <reason>
+WARNING Purged rejected cache artifact <artifact>: <reason>
+DEBUG No eligible music tracks remain after excluding session-rejected cache keys
 ```
 
 ## Required secrets and config
@@ -276,6 +276,51 @@ the floor while the bounded queue can still build more runway, the producer
 chooses music instead. If the bounded queue is effectively saturated and still
 cannot reach the seconds floor, the due speech is allowed so optional breaks do
 not starve forever on short-track stations.
+
+### Reading stream-delivery diagnostics
+
+`runtime_status.stream_delivery` is a **private, admin-only** diagnostic surface
+(authenticated `/status` only — it is never added to `/public-status`, and there
+is no listener copy or operator control). It proves when the 500 ms delivery
+cushion (see [Delivery cushion](architecture.md#delivery-cushion-send-ahead-pacing))
+absorbed a scheduling delay versus when it was exhausted, and distinguishes an
+app-side segment outcome, a global pacing miss, and one lagging listener — all
+without retaining any listener or Home Assistant identity.
+
+Shape (all counters and lists are present from boot, zeroed / empty / `idle`
+before anything is recorded; `slow_listener_drops.last_drop_at` is `null` until
+the first overflow, because no timestamp exists yet):
+
+- `target_lead_ms` — the fixed send-ahead target (`500`).
+- `late_threshold_ms` — the lateness that records an event (`50`).
+- `session` / `window_15m` — counts of `late`, `underrun`, `overrun_rebased`, and
+  `total`, for the whole session and a rolling 15-minute window.
+- `recent` — up to 20 coalesced recent pacing events. Each carries a `kind`
+  (`late` = a late send the cushion still absorbed; `underrun` = the cushion was
+  exhausted; `overrun_rebased` = an overlong stall was bounded to the recovery
+  burst and the timeline rebased), timestamp, `lateness_ms`, `remaining_lead_ms`,
+  `deficit_ms`, `segment_type`, `playback_epoch`, `listener_count`, a coarse
+  generator `phase`/`kind`, and the HA refresh `in_flight` / `foreground_timed_out`
+  / `stage` / `stage_elapsed_ms`.
+- `recent_stream_outcomes` — up to 20 anonymous completed-send outcomes:
+  timestamp, `segment_type`, classified `result`, `bytes_sent`,
+  `starting_listener_count`, and `terminal_reason` (`eof`, `skip`, or
+  `file_error`; `cancelled` for planned task shutdown; or `aborted` for another
+  non-I/O interruption).
+- `slow_listener_drops` — `session` / `window_15m` totals and `last_drop_at` for
+  queue-overflow drops of a lagging listener (no identifier is retained).
+- `ha_refresh` — the current coarse HA projection `stage` (`states_request`,
+  `enrichment_wait`, `projection`, `idle`) and `stage_elapsed_ms`.
+
+How to read it: a `late` event means the cushion did its job. An `underrun`
+(also a rate-limited device-log warning, so it survives after the bounded status
+history rolls over) means a stall exceeded the cushion and was audible; correlate
+its coarse generator kind and HA `stage` to tell rendering pressure from an HA
+projection. An `overrun_rebased` confirms a long stall was bounded and did not
+compound into a catch-up burst. **Privacy exclusion list** — these rows never
+contain raw HA states, labels, titles, segment IDs, listener IDs, IP addresses,
+or prompt material; only timestamps, counts, durations, coarse kinds, and state
+flags.
 
 ### Detecting a not-working provider key
 

@@ -14,6 +14,9 @@
 
 ### Fixed
 
+- **Direct listening now stays smoother when background work takes a beat.** The station sends short source packets with a small shared delivery cushion and bounded recovery after longer pauses, so one busy event-loop moment is less likely to become a gap for listeners. Slow connections still drop rather than holding the room, and private control-room delivery signals make those recoveries visible without storing listener details.
+- **Home Assistant context no longer has to finish its parsing on the audio loop.** Once the Home Assistant reply arrives, the heavier projection work runs separately; the final result still rechecks live mutes before it can be used, so a muted entity cannot reappear later as a delayed host cue.
+- **Blocked or failed music sources no longer become silent songs.** When YouTube or yt-dlp rejects a track, including an HTTP 403, the add-on marks it unavailable before probing or normalization and selects another candidate. If no accepted candidate is ready, its continuity-recovery ladder keeps the stream audible; rejected normalization files are removed so they cannot return as fallback audio.
 - **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. Songs already banned or removed when the reserve is rebuilt are excluded from that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
 
 ## 2.18.0

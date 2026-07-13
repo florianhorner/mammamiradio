@@ -824,6 +824,48 @@ async def test_error_recovery_queues_recovery_sweeper():
 
 
 @pytest.mark.asyncio
+async def test_unavailable_marker_exhaustion_queues_recovery_sweeper(tmp_path):
+    """A tiny unavailable marker must enter recovery once it denies the final track."""
+    from mammamiradio.playlist import downloader
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+
+    state = _make_state()
+    state.playlist = state.playlist[:1]
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    marker = tmp_path / f"_failed_{state.playlist[0].cache_key}.mp3"
+    marker.write_text("yt-dlp unavailable")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=marker),
+            patch(f"{PRODUCER_MODULE}.validate_download", wraps=downloader.validate_download),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._get_last_music_file", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+
+        assert is_rejected_cache_key(state.playlist[0].cache_key)
+        segment = queue.get_nowait()
+        assert segment is recovery
+        assert segment.metadata["rescue"] is True
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_source_switch_discards_stale_music_segment(tmp_path):
     """A source switch should invalidate any in-flight music from the previous playlist."""
     old_track = Track(title="Old Song", artist="Old Artist", duration_ms=200_000, spotify_id="old1")
@@ -1432,32 +1474,227 @@ async def test_prewarm_skips_invalid_download_before_normalize():
 
 
 @pytest.mark.asyncio
-async def test_prewarm_quality_gate_rejection():
-    """prewarm returns False when quality gate rejects the track."""
-    from mammamiradio.audio.audio_quality import AudioQualityError
+async def test_failed_download_marker_skips_normalize_and_denylists_track(tmp_path):
+    """A yt-dlp failure marker is rejected before FFprobe or normalization."""
+    from mammamiradio.playlist import downloader
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    track = Track(
+        title="403 Probe",
+        artist="Test Artist",
+        duration_ms=180_000,
+        youtube_id="dQw4w9WgXcQ",
+        source="youtube",
+    )
+    marker = tmp_path / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("yt-dlp failed: HTTP Error 403: Forbidden")
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=marker),
+            patch(f"{PRODUCER_MODULE}.validate_download", wraps=downloader.validate_download),
+            patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+            patch("mammamiradio.playlist.downloader.subprocess.run") as mock_ffprobe,
+        ):
+            rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+        assert rendered is None
+        assert is_rejected_cache_key(track.cache_key)
+        mock_normalize.assert_not_called()
+        mock_ffprobe.assert_not_called()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_skips_denylisted_track_for_playable_alternative(tmp_path):
+    """Prewarm must not spend its bounded startup slots on a failed acquisition."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+
+    state = _make_state()
+    rejected, playable = state.playlist
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized audio")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "yt-dlp failed: HTTP Error 403: Forbidden")
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source) as mock_download,
+            patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+            patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=180.0),
+        ):
+            result = await prewarm_first_segment(queue, state, config)
+
+        assert result is True
+        assert mock_download.await_args.args[0] is playable
+        segment = queue.get_nowait()
+        assert segment.metadata["title"] == playable.display
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_valid_local_recovery_reopens_a_session_denied_track(tmp_path):
+    """A newly synced local file heals a denied source only after it validates."""
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.scheduling.producer import _render_music_track, _select_accepted_music_track
+
+    state = _make_state()
+    state.playlist = state.playlist[:1]
+    track = state.playlist[0]
+    track.source = "local"
+    local_file = tmp_path / "recovered.mp3"
+    track.local_path = local_file
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    marker = tmp_path / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("yt-dlp unavailable")
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized recovered audio")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        local_file.write_bytes(b"recovered audio")
+        assert _select_accepted_music_track(state, config) is track
+        assert is_rejected_cache_key(track.cache_key)
+
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=local_file),
+            patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+        ):
+            rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+        assert rendered is not None
+        assert not is_rejected_cache_key(track.cache_key)
+        assert not marker.exists()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_returns_false_when_every_track_is_denylisted(tmp_path):
+    """No eligible prewarm track must not trigger another acquisition attempt."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
     from mammamiradio.scheduling.producer import prewarm_first_segment
 
     state = _make_state()
     config = _make_config()
-    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue = asyncio.Queue()
+
+    clear_rejected_cache_keys()
+    try:
+        for track in state.playlist:
+            reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp failed: HTTP Error 403: Forbidden")
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_download,
+            patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+        ):
+            result = await prewarm_first_segment(queue, state, config)
+
+        assert result is False
+        assert queue.empty()
+        mock_download.assert_not_awaited()
+        mock_normalize.assert_not_called()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_rejection_purges_normalized_cache(tmp_path):
+    """A rejected prewarm render cannot remain available to recovery playback."""
+    from mammamiradio.audio.audio_quality import AudioQualityError
+    from mammamiradio.scheduling.producer import _normalized_cache_path, prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    track = state.playlist[0]
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
 
     def _reject(*_a, **_kw):
         raise AudioQualityError("silent track")
 
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"silent normalized audio")
+
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch.object(state, "select_next_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
     ):
         result = await prewarm_first_segment(queue, state, config)
 
     assert result is False
     assert queue.empty()
+    assert not norm_cached.exists()
+    assert not list(tmp_path.glob("music_*.mp3"))
     # The rejected prewarm render is recorded as generation waste (#397).
     assert state.discard_by_reason.get("quality_gate_reject") == 1
     assert state.discard_by_type.get("music") == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_cached_quality_gate_rejection_purges_normalized_cache(tmp_path):
+    """A rejected cache-hit prewarm cannot remain a recovery candidate."""
+    from mammamiradio.audio.audio_quality import AudioQualityError
+    from mammamiradio.scheduling.producer import _normalized_cache_path, prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    track = state.playlist[0]
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
+    norm_cached.write_bytes(b"stale silent normalized audio")
+
+    def _reject(*_a, **_kw):
+        raise AudioQualityError("silent track")
+
+    with (
+        patch.object(state, "select_next_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as mock_reconcile,
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert not norm_cached.exists()
+    mock_reconcile.assert_called_once_with(norm_cached, background=False)
+    mock_normalize.assert_not_called()
 
 
 @pytest.mark.asyncio

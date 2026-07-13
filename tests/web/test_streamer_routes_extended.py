@@ -892,6 +892,57 @@ async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp
 
 
 @pytest.mark.asyncio
+async def test_commit_external_download_reaccepts_a_recovered_denied_track(tmp_path):
+    """An admitted retry of the same YouTube ID must remain eligible to play next."""
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Recovered", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    marker_path = tmp_path / f"_failed_{track.cache_key}.mp3"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(tmp_path, track.cache_key, "yt-dlp unavailable")
+        marker_path.write_text("yt-dlp unavailable")
+        raw_path.write_bytes(b"downloaded audio")
+
+        with (
+            patch(
+                "mammamiradio.playlist.downloader.download_external_track",
+                new_callable=AsyncMock,
+                return_value=raw_path,
+            ),
+            patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+        ):
+            status = await streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+            )
+
+        assert status == "pinned"
+        assert state.pinned_track is track
+        assert not is_rejected_cache_key(track.cache_key)
+        assert not marker_path.exists()
+        assert _select_accepted_music_track(state, app.state.config) is track
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_add_track_play_next():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

@@ -16,6 +16,7 @@ from mammamiradio.home.catalog import (
     compute_hash,
     generate_label_catalog,
     load_catalog,
+    load_catalog_snapshot,
     reset_catalog_cache,
     resolve_label,
     save_catalog,
@@ -102,6 +103,29 @@ def test_resolve_label_fallback_drops_raw_object_ids(tmp_path, entity_id, friend
 def test_load_catalog_corrupt_json_degrades_to_empty(tmp_path):
     (tmp_path / CATALOG_FILENAME).write_text("{", encoding="utf-8")
     assert load_catalog(tmp_path)["entries"] == {}
+
+
+def test_load_catalog_snapshot_is_detached_from_module_cache(tmp_path):
+    catalog = {
+        "schema_version": 1,
+        "entries": {
+            "light.counter": {
+                "hash": "abc",
+                "label_it": "Luce bancone",
+                "label_en": "Counter light",
+            }
+        },
+    }
+    save_catalog(tmp_path, catalog)
+
+    cached = load_catalog(tmp_path)
+    snapshot = load_catalog_snapshot(tmp_path)
+
+    assert snapshot == cached
+    assert snapshot is not cached
+    assert snapshot["entries"] is not cached["entries"]
+    snapshot["entries"]["light.counter"]["label_it"] = "Mutata"
+    assert cached["entries"]["light.counter"]["label_it"] == "Luce bancone"
 
 
 def test_save_catalog_uses_owner_only_permissions(tmp_path):

@@ -52,6 +52,7 @@ from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
     GenerationWasteReason,
+    HostPersonality,
     InterruptSpec,
     Segment,
     SegmentType,
@@ -80,21 +81,32 @@ from mammamiradio.home.ha_context import (
     _publish_home_context_outcome,
     apply_entity_mute_policy,
     check_reactive_triggers,
+    discard_home_context_entities,
     fetch_home_context,
     get_cached_home_context,
+    home_context_invalidation_generation,
     push_state_to_ha,
-    revalidate_home_context_mutes,
+    revalidate_home_context_outcome_mutes,
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
 from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_recipe_match
 from mammamiradio.home.scene_namer import resolve_home_mood
-from mammamiradio.hosts.ad_creative import _cast_voices, _pick_brand, _select_ad_creative
+from mammamiradio.hosts.ad_creative import (
+    AdBrand,
+    AdVoice,
+    SonicWorld,
+    _cast_voices,
+    _pick_brand,
+    _select_ad_creative,
+)
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
+    accept_recovered_download,
     download_track,
     evict_cache_lru,
+    has_fresh_concrete_track_source,
     is_rejected_cache_key,
     reject_cached_download,
     validate_download,
@@ -106,6 +118,71 @@ from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_rest
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
+
+
+def _direct_campaign_default_voice(brand: AdBrand, voices: dict[str, AdVoice]) -> AdVoice | None:
+    """Keep roleless fallback copy on the selected campaign character."""
+
+    campaign = brand.campaign
+    direct_name = campaign.spokesperson_voice.strip() if campaign and campaign.spokesperson_voice else ""
+    if not direct_name:
+        return None
+    return next((voice for voice in voices.values() if voice.name.strip() == direct_name), None)
+
+
+def _safe_ad_promo_voice(voices: list[AdVoice]) -> AdVoice | None:
+    """Return a house voice that may speak a break-level promo tag.
+
+    The tag is not part of any campaign. It must therefore never consume a
+    staged, quarantined, supporting-only, or campaign-reserved character.
+    """
+
+    return next(
+        (
+            voice
+            for voice in voices
+            if voice.airtime_approved
+            and not voice.direct_identity_quarantined
+            and not voice.secondary_only
+            and not voice.reserved_for
+        ),
+        None,
+    )
+
+
+def _select_safe_ad_spot(
+    brands: list[AdBrand],
+    ad_history: list[AdHistoryEntry],
+    state: StationState,
+    voices: list[AdVoice],
+    hosts: list[HostPersonality],
+) -> tuple[AdBrand, str, SonicWorld, dict[str, AdVoice]] | None:
+    """Choose one ad slot, retrying another campaign if direct casting rejects it."""
+
+    remaining = list(brands)
+    # Pending audition candidates must not make a duo format look safe before
+    # they are eligible to be cast. ``_cast_voices`` applies the same gate;
+    # keeping the count aligned avoids selecting a multi-voice format whose
+    # second identity is only present on paper.
+    num_voices = sum(voice.airtime_approved for voice in voices) or 1
+    while remaining:
+        try:
+            brand = _pick_brand(remaining, ad_history)
+        except ValueError:
+            logger.warning("No safe ad campaign is available for this spot")
+            return None
+        try:
+            ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
+            voice_map = _cast_voices(brand, voices, hosts, roles_needed)
+        except ValueError as exc:
+            logger.warning("Skipping unsafe ad campaign %s for this spot: %s", brand.name, exc)
+            remaining = [candidate for candidate in remaining if candidate is not brand]
+            continue
+        return brand, ad_format, sonic, voice_map
+    logger.warning("No safe ad campaign remains after cast validation")
+    return None
+
+
 # Kept as a module-level compatibility seam for existing downstream test
 # fixtures.  The producer's live path uses _fetch_home_context_outcome above.
 _LEGACY_FETCH_HOME_CONTEXT = fetch_home_context
@@ -246,6 +323,7 @@ async def _fetch_producer_context_outcome(
     radio_event_rules: list[RadioEventRule] | None,
     authorization: HomeAuthorization | None = None,
     observed_entity_ids_callback: Callable[[frozenset[str]], None] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> _HomeContextFetchOutcome:
     """Fetch the typed mailbox outcome, preserving the legacy injected seam."""
     if not _uses_injected_legacy_fetch():
@@ -257,11 +335,15 @@ async def _fetch_producer_context_outcome(
             cache_dir=cache_dir,
             radio_event_rules=radio_event_rules,
             authorization=authorization,
-            observed_entity_ids_callback=observed_entity_ids_callback,
+            # The real producer defers observation bookkeeping until the
+            # coordinator drains and accepts this inert candidate.
+            observed_entity_ids_callback=None,
+            stage_callback=stage_callback,
         )
 
     started_at = time.time()
     started_monotonic = time.monotonic()
+    invalidation_generation = home_context_invalidation_generation()
     context = _legacy_mock_home_context(
         await fetch_home_context(
             ha_url=ha_url,
@@ -286,6 +368,7 @@ async def _fetch_producer_context_outcome(
         attempt_started_at=started_at,
         attempt_finished_at=time.time(),
         duration_seconds=max(0.0, time.monotonic() - started_monotonic),
+        invalidation_generation=invalidation_generation,
     )
 
 
@@ -303,9 +386,19 @@ class RenderedMusicTrack:
     cache_hit: bool
 
 
+def _is_session_rejected_without_concrete_source(track: Track, config: StationConfig) -> bool:
+    """Keep failed remote sources excluded unless concrete recovery media appeared."""
+    cache_dir = getattr(config, "cache_dir", Path("cache"))
+    return is_rejected_cache_key(track.cache_key) and not has_fresh_concrete_track_source(
+        track, cache_dir, Path("music")
+    )
+
+
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
-    rejected_keys = {track.cache_key for track in state.playlist if is_rejected_cache_key(track.cache_key)}
-    if state.pinned_track is not None and is_rejected_cache_key(state.pinned_track.cache_key):
+    rejected_keys = {
+        track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
+    }
+    if state.pinned_track is not None and _is_session_rejected_without_concrete_source(state.pinned_track, config):
         rejected_keys.add(state.pinned_track.cache_key)
     try:
         candidate = state.select_next_track(
@@ -503,6 +596,13 @@ async def _render_music_track(
             return None
         if actual_duration_ms is not None:
             track.duration_ms = actual_duration_ms
+
+    # A concrete local/cache fallback is allowed through the selection gate
+    # while still session-denied, then clears that denial only after the full
+    # source admission above succeeds. This avoids retry loops yet lets a newly
+    # synced recovery file heal a transient source failure without a restart.
+    if is_rejected_cache_key(track.cache_key):
+        accept_recovered_download(config.cache_dir, track.cache_key)
 
     # The producer's existing ``finding`` phase owns source/download timing.
     # Close it before normalization so a slow Pi encode cannot be misreported as
@@ -2022,9 +2122,10 @@ async def _prefetch_next(
     that slow-hardware normalization (~75s on Pi) completes during the current
     track's playback (~3-4 min) rather than after the queue drains.
 
-    Uses a non-mutating peek: finds the first track outside the repeat-cooldown
-    window without calling select_next_track (which has weighted-random side
-    effects). Falls back to playlist[0] if all tracks are in cooldown.
+    Uses a non-mutating peek: finds the first accepted track outside the
+    repeat-cooldown window without calling select_next_track (which has
+    weighted-random side effects). Falls back to the first accepted track if all
+    accepted tracks are in cooldown.
     Non-fatal — any failure is swallowed after a DEBUG log.
 
     _failed_keys: caller-owned set; on failure the candidate's cache_key is added
@@ -2038,23 +2139,23 @@ async def _prefetch_next(
             return
         cooldown = config.playlist.repeat_cooldown
         recent_keys = {t.cache_key for t in list(state.played_tracks)[-cooldown:]}
+        eligible_tracks = [
+            t
+            for t in state.playlist
+            if not _is_session_rejected_without_concrete_source(t, config)
+            and (_failed_keys is None or t.cache_key not in _failed_keys)
+        ]
+        if not eligible_tracks:
+            logger.debug("Prefetch: no accepted music candidates remain")
+            return
         candidate = next(
-            (
-                t
-                for t in state.playlist
-                if t.cache_key not in recent_keys and (_failed_keys is None or t.cache_key not in _failed_keys)
-            ),
-            state.playlist[0],
+            (t for t in eligible_tracks if t.cache_key not in recent_keys),
+            eligible_tracks[0],
         )
         candidate_key = candidate.cache_key
-        if _failed_keys is not None and candidate_key in _failed_keys:
-            return  # all candidates have failed — nothing useful to prefetch
         norm_cached = _normalized_cache_path(candidate, config)
         if norm_cached.exists():
             logger.debug("Prefetch: norm already cached for %s", candidate.display)
-            return
-        if is_rejected_cache_key(candidate.cache_key):
-            logger.debug("Prefetch: skipping denylisted candidate %s", candidate.display)
             return
         logger.info("Prefetch: pre-normalizing %s in background", candidate.display)
         rendered = await _render_music_track(
@@ -2117,10 +2218,9 @@ async def prewarm_first_segment(
         return None
 
     try:
-        track = state.select_next_track(
-            repeat_cooldown=config.playlist.repeat_cooldown,
-            artist_cooldown=config.playlist.artist_cooldown,
-        )
+        track = _select_accepted_music_track(state, config)
+        if track is None:
+            return False
         logger.info("Pre-warming first track: %s", track.display)
         rendered = await _render_music_track(
             track,
@@ -2148,6 +2248,10 @@ async def prewarm_first_segment(
                     duration_sec=(track.duration_ms or 0) / 1000.0,
                     ephemeral=not rendered.cache_hit,
                 )
+                # A quality rejection means this normalization is not safe
+                # recovery media either. Remove the cache copy as well as the
+                # transient render so a later rescue path cannot select it.
+                rendered.cache_path.unlink(missing_ok=True)
                 if not rendered.cache_hit:
                     norm_path.unlink(missing_ok=True)
                 return False
@@ -2491,6 +2595,7 @@ class _HAContextRefreshCoordinator:
         self._home_event_handoffs_allowed = True
         self._next_retry_not_before = 0.0
         self._closed = False
+        self._attempt_generation = 0
         self._state.ha_context_refresh_stale_after_seconds = self.stale_threshold_seconds
         self._state.ha_context_refresh_configured = bool(
             config.homeassistant.enabled
@@ -2502,7 +2607,16 @@ class _HAContextRefreshCoordinator:
         # distinguish a still-running request from a completed reply awaiting
         # adoption. No completion callback writes StationState.
         self._state.ha_context_refresh_mailbox = self
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
+
+    def _set_refresh_stage(self, stage: str, generation: int) -> None:
+        """Accept coarse stage writes only from the currently owned request."""
+        if generation != self._attempt_generation:
+            return
+        if self._closed and stage != "idle":
+            return
+        self._state.set_ha_context_refresh_stage(stage)
 
     @property
     def current_context(self) -> HomeContext | None:
@@ -2513,6 +2627,10 @@ class _HAContextRefreshCoordinator:
     def home_event_handoffs_allowed(self) -> bool:
         """Whether the ledger may offer home-event material to a prompt."""
         return self._home_event_handoffs_allowed
+
+    def invalidate_muted_entities(self, entity_ids: set[str]) -> None:
+        """Forget muted state before a later unmute can replay its transition."""
+        self._context = discard_home_context_entities(self._context, entity_ids)
 
     @property
     def in_flight_task(self) -> asyncio.Task[_HomeContextFetchOutcome] | None:
@@ -2671,6 +2789,9 @@ class _HAContextRefreshCoordinator:
         self._attempt_finished_monotonic = 0.0
         self._attempt_started_after_stale_gap = self._is_stale()
         self._foreground_timed_out = False
+        self._attempt_generation += 1
+        attempt_generation = self._attempt_generation
+        self._set_refresh_stage("states_request", attempt_generation)
 
         async def _bounded_fetch() -> _HomeContextFetchOutcome:
             # This is the sole total-request timeout.  The foreground wait uses
@@ -2689,6 +2810,7 @@ class _HAContextRefreshCoordinator:
                     radio_event_rules=self._config.radio_events,
                     authorization=self._state.home_authorization,
                     observed_entity_ids_callback=self._state.home_entity_ids_observer,
+                    stage_callback=lambda stage: self._set_refresh_stage(stage, attempt_generation),
                 ),
                 name="ha-context-fetch",
             )
@@ -2708,6 +2830,7 @@ class _HAContextRefreshCoordinator:
                         await request
                 # Private timing only: no task callback writes StationState.
                 self._attempt_finished_monotonic = time.monotonic()
+                self._set_refresh_stage("idle", attempt_generation)
 
         self._task = asyncio.create_task(_bounded_fetch(), name="ha-context-refresh")
         self._state.ha_context_refresh_in_flight = True
@@ -2720,6 +2843,7 @@ class _HAContextRefreshCoordinator:
         self._state.ha_context_refresh_last_result = result
         self._state.ha_context_refresh_last_result_duration_ms = round(max(0.0, duration_seconds) * 1000)
         self._state.ha_context_refresh_last_result_used_background = used_background
+        self._state.set_ha_context_refresh_stage("idle")
         self._sync_freshness()
 
     async def _drain_completed_result(self) -> tuple[HomeContext, bool] | None:
@@ -2775,13 +2899,21 @@ class _HAContextRefreshCoordinator:
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
 
+        observer = self._state.home_entity_ids_observer
+        if observer is not None and outcome.observed_entity_ids:
+            try:
+                observer(outcome.observed_entity_ids)
+            except Exception:
+                logger.warning("Legacy-home observation persistence failed", exc_info=True)
+
         # A request that *started* while the prior snapshot was safe keeps its
         # legitimate one-shots when it is adopted promptly, even if the prior
         # snapshot crossed the threshold in flight. A reply that itself has
         # aged past the threshold while waiting in the mailbox is different:
         # it must never become prompt input.
         was_stale_gap = self._attempt_started_after_stale_gap
-        adopted = revalidate_home_context_mutes(outcome.context, self._config.cache_dir)
+        accepted_outcome = revalidate_home_context_outcome_mutes(outcome, self._config.cache_dir)
+        adopted = accepted_outcome.context
         stale_at_adoption = self._is_stale(adopted)
         if was_stale_gap or stale_at_adoption:
             self._suppress_stale_handoffs()
@@ -2795,7 +2927,7 @@ class _HAContextRefreshCoordinator:
         # Publish both the accepted snapshot and its event-matcher baselines as
         # one producer-owned handoff.  No background-task callback can do this.
         if not _uses_injected_legacy_fetch():
-            _publish_home_context_outcome(replace(outcome, context=adopted))
+            _publish_home_context_outcome(replace(accepted_outcome, context=adopted))
         self._context = adopted
         self._record_terminal_result(
             "stale" if stale_at_adoption else "success",
@@ -2875,6 +3007,7 @@ class _HAContextRefreshCoordinator:
     async def close(self) -> None:
         """Explicitly cancel and await the retained request during producer exit."""
         self._closed = True
+        self._attempt_generation += 1
         task = self._task
         self._task = None
         if task is not None:
@@ -2884,6 +3017,7 @@ class _HAContextRefreshCoordinator:
                 await task
         self._state.ha_context_refresh_in_flight = False
         self._state.ha_context_refresh_active_foreground_timed_out = False
+        self._state.set_ha_context_refresh_stage("idle")
         if self._state.ha_context_refresh_mailbox is self:
             self._state.ha_context_refresh_mailbox = None
 
@@ -3774,10 +3908,10 @@ async def _run_producer_inner(
                 track = _select_accepted_music_track(state, config)
                 playlist_idx: int = -1
                 if track is None:
-                    # All recent candidates denylisted — yield to event loop and retry.
-                    state.finish_render_timing("discarded", reason=GenerationWasteReason.BLOCKLIST_GATE)
-                    await asyncio.sleep(0.1)
-                    continue
+                    # Do not spin while every candidate is unavailable. Route
+                    # through the same audible recovery ladder as a hard music
+                    # rendering failure; the source denylist clears at restart.
+                    raise RuntimeError("No eligible music tracks remain after unavailable-source rejections")
                 logger.info("Producing MUSIC: %s", track.display)
                 playlist_idx = next(
                     (i for i, t in enumerate(state.playlist) if t is track),
@@ -3810,7 +3944,7 @@ async def _run_producer_inner(
                 # Quality gate: reject truncated/silent downloads before queueing.
                 # Circuit breaker: after MUSIC_QUALITY_GATE_REJECTION_LIMIT consecutive rejections, either serve a
                 # packaged recovery clip (when the rejection is due to silence — i.e. all
-                # tracks are silence placeholders and playing them would cause dead air) or
+                # available audio is silent and playing it would cause dead air) or
                 # let the track through as-is (when rejected for other reasons such as being
                 # short — silence is still worse than a slightly-short real track).
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
@@ -3828,9 +3962,15 @@ async def _run_producer_inner(
                         if _music_qg_rejections >= MUSIC_QUALITY_GATE_REJECTION_LIMIT:
                             _music_qg_rejections = 0
                             if "silence" in str(exc).lower():
-                                # All available tracks are silence placeholders.  Playing
+                                # All available tracks are silent. Playing
                                 # them would break the illusion with dead air.  Insert a
                                 # packaged recovery clip instead so the stream stays alive.
+                                # The rejected normalization is not safe recovery media
+                                # either. Remove both its durable cache copy and its
+                                # transient render before selecting a fallback.
+                                norm_cached.unlink(missing_ok=True)
+                                if not norm_is_cached:
+                                    norm_path.unlink(missing_ok=True)
                                 fallback = _pick_recovery_clip(state)
                                 if fallback:
                                     logger.warning(
@@ -3840,8 +3980,6 @@ async def _run_producer_inner(
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.BANTER,
@@ -3863,15 +4001,13 @@ async def _run_producer_inner(
                                 # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
                                 last_good = _get_last_music_file(state)
-                                if last_good:
+                                if last_good and last_good != norm_cached:
                                     logger.warning(
                                         "Quality gate circuit breaker: silence with no banter fallback — "
                                         "recycling last-known-good music (%s: %s)",
                                         norm_path.name,
                                         exc,
                                     )
-                                    if not norm_is_cached:
-                                        norm_path.unlink(missing_ok=True)
                                     await _queue_segment(
                                         Segment(
                                             type=SegmentType.MUSIC,
@@ -3890,21 +4026,19 @@ async def _run_producer_inner(
                                         "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
                                     )
                                     continue
-                                # No recovery clip, no last-known-good.  Drop this track and let
-                                # the streamer's rescue path handle the gap — queueing a
-                                # silent file would break the illusion.
+                                # No recovery clip and no distinct last-known-good file.
+                                # Route through the broad producer recovery ladder so its
+                                # sweeper and emergency-tone rungs can keep the station
+                                # audible without ever queueing this rejected silent file.
                                 logger.error(
                                     "Quality gate circuit breaker: silence, no banter, "
-                                    "no last-known-good music — dropping track (%s: %s)",
+                                    "no distinct last-known-good music — entering recovery ladder (%s: %s)",
                                     norm_path.name,
                                     exc,
                                 )
-                                if not norm_is_cached:
-                                    norm_path.unlink(missing_ok=True)
-                                state.finish_render_timing(
-                                    "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
-                                )
-                                continue
+                                raise RuntimeError(
+                                    "Music quality circuit breaker exhausted direct recovery media"
+                                ) from exc
                             else:
                                 # Short/quiet track — likely a real file that just barely
                                 # missed the threshold.  Let it through; it's better than silence.
@@ -4838,15 +4972,19 @@ async def _run_producer_inner(
                 break_roles: list[list[str]] = []
                 spot_params = []
                 for spot_idx in range(num_spots):
-                    brand = _pick_brand(
+                    selection = _select_safe_ad_spot(
                         config.ads.brands,
                         list(state.ad_history)
                         + [AdHistoryEntry(brand=b, summary="", timestamp=0) for b in used_brands_this_break],
+                        state,
+                        config.ads.voices,
+                        _sw._regular_hosts(config),
                     )
+                    if selection is None:
+                        logger.warning("Skipping unavailable ad slot %d/%d", spot_idx + 1, num_spots)
+                        break
+                    brand, ad_format, sonic, voice_map = selection
                     used_brands_this_break.append(brand.name)
-                    num_voices = len(config.ads.voices) if config.ads.voices else 1
-                    ad_format, sonic, roles_needed = _select_ad_creative(brand, state, num_voices)
-                    voice_map = _cast_voices(brand, config.ads.voices, _sw._regular_hosts(config), roles_needed)
                     logger.info(
                         "  Spot %d/%d: %s (format=%s, roles=%s)",
                         spot_idx + 1,
@@ -4856,6 +4994,16 @@ async def _run_producer_inner(
                         list(voice_map.keys()),
                     )
                     spot_params.append((brand, ad_format, sonic, voice_map))
+
+                if not spot_params:
+                    logger.warning("No safe ad campaigns configured — skipping ad break")
+                    state.songs_since_ad = 0
+                    state.finish_render_timing("discarded", reason="no_safe_ad_campaigns")
+                    continue
+                # A single invalid direct campaign must not kill the preceding
+                # safe spots in this break. Downstream fan-out and metadata
+                # reflect the actual number of slots we will air.
+                num_spots = len(spot_params)
 
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
@@ -4888,8 +5036,8 @@ async def _run_producer_inner(
                     # Promo compliance tag
                     try:
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
-                        if config.ads.voices:
-                            promo_voice = config.ads.voices[0]
+                        promo_voice = _safe_ad_promo_voice(config.ads.voices)
+                        if promo_voice is not None:
                             pvoice = promo_voice.voice
                             pengine = promo_voice.engine
                             pfallback = promo_voice.edge_fallback_voice
@@ -5012,8 +5160,9 @@ async def _run_producer_inner(
                                 sfx_dir,
                                 state=state,
                                 cache_dir=config.cache_dir,
+                                default_voice=_direct_campaign_default_voice(brand, vm),
                             )
-                            for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                            for script, (brand, _, _, vm) in zip(scripts, spot_params, strict=False)
                         )
                     )
 

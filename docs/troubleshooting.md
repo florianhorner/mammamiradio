@@ -87,9 +87,9 @@ The music quality gate (mostly silence, short normalization output) has a differ
 Expected log signature:
 
 ```
-WARNING Skipping track due to invalid download (Some Artist - Some Title): duration too short (8.2s)
-WARNING Purged rejected cache file abc123.mp3: duration too short (8.2s)
-DEBUG Skipping denylisted track (already rejected this session): Some Artist - Some Title
+WARNING Skipping music track due to invalid download (Some Artist - Some Title): duration too short (8.2s)
+WARNING Purged rejected cache artifact abc123.mp3: duration too short (8.2s)
+DEBUG No eligible music tracks remain after excluding session-rejected cache keys
 ```
 
 The denylist is process-local — it clears on restart so a track that was transiently bad gets another chance after the next boot.

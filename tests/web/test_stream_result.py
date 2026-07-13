@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.models import SegmentType
+from mammamiradio.core.models import SegmentType, StationState
 from mammamiradio.web.streamer import _emit_stream_result, _schedule_banter_memory_extraction_after_send
 
 
@@ -73,6 +73,31 @@ def test_disabled_ledger_records_nothing():
     state = SimpleNamespace(ledger=led)
     _emit_stream_result(state, _segment({}), bytes_sent=10, was_skipped=False, listeners=1)
     assert led.rows == []
+
+
+def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
+    led = _FakeLedger(enabled=False)
+    state = StationState()
+    state.ledger = led
+
+    _emit_stream_result(
+        state,
+        _segment({}, seg_type=SegmentType.STATION_ID),
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+    )
+
+    assert led.rows == []
+    outcome = list(state.stream_outcome_history)[-1]
+    assert outcome["timestamp"] > 0
+    assert {key: value for key, value in outcome.items() if key != "timestamp"} == {
+        "segment_type": "station_id",
+        "result": "aired",
+        "bytes_sent": 4096,
+        "starting_listener_count": 1,
+        "terminal_reason": "eof",
+    }
 
 
 def test_release_campaign_runs_even_when_ledger_disabled():
