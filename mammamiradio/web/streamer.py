@@ -2894,6 +2894,25 @@ def _emit_release_campaign_result(state, segment, bytes_sent: int, was_skipped: 
         logger.debug("Release campaign stream-result hook failed: %s", exc)
 
 
+def _ad_cast_status_payload(config) -> dict[str, object]:
+    """Return only the config compiler's safe direct-cast diagnostics."""
+
+    report = getattr(getattr(config, "ads", None), "cast_report", None)
+    raw_excluded = getattr(report, "excluded_brands", ())
+    raw_warnings = getattr(report, "warnings", ())
+    excluded = (
+        sorted(name for name in raw_excluded if isinstance(name, str) and name.strip())
+        if isinstance(raw_excluded, set | frozenset | list | tuple)
+        else []
+    )
+    warnings = (
+        [warning for warning in raw_warnings if isinstance(warning, str) and warning.strip()][:20]
+        if isinstance(raw_warnings, list | tuple)
+        else []
+    )
+    return {"excluded_campaigns": excluded, "warnings": warnings}
+
+
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
     """Record a station-wide operator toggle in the provenance ledger.
 
@@ -6687,6 +6706,7 @@ async def status(
     runtime_health = _runtime_health_snapshot(request)
     provider_health = _provider_health_snapshot(config, state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
+    ad_cast = _ad_cast_status_payload(config)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
     authorization = state.home_authorization or HomeAuthorization.narrow()
     try:
@@ -6804,6 +6824,9 @@ async def status(
             },
             "brand": _serialize_brand(config.brand),
             "brand_warnings": list(config.brand_warnings),
+            # Invalid direct mappings are skipped rather than recast. Keep the
+            # config diagnostics behind admin auth and out of public status.
+            "ad_cast": ad_cast,
         }
     )
     return payload

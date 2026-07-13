@@ -519,7 +519,16 @@ async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch
     assert result == output
     assert seen["url"] == "https://api.elevenlabs.io/v1/text-to-speech/voice_italian_character"
     assert seen["headers"]["xi-api-key"] == "eleven-secret"
-    assert seen["json"]["model_id"] == "eleven_multilingual_v2"
+    assert seen["json"] == {
+        "text": "Ciao mondo",
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.78,
+            "style": 0.45,
+            "use_speaker_boost": True,
+        },
+    }
     _mock_all["normalize"].assert_called_once()
     _mock_all["Communicate"].assert_not_called()
 
@@ -1044,6 +1053,51 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_empty_parts_fallback_keeps_direct_voice_settings(tmp_path, monkeypatch):
+    """The empty-script rescue keeps its selected character and tuned payload."""
+    import mammamiradio.audio.tts as tts
+
+    seen: list[dict[str, object]] = []
+
+    async def _synthesize(text, voice, output_path, **kwargs):
+        seen.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"x" * 2048)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize", _synthesize)
+    direct = AdVoice(
+        name="Il Razzo",
+        voice="voice-razzo",
+        style="fast",
+        role="disclaimer_goblin",
+        engine="elevenlabs",
+        voice_settings={"stability": 0.6},
+    )
+    hammer = AdVoice(name="House Hammer", voice="house-hammer", style="clear", role="hammer")
+
+    result = await tts.synthesize_ad(
+        AdScript(brand="Scarpe Volanti", parts=[]),
+        {"hammer": hammer, "disclaimer_goblin": direct},
+        tmp_path,
+        default_voice=direct,
+    )
+
+    assert result.exists()
+    assert seen == [
+        {
+            "text": "Scarpe Volanti",
+            "voice": "voice-razzo",
+            "engine": "elevenlabs",
+            "edge_fallback_voice": "",
+            "openai_instructions": "Perform as an Italian radio commercial character. "
+            "Role: disclaimer_goblin. Style: fast.",
+            "voice_settings": {"stability": 0.6},
+            "state": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_empty_music_bed_uses_voice_only(_mock_all, tmp_path, caplog):
     from mammamiradio.audio.tts import synthesize_ad
 
@@ -1118,6 +1172,53 @@ async def test_synthesize_ad_role_resolution_fallback(_mock_all, tmp_path):
     assert result.exists()
     # Should use first voice (hammer) since "unknown_role" not in dict
     _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural", rate="+0%", pitch="+0Hz")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_forwards_ad_voice_settings_and_direct_default(_mock_all, tmp_path, monkeypatch):
+    """Configured ad tuning reaches TTS, while roleless copy keeps its direct character."""
+    import mammamiradio.audio.tts as tts
+
+    seen: list[dict[str, object]] = []
+
+    async def _synthesize(text, voice, output_path, **kwargs):
+        seen.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"x" * 2048)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize", _synthesize)
+    direct = AdVoice(
+        name="Il Razzo",
+        voice="voice-razzo",
+        style="fast",
+        role="disclaimer_goblin",
+        engine="elevenlabs",
+        voice_settings={"stability": 0.6},
+    )
+    hammer = AdVoice(name="House Hammer", voice="house-hammer", style="clear", role="hammer")
+    script = AdScript(brand="Scarpe Volanti", parts=[AdPart(type="voice", text="Compra ora!")], mood="lounge")
+
+    result = await tts.synthesize_ad(
+        script,
+        {"hammer": hammer, "disclaimer_goblin": direct},
+        tmp_path,
+        default_voice=direct,
+    )
+
+    assert result.exists()
+    assert seen == [
+        {
+            "text": "Compra ora!",
+            "voice": "voice-razzo",
+            "engine": "elevenlabs",
+            "edge_fallback_voice": "",
+            "openai_instructions": "Perform as an Italian radio commercial character. "
+            "Role: disclaimer_goblin. Style: fast.",
+            "voice_settings": {"stability": 0.6},
+            "loudnorm": False,
+            "state": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

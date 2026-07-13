@@ -601,6 +601,7 @@ engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "textbook Italian radio ad delivery — warm confidence, rising inflection on the product name, rhythm that makes everything sound unmissable and time-limited"
 role = "hammer"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Don Carmelo"
@@ -609,12 +610,14 @@ engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "smooth mob-adjacent charmer, always smiling, always reasonable, makes you feel honoured and slightly terrified, sells protection plans and insurance with implications so obvious they're never stated"
 role = "seductress"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Rinaldo"
 voice = "it-IT-DiegoNeural"
 style = "fast-talking disclaimer reader, buries the bad news in speed"
 role = "disclaimer_goblin"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Fiamma"
@@ -623,6 +626,7 @@ engine = "openai"
 edge_fallback_voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
 role = "maniac"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Nonno Aldo"
@@ -631,6 +635,7 @@ engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "ancient patriarch with a trombone-deep voice, speaks with the slow deliberate weight of someone who has buried three governments, sells anything — mausoleums, crypto, sketchy supplements — with total sincerity and zero self-awareness about the contrast"
 role = "bureaucrat"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Lo Straniero"
@@ -639,6 +644,7 @@ engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "mysterious guest voice that nobody can quite place, delivers ads as if he wandered into the studio by accident and just started reading, oddly compelling"
 role = "witness"
+airtime_approved = true
 
 # Original OpenAI/Azure ad voices — kept alongside the ElevenLabs characters so
 # each role rotates between two timbres. Variety per ad break.
@@ -649,6 +655,7 @@ engine = "azure"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
 role = "hammer"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Palmira"
@@ -657,6 +664,7 @@ engine = "elevenlabs"
 edge_fallback_voice = "it-IT-IsabellaNeural"
 style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
 role = "seductress"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Dottore Marzio"
@@ -665,6 +673,7 @@ engine = "azure"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
 style = "dry official government notice voice, reads absurd regulations with total sincerity"
 role = "bureaucrat"
+airtime_approved = true
 
 [[ads.voices]]
 name = "Signora Testimonia"
@@ -673,3 +682,4 @@ engine = "openai"
 edge_fallback_voice = "it-IT-ElsaNeural"
 style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"
+airtime_approved = true

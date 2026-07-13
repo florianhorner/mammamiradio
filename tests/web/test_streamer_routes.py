@@ -40,6 +40,7 @@ from mammamiradio.web.streamer import (
     STREAM_TARGET_LEAD_SECONDS,
     LiveStreamHub,
     StreamPacer,
+    _ad_cast_status_payload,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -2708,6 +2709,31 @@ async def test_status_includes_station_mode():
     assert "station_mode" in body
     assert "id" in body["station_mode"]
     assert "provider_health" in body
+
+
+@pytest.mark.asyncio
+async def test_status_includes_direct_cast_diagnostics_and_public_status_omits_them():
+    app = _make_test_app()
+    app.state.config.ads.cast_report = SimpleNamespace(
+        excluded_brands=frozenset({"Broken Campaign"}),
+        warnings=("Broken Campaign has no approved direct character",),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin = (await client.get("/status")).json()
+        public = (await client.get("/public-status")).json()
+
+    assert admin["ad_cast"] == {
+        "excluded_campaigns": ["Broken Campaign"],
+        "warnings": ["Broken Campaign has no approved direct character"],
+    }
+    assert "ad_cast" not in public
+
+
+def test_ad_cast_status_payload_rejects_unexpected_report_shapes():
+    config = SimpleNamespace(ads=SimpleNamespace(cast_report=SimpleNamespace(excluded_brands="bad", warnings="bad")))
+
+    assert _ad_cast_status_payload(config) == {"excluded_campaigns": [], "warnings": []}
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mammamiradio.scheduling.producer as producer
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import (
@@ -88,6 +89,73 @@ def test_pick_brand_weights_recurring():
     picks = [_pick_brand(brands, []) for _ in range(50)]
     recurring_count = sum(1 for p in picks if p.name == "Recurring")
     assert recurring_count > 25  # Should be weighted 3:1
+
+
+def test_direct_campaign_cast_failure_uses_another_safe_brand(monkeypatch):
+    invalid = AdBrand(
+        name="Invalid direct campaign",
+        tagline="nope",
+        campaign=CampaignSpine(
+            spokesperson_voice="Missing Character",
+            spokesperson_role="hammer",
+            format_pool=["live_remote"],
+        ),
+    )
+    safe = AdBrand(name="Safe campaign", tagline="yes")
+    voice = AdVoice(name="House Hammer", voice="it-IT-DiegoNeural", style="safe", role="hammer")
+
+    monkeypatch.setattr(producer, "_pick_brand", lambda brands, _history: brands[0])
+
+    selected = producer._select_safe_ad_spot(
+        [invalid, safe],
+        [],
+        StationState(),
+        [voice],
+        [],
+    )
+
+    assert selected is not None
+    assert selected[0].name == "Safe campaign"
+
+
+def test_direct_campaign_roleless_fallback_normalizes_character_name() -> None:
+    brand = AdBrand(
+        name="Scarpe Volanti",
+        tagline="T",
+        campaign=CampaignSpine(spokesperson_voice="Il Razzo", spokesperson_role="disclaimer_goblin"),
+    )
+    hammer = AdVoice(name="House Hammer", voice="hammer", style="safe", role="hammer")
+    razzo = AdVoice(name=" Il Razzo ", voice="razzo", style="fast", role="disclaimer_goblin")
+
+    selected = producer._direct_campaign_default_voice(
+        brand,
+        {"hammer": hammer, "disclaimer_goblin": razzo},
+    )
+
+    assert selected is razzo
+
+
+def test_ad_break_promo_uses_only_an_unreserved_approved_house_voice() -> None:
+    staged = AdVoice(name="Staged", voice="staged", style="x", role="hammer", airtime_approved=False)
+    quarantined = AdVoice(
+        name="Quarantined",
+        voice="quarantined",
+        style="x",
+        role="hammer",
+        direct_identity_quarantined=True,
+    )
+    reserved = AdVoice(
+        name="Reserved",
+        voice="reserved",
+        style="x",
+        role="hammer",
+        reserved_for=frozenset({"Owned Brand"}),
+    )
+    support = AdVoice(name="Support", voice="support", style="x", role="hammer", secondary_only=True)
+    house = AdVoice(name="House", voice="house", style="x", role="hammer")
+
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support, house]) is house
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -949,6 +1017,55 @@ async def test_humanity_event_fires_only_once(tmp_path):
 # ---------------------------------------------------------------------------
 # Gap 4 — Ad break quality reject resets songs_since_ad
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
+    """An all-unsafe cast resets pacing without rendering or queuing an ad."""
+    state = _make_run_state()
+    state.force_next = SegmentType.AD
+    state.songs_since_ad = 5
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _no_safe_campaign(*_args, **_kwargs):
+        # Keep the next producer iteration idle so this assertion observes only
+        # the skipped AD branch, not a following music render.
+        state.listeners_active = 0
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.render_timings and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            if not state.render_timings:
+                raise TimeoutError("Producer did not record the skipped ad break")
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert select_spot.call_count == 1
+    write_ad.assert_not_called()
+    synthesize_ad.assert_not_called()
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.songs_since_ad == 0
+    timing = state.render_timings[0]
+    assert timing["kind"] == SegmentType.AD.value
+    assert timing["outcome"] == "discarded"
+    assert timing["reason"] == "no_safe_ad_campaigns"
 
 
 @pytest.mark.asyncio
