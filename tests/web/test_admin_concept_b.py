@@ -227,4 +227,5 @@ def test_rotation_pool_has_first_use_ban_hint() -> None:
     html = _html()
     assert 'id="banHint"' in html
     hint = html[html.index('id="banHint"') : html.index('id="banHint"') + 220]
-    assert "Ban" in hint and "Banned" in hint
+    assert "Ban" in hint and "Library tools" in hint
+    assert 'id="banlistToggle"' in html

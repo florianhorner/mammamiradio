@@ -93,6 +93,9 @@ async (page) => {
   const liveStatusResponse = await page.request.get(`${baseUrl}/status`);
   assert(liveStatusResponse.ok(), 'local /status was unavailable');
   const liveStatus = await liveStatusResponse.json();
+  const liveSetupResponse = await page.request.get(`${baseUrl}/api/setup/status`);
+  assert(liveSetupResponse.ok(), 'local /api/setup/status was unavailable');
+  const liveSetup = await liveSetupResponse.json();
   let statusScenario = 'network';
   const statusResponseQueue = [];
   const makeQueuedStatus = (body, { status = 200, held = false } = {}) => {
@@ -606,6 +609,146 @@ async (page) => {
   await page.unroute('**/api/hosts');
   await page.unroute('**/api/skip');
 
+  let recoveryCapabilities = 'available';
+  let recoverySetup = 'available';
+  await page.route('**/api/capabilities', async (route) => {
+    if (recoveryCapabilities === 'failure') {
+      await route.abort();
+      return;
+    }
+    const capabilities = recoveryCapabilities === 'available'
+      ? { charts_reload: true, jamendo: false }
+      : { charts_reload: false, jamendo: false };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ capabilities }) });
+  });
+  await page.route('**/api/setup/status', async (route) => {
+    if (recoverySetup === 'failure') {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(liveSetup) });
+  });
+
+  await page.evaluate((status) => {
+    _plRows = [];
+    _caps = null;
+    _capsState = 'checking';
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    updateEmptyPoolRecovery();
+  }, restoredStatus);
+  const checkingRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(checkingRecovery.text.includes('Checking available music sources'), 'empty pool claimed no source before capabilities arrived');
+  assert(checkingRecovery.libraryHidden && !checkingRecovery.setupHidden, 'checking recovery did not offer setup without a false import action');
+
+  recoveryCapabilities = 'available';
+  recoverySetup = 'failure';
+  await page.evaluate(() => refreshSlow());
+  const availableRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupHidden: sourceImportGroup.hidden,
+  }));
+  assert(!availableRecovery.libraryHidden && availableRecovery.setupHidden && !availableRecovery.sourceGroupHidden,
+    'capability success waited for setup status before exposing recovery');
+  assert(availableRecovery.text.includes('Library tools'), 'available source recovery lost its Library tools guidance');
+
+  recoveryCapabilities = 'none';
+  recoverySetup = 'available';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    return refreshSlow();
+  }, restoredStatus);
+  const noSourceRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(noSourceRecovery.text.includes('Set a music source from setup.'), 'no-source recovery lost actionable golden-path guidance');
+  assert(noSourceRecovery.libraryHidden && !noSourceRecovery.setupHidden, 'no-source recovery exposed the wrong action');
+
+  recoveryCapabilities = 'failure';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = status;
+    return refreshSlow();
+  }, restoredStatus);
+  const firstCapabilityFailure = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(firstCapabilityFailure.text.includes('Could not check available music sources'), 'first capability failure claimed no source');
+  assert(firstCapabilityFailure.libraryHidden && !firstCapabilityFailure.setupHidden, 'capability failure hid every recovery route');
+
+  recoveryCapabilities = 'available';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = status;
+    return refreshSlow();
+  }, restoredStatus);
+  recoveryCapabilities = 'failure';
+  await page.evaluate(() => refreshSlow());
+  const retainedCapabilityRecovery = await page.evaluate(() => ({
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupHidden: sourceImportGroup.hidden,
+  }));
+  assert(!retainedCapabilityRecovery.libraryHidden && retainedCapabilityRecovery.setupHidden && !retainedCapabilityRecovery.sourceGroupHidden,
+    'later capability failure discarded the last known recovery action');
+
+  const stoppedRecovery = await page.evaluate((status) => {
+    _plRows = [];
+    _caps = { capabilities: { charts_reload: true, jamendo: false } };
+    _capsState = 'ready';
+    _st = status;
+    updateEmptyPoolRecovery();
+    updateStopState(true);
+    const libraryButton = document.getElementById('emptyPoolLibraryBtn');
+    libraryButton.click();
+    const library = {
+      inert: libraryButton.inert,
+      aria: libraryButton.getAttribute('aria-disabled'),
+      opened: document.getElementById('libraryTools').open,
+    };
+    _caps = { capabilities: { charts_reload: false, jamendo: false } };
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    updateEmptyPoolRecovery();
+    const setupButton = document.getElementById('emptyPoolSetupBtn');
+    setupButton.click();
+    const setup = {
+      inert: setupButton.inert,
+      aria: setupButton.getAttribute('aria-disabled'),
+      opened: document.getElementById('setupGroup').open,
+    };
+    updateStopState(false);
+    return { library, setup };
+  }, restoredStatus);
+  assert(!stoppedRecovery.library.inert && stoppedRecovery.library.aria === null && stoppedRecovery.library.opened,
+    'empty-pool Library tools recovery was inert while stopped');
+  assert(!stoppedRecovery.setup.inert && stoppedRecovery.setup.aria === null && stoppedRecovery.setup.opened,
+    'empty-pool setup recovery was inert while stopped');
+
+  await page.unroute('**/api/capabilities');
+  await page.unroute('**/api/setup/status');
+
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
     const airNext = document.querySelector('.mmr-console-triggers .a-trigger');
@@ -909,7 +1052,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 30,
+    checks: 37,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,
