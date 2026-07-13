@@ -25,7 +25,15 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
-from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import (
+    AD_FORMATS,
+    SPEAKER_ROLES,
+    AdBrand,
+    AdFormat,
+    AdScript,
+    AdVoice,
+    CampaignSpine,
+)
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
     _LOCAL_BALLOON_GUEST_HOST,
@@ -4614,6 +4622,45 @@ async def test_write_ad_multi_role_json(config, state):
     assert "hammer" in roles
     assert "witness" in roles
     assert result.roles_used == sorted(roles)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ad_format", "partner_role"),
+    [("classic_pitch", "disclaimer_goblin"), ("duo_scene", "maniac")],
+)
+async def test_write_ad_replaces_partner_only_direct_campaign_output(config, state, ad_format, partner_role):
+    """A direct campaign cannot air solely through its supporting actor."""
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "   ", "role": "hammer"},
+                {"type": "voice", "text": "Parlo solo io, partner!", "role": partner_role},
+            ],
+            "mood": "upbeat",
+            "summary": "Partner-only direct ad",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    brand = AdBrand(
+        name="Owned Brand",
+        tagline="Tag",
+        category="tech",
+        campaign=CampaignSpine(spokesperson_voice="Owned Hammer", spokesperson_role="hammer"),
+    )
+    voices = {
+        "hammer": AdVoice(name="Owned Hammer", voice="owned", style="main", role="hammer"),
+        partner_role: AdVoice(name="House Partner", voice="partner", style="support", role=partner_role),
+    }
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    assert result.format == "classic_pitch"
+    assert [part.role for part in result.parts if part.type == "voice"] == ["hammer"]
 
 
 @pytest.mark.asyncio
