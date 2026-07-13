@@ -533,10 +533,16 @@ def test_home_moment_drop_reasons_explain_changed_show_state() -> None:
         ("interrupt_slot_busy", "stepped aside — another moment was already lined up"),
         ("stale_playlist", "set aside when the playlist changed — the hosts are following the new rundown"),
         ("stale_source", "set aside when the music source changed — the hosts are following the new source"),
+        ("source_switch", "set aside when the music source changed — the hosts are following the new source"),
         ("stale_chaos", "set aside when Chaos Mode changed — the hosts are following the new direction"),
     ):
         assert reason in block
         assert label in block
+    assert (
+        "if(r==='stale_source'||r==='source_switch')"
+        "return{text:'set aside when the music source changed — "
+        "the hosts are following the new source',color:'var(--muted)'};"
+    ) in block
 
 
 def test_format_request_age_guards_invalid_values() -> None:
