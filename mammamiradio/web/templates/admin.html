@@ -4031,7 +4031,8 @@ function playlistPreferenceRevision(){
 }
 function playlistRenderSignature(page){
   const p=page||{};
-  return [p.revision??'',playlistPreferenceRevision(),p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
+  const heading=_st?.heading||{};
+  return [p.revision??'',playlistPreferenceRevision(),heading.active?'1':'0',heading.id||'',p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
 }
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
