@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,6 +30,7 @@ from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, matc
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
+from mammamiradio.scheduling.handoff import PreparedMusicHandoff
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
@@ -36,6 +38,7 @@ from mammamiradio.scheduling.producer import (
     _pick_canned_clip,
     run_producer,
 )
+from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -1037,6 +1040,46 @@ def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
     # No slot reserved -> only the real queue is protected.
     state.continuity_slot = None
     assert _cache_eviction_protected_paths(queue, state) == {queued_path}
+
+
+def test_cache_eviction_protects_hidden_handoff_original(tmp_path):
+    """A committed pair can still restore its full source before playback."""
+
+    from mammamiradio.scheduling.handoff import commit_music_handoff
+    from mammamiradio.scheduling.producer import _cache_eviction_protected_paths
+
+    state = _make_state()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    original = tmp_path / "norm_original_192k.mp3"
+    head = tmp_path / "handoff_head.mp3"
+    tail = tmp_path / "handoff_tail.mp3"
+    successor_path = tmp_path / "handoff_successor.mp3"
+    for path in (original, head, tail, successor_path):
+        path.write_bytes(path.stem.encode())
+    music = Segment(type=SegmentType.MUSIC, path=original, duration_sec=180.0, metadata={"queue_id": "music"})
+    successor = Segment(type=SegmentType.BANTER, path=successor_path, duration_sec=10.0)
+    queue.put_nowait(music)
+    state.queued_segments = [{"id": "music", "duration_sec": 180.0}]
+    prepared = PreparedMusicHandoff(
+        music_segment=music,
+        source_path=original,
+        split=Mp3HandoffSplit(
+            head_path=head,
+            tail_path=tail,
+            playable_start_byte=0,
+            head_end_byte=4,
+            playable_end_byte=8,
+            head_duration_sec=172.0,
+            tail_duration_sec=8.0,
+            source_duration_sec=180.0,
+            frame_count=10,
+            head_frame_count=9,
+            tail_frame_count=1,
+        ),
+    )
+    assert commit_music_handoff(queue, state, prepared, successor, {"id": "speech", "duration_sec": 10.0})
+
+    assert _cache_eviction_protected_paths(queue, state) == {head, successor_path, original}
 
 
 # ---------------------------------------------------------------------------
@@ -3134,6 +3177,34 @@ def test_pick_brand_all_recent_allows_repeats():
 # ---------------------------------------------------------------------------
 
 
+def _unit_prepared_handoff(tmp_path: Path, *, tail_exists: bool = True) -> PreparedMusicHandoff:
+    source = tmp_path / "norm_song.mp3"
+    head = tmp_path / "song_head.mp3"
+    tail = tmp_path / "song_tail.mp3"
+    source.write_bytes(b"source")
+    head.write_bytes(b"head")
+    if tail_exists:
+        tail.write_bytes(b"tail")
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    return PreparedMusicHandoff(
+        music_segment=music,
+        source_path=source,
+        split=Mp3HandoffSplit(
+            head_path=head,
+            tail_path=tail,
+            playable_start_byte=0,
+            head_end_byte=4,
+            playable_end_byte=8,
+            head_duration_sec=112.0,
+            tail_duration_sec=8.0,
+            source_duration_sec=120.0,
+            frame_count=10,
+            head_frame_count=8,
+            tail_frame_count=2,
+        ),
+    )
+
+
 def test_latest_music_file_returns_none_for_empty_dir(tmp_path):
     """_latest_music_file returns None when no music files exist."""
     from mammamiradio.scheduling import producer
@@ -3244,6 +3315,1731 @@ async def test_try_crossfade_failure_returns_voice(tmp_path):
         result = await _try_crossfade(voice, config, output, tail)
 
     assert result == voice
+
+
+@pytest.mark.asyncio
+async def test_try_crossfade_missing_reserved_tail_discards_owned_head(tmp_path):
+    from mammamiradio.scheduling.producer import _try_crossfade
+
+    prepared = _unit_prepared_handoff(tmp_path, tail_exists=False)
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"voice")
+    output = tmp_path / "output.mp3"
+    output.write_bytes(b"partial")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    result = await _try_crossfade(voice, config, output, prepared)
+
+    assert result == voice
+    assert voice.exists()
+    assert not output.exists()
+    assert not prepared.split.head_path.exists()
+
+
+def _fake_handoff_split(source: Path, output_dir: Path, _tail_seconds: float, *, stem: str) -> Mp3HandoffSplit:
+    head = output_dir / f"{stem}_head.mp3"
+    tail = output_dir / f"{stem}_tail.mp3"
+    head.write_bytes(b"head")
+    tail.write_bytes(b"tail")
+    return Mp3HandoffSplit(
+        head_path=head,
+        tail_path=tail,
+        playable_start_byte=0,
+        head_end_byte=4,
+        playable_end_byte=8,
+        head_duration_sec=112.0,
+        tail_duration_sec=8.0,
+        source_duration_sec=120.0,
+        frame_count=10,
+        head_frame_count=8,
+        tail_frame_count=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_music_handoff_source_change_discards_split_outputs(tmp_path):
+    from mammamiradio.scheduling.producer import _prepare_music_handoff
+
+    source = tmp_path / "norm_song.mp3"
+    source.write_bytes(b"original")
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(music)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    def _split_and_replace(*args, **kwargs):
+        split = _fake_handoff_split(*args, **kwargs)
+        source.write_bytes(b"changed-source-bytes")
+        return split
+
+    with patch(f"{PRODUCER_MODULE}.split_mpeg1_l3_handoff", side_effect=_split_and_replace):
+        result = await _prepare_music_handoff(queue, config, tail_seconds=8.0)
+
+    assert result is None
+    assert list(tmp_path.glob("*_handoff_*_head.mp3")) == []
+    assert list(tmp_path.glob("*_handoff_*_tail.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_music_handoff_post_split_stat_failure_discards_outputs(tmp_path):
+    from mammamiradio.scheduling.producer import _prepare_music_handoff
+
+    source = tmp_path / "norm_song.mp3"
+    source.write_bytes(b"source")
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(music)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    real_stat = Path.stat
+    source_stat_calls = 0
+
+    def _stat(path: Path, *args, **kwargs):
+        nonlocal source_stat_calls
+        if path == source:
+            source_stat_calls += 1
+            if source_stat_calls == 2:
+                raise FileNotFoundError(source)
+        return real_stat(path, *args, **kwargs)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.peek_music_handoff_candidate", return_value=music),
+        patch.object(Path, "stat", _stat),
+        patch(f"{PRODUCER_MODULE}.split_mpeg1_l3_handoff", side_effect=_fake_handoff_split),
+    ):
+        result = await _prepare_music_handoff(queue, config, tail_seconds=8.0)
+
+    assert result is None
+    assert list(tmp_path.glob("*_handoff_*_head.mp3")) == []
+    assert list(tmp_path.glob("*_handoff_*_tail.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_music_handoff_split_failure_discards_partial_known_outputs(tmp_path):
+    from mammamiradio.scheduling.producer import _prepare_music_handoff
+
+    source = tmp_path / "norm_song.mp3"
+    source.write_bytes(b"source")
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(music)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    def _partially_write_then_fail(_source, output_dir, _tail_seconds, *, stem):
+        (output_dir / f"{stem}_head.mp3").write_bytes(b"partial-head")
+        (output_dir / f"{stem}_tail.mp3").write_bytes(b"partial-tail")
+        raise RuntimeError("split failed after publishing outputs")
+
+    with patch(
+        f"{PRODUCER_MODULE}.split_mpeg1_l3_handoff",
+        side_effect=_partially_write_then_fail,
+    ):
+        result = await _prepare_music_handoff(queue, config, tail_seconds=8.0)
+
+    assert result is None
+    assert list(tmp_path.glob("*_handoff_*_head.mp3")) == []
+    assert list(tmp_path.glob("*_handoff_*_tail.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_music_handoff_cancellation_drains_thread_then_cleans_outputs(tmp_path):
+    from mammamiradio.scheduling.producer import _prepare_music_handoff
+
+    source = tmp_path / "norm_song.mp3"
+    source.write_bytes(b"source")
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(music)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_split(*args, **kwargs):
+        started.set()
+        assert release.wait(timeout=2.0)
+        return _fake_handoff_split(*args, **kwargs)
+
+    with patch(f"{PRODUCER_MODULE}.split_mpeg1_l3_handoff", side_effect=_blocking_split):
+        task = asyncio.create_task(_prepare_music_handoff(queue, config, tail_seconds=8.0))
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not started.is_set():
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError("split worker did not start")
+            await asyncio.sleep(0.01)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert list(tmp_path.glob("*_handoff_*_head.mp3")) == []
+    assert list(tmp_path.glob("*_handoff_*_tail.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_owned_child_group_waits_for_raw_executor_sibling_before_cleanup(tmp_path):
+    """A sibling failure cannot detach an executor worker that publishes later."""
+    from mammamiradio.scheduling.producer import _gather_owned_child_tasks
+
+    late_output = tmp_path / "late_child.mp3"
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    sibling_failed = asyncio.Event()
+
+    def _late_publish() -> Path:
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        late_output.write_bytes(b"late")
+        return late_output
+
+    async def _raw_executor_child() -> Path:
+        return await asyncio.get_running_loop().run_in_executor(None, _late_publish)
+
+    async def _failing_child() -> None:
+        while not worker_started.is_set():
+            await asyncio.sleep(0.01)
+        sibling_failed.set()
+        raise RuntimeError("sibling failed")
+
+    raw_task = asyncio.create_task(_raw_executor_child())
+    failing_task = asyncio.create_task(_failing_child())
+    group_task = asyncio.create_task(_gather_owned_child_tasks([failing_task, raw_task], tmp_path))
+    try:
+        await asyncio.wait_for(sibling_failed.wait(), timeout=2.0)
+        await asyncio.sleep(0.02)
+        assert not group_task.done()
+        release_worker.set()
+        with pytest.raises(RuntimeError, match="sibling failed"):
+            await group_task
+    finally:
+        release_worker.set()
+        if not group_task.done():
+            group_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await group_task
+
+    assert not late_output.exists()
+
+
+@pytest.mark.asyncio
+async def test_impossible_moment_cancellation_drains_tts_before_cleanup(tmp_path):
+    """Cancellation waits for late TTS publication, then removes the known path."""
+    from mammamiradio.scheduling.producer import _synthesize_impossible_moment
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    state = _make_state()
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    async def _late_synthesize(_text, _voice, output_path, **_kwargs) -> None:
+        def _publish() -> None:
+            worker_started.set()
+            assert release_worker.wait(timeout=2.0)
+            output_path.write_bytes(b"late-tts")
+
+        await asyncio.get_running_loop().run_in_executor(None, _publish)
+
+    with patch(f"{PRODUCER_MODULE}.synthesize", side_effect=_late_synthesize):
+        task = asyncio.create_task(_synthesize_impossible_moment("Una cosa impossibile.", config, state))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not worker_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("TTS worker did not start")
+                await asyncio.sleep(0.01)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            release_worker.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release_worker.set()
+
+    assert list(tmp_path.glob("impossible_*.mp3")) == []
+    assert list(tmp_path.glob("impossible_xf_*.mp3")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_stage", ["stinger", "concat"])
+async def test_transition_sting_cancellation_drains_worker_and_preserves_source(
+    tmp_path,
+    blocked_stage,
+):
+    """Neither transition worker can republish scratch after cancellation cleanup."""
+    from mammamiradio.scheduling.producer import _maybe_add_transition_sting
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    state = _make_state()
+    source = tmp_path / "dry_banter.mp3"
+    source.write_bytes(b"dry")
+    segment = Segment(type=SegmentType.BANTER, path=source, ephemeral=True)
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    imaging = MagicMock()
+
+    def _maybe_block(stage: str) -> None:
+        if blocked_stage != stage:
+            return
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+
+    def _pick_stinger(_previous, _actual, output_path) -> Path:
+        _maybe_block("stinger")
+        output_path.write_bytes(b"sting")
+        return output_path
+
+    def _concat(_inputs, output_path, *_args, **_kwargs) -> Path:
+        _maybe_block("concat")
+        output_path.write_bytes(b"merged")
+        return output_path
+
+    imaging.pick_stinger.side_effect = _pick_stinger
+    with (
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
+    ):
+        task = asyncio.create_task(_maybe_add_transition_sting(segment, SegmentType.MUSIC, config, state))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not worker_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError(f"{blocked_stage} worker did not start")
+                await asyncio.sleep(0.01)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            release_worker.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release_worker.set()
+
+    assert source.read_bytes() == b"dry"
+    assert list(tmp_path.glob("transition_*.mp3")) == []
+    assert list(tmp_path.glob("segment_with_sting_*.mp3")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached", [False, True])
+async def test_egress_cancellation_drains_worker_before_staging_cleanup(tmp_path, cached):
+    """Fresh and cached egress workers settle before their scratch is removed."""
+    from mammamiradio.scheduling.producer import _apply_egress
+
+    config = _make_config()
+    config.tmp_dir = tmp_path / "tmp"
+    config.cache_dir = tmp_path / "cache"
+    config.tmp_dir.mkdir()
+    config.cache_dir.mkdir()
+    source_dir = config.cache_dir if cached else config.tmp_dir
+    source = source_dir / "source.mp3"
+    source.write_bytes(b"source")
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=source,
+        ephemeral=not cached,
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    outputs: list[Path] = []
+
+    def _late_egress(_source, output_path) -> bool:
+        outputs.append(output_path)
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        output_path.write_bytes(b"late-egress")
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}.broadcast_chain_version", return_value="test-chain"),
+        patch(f"{PRODUCER_MODULE}.apply_broadcast_chain", side_effect=_late_egress),
+    ):
+        task = asyncio.create_task(_apply_egress(segment, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not worker_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("egress worker did not start")
+                await asyncio.sleep(0.01)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            release_worker.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release_worker.set()
+
+    assert source.read_bytes() == b"source"
+    assert outputs
+    assert all(not path.exists() for path in outputs)
+
+
+@pytest.mark.asyncio
+async def test_handoff_commit_rejection_discards_split_and_egressed_render(tmp_path):
+    from mammamiradio.scheduling.producer import _enqueue_handoff_with_egress
+
+    prepared = _unit_prepared_handoff(tmp_path)
+    speech_path = tmp_path / "speech.mp3"
+    speech_path.write_bytes(b"speech")
+    egressed_path = tmp_path / "speech_egressed.mp3"
+    egressed_path.write_bytes(b"egressed")
+    segment = Segment(type=SegmentType.BANTER, path=speech_path, ephemeral=True)
+    egressed = Segment(type=SegmentType.BANTER, path=egressed_path, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(prepared.music_segment)
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=egressed),
+        patch(f"{PRODUCER_MODULE}.commit_music_handoff", return_value=False),
+    ):
+        result = await _enqueue_handoff_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            prepared=prepared,
+            shadow_entry={"id": "speech"},
+        )
+
+    assert result is None
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert not egressed_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_handoff_commit_transfers_owner_before_bookkeeping(tmp_path):
+    from mammamiradio.scheduling.producer import _enqueue_handoff_with_egress
+
+    prepared = _unit_prepared_handoff(tmp_path)
+    successor_path = tmp_path / "successor.mp3"
+    successor_path.write_bytes(b"successor")
+    successor = Segment(type=SegmentType.BANTER, path=successor_path, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(prepared.music_segment)
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    transfer = MagicMock()
+
+    def _fail_bookkeeping(*_args, **_kwargs):
+        transfer.assert_called_once_with()
+        raise RuntimeError("bookkeeping failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=successor),
+        patch(f"{PRODUCER_MODULE}._remember_enqueued", side_effect=_fail_bookkeeping),
+        pytest.raises(RuntimeError, match="bookkeeping failed"),
+    ):
+        await _enqueue_handoff_with_egress(
+            queue,
+            state,
+            config,
+            successor,
+            prepared=prepared,
+            shadow_entry={"id": "successor"},
+            ownership_transfer=transfer,
+        )
+
+    queued = list(queue._queue)
+    assert queued == [prepared.music_segment, successor]
+    assert prepared.music_segment.path == prepared.split.head_path
+    assert prepared.split.head_path.exists()
+    assert successor_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_handoff_precommit_exception_discards_private_egress_render(tmp_path):
+    """A post-egress failure cannot leak the replacement before queue commit."""
+    from mammamiradio.scheduling.producer import _enqueue_handoff_with_egress
+
+    prepared = _unit_prepared_handoff(tmp_path)
+    source_path = tmp_path / "successor_source.mp3"
+    source_path.write_bytes(b"source")
+    egressed_path = tmp_path / "successor_egressed.mp3"
+    egressed_path.write_bytes(b"egressed")
+    source = Segment(type=SegmentType.BANTER, path=source_path, ephemeral=True)
+    egressed = Segment(type=SegmentType.BANTER, path=egressed_path, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(prepared.music_segment)
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=egressed),
+        patch.object(StationState, "add_render_stage_timing", side_effect=RuntimeError("timing failed")),
+        pytest.raises(RuntimeError, match="timing failed"),
+    ):
+        await _enqueue_handoff_with_egress(
+            queue,
+            state,
+            config,
+            source,
+            prepared=prepared,
+            shadow_entry={"id": "successor"},
+        )
+
+    assert list(queue._queue) == [prepared.music_segment]
+    assert source_path.exists()
+    assert not egressed_path.exists()
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_enqueue_transfers_owner_before_bookkeeping(tmp_path):
+    """Once queue.put succeeds, later bookkeeping cannot retain caller ownership."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    path = tmp_path / "ordinary.mp3"
+    path.write_bytes(b"audio")
+    segment = Segment(type=SegmentType.BANTER, path=path, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    transfer = MagicMock()
+
+    def _fail_bookkeeping(*_args, **_kwargs):
+        transfer.assert_called_once_with()
+        raise RuntimeError("bookkeeping failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=segment),
+        patch(f"{PRODUCER_MODULE}._remember_enqueued", side_effect=_fail_bookkeeping),
+        pytest.raises(RuntimeError, match="bookkeeping failed"),
+    ):
+        await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            ownership_transfer=transfer,
+        )
+
+    assert list(queue._queue) == [segment]
+    assert path.read_bytes() == b"audio"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_enqueue_keeps_owner_on_post_capacity_stale_rejection(tmp_path):
+    """A stale retraction must not transfer unrelated private attempt artifacts."""
+    from mammamiradio.scheduling.producer import (
+        _enqueue_with_egress,
+        _ProducerAttemptOwnership,
+    )
+
+    path = tmp_path / "ordinary.mp3"
+    sentinel = tmp_path / "private_sentinel.mp3"
+    path.write_bytes(b"audio")
+    sentinel.write_bytes(b"private")
+    segment = Segment(type=SegmentType.BANTER, path=path, ephemeral=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    owner = _ProducerAttemptOwnership.create(tmp_path)
+    owner.begin()
+    owner.own_paths(path, sentinel)
+    stale_results = iter((False, False, True))
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=segment):
+        result = await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            stale_check=lambda: next(stale_results),
+            ownership_transfer=owner.transfer,
+        )
+
+    assert result is False
+    assert queue.empty()
+    assert owner.active is True
+    assert sentinel.exists()
+    owner.discard()
+    assert not sentinel.exists()
+
+
+@pytest.mark.asyncio
+async def test_apply_talk_bed_keeps_source_until_caller_adopts_replacement(tmp_path):
+    from mammamiradio.scheduling.producer import _apply_talk_bed
+
+    source = tmp_path / "dry_voice.mp3"
+    source.write_bytes(b"dry")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    imaging = MagicMock()
+
+    def _write_bed(_duration, output_path, _source_track):
+        output_path.write_bytes(b"bed")
+        return output_path
+
+    def _write_mix(_voice_path, _bed_path, output_path, _bed_db):
+        output_path.write_bytes(b"mixed")
+        return output_path
+
+    imaging.pick_talk_bed.side_effect = _write_bed
+    with (
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_write_mix),
+    ):
+        result = await _apply_talk_bed(source, config, _make_state(), prefix="banter")
+
+    assert source.read_bytes() == b"dry"
+    assert result.read_bytes() == b"mixed"
+    assert list(tmp_path.glob("banter_bed_*.mp3")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_prefix", "fallback_prefix"),
+    [("banter", "banter_dry"), ("news", "news_dry")],
+)
+@pytest.mark.parametrize("failed_side", ["primary", "fallback"])
+async def test_paired_talk_bed_asymmetric_failure_keeps_both_dry_inputs(
+    tmp_path,
+    primary_prefix,
+    fallback_prefix,
+    failed_side,
+):
+    from mammamiradio.scheduling.producer import _apply_paired_talk_beds
+
+    primary = tmp_path / "primary.mp3"
+    fallback = tmp_path / "fallback.mp3"
+    primary.write_bytes(b"primary")
+    fallback.write_bytes(b"fallback")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    failed_prefix = primary_prefix if failed_side == "primary" else fallback_prefix
+
+    async def _transform(_path, _config, _state, *, prefix):
+        if prefix == failed_prefix:
+            raise RuntimeError(f"{prefix} failed")
+        output = tmp_path / f"{prefix}_bedded.mp3"
+        output.write_bytes(b"bedded")
+        return output
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", side_effect=_transform),
+        pytest.raises(RuntimeError, match="failed"),
+    ):
+        await _apply_paired_talk_beds(
+            primary,
+            fallback,
+            config,
+            _make_state(),
+            primary_prefix=primary_prefix,
+            fallback_prefix=fallback_prefix,
+        )
+
+    assert primary.exists()
+    assert fallback.exists()
+    assert list(tmp_path.glob("*_bedded.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_paired_talk_bed_does_not_consume_either_input_until_both_succeed(tmp_path):
+    from mammamiradio.scheduling.producer import _apply_paired_talk_beds
+
+    primary = tmp_path / "primary.mp3"
+    fallback = tmp_path / "fallback.mp3"
+    primary.write_bytes(b"primary")
+    fallback.write_bytes(b"fallback")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    primary_done = asyncio.Event()
+    release_fallback = asyncio.Event()
+
+    async def _transform(_path, _config, _state, *, prefix):
+        output = tmp_path / f"{prefix}_bedded.mp3"
+        output.write_bytes(b"bedded")
+        if prefix == "banter":
+            primary_done.set()
+        else:
+            await release_fallback.wait()
+        return output
+
+    with patch(f"{PRODUCER_MODULE}._apply_talk_bed", side_effect=_transform):
+        task = asyncio.create_task(
+            _apply_paired_talk_beds(
+                primary,
+                fallback,
+                config,
+                _make_state(),
+                primary_prefix="banter",
+                fallback_prefix="banter_dry",
+            )
+        )
+        await primary_done.wait()
+        assert primary.exists()
+        assert fallback.exists()
+        release_fallback.set()
+        primary_result, fallback_result = await task
+
+    assert not primary.exists()
+    assert not fallback.exists()
+    assert primary_result.exists()
+    assert fallback_result.exists()
+
+
+@pytest.mark.asyncio
+async def test_paired_talk_bed_cancellation_discards_completed_replacement(tmp_path):
+    from mammamiradio.scheduling.producer import _apply_paired_talk_beds
+
+    primary = tmp_path / "primary.mp3"
+    fallback = tmp_path / "fallback.mp3"
+    primary.write_bytes(b"primary")
+    fallback.write_bytes(b"fallback")
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    primary_done = asyncio.Event()
+    release_fallback = asyncio.Event()
+
+    async def _transform(_path, _config, _state, *, prefix):
+        if prefix == "banter_dry":
+            await release_fallback.wait()
+        output = tmp_path / f"{prefix}_bedded.mp3"
+        output.write_bytes(b"bedded")
+        primary_done.set()
+        return output
+
+    with patch(f"{PRODUCER_MODULE}._apply_talk_bed", side_effect=_transform):
+        task = asyncio.create_task(
+            _apply_paired_talk_beds(
+                primary,
+                fallback,
+                config,
+                _make_state(),
+                primary_prefix="banter",
+                fallback_prefix="banter_dry",
+            )
+        )
+        await primary_done.wait()
+        task.cancel()
+        release_fallback.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert primary.exists()
+    assert fallback.exists()
+    assert list(tmp_path.glob("*_bedded.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_banter_sibling_failure_drains_late_crossfade_and_handoff_artifacts(tmp_path):
+    """A failed dialogue cannot strand a late FFmpeg output or prepared split."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    dialogue_failed = asyncio.Event()
+    preparation_tasks: list[asyncio.Task] = []
+
+    async def _prepare(*_args, **_kwargs):
+        preparation_tasks.append(asyncio.current_task())
+        return prepared
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    def _late_crossfade(_tail, _voice, output_path, **_kwargs):
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        output_path.write_bytes(b"late-crossfade")
+        return output_path
+
+    async def _fail_dialogue(*_args, **_kwargs):
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not worker_started.is_set():
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError("crossfade worker did not start")
+            await asyncio.sleep(0.01)
+        state.session_stopped = True
+        dialogue_failed.set()
+        raise RuntimeError("dialogue sibling failed")
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Parliamone.")], None),
+        ),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, side_effect=_prepare),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=_fail_dialogue,
+        ),
+        patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_late_crossfade),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(dialogue_failed.wait(), timeout=2.0)
+            await asyncio.sleep(0.02)
+            release_worker.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while (
+                not preparation_tasks
+                or not all(task.done() for task in preparation_tasks)
+                or prepared.split.head_path.exists()
+                or prepared.split.tail_path.exists()
+                or list(tmp_path.glob("banter_trans_*.mp3"))
+            ):
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("banter render group did not release owned artifacts")
+                await asyncio.sleep(0.01)
+        finally:
+            release_worker.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert preparation_tasks
+    assert all(task.done() for task in preparation_tasks)
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert list(tmp_path.glob("trans_*.mp3")) == []
+    assert list(tmp_path.glob("banter_trans_*.mp3")) == []
+
+
+@pytest.mark.asyncio
+async def test_banter_concat_sibling_failure_drains_late_worker_and_outputs(tmp_path):
+    """One failed concat cannot race cleanup with its uncancellable sibling."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    late_worker_started = threading.Event()
+    release_late_worker = threading.Event()
+    concat_failed = threading.Event()
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _write_dialogue(*_args, **_kwargs):
+        output = tmp_path / "dialogue.mp3"
+        output.write_bytes(b"dialogue")
+        return output
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    def _racing_concat(_inputs, output_path, *_args, **_kwargs):
+        if output_path.name.startswith("banter_dry_"):
+            late_worker_started.set()
+            assert release_late_worker.wait(timeout=2.0)
+            output_path.write_bytes(b"late-fallback")
+            return output_path
+        assert late_worker_started.wait(timeout=2.0)
+        concat_failed.set()
+        raise RuntimeError("primary concat failed")
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Parliamone.")], None),
+        ),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=_write_dialogue,
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_racing_concat),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not concat_failed.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("primary concat did not fail")
+                await asyncio.sleep(0.01)
+            state.session_stopped = True
+            await asyncio.sleep(0.02)
+            release_late_worker.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while (
+                prepared.split.head_path.exists()
+                or prepared.split.tail_path.exists()
+                or list(tmp_path.glob("banter_full_*.mp3"))
+                or list(tmp_path.glob("banter_dry_*.mp3"))
+            ):
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("banter concat group did not release owned outputs")
+                await asyncio.sleep(0.01)
+        finally:
+            release_late_worker.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert list(tmp_path.glob("banter_full_*.mp3")) == []
+    assert list(tmp_path.glob("banter_dry_*.mp3")) == []
+    assert list(tmp_path.glob("banter_trans_*.mp3")) == []
+    assert list(tmp_path.glob("trans_*.mp3")) == []
+    assert not (tmp_path / "dialogue.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_banter_post_concat_cancellation_discards_attempt_before_admission(tmp_path):
+    """Cancellation after handoff assignment releases both renders and split."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    paired_bed_started = asyncio.Event()
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _write_dialogue(*_args, **_kwargs):
+        output = tmp_path / "dialogue.mp3"
+        output.write_bytes(b"dialogue")
+        return output
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    def _concat(_inputs, output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"concat")
+        return output_path
+
+    async def _block_after_concat(*args, **kwargs):
+        paired_bed_started.set()
+        await asyncio.Event().wait()
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Parliamone.")], None),
+        ),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=_write_dialogue,
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
+        patch(
+            f"{PRODUCER_MODULE}._apply_paired_talk_beds",
+            new_callable=AsyncMock,
+            side_effect=_block_after_concat,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        await asyncio.wait_for(paired_bed_started.wait(), timeout=2.0)
+        producer_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await producer_task
+
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert list(tmp_path.glob("banter_full_*.mp3")) == []
+    assert list(tmp_path.glob("banter_dry_*.mp3")) == []
+    assert list(tmp_path.glob("banter_trans_*.mp3")) == []
+    assert list(tmp_path.glob("trans_*.mp3")) == []
+    assert not (tmp_path / "dialogue.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_handoff_commit_transfers_before_fallback_cleanup_failure(tmp_path):
+    """Post-commit cleanup failure is contained and preserves queue ownership."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    real_unlink = Path.unlink
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _write_dialogue(*_args, **_kwargs):
+        output = tmp_path / "dialogue.mp3"
+        output.write_bytes(b"dialogue")
+        return output
+
+    async def _crossfade(_voice, _config, output_path, handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        handoff.split.tail_path.unlink(missing_ok=True)
+        return output_path
+
+    def _concat(_inputs, output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"concat")
+        return output_path
+
+    async def _keep_dry_pair(primary, fallback, *_args, **_kwargs):
+        return primary, fallback
+
+    def _fail_fallback_unlink(path: Path, *args, **kwargs):
+        if path.name.startswith("banter_dry_"):
+            raise OSError("fallback cleanup failed")
+        return real_unlink(path, *args, **kwargs)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Parliamone.")], None),
+        ),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=_write_dialogue,
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
+        patch(
+            f"{PRODUCER_MODULE}._apply_paired_talk_beds",
+            new_callable=AsyncMock,
+            side_effect=_keep_dry_pair,
+        ),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _: segment),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.object(Path, "unlink", _fail_fallback_unlink),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while queue.qsize() < 2 or not state.handoff_reservations:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("handoff did not commit")
+                await asyncio.sleep(0.01)
+        finally:
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    queued = list(queue._queue)
+    assert len(queued) == 2
+    assert queued[0] is prepared.music_segment
+    assert queued[0].path == prepared.split.head_path
+    assert queued[0].path.exists()
+    assert queued[1].type == SegmentType.BANTER
+    assert queued[1].path.exists()
+    assert state.handoff_reservations
+    for fallback in tmp_path.glob("banter_dry_*.mp3"):
+        real_unlink(fallback, missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_ad_phase_one_sibling_failure_drains_preparation_and_render_artifacts(tmp_path):
+    """A failed script sibling releases a completed intro, bumper, and handoff."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    promo_done = asyncio.Event()
+    script_failed = asyncio.Event()
+    preparation_tasks: list[asyncio.Task] = []
+
+    async def _prepare(*_args, **_kwargs):
+        preparation_tasks.append(asyncio.current_task())
+        return prepared
+
+    async def _write_voice(text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+        if text == "Messaggio promozionale.":
+            promo_done.set()
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    async def _fail_script(*_args, **_kwargs):
+        await promo_done.wait()
+        state.session_stopped = True
+        script_failed.set()
+        raise RuntimeError("ad script sibling failed")
+
+    def _write_bumper(output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_fail_script),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, side_effect=_prepare),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_bumper),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(script_failed.wait(), timeout=2.0)
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.failed_segments == 0:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("ad render group did not finish failure cleanup")
+                await asyncio.sleep(0.01)
+        finally:
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert preparation_tasks
+    assert all(task.done() for task in preparation_tasks)
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+        "bumper_mid_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
+
+
+@pytest.mark.asyncio
+async def test_ad_post_phase_one_cancellation_discards_attempt_before_admission(tmp_path):
+    """A completed intro handoff remains privately owned through later phases."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    brand = config.ads.brands[0]
+    script = AdScript(
+        brand=brand.name,
+        parts=[AdPart(type="voice", text="Compra subito.")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=[],
+    )
+    phase_two_started = threading.Event()
+    release_phase_two = threading.Event()
+    late_ad_path = tmp_path / "late_phase_two_ad.mp3"
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    def _write_bumper(output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    async def _block_phase_two(*_args, **_kwargs):
+        def _late_publish() -> Path:
+            phase_two_started.set()
+            assert release_phase_two.wait(timeout=2.0)
+            late_ad_path.write_bytes(b"late-ad")
+            return late_ad_path
+
+        return await asyncio.get_running_loop().run_in_executor(None, _late_publish)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._pick_brand", return_value=brand),
+        patch(f"{PRODUCER_MODULE}._select_ad_creative", return_value=("classic_pitch", SonicWorld(), [])),
+        patch(f"{PRODUCER_MODULE}._cast_voices", return_value={}),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_bumper),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            side_effect=_block_phase_two,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not phase_two_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("phase-two worker did not start")
+                await asyncio.sleep(0.01)
+            producer_task.cancel()
+            await asyncio.sleep(0.02)
+            assert not producer_task.done()
+            release_phase_two.set()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+        finally:
+            release_phase_two.set()
+
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert not late_ad_path.exists()
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+        "bumper_mid_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
+
+
+@pytest.mark.asyncio
+async def test_ad_phase_two_failure_drains_late_tts_sibling_result(tmp_path):
+    """One failed spot drains and deletes a late successful spot render."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.ad_spots_per_break = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    brand = config.ads.brands[0]
+    scripts = [
+        AdScript(
+            brand=brand.name,
+            parts=[AdPart(type="voice", text=f"Spot {index}.")],
+            summary=f"spot-{index}",
+            format="classic_pitch",
+            sonic=SonicWorld(),
+            roles_used=[],
+        )
+        for index in range(2)
+    ]
+    late_started = threading.Event()
+    release_late = threading.Event()
+    phase_two_failed = asyncio.Event()
+    late_output = tmp_path / "late_ad_spot.mp3"
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _same_intro_path(voice_path, *_args, **_kwargs):
+        return voice_path
+
+    def _write_bumper(output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    async def _write_script(*_args, spot_index, **_kwargs):
+        return scripts[spot_index]
+
+    async def _render_spot(script, *_args, **_kwargs):
+        if script.summary == "spot-1":
+
+            def _late_publish() -> Path:
+                late_started.set()
+                assert release_late.wait(timeout=2.0)
+                late_output.write_bytes(b"late-spot")
+                return late_output
+
+            return await asyncio.get_running_loop().run_in_executor(None, _late_publish)
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not late_started.is_set():
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError("late ad spot did not start")
+            await asyncio.sleep(0.01)
+        state.session_stopped = True
+        phase_two_failed.set()
+        raise RuntimeError("first spot failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._pick_brand", return_value=brand),
+        patch(f"{PRODUCER_MODULE}._select_ad_creative", return_value=("classic_pitch", SonicWorld(), [])),
+        patch(f"{PRODUCER_MODULE}._cast_voices", return_value={}),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_write_script),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=None),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_bumper),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_render_spot),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(phase_two_failed.wait(), timeout=2.0)
+            await asyncio.sleep(0.02)
+            assert state.failed_segments == 0
+            release_late.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.failed_segments == 0:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("phase-two cleanup did not finish")
+                await asyncio.sleep(0.01)
+        finally:
+            release_late.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert not late_output.exists()
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
+
+
+@pytest.mark.asyncio
+async def test_ad_bumper_failure_drains_late_sibling_before_outer_cleanup(tmp_path):
+    """A failed bumper waits for a late sibling before known paths are removed."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.ad_spots_per_break = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    brand = config.ads.brands[0]
+    script = AdScript(
+        brand=brand.name,
+        parts=[AdPart(type="voice", text="Compra subito.")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=[],
+    )
+    late_worker_started = threading.Event()
+    release_late_worker = threading.Event()
+    bumper_failed = threading.Event()
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _same_intro_path(voice_path, *_args, **_kwargs):
+        return voice_path
+
+    def _racing_bumper(output_path, *_args, **_kwargs):
+        if output_path.name.startswith("bumper_mid_"):
+            late_worker_started.set()
+            assert release_late_worker.wait(timeout=2.0)
+            output_path.write_bytes(b"late-bumper")
+            return output_path
+        assert late_worker_started.wait(timeout=2.0)
+        bumper_failed.set()
+        raise RuntimeError("opening bumper failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._pick_brand", return_value=brand),
+        patch(f"{PRODUCER_MODULE}._select_ad_creative", return_value=("classic_pitch", SonicWorld(), [])),
+        patch(f"{PRODUCER_MODULE}._cast_voices", return_value={}),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=None),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_racing_bumper),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not bumper_failed.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("opening bumper did not fail")
+                await asyncio.sleep(0.01)
+            state.session_stopped = True
+            await asyncio.sleep(0.02)
+            release_late_worker.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.failed_segments == 0:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("ad bumper group did not finish failure cleanup")
+                await asyncio.sleep(0.01)
+        finally:
+            release_late_worker.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+        "bumper_mid_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
+
+
+@pytest.mark.asyncio
+async def test_ad_phase_four_failure_drains_late_closing_bumper(tmp_path):
+    """Outro failure cannot return while its closing-bumper thread can publish."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    brand = config.ads.brands[0]
+    script = AdScript(
+        brand=brand.name,
+        parts=[AdPart(type="voice", text="Compra subito.")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=[],
+    )
+    ad_spot = tmp_path / "ad_spot.mp3"
+    closing_started = threading.Event()
+    release_closing = threading.Event()
+    outro_failed = asyncio.Event()
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        if output_path.name.startswith("ad_outro_"):
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not closing_started.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("closing bumper did not start")
+                await asyncio.sleep(0.01)
+            state.session_stopped = True
+            outro_failed.set()
+            raise RuntimeError("outro failed")
+        output_path.write_bytes(b"voice")
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    async def _write_ad(*_args, **_kwargs):
+        ad_spot.write_bytes(b"spot")
+        return ad_spot
+
+    def _write_bumper(output_path, *_args, **_kwargs):
+        if output_path.name.startswith("bumper_out_"):
+            closing_started.set()
+            assert release_closing.wait(timeout=2.0)
+            output_path.write_bytes(b"late-closing")
+            return output_path
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._pick_brand", return_value=brand),
+        patch(f"{PRODUCER_MODULE}._select_ad_creative", return_value=("classic_pitch", SonicWorld(), [])),
+        patch(f"{PRODUCER_MODULE}._cast_voices", return_value={}),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_write_ad),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_bumper),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(outro_failed.wait(), timeout=2.0)
+            await asyncio.sleep(0.02)
+            release_closing.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.failed_segments == 0:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("phase-four cleanup did not finish")
+                await asyncio.sleep(0.01)
+        finally:
+            release_closing.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert not ad_spot.exists()
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+        "bumper_out_*.mp3",
+        "ad_outro_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
+
+
+@pytest.mark.asyncio
+async def test_ad_phase_five_failure_drains_late_dry_concat(tmp_path):
+    """Primary concat failure drains the late dry worker before attempt cleanup."""
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path)
+    queue.put_nowait(prepared.music_segment)
+    host = config.hosts[0]
+    brand = config.ads.brands[0]
+    script = AdScript(
+        brand=brand.name,
+        parts=[AdPart(type="voice", text="Compra subito.")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=[],
+    )
+    ad_spot = tmp_path / "ad_spot.mp3"
+    late_worker_started = threading.Event()
+    release_late_worker = threading.Event()
+    concat_failed = threading.Event()
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _crossfade(_voice, _config, output_path, _handoff, **_kwargs):
+        output_path.write_bytes(b"crossfade")
+        return output_path
+
+    async def _write_ad(*_args, **_kwargs):
+        ad_spot.write_bytes(b"spot")
+        return ad_spot
+
+    def _write_bumper(output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    def _racing_concat(_inputs, output_path, *_args, **_kwargs):
+        if output_path.name.startswith("adbreak_dry_"):
+            late_worker_started.set()
+            assert release_late_worker.wait(timeout=2.0)
+            output_path.write_bytes(b"late-dry")
+            return output_path
+        assert late_worker_started.wait(timeout=2.0)
+        state.session_stopped = True
+        concat_failed.set()
+        raise RuntimeError("tail concat failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._pick_brand", return_value=brand),
+        patch(f"{PRODUCER_MODULE}._select_ad_creative", return_value=("classic_pitch", SonicWorld(), [])),
+        patch(f"{PRODUCER_MODULE}._cast_voices", return_value={}),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._prepare_music_handoff",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_write_ad),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_bumper),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_racing_concat),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not concat_failed.is_set():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("phase-five primary concat did not fail")
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.02)
+            release_late_worker.set()
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.failed_segments == 0:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("phase-five cleanup did not finish")
+                await asyncio.sleep(0.01)
+        finally:
+            release_late_worker.set()
+            producer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await producer_task
+
+    assert not prepared.split.head_path.exists()
+    assert not prepared.split.tail_path.exists()
+    assert not ad_spot.exists()
+    for pattern in (
+        "ad_intro_*.mp3",
+        "ad_trans_*.mp3",
+        "promo_tag_*.mp3",
+        "bumper_in_*.mp3",
+        "bumper_out_*.mp3",
+        "ad_outro_*.mp3",
+        "adbreak_*.mp3",
+        "adbreak_dry_*.mp3",
+    ):
+        assert list(tmp_path.glob(pattern)) == []
 
 
 # ---------------------------------------------------------------------------

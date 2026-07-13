@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.models import Segment, SegmentType, StationState
-from mammamiradio.scheduling.producer import _enqueue_with_egress
+from mammamiradio.scheduling.producer import _enqueue_with_egress, _schedule_restart_handoff_spool
 
 
 @pytest.mark.asyncio
@@ -91,3 +91,46 @@ async def test_enqueue_front_insert_does_not_write_restart_handoff(tmp_path):
         )
 
     m_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_restart_spool_keeps_full_music_instead_of_private_handoff_head(tmp_path):
+    """Audio-delivery Scenario 3: a private handoff head is never persisted.
+
+    The ordinary full song may seed restart recovery, but a later exact-once
+    queue commit must not replace that safe candidate with a truncated head
+    whose tail-bearing successor exists only in the live process.
+    """
+
+    state = StationState()
+    config = SimpleNamespace(cache_dir=tmp_path, tmp_dir=tmp_path / "tmp")
+    original = tmp_path / "norm_artist_song_192k.mp3"
+    original.write_bytes(b"full-song")
+    head = tmp_path / "handoff_head.mp3"
+    head.write_bytes(b"shortened-head")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=original,
+        duration_sec=120.0,
+        metadata={"artist": "Artist", "title_only": "Song", "audio_source": "download"},
+        ephemeral=False,
+    )
+
+    with patch("mammamiradio.scheduling.producer.try_write_restart_handoff_spool", return_value=True) as m_write:
+        _schedule_restart_handoff_spool(state, config, segment)
+        tasks = list(state._restart_handoff_tasks)
+        assert len(tasks) == 1
+        await tasks[0]
+
+        segment.path = head
+        segment.duration_sec = 112.0
+        segment.ephemeral = True
+        segment.handoff_id = "private-handoff"
+        _schedule_restart_handoff_spool(state, config, segment)
+        await asyncio.sleep(0)
+
+    m_write.assert_called_once()
+    candidate = m_write.call_args.args[1][0]
+    assert candidate.path == original
+    assert candidate.duration_sec == 120.0
+    assert not state.handoff_reservations

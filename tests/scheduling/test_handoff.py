@@ -9,9 +9,12 @@ import pytest
 
 from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.scheduling.handoff import (
+    HandoffPhase,
     PreparedMusicHandoff,
     cancel_active_music_handoff,
     commit_music_handoff,
+    finish_handoff_segment,
+    mark_handoff_segment_selected,
     peek_music_handoff_candidate,
     reconcile_handoff_queue_items,
 )
@@ -146,12 +149,49 @@ def test_reconcile_drops_successor_and_restores_music_when_pair_is_reordered(tmp
 
 
 def test_reconcile_returns_successor_when_predecessor_is_removed(tmp_path: Path) -> None:
-    _queue, state, music, successor, _original, _head, _tail = _committed_pair(tmp_path)
+    _queue, state, music, successor, original, head, _tail = _committed_pair(tmp_path)
     items = [successor]
 
     assert reconcile_handoff_queue_items(state, items) == [successor]
     assert items == []
+    assert music.path == head, "explicitly removed music is not silently reinserted"
+    assert original.exists(), "a non-ephemeral source remains cache-owned"
     assert music.handoff_id is None
+    assert successor.handoff_id is None
+    assert not state.handoff_reservations
+
+
+def test_clean_head_eof_protects_successor_across_front_rewrite(tmp_path: Path) -> None:
+    _queue, state, music, successor, _original, _head, _tail = _committed_pair(tmp_path)
+    reservation = next(iter(state.handoff_reservations.values()))
+    forced = Segment(type=SegmentType.BANTER, path=tmp_path / "forced.mp3")
+
+    assert reservation.phase is HandoffPhase.QUEUED
+    mark_handoff_segment_selected(state, music)
+    assert reservation.phase is HandoffPhase.HEAD_ACTIVE
+    finish_handoff_segment(state, music, completed_cleanly=True)
+    assert reservation.phase is HandoffPhase.SUCCESSOR_DUE
+
+    items = [forced, successor]
+    assert reconcile_handoff_queue_items(state, items) == []
+    assert items == [successor, forced]
+    assert reservation.phase is HandoffPhase.SUCCESSOR_DUE
+
+    mark_handoff_segment_selected(state, successor)
+    assert reservation.phase is HandoffPhase.SUCCESSOR_ACTIVE
+    finish_handoff_segment(state, successor, completed_cleanly=True)
+    assert not state.handoff_reservations
+
+
+def test_explicit_removal_of_due_successor_retires_without_music_restore(tmp_path: Path) -> None:
+    _queue, state, music, successor, original, head, _tail = _committed_pair(tmp_path)
+    mark_handoff_segment_selected(state, music)
+    finish_handoff_segment(state, music, completed_cleanly=True)
+
+    items: list[Segment] = []
+    assert reconcile_handoff_queue_items(state, items) == []
+    assert music.path == head
+    assert original.exists()
     assert successor.handoff_id is None
     assert not state.handoff_reservations
 

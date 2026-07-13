@@ -505,6 +505,8 @@ async def test_error_recovery_sweeper_does_not_get_transition_stinger(tmp_path):
 @pytest.mark.asyncio
 async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
     """A direct MUSIC -> BANTER owns only a pre-split tail, never the song path."""
+    from mammamiradio.scheduling.producer import _apply_paired_talk_beds
+
     song = tmp_path / "adjacent_song.mp3"
     song.write_bytes(b"music")
     state = _make_state()
@@ -517,6 +519,7 @@ async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
     handoff = _prepared_handoff(music, tmp_path)
     host = config.hosts[0]
     banter_lines = [(host, "Che pezzo!")]
+    paired_talk_beds = AsyncMock(wraps=_apply_paired_talk_beds)
 
     xfade_sources: list[Path] = []
 
@@ -537,6 +540,7 @@ async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect),
         patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=handoff),
         patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_xfade_writes_output),
+        patch(f"{PRODUCER_MODULE}._apply_paired_talk_beds", paired_talk_beds),
         patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _config: segment),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.0),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
@@ -557,6 +561,11 @@ async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
     assert seg.metadata["has_music_tail"] is True
     assert all(call.args[2] is None for call in imaging.pick_talk_bed.call_args_list)
     assert xfade_sources == [handoff.split.tail_path]
+    paired_talk_beds.assert_awaited_once()
+    assert paired_talk_beds.await_args.kwargs == {
+        "primary_prefix": "banter",
+        "fallback_prefix": "banter_dry",
+    }
 
 
 @pytest.mark.asyncio
@@ -819,6 +828,8 @@ async def test_news_flash_crossfade_severed_after_ad(tmp_path):
 @pytest.mark.asyncio
 async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
     """A news flash commits only against a supplied tail from its queued song."""
+    from mammamiradio.scheduling.producer import _apply_paired_talk_beds
+
     song = tmp_path / "adjacent_song.mp3"
     song.write_bytes(b"music")
     state = _make_state()
@@ -831,6 +842,7 @@ async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
     handoff = _prepared_handoff(music, tmp_path, tail_seconds=6.0)
     host = config.hosts[0]
     xfade_sources: list[Path] = []
+    paired_talk_beds = AsyncMock(wraps=_apply_paired_talk_beds)
 
     def _xf(_music, _voice, output_path, *_a, **_k):
         xfade_sources.append(_music)
@@ -848,6 +860,7 @@ async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
         patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=handoff),
         patch(f"{PRODUCER_MODULE}.crossfade_voice_over_tail", side_effect=_xf),
+        patch(f"{PRODUCER_MODULE}._apply_paired_talk_beds", paired_talk_beds),
         patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _config: segment),
         patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -865,6 +878,11 @@ async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
     assert seg.type == SegmentType.NEWS_FLASH
     assert seg.metadata["has_music_tail"] is True
     assert xfade_sources == [handoff.split.tail_path]
+    paired_talk_beds.assert_awaited_once()
+    assert paired_talk_beds.await_args.kwargs == {
+        "primary_prefix": "news",
+        "fallback_prefix": "news_dry",
+    }
 
 
 @pytest.mark.asyncio

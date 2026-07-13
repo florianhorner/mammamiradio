@@ -92,8 +92,13 @@ from mammamiradio.playlist.playlist import (
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
 from mammamiradio.scheduling.handoff import (
     cancel_active_music_handoff,
+    finish_handoff_segment,
+    handoff_original_source,
+    handoff_original_sources,
+    has_cancellable_music_handoff,
+    is_protected_handoff_successor,
+    mark_handoff_segment_selected,
     reconcile_handoff_queue_items,
-    retire_handoff_for_started_segment,
 )
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
@@ -372,7 +377,14 @@ def _discard_handoff_orphans(state: StationState, segments: list[Segment], reaso
     return discarded
 
 
-def _cancel_active_handoff_from_queue(q, state: StationState, *, reason: str) -> int:
+def _cancel_active_handoff_from_queue(
+    q,
+    state: StationState,
+    *,
+    reason: str,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+) -> int:
     """Remove the queued successor when a currently airing music head is cut.
 
     The currently streaming head has already left ``q`` and can never be made
@@ -380,9 +392,18 @@ def _cancel_active_handoff_from_queue(q, state: StationState, *, reason: str) ->
     before the normal control action makes a skip visible to playback.
     """
 
-    active = getattr(state, "active_playback_segment", None)
-    if active is None or not getattr(active, "handoff_id", None):
+    if not has_cancellable_music_handoff(state):
         return 0
+    # Snapshot the hidden full source before cancellation releases the private
+    # reservation. A continuity rebuild immediately after Skip/Panic/source
+    # switch must never select music whose head has already partially aired.
+    for original_path, music in handoff_original_sources(state):
+        if excluded_paths is not None:
+            excluded_paths.add(original_path)
+        if excluded_track_keys is not None:
+            track_key = _segment_track_key(music)
+            if track_key != ("", ""):
+                excluded_track_keys.add(track_key)
     items = _drain_segment_queue(q)
     orphaned = cancel_active_music_handoff(state, items)
     discarded = _discard_handoff_orphans(state, orphaned, reason)
@@ -421,6 +442,16 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
 
 _CONTINUITY_RESERVATION_FLAG = "continuity_reservation"
 _CONTINUITY_CACHE_SCAN_LIMIT = 24
+
+
+def _segment_track_key(segment: Segment) -> tuple[str, str]:
+    """Return the same coarse artist/title identity used by cache continuity."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return (
+        str(metadata.get("artist") or "").strip().lower(),
+        str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+    )
 
 
 def _indexed_audio_path_is_file(path: Path) -> bool:
@@ -645,8 +676,16 @@ def _reserve_continuity_runway(
     from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
 
     q = app_state.queue
-    excluded_paths = excluded_paths or set()
-    excluded_track_keys = excluded_track_keys or set()
+    excluded_paths = set(excluded_paths or ())
+    excluded_track_keys = set(excluded_track_keys or ())
+    # A live reservation's original source is hidden behind the shortened head
+    # path. Exclude it (and canonical cache copies) even for ordinary, non-purge
+    # runway additions while that head is active or its successor is due.
+    for original_path, music in handoff_original_sources(state):
+        excluded_paths.add(original_path)
+        track_key = _segment_track_key(music)
+        if track_key != ("", ""):
+            excluded_track_keys.add(track_key)
     # A replace action supersedes every prior safety promise too. A stale
     # capacity-exempt slot is intentionally invisible to the real queue, so it
     # must be cleared before the old queue can be replaced.
@@ -695,13 +734,24 @@ def _reserve_continuity_runway(
         return 0
 
     max_segments = q.maxsize if q.maxsize > 0 else None
+    surviving_paths = {segment.path for segment in ordinary} if not replace_queue else set()
+    surviving_track_keys = (
+        {track_key for segment in ordinary if (track_key := _segment_track_key(segment)) != ("", "")}
+        if not replace_queue
+        else set()
+    )
     reservation = _continuity_reservation_segments(
         state,
         config,
         target,
         max_segments=max_segments,
-        excluded_paths=excluded_paths,
-        excluded_track_keys=excluded_track_keys,
+        # A non-replacing control keeps these ordinary segments in the real
+        # queue. Never append the same cached bytes (or the same canonical song
+        # through another cached path) as "recovery" behind them. In particular,
+        # queue-remove may just have restored a handoff predecessor to its full
+        # original path while ``last_music_file`` has advanced to a later song.
+        excluded_paths=excluded_paths | surviving_paths,
+        excluded_track_keys=excluded_track_keys | surviving_track_keys,
     )
     if not reservation:
         logger.warning("No packaged or cache continuity audio available for live control")
@@ -714,7 +764,10 @@ def _reserve_continuity_runway(
 
     if not replace_queue and protected_ready > 0:
         if q.maxsize > 0:
-            non_evictable_count = sum(bool(segment.metadata.get("air_next")) for segment in ordinary)
+            non_evictable_count = sum(
+                bool(segment.metadata.get("air_next")) or is_protected_handoff_successor(state, segment)
+                for segment in ordinary
+            )
             real_protected_capacity = max(0, q.maxsize - non_evictable_count)
             fresh_capacity = real_protected_capacity or 1  # one capacity-exempt slot
         else:
@@ -743,6 +796,7 @@ def _reserve_continuity_runway(
                 for idx in range(len(existing) - 1, -1, -1)
                 if not existing[idx].metadata.get(_CONTINUITY_RESERVATION_FLAG)
                 and not existing[idx].metadata.get("air_next")
+                and not is_protected_handoff_successor(state, existing[idx])
             ),
             None,
         )
@@ -2024,10 +2078,14 @@ def _apply_loaded_source(
     # The queue replacement and its reservation happen before the source
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
+    handoff_excluded_paths: set[Path] = set()
+    handoff_excluded_track_keys: set[tuple[str, str]] = set()
     _cancel_active_handoff_from_queue(
         request.app.state.queue,
         state,
         reason=GenerationWasteReason.SOURCE_SWITCH,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
     )
     purged = _reserve_continuity_runway(
         request.app.state,
@@ -2035,6 +2093,8 @@ def _apply_loaded_source(
         request.app.state.config,
         replace_queue=True,
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
     )
     state.switch_playlist(tracks, resolved_source)
     _delete_persisted_heading(request.app.state.config.cache_dir)
@@ -2198,6 +2258,63 @@ async def _packaged_recovery_segment(fallback: Path) -> Segment:
         },
         ephemeral=False,
     )
+
+
+def _finalize_selected_playback(
+    app,
+    segment_queue,
+    state: StationState,
+    config,
+    segment: Segment,
+    *,
+    pulled_from_queue: bool,
+    bytes_sent: int,
+    was_skipped: bool,
+    send_completed_cleanly: bool,
+    start_listeners: int,
+    cancel_reason: str,
+) -> None:
+    """Settle every selected Segment exactly once, including setup failures.
+
+    Selection happens before public now-playing callbacks and file open. Keeping
+    one outer finalizer around that whole region guarantees a callback exception
+    cannot strand ``active_playback_segment`` or the queue's unfinished-task
+    counter. A clean music head becomes ``SUCCESSOR_DUE`` before the active
+    pointer is cleared; an unsuccessful head retracts its queued successor.
+    """
+
+    handoff_completed_cleanly = send_completed_cleanly
+    if segment.type is SegmentType.MUSIC and segment.handoff_id:
+        # Opening an empty/truncated head reaches Python EOF but emits no owned
+        # music frame. It cannot authorize the tail successor as if the head
+        # had aired successfully.
+        handoff_completed_cleanly = send_completed_cleanly and bytes_sent > 0
+    try:
+        if segment.type is SegmentType.MUSIC and segment.handoff_id and not handoff_completed_cleanly:
+            _cancel_active_handoff_from_queue(segment_queue, state, reason=cancel_reason)
+        finish_handoff_segment(state, segment, completed_cleanly=handoff_completed_cleanly)
+    finally:
+        try:
+            _schedule_banter_memory_extraction_after_send(
+                app.state,
+                config,
+                state,
+                segment,
+                bytes_sent=bytes_sent,
+                send_completed_cleanly=send_completed_cleanly,
+                listeners=start_listeners,
+            )
+        finally:
+            try:
+                _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
+            finally:
+                _unlink_ephemeral_best_effort(segment)
+                try:
+                    if pulled_from_queue:
+                        segment_queue.task_done()
+                finally:
+                    if state.active_playback_segment is segment:
+                        state.active_playback_segment = None
 
 
 async def run_playback_loop(app) -> None:
@@ -2450,82 +2567,70 @@ async def run_playback_loop(app) -> None:
         # so it cannot identify the exact tail-bearing successor that a live
         # Skip/Panic must retract.
         state.active_playback_segment = segment
-        prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
-        if state.session_stopped:
-            # Stop landed mid-selection: drop this segment instead of airing it.
-            # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
-            # bridge captured just before the stop) and balance the queue
-            # bookkeeping — the normal finally calls task_done for pulled segments.
-            _cancel_active_handoff_from_queue(
-                segment_queue,
-                state,
-                reason=GenerationWasteReason.SESSION_STOPPED,
-            )
-            # A tail successor may itself have been pulled just before Stop
-            # landed. It never starts streaming, but its private predecessor
-            # ownership must still be released with the discarded selection.
-            retire_handoff_for_started_segment(state, segment)
-            state.record_discard(
-                segment,
-                reason=GenerationWasteReason.SESSION_STOPPED,
-                already_counted_in_produced=pulled_from_queue,
-            )
-            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.SESSION_STOPPED)
-            # Use the hardened helper (never raises) instead of a raw unlink: a
-            # throwing unlink here would escape into the playback coroutine and
-            # drop the stream (#1), and skip the task_done() balance below.
-            _unlink_ephemeral_best_effort(segment)
-            if pulled_from_queue:
-                segment_queue.task_done()
-            if state.active_playback_segment is segment:
-                state.active_playback_segment = None
-            state.queue_empty_since = None
-            gap_clips_served = 0
-            continue
-        retire_handoff_for_started_segment(state, segment)
-        state.last_air_monotonic = _runtime_monotonic()
-        state.on_stream_segment(segment)
-        if state.runtime_events:
-            new_last_provider_event = state.runtime_events[-1]
-            if new_last_provider_event is not prev_last_provider_event:
-                logger.info("provider_switch_event", extra=new_last_provider_event.to_dict())
-        if pulled_from_queue and state.queued_segments:
-            state.queued_segments.pop(0)
-        logger.info(
-            ">>> NOW STREAMING %s: %s",
-            segment.type.value,
-            segment.metadata.get("title", segment.metadata),
-        )
-
-        if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-            _ha_task = asyncio.create_task(
-                push_state_to_ha(
-                    ha_url=config.homeassistant.url,
-                    ha_token=config.ha_token,
-                    now_streaming=copy.deepcopy(state.now_streaming),
-                    current_track=state.current_track,
-                    listeners_active=state.listeners_active,
-                    session_stopped=state.session_stopped,
-                    queue_depth=len(state.queued_segments),
-                    station_name=config.display_station_name,
-                    artwork_url=config.brand.artwork_url,
-                )
-            )
-            _ha_push_tasks.add(_ha_task)
-            _ha_task.add_done_callback(_ha_push_tasks.discard)
-
+        bytes_sent = 0
+        was_skipped = False
+        send_completed_cleanly = False
+        start_listeners = 0
+        cancel_reason: str = GenerationWasteReason.OPERATOR_PURGE
         try:
-            send_start = time.monotonic()
-            bytes_sent = 0
-            was_skipped = False
-            send_completed_cleanly = False
-            # Sample listeners at the START of the send loop so a mid-segment
-            # disconnect doesn't mislabel an aired segment as no_listeners
-            # (matches classify_stream_outcome's documented contract). Default to
-            # 0 first so the finally's _emit_stream_result never references an
-            # unbound local if listener sampling itself raises.
-            start_listeners = 0
+            mark_handoff_segment_selected(state, segment)
+            # The real queue item was selected even if a public callback below
+            # fails. Settle the shadow in the same selected-segment scope so a
+            # pre-send exception cannot leave a phantom Up Next row behind.
+            if pulled_from_queue and state.queued_segments:
+                state.queued_segments.pop(0)
+            prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
+
+            if state.session_stopped:
+                # Stop landed after queue selection but before send. The outer
+                # finalizer still owns handoff cancellation, outcome callbacks,
+                # ephemeral cleanup, task_done, and the active pointer.
+                was_skipped = True
+                cancel_reason = GenerationWasteReason.SESSION_STOPPED
+                state.record_discard(
+                    segment,
+                    reason=GenerationWasteReason.SESSION_STOPPED,
+                    already_counted_in_produced=pulled_from_queue,
+                )
+                _drop_segment_moment_receipts(state, segment, GenerationWasteReason.SESSION_STOPPED)
+                state.queue_empty_since = None
+                gap_clips_served = 0
+                continue
+
+            state.last_air_monotonic = _runtime_monotonic()
+            state.on_stream_segment(segment)
+            if state.runtime_events:
+                new_last_provider_event = state.runtime_events[-1]
+                if new_last_provider_event is not prev_last_provider_event:
+                    logger.info("provider_switch_event", extra=new_last_provider_event.to_dict())
+            logger.info(
+                ">>> NOW STREAMING %s: %s",
+                segment.type.value,
+                segment.metadata.get("title", segment.metadata),
+            )
+
+            if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+                _ha_task = asyncio.create_task(
+                    push_state_to_ha(
+                        ha_url=config.homeassistant.url,
+                        ha_token=config.ha_token,
+                        now_streaming=copy.deepcopy(state.now_streaming),
+                        current_track=state.current_track,
+                        listeners_active=state.listeners_active,
+                        session_stopped=state.session_stopped,
+                        queue_depth=len(state.queued_segments),
+                        station_name=config.display_station_name,
+                        artwork_url=config.brand.artwork_url,
+                    )
+                )
+                _ha_push_tasks.add(_ha_task)
+                _ha_task.add_done_callback(_ha_push_tasks.discard)
+
+            # Sample at the actual send boundary, after now-playing callbacks.
+            # A listener disconnected by those callbacks did not hear this
+            # segment and must not authorize post-air memory extraction.
             start_listeners = len(hub._listeners)
+            send_start = time.monotonic()
             skip_event.clear()
             # A queued segment's file can vanish before it airs — evicted by the
             # cache LRU, deleted externally, or pruned by the restart-handoff spool
@@ -2561,12 +2666,7 @@ async def run_playback_loop(app) -> None:
             except OSError as exc:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
-            if was_skipped:
-                _cancel_active_handoff_from_queue(
-                    segment_queue,
-                    state,
-                    reason=GenerationWasteReason.OPERATOR_PURGE,
-                )
+
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
             # already playing again) still captures it. Single extract at the
@@ -2597,7 +2697,7 @@ async def run_playback_loop(app) -> None:
                             }
                 except Exception as exc:
                     logger.warning("lookback snapshot failed for %s segment: %s", segment.type.value, exc)
-            if segment.type == SegmentType.MUSIC and not was_skipped:
+            if segment.type == SegmentType.MUSIC and not was_skipped and send_completed_cleanly and bytes_sent > 0:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
                 # segment — on Pi, the SQLite writes can take long enough to cause
@@ -2607,24 +2707,19 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
-            _schedule_banter_memory_extraction_after_send(
-                app.state,
-                config,
+            _finalize_selected_playback(
+                app,
+                segment_queue,
                 state,
+                config,
                 segment,
+                pulled_from_queue=pulled_from_queue,
                 bytes_sent=bytes_sent,
+                was_skipped=was_skipped,
                 send_completed_cleanly=send_completed_cleanly,
-                listeners=start_listeners,
+                start_listeners=start_listeners,
+                cancel_reason=cancel_reason,
             )
-            _emit_stream_result(state, segment, bytes_sent, was_skipped, start_listeners)
-            # Best-effort unlink: a raw unlink here can raise a non-missing OSError
-            # and escape the finally, killing the playback loop after we already
-            # decided to move on. Reuse the guarded helper used everywhere else.
-            _unlink_ephemeral_best_effort(segment)
-            if pulled_from_queue:
-                segment_queue.task_done()
-            if state.active_playback_segment is segment:
-                state.active_playback_segment = None
 
 
 def _schedule_banter_memory_extraction_after_send(
@@ -3511,12 +3606,23 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
     was forced.
     """
+    handoff_excluded_paths: set[Path] = set()
+    handoff_excluded_track_keys: set[tuple[str, str]] = set()
     _cancel_active_handoff_from_queue(
         app_state.queue,
         state,
         reason=GenerationWasteReason.OPERATOR_PURGE,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
     )
-    _reserve_continuity_runway(app_state, state, config, discard_reason=GenerationWasteReason.OPERATOR_PURGE)
+    _reserve_continuity_runway(
+        app_state,
+        state,
+        config,
+        discard_reason=GenerationWasteReason.OPERATOR_PURGE,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
+    )
     now_seg = state.now_streaming or {}
     skipped_music_metadata: dict | None = None
     skipped_music_listen_sec = 0.0
@@ -3607,10 +3713,14 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
             "ok": False,
             "error": "The station is paused. Press Start before using Panic Cut.",
         }
+    handoff_excluded_paths: set[Path] = set()
+    handoff_excluded_track_keys: set[tuple[str, str]] = set()
     _cancel_active_handoff_from_queue(
         request.app.state.queue,
         state,
         reason=GenerationWasteReason.OPERATOR_PANIC,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
     )
     purged = _reserve_continuity_runway(
         request.app.state,
@@ -3618,6 +3728,8 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
         request.app.state.config,
         replace_queue=True,
         discard_reason=GenerationWasteReason.OPERATOR_PANIC,
+        excluded_paths=handoff_excluded_paths,
+        excluded_track_keys=handoff_excluded_track_keys,
     )
     if state.now_streaming:
         request.app.state.skip_event.set()
@@ -3707,6 +3819,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     if not real_removed and index < len(items):
         removed_segment = items.pop(index)
 
+    handoff_source = handoff_original_source(state, removed_segment) if removed_segment is not None else None
     if removed_segment is not None:
         state.record_discard(
             removed_segment,
@@ -3724,12 +3837,20 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
     state.queued_segments.pop(index)
     _rebuild_queue_shadow(q, state, items)
     excluded_paths = {removed_segment.path} if removed_segment is not None else set()
+    excluded_track_keys: set[tuple[str, str]] = set()
+    if handoff_source is not None:
+        original_path, original_music = handoff_source
+        excluded_paths.add(original_path)
+        original_key = _segment_track_key(original_music)
+        if original_key != ("", ""):
+            excluded_track_keys.add(original_key)
     _reserve_continuity_runway(
         request.app.state,
         state,
         request.app.state.config,
         discard_reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
         excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
     )
 
     logger.info("Queue item removed by admin: %s (id=%s)", removed_label, target_id or "n/a")

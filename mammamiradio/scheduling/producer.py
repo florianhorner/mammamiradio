@@ -102,6 +102,8 @@ from mammamiradio.scheduling.handoff import (
     PreparedMusicHandoff,
     commit_music_handoff,
     discard_prepared_music_handoff,
+    handoff_original_paths,
+    is_protected_handoff_successor,
     peek_music_handoff_candidate,
     reconcile_handoff_queue_items,
 )
@@ -1349,7 +1351,7 @@ def _front_insert_queue_and_shadow(
     # accurate one is produced on the next normal cycle (see #641 for the sibling
     # audio-level version of this problem).
     stale_head: Segment | None = None
-    if items and items[0].metadata.get("transition_track_ref"):
+    if items and items[0].metadata.get("transition_track_ref") and not is_protected_handoff_successor(state, items[0]):
         stale_head = items.pop(0)
     items.insert(0, segment)
     dropped: list[Segment] = []
@@ -1361,7 +1363,9 @@ def _front_insert_queue_and_shadow(
             (
                 index
                 for index in range(len(items) - 1, 0, -1)
-                if not items[index].metadata.get("continuity_reservation") and not items[index].metadata.get("air_next")
+                if not items[index].metadata.get("continuity_reservation")
+                and not items[index].metadata.get("air_next")
+                and not is_protected_handoff_successor(state, items[index])
             ),
             None,
         )
@@ -1517,9 +1521,8 @@ async def _bake_cached_egress(segment: Segment, source: Path, config: StationCon
     if baked.exists() and baked.stat().st_size > 0:  # cache hit — no re-encode
         return replace(segment, path=baked, ephemeral=False)
     staging = config.cache_dir / f"fm_{source.stem}_{chain_ver}_{src_tag}.staging_{uuid4().hex[:8]}.mp3"
-    loop = asyncio.get_running_loop()
     try:
-        applied = await loop.run_in_executor(None, apply_broadcast_chain, source, staging)
+        applied = await _run_owned_thread(apply_broadcast_chain, source, staging)
     except Exception:
         logger.debug("Egress bake failed (non-fatal), airing source clean", exc_info=True)
         with contextlib.suppress(OSError):
@@ -1565,9 +1568,8 @@ async def _apply_egress(segment: Segment, config: StationConfig) -> Segment:
     if not segment.ephemeral and _is_under(source, config.cache_dir):
         return await _bake_cached_egress(segment, source, config)
     out = config.tmp_dir / f"egress_{uuid4().hex[:8]}.mp3"
-    loop = asyncio.get_running_loop()
     try:
-        applied = await loop.run_in_executor(None, apply_broadcast_chain, source, out)
+        applied = await _run_owned_thread(apply_broadcast_chain, source, out)
     except Exception:
         logger.debug("Egress broadcast chain failed (non-fatal), airing clean", exc_info=True)
         with contextlib.suppress(OSError):
@@ -1686,6 +1688,7 @@ async def _enqueue_with_egress(
     front_insert: bool = False,
     shadow_entry: dict | None = None,
     stale_check: StaleCheck | None = None,
+    ownership_transfer: Callable[[], None] | None = None,
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
@@ -1711,45 +1714,303 @@ async def _enqueue_with_egress(
     if not front_insert and shadow_entry is None:
         shadow_entry = _queue_shadow_entry(segment)
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
-    egress_started = time.monotonic()
-    segment = await _apply_egress(segment, config)
-    state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
-    # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
-    # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
-    # would purge the queue before this put. A caller that captured a generation up front
-    # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
-    # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
-    # keep their documented pre-egress-only behavior.
-    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
-    if rejection_reason is not None:
-        _discard_rejected_admission(state, segment, rejection_reason, phase="post-egress enqueue gate")
-        return False
-    admission_started = time.monotonic()
-    if front_insert:
-        assert shadow_entry is not None  # narrowed by the guard above (mypy)
-        admitted = _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+    egressed_owned = False
+    try:
+        egress_started = time.monotonic()
+        segment = await _apply_egress(segment, config)
+        egressed_owned = True
+        state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
+        # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
+        # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
+        # would purge the queue before this put. A caller that captured a generation up front
+        # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
+        # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
+        # keep their documented pre-egress-only behavior.
+        rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+        if rejection_reason is not None:
+            _discard_rejected_admission(state, segment, rejection_reason, phase="post-egress enqueue gate")
+            return False
+        admission_started = time.monotonic()
+        if front_insert:
+            assert shadow_entry is not None  # narrowed by the guard above (mypy)
+            admitted = _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+            if admitted:
+                egressed_owned = False
+                if ownership_transfer is not None:
+                    ownership_transfer()
+            state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+            return admitted
+        await queue.put(segment)
+        # Revalidate after that wait, then synchronously retract the exact admitted
+        # object before publishing its shadow row or any queue-commit side effect.
+        rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+        if rejection_reason is not None:
+            removed = _remove_exact_queued_segment(queue, segment, state)
+            if removed:
+                _discard_rejected_admission(state, segment, rejection_reason, phase="post-capacity enqueue gate")
+            else:  # Defensive: impossible without a new await/consumer interleaving above.
+                logger.error("Stale %s escaped atomic queue retraction", segment.type.value)
+            state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+            return False
+        # The post-capacity gate accepted the exact queued object. Transfer all
+        # attempt artifacts synchronously before shadow/bookkeeping can fail.
+        egressed_owned = False
+        if ownership_transfer is not None:
+            ownership_transfer()
+        assert shadow_entry is not None
+        state.queued_segments.append(shadow_entry)
+        _remember_enqueued(state, segment, pre_egress_path)
+        _schedule_restart_handoff_spool(state, config, segment)
         state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
-        return admitted
-    await queue.put(segment)
-    # ``queue.put`` is an await when capacity is full. Revalidate after that wait,
-    # then synchronously retract the exact admitted object before publishing its
-    # shadow row or any queue-commit side effect. This closes the cutover race in
-    # which a purge/source/chaos action lands after the post-egress check.
-    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
-    if rejection_reason is not None:
-        removed = _remove_exact_queued_segment(queue, segment, state)
-        if removed:
-            _discard_rejected_admission(state, segment, rejection_reason, phase="post-capacity enqueue gate")
-        else:  # Defensive: impossible without a new await/consumer interleaving above.
-            logger.error("Stale %s escaped atomic queue retraction", segment.type.value)
-        state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
-        return False
-    assert shadow_entry is not None
-    state.queued_segments.append(shadow_entry)
-    _remember_enqueued(state, segment, pre_egress_path)
-    _schedule_restart_handoff_spool(state, config, segment)
-    state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
-    return True
+        return True
+    finally:
+        if egressed_owned:
+            _unlink_if_tmp_render(segment, config.tmp_dir)
+
+
+def _unlink_path_best_effort(path: Path) -> None:
+    """Remove one owned scratch path without letting cleanup break audio."""
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Scratch audio cleanup failed: %s", path, exc_info=True)
+
+
+def _discard_prepared_handoff(prepared: PreparedMusicHandoff) -> None:
+    """Discard every producer-owned artifact for an uncommitted handoff.
+
+    ``discard_prepared_music_handoff`` remains the cross-module ownership API.
+    Newer frame splitters may additionally publish a decoder-preroll artifact;
+    keep that compatibility detail local until ownership transfers to the queue.
+    """
+
+    discard_prepared_music_handoff(prepared)
+    decode_path = getattr(prepared.split, "tail_decode_path", None)
+    if isinstance(decode_path, Path) and decode_path != prepared.split.tail_path:
+        _unlink_path_best_effort(decode_path)
+
+
+@dataclass
+class _HandoffPreparationAttempt:
+    """Own the predictable scratch namespace of one frame-split attempt."""
+
+    head_path: Path
+    tail_path: Path
+    extra_paths: set[Path]
+    transferred: bool = False
+
+    @classmethod
+    def create(cls, source_path: Path, output_dir: Path) -> tuple[_HandoffPreparationAttempt, str]:
+        stem = f"{source_path.stem}_handoff_{uuid4().hex}"
+        return (
+            cls(
+                head_path=output_dir / f"{stem}_head.mp3",
+                tail_path=output_dir / f"{stem}_tail.mp3",
+                extra_paths=set(),
+            ),
+            stem,
+        )
+
+    def observe_split(self, split: object) -> None:
+        decode_path = getattr(split, "tail_decode_path", None)
+        if isinstance(decode_path, Path):
+            self.extra_paths.add(decode_path)
+
+    def transfer(self, prepared: PreparedMusicHandoff) -> PreparedMusicHandoff:
+        self.transferred = True
+        return prepared
+
+    def discard(self) -> None:
+        if self.transferred:
+            return
+        for path in {self.head_path, self.tail_path, *self.extra_paths}:
+            _unlink_path_best_effort(path)
+
+
+async def _drain_shielded_task_after_cancellation(task: asyncio.Task):
+    """Wait for shielded thread work to settle despite repeated cancellation.
+
+    Python cannot stop a running ``to_thread`` callable. Returning from its
+    coroutine before the worker publishes its known outputs would race cleanup,
+    so cancellation drains the worker first and lets the attempt owner unlink
+    whatever it produced.
+    """
+
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except BaseException:
+            break
+    try:
+        return task.result()
+    except BaseException:
+        return None
+
+
+async def _run_owned_thread(function: Callable, /, *args, **kwargs):
+    """Run bounded scratch-producing work without abandoning its thread."""
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await _drain_shielded_task_after_cancellation(task)
+        raise
+
+
+def _discard_owned_render_result(
+    result: object,
+    tmp_dir: Path,
+    *,
+    preserve_paths: set[Path] | None = None,
+) -> None:
+    """Release successful child-task results that their failed group cannot adopt."""
+
+    if isinstance(result, PreparedMusicHandoff):
+        _discard_prepared_handoff(result)
+        return
+    if isinstance(result, Path):
+        if preserve_paths is not None and result in preserve_paths:
+            return
+        try:
+            is_owned = result.resolve().is_relative_to(tmp_dir.resolve())
+        except OSError:
+            is_owned = False
+        if is_owned:
+            _unlink_path_best_effort(result)
+        return
+    if isinstance(result, tuple | list | set):
+        for value in result:
+            _discard_owned_render_result(value, tmp_dir, preserve_paths=preserve_paths)
+
+
+async def _settle_child_tasks_without_cancelling(
+    tasks: list[asyncio.Task],
+) -> tuple[list[object], asyncio.CancelledError | None]:
+    """Shield a child group and let every task reach a natural terminal state.
+
+    Cancelling a coroutine suspended in ``run_in_executor`` only detaches its
+    Task; the worker keeps running and may publish after cleanup. The group is
+    therefore shielded from outer cancellation and uses ``return_exceptions``
+    so one child failure never cancels or abandons its siblings.
+    """
+
+    group = asyncio.gather(*tasks, return_exceptions=True)
+    outer_cancellation: asyncio.CancelledError | None = None
+    while not group.done():
+        try:
+            await asyncio.shield(group)
+        except asyncio.CancelledError as exc:
+            if outer_cancellation is None:
+                outer_cancellation = exc
+            continue
+    return list(group.result()), outer_cancellation
+
+
+async def _gather_owned_child_tasks(
+    tasks: list[asyncio.Task],
+    tmp_dir: Path,
+    *,
+    preserve_paths: set[Path] | None = None,
+) -> list[object]:
+    """Settle an owned group, cleaning successes before propagating failure."""
+
+    results, outer_cancellation = await _settle_child_tasks_without_cancelling(tasks)
+    failure = next((result for result in results if isinstance(result, BaseException)), None)
+    if outer_cancellation is not None or failure is not None:
+        for result in results:
+            if not isinstance(result, BaseException):
+                _discard_owned_render_result(result, tmp_dir, preserve_paths=preserve_paths)
+        if outer_cancellation is not None:
+            raise outer_cancellation
+        assert isinstance(failure, BaseException)
+        raise failure
+    return results
+
+
+async def _drain_and_discard_child_tasks(tasks: list[asyncio.Task], tmp_dir: Path) -> None:
+    """Settle an already-unadopted group and discard every successful result."""
+
+    results, outer_cancellation = await _settle_child_tasks_without_cancelling(tasks)
+    for result in results:
+        if not isinstance(result, BaseException):
+            _discard_owned_render_result(result, tmp_dir)
+    if outer_cancellation is not None:
+        raise outer_cancellation
+
+
+async def _discard_prepared_handoff_task(task: asyncio.Task[PreparedMusicHandoff | None], tmp_dir: Path) -> None:
+    """Drain an unadopted preparation task and discard a completed result."""
+
+    await _drain_and_discard_child_tasks([task], tmp_dir)
+
+
+@dataclass
+class _ProducerAttemptOwnership:
+    """Idempotent owner for one render attempt until queue admission.
+
+    Branch-local cleanup still handles ordinary degradation immediately. This
+    owner is the cancellation/finally backstop spanning every later await —
+    quality, stings, probes, egress, and admission. ``transfer`` is synchronous
+    and must run immediately after the queue accepts the attempt.
+    """
+
+    tmp_dir: Path
+    paths: set[Path]
+    prepared_handoffs: list[PreparedMusicHandoff]
+    active: bool = False
+
+    @classmethod
+    def create(cls, tmp_dir: Path) -> _ProducerAttemptOwnership:
+        return cls(tmp_dir=tmp_dir, paths=set(), prepared_handoffs=[])
+
+    def begin(self) -> None:
+        self.discard()
+        self.active = True
+
+    def own_path(self, path: Path | None) -> None:
+        if self.active and isinstance(path, Path):
+            self.paths.add(path)
+
+    def own_paths(self, *paths: Path | None) -> None:
+        for path in paths:
+            self.own_path(path)
+
+    def own_segment(self, segment: Segment) -> None:
+        if self.active and _is_tmp_render(segment, self.tmp_dir):
+            self.own_path(segment.path)
+
+    def own_prepared(self, prepared: PreparedMusicHandoff | None) -> None:
+        if not self.active or prepared is None:
+            return
+        if not any(owned is prepared for owned in self.prepared_handoffs):
+            self.prepared_handoffs.append(prepared)
+
+    def transfer(self) -> None:
+        """Atomically relinquish all artifacts after successful admission."""
+
+        self.paths.clear()
+        self.prepared_handoffs.clear()
+        self.active = False
+
+    def discard(self) -> None:
+        """Release every still-private artifact; safe to call repeatedly."""
+
+        for prepared in self.prepared_handoffs:
+            _discard_prepared_handoff(prepared)
+        for path in self.paths:
+            try:
+                is_owned = path.resolve().is_relative_to(self.tmp_dir.resolve())
+            except OSError:
+                is_owned = False
+            if is_owned and not _is_packaged_asset(path):
+                _unlink_path_best_effort(path)
+        self.paths.clear()
+        self.prepared_handoffs.clear()
+        self.active = False
 
 
 async def _enqueue_handoff_with_egress(
@@ -1761,6 +2022,7 @@ async def _enqueue_handoff_with_egress(
     prepared: PreparedMusicHandoff,
     shadow_entry: dict,
     stale_check: StaleCheck | None = None,
+    ownership_transfer: Callable[[], None] | None = None,
 ) -> Segment | None:
     """Egress a prepared speech successor then atomically commit its handoff.
 
@@ -1770,32 +2032,46 @@ async def _enqueue_handoff_with_egress(
     fallback while the untouched song remains whole.
     """
 
-    rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
-    if rejection_reason is not None:
-        _discard_rejected_admission(state, segment, rejection_reason, phase="pre-egress handoff gate")
-        discard_prepared_music_handoff(prepared)
-        return None
+    prepared_owned = True
+    egressed: Segment | None = None
+    egressed_owned = False
+    try:
+        rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
+        if rejection_reason is not None:
+            _discard_rejected_admission(state, segment, rejection_reason, phase="pre-egress handoff gate")
+            return None
 
-    pre_egress_path = segment.path
-    egress_started = time.monotonic()
-    egressed = await _apply_egress(segment, config)
-    state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
-    rejection_reason = _enqueue_rejection_reason(state, egressed, stale_check)
-    if rejection_reason is not None:
-        _discard_rejected_admission(state, egressed, rejection_reason, phase="post-egress handoff gate")
-        discard_prepared_music_handoff(prepared)
-        return None
+        pre_egress_path = segment.path
+        egress_started = time.monotonic()
+        egressed = await _apply_egress(segment, config)
+        egressed_owned = True
+        state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
+        rejection_reason = _enqueue_rejection_reason(state, egressed, stale_check)
+        if rejection_reason is not None:
+            _discard_rejected_admission(state, egressed, rejection_reason, phase="post-egress handoff gate")
+            return None
 
-    admission_started = time.monotonic()
-    if not commit_music_handoff(queue, state, prepared, egressed, shadow_entry):
-        _unlink_if_tmp_render(egressed, config.tmp_dir)
-        discard_prepared_music_handoff(prepared)
+        admission_started = time.monotonic()
+        if not commit_music_handoff(queue, state, prepared, egressed, shadow_entry):
+            _unlink_if_tmp_render(egressed, config.tmp_dir)
+            state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+            return None
+
+        # The queue reservation owns the shortened head from this exact point.
+        # Any later bookkeeping failure must not let this call's finalizer delete
+        # audio that has already become visible to playback.
+        prepared_owned = False
+        egressed_owned = False
+        if ownership_transfer is not None:
+            ownership_transfer()
+        _remember_enqueued(state, egressed, pre_egress_path)
         state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
-        return None
-
-    _remember_enqueued(state, egressed, pre_egress_path)
-    state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
-    return egressed
+        return egressed
+    finally:
+        if egressed_owned and egressed is not None:
+            _unlink_if_tmp_render(egressed, config.tmp_dir)
+        if prepared_owned:
+            _discard_prepared_handoff(prepared)
 
 
 async def _apply_talk_bed(
@@ -1811,30 +2087,76 @@ async def _apply_talk_bed(
     bed. The outgoing song is never accepted here: its final frames, when
     eligible, are already owned by the explicit handoff successor mix.
     """
-    loop = asyncio.get_running_loop()
     bed_path = config.tmp_dir / f"{prefix}_bed_{uuid4().hex[:8]}.mp3"
-    with _timed_render_stage(state, "mix"):
-        duration = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
-        imaging_lib = _make_imaging_lib(config)
-        bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
-        try:
-            await loop.run_in_executor(None, imaging_lib.pick_talk_bed, duration, bed_path, None)
-            await loop.run_in_executor(
-                None,
+    bedded_path = config.tmp_dir / f"{prefix}_bedded_{uuid4().hex[:8]}.mp3"
+    completed = False
+    try:
+        with _timed_render_stage(state, "mix"):
+            duration = await _run_owned_thread(_probe_segment_duration, audio_path)
+            imaging_lib = _make_imaging_lib(config)
+            await _run_owned_thread(imaging_lib.pick_talk_bed, duration, bed_path, None)
+            await _run_owned_thread(
                 mix_voice_with_bed,
                 audio_path,
                 bed_path,
                 bedded_path,
                 config.imaging.bed_volume_db,
             )
-        except Exception:
-            bedded_path.unlink(missing_ok=True)
-            bed_path.unlink(missing_ok=True)
-            raise
-        finally:
-            bed_path.unlink(missing_ok=True)
-    audio_path.unlink(missing_ok=True)
-    return bedded_path
+        completed = True
+        return bedded_path
+    finally:
+        _unlink_path_best_effort(bed_path)
+        if not completed:
+            _unlink_path_best_effort(bedded_path)
+
+
+async def _apply_and_adopt_talk_bed(
+    audio_path: Path,
+    config: StationConfig,
+    state: StationState,
+    *,
+    prefix: str,
+) -> Path:
+    """Replace one dry render only after its bed transform succeeds."""
+
+    replacement = await _apply_talk_bed(audio_path, config, state, prefix=prefix)
+    if replacement != audio_path:
+        _unlink_path_best_effort(audio_path)
+    return replacement
+
+
+async def _apply_paired_talk_beds(
+    audio_path: Path,
+    fallback_audio_path: Path,
+    config: StationConfig,
+    state: StationState,
+    *,
+    primary_prefix: str,
+    fallback_prefix: str,
+) -> tuple[Path, Path]:
+    """Transform a tail-bearing render and its dry fallback transactionally.
+
+    ``_apply_talk_bed`` deliberately leaves its input untouched.  Both child
+    transforms settle before either source is consumed, so one failed FFmpeg
+    job can never strand the caller with a variable that names a deleted file.
+    """
+
+    primary_task = asyncio.create_task(_apply_talk_bed(audio_path, config, state, prefix=primary_prefix))
+    fallback_task = asyncio.create_task(_apply_talk_bed(fallback_audio_path, config, state, prefix=fallback_prefix))
+    results = await _gather_owned_child_tasks(
+        [primary_task, fallback_task],
+        config.tmp_dir,
+        preserve_paths={audio_path, fallback_audio_path},
+    )
+
+    primary_result, fallback_result = results
+    assert isinstance(primary_result, Path)
+    assert isinstance(fallback_result, Path)
+    if primary_result != audio_path:
+        _unlink_path_best_effort(audio_path)
+    if fallback_result != fallback_audio_path:
+        _unlink_path_best_effort(fallback_audio_path)
+    return primary_result, fallback_result
 
 
 async def _prepare_music_handoff(
@@ -1854,40 +2176,47 @@ async def _prepare_music_handoff(
     if candidate is None:
         return None
     source_path = candidate.path
+    attempt, artifact_stem = _HandoffPreparationAttempt.create(source_path, config.tmp_dir)
+    split_task: asyncio.Task | None = None
     try:
         before = source_path.stat()
-        split = await asyncio.to_thread(
-            split_mpeg1_l3_handoff,
-            source_path,
-            config.tmp_dir,
-            tail_seconds,
+        split_task = asyncio.create_task(
+            asyncio.to_thread(
+                split_mpeg1_l3_handoff,
+                source_path,
+                config.tmp_dir,
+                tail_seconds,
+                stem=artifact_stem,
+            )
         )
+        try:
+            split = await asyncio.shield(split_task)
+        except asyncio.CancelledError:
+            late_split = await _drain_shielded_task_after_cancellation(split_task)
+            if late_split is not None:
+                attempt.observe_split(late_split)
+            raise
+        attempt.observe_split(split)
         after = source_path.stat()
-    except Exception as exc:
-        logger.info("Music handoff unavailable; using dry speech: %s", exc)
-        return None
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        # The split may have captured old bytes while cache maintenance swapped
-        # the path. A tail that cannot be proven to match the queued egress
-        # source is unusable; remove both artifacts and keep the song whole.
-        discard_prepared_music_handoff(
+        if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+            logger.info("Music handoff source changed during frame split; using dry speech")
+            return None
+        return attempt.transfer(
             PreparedMusicHandoff(
                 music_segment=candidate,
                 source_path=source_path,
                 split=split,
-                source_size=before.st_size,
-                source_mtime_ns=before.st_mtime_ns,
+                source_size=after.st_size,
+                source_mtime_ns=after.st_mtime_ns,
             )
         )
-        logger.info("Music handoff source changed during frame split; using dry speech")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.info("Music handoff unavailable; using dry speech: %s", exc)
         return None
-    return PreparedMusicHandoff(
-        music_segment=candidate,
-        source_path=source_path,
-        split=split,
-        source_size=after.st_size,
-        source_mtime_ns=after.st_mtime_ns,
-    )
+    finally:
+        attempt.discard()
 
 
 async def _try_crossfade(
@@ -1909,39 +2238,56 @@ async def _try_crossfade(
 
     tail_path: Path | None
     duration: float
+    decoder_preroll_samples: int
+    tail_sample_count: int | None
     if isinstance(music_tail, PreparedMusicHandoff):
-        tail_path = music_tail.split.tail_path
+        tail_path = getattr(music_tail.split, "tail_decode_path", None) or music_tail.split.tail_path
         duration = music_tail.split.tail_duration_sec
+        decoder_preroll_samples = getattr(music_tail.split, "tail_preroll_samples", 0)
+        tail_sample_count = getattr(music_tail.split, "tail_sample_count", 0) or None
     else:
         tail_path = music_tail
         duration = tail_seconds
+        decoder_preroll_samples = 0
+        tail_sample_count = None
     if not tail_path or not tail_path.exists():
+        _unlink_path_best_effort(output_path)
+        if isinstance(music_tail, PreparedMusicHandoff):
+            _discard_prepared_handoff(music_tail)
         return voice_path
     try:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            partial(
-                crossfade_voice_over_tail,
-                tail_path,
-                voice_path,
-                output_path,
-                tail_duration_sec=duration,
-                voice_volume=1.0,
-                music_fade_volume=music_fade_volume,
-            ),
+        await _run_owned_thread(
+            crossfade_voice_over_tail,
+            tail_path,
+            voice_path,
+            output_path,
+            tail_duration_sec=duration,
+            decoder_preroll_samples=decoder_preroll_samples,
+            tail_sample_count=tail_sample_count,
+            voice_volume=1.0,
+            music_fade_volume=music_fade_volume,
         )
         if isinstance(music_tail, PreparedMusicHandoff):
-            music_tail.split.tail_path.unlink(missing_ok=True)
+            _unlink_path_best_effort(music_tail.split.tail_path)
+            decode_path = getattr(music_tail.split, "tail_decode_path", None)
+            if isinstance(decode_path, Path) and decode_path != music_tail.split.tail_path:
+                _unlink_path_best_effort(decode_path)
         if not keep_voice:
             voice_path.unlink(missing_ok=True)
         logger.info("Crossfade over reserved tail %s", tail_path.name)
         return output_path
+    except asyncio.CancelledError:
+        # ``_run_owned_thread`` has already drained the uncancellable worker,
+        # so no late FFmpeg write can race these final ownership releases.
+        _unlink_path_best_effort(output_path)
+        if isinstance(music_tail, PreparedMusicHandoff):
+            _discard_prepared_handoff(music_tail)
+        raise
     except Exception as exc:
         logger.warning("Crossfade failed, using standalone: %s", exc)
-        output_path.unlink(missing_ok=True)
+        _unlink_path_best_effort(output_path)
         if isinstance(music_tail, PreparedMusicHandoff):
-            discard_prepared_music_handoff(music_tail)
+            _discard_prepared_handoff(music_tail)
         return voice_path
 
 
@@ -1965,41 +2311,46 @@ async def _maybe_add_transition_sting(
         or segment.metadata.get("rescue")
     ):
         return segment
+    sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
+    merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
+    pre_sting_path = segment.path
+    pre_sting_ephemeral = segment.ephemeral
+    imaging_lib = _make_imaging_lib(config)
     try:
-        loop = asyncio.get_running_loop()
-        sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
-        imaging_lib = _make_imaging_lib(config)
         with _timed_render_stage(state, "mix"):
-            await loop.run_in_executor(
-                None,
+            await _run_owned_thread(
                 imaging_lib.pick_stinger,
                 previous_type,
                 actual_type,
                 sting_path,
             )
-            merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
-            pre_sting_path = segment.path
-            pre_sting_ephemeral = segment.ephemeral
-            try:
-                await loop.run_in_executor(
-                    None,
-                    concat_files,
-                    [sting_path, segment.path],
-                    merged_path,
-                    0,
-                    False,
-                )
-            except Exception:
-                merged_path.unlink(missing_ok=True)
-                raise
-            finally:
-                sting_path.unlink(missing_ok=True)
-        if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
-            pre_sting_path.unlink(missing_ok=True)
-        return replace(segment, path=merged_path, ephemeral=True)
+            await _run_owned_thread(
+                concat_files,
+                [sting_path, segment.path],
+                merged_path,
+                0,
+                False,
+            )
+    except asyncio.CancelledError:
+        # Both scratch workers have settled before cleanup, so neither can
+        # republish after cancellation returns to the attempt owner.
+        _unlink_path_best_effort(sting_path)
+        _unlink_path_best_effort(merged_path)
+        raise
     except Exception as exc:
+        _unlink_path_best_effort(sting_path)
+        _unlink_path_best_effort(merged_path)
         logger.warning("Transition sting generation failed, using clean cut: %s", exc)
         return segment
+    except BaseException:
+        _unlink_path_best_effort(sting_path)
+        _unlink_path_best_effort(merged_path)
+        raise
+
+    _unlink_path_best_effort(sting_path)
+    if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
+        _unlink_path_best_effort(pre_sting_path)
+    return replace(segment, path=merged_path, ephemeral=True)
 
 
 async def _synthesize_impossible_moment(
@@ -2017,23 +2368,33 @@ async def _synthesize_impossible_moment(
     """
     host = random.choice(_sw._regular_hosts(config))
     imp_path = config.tmp_dir / f"impossible_{uuid4().hex[:8]}.mp3"
-    with _timed_render_stage(state, "tts"):
-        await synthesize(
-            line,
-            host.voice,
-            imp_path,
-            engine=host.engine,
-            edge_fallback_voice=host.edge_fallback_voice,
-            state=state,
-        )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
-    with _timed_render_stage(state, "mix"):
-        audio_path = await _try_crossfade(imp_path, config, xfade_out, music_tail, keep_voice=return_fallback)
-    state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
-    if return_fallback:
-        prepared = music_tail if isinstance(music_tail, PreparedMusicHandoff) and audio_path == xfade_out else None
-        return audio_path, imp_path if prepared is not None else None, prepared
-    return audio_path
+    try:
+        with _timed_render_stage(state, "tts"):
+            synth_task = asyncio.create_task(
+                synthesize(
+                    line,
+                    host.voice,
+                    imp_path,
+                    engine=host.engine,
+                    edge_fallback_voice=host.edge_fallback_voice,
+                    state=state,
+                )
+            )
+            await _gather_owned_child_tasks([synth_task], config.tmp_dir)
+        with _timed_render_stage(state, "mix"):
+            audio_path = await _try_crossfade(imp_path, config, xfade_out, music_tail, keep_voice=return_fallback)
+        state.last_banter_script = [{"host": host.name, "text": line, "type": "impossible"}]
+        if return_fallback:
+            prepared = music_tail if isinstance(music_tail, PreparedMusicHandoff) and audio_path == xfade_out else None
+            return audio_path, imp_path if prepared is not None else None, prepared
+        return audio_path
+    except BaseException:
+        _unlink_path_best_effort(imp_path)
+        _unlink_path_best_effort(xfade_out)
+        if isinstance(music_tail, PreparedMusicHandoff):
+            _discard_prepared_handoff(music_tail)
+        raise
 
 
 _recently_played_clips: deque[str] = deque(maxlen=50)
@@ -2500,21 +2861,77 @@ async def _fire_interrupt(
 
     # Drain the lookahead queue so no buffered music leaks between bridge and banter.
     purged = 0
-    while not queue.empty():
+    while True:
         try:
             seg = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        except Exception:
+            logger.error("Interrupt queue drain stopped before the queue was empty", exc_info=True)
+            break
+        try:
             state.record_discard(seg, reason=GenerationWasteReason.INTERRUPT, already_counted_in_produced=True)
+        except Exception:
+            logger.warning("Interrupt accounting failed for %s; continuing queue drain", seg.path, exc_info=True)
+        try:
             if seg.ephemeral and not _is_packaged_asset(seg.path):
-                seg.path.unlink(missing_ok=True)
+                _unlink_path_best_effort(seg.path)
+        except Exception:
+            logger.warning("Interrupt file cleanup failed for %s; continuing queue drain", seg.path, exc_info=True)
+        finally:
+            # The Segment has already left the real queue. Accounting and file
+            # cleanup are independent best-effort operations, and neither can
+            # strand later audio or leave queue.join() permanently blocked.
             queue.task_done()
             purged += 1
-        except Exception:
-            break
+
     # The current music head may already be in playback while its successor
-    # sits in the drained lookahead. Releasing every pair against an empty
-    # final queue makes the urgent cut discard that successor rather than
-    # letting it carry an already-aborted tail into the interrupt.
-    reconcile_handoff_queue_items(state, [])
+    # sits in the drained lookahead. Reconcile against the ACTUAL residual
+    # topology rather than asserting an empty queue after a partial drain.
+    residual = list(getattr(queue, "_queue", ()))
+    orphaned = reconcile_handoff_queue_items(state, residual)
+    for orphan in orphaned:
+        try:
+            removed = _remove_exact_queued_segment(queue, orphan)
+        except Exception:
+            logger.error("Interrupt could not retract an orphaned handoff successor", exc_info=True)
+            removed = False
+        if removed:
+            try:
+                state.record_discard(
+                    orphan,
+                    reason=GenerationWasteReason.INTERRUPT,
+                    already_counted_in_produced=True,
+                )
+            except Exception:
+                logger.warning(
+                    "Interrupt accounting failed for orphaned %s; continuing cleanup",
+                    orphan.path,
+                    exc_info=True,
+                )
+            try:
+                if orphan.ephemeral and not _is_packaged_asset(orphan.path):
+                    _unlink_path_best_effort(orphan.path)
+            except Exception:
+                logger.warning(
+                    "Interrupt file cleanup failed for orphaned %s; continuing",
+                    orphan.path,
+                    exc_info=True,
+                )
+            # _remove_exact_queued_segment balances task_done for every item it
+            # drains and requeues, including this orphan. Count only telemetry.
+            purged += 1
+
+    residual = list(getattr(queue, "_queue", ()))
+    if residual:
+        # A non-standard/broken queue refused a complete synchronous drain.
+        # Preserve its remaining audio and abort before the bridge/Skip becomes
+        # visible; otherwise those survivors would leak between the urgent cut
+        # and its banter while the shadow falsely claimed an empty queue.
+        state.queued_segments = [_queue_shadow_entry(segment) for segment in residual]
+        state.interrupt_slot = None
+        logger.error("Interrupt aborted because %d buffered segment(s) could not be drained", len(residual))
+        return False
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
@@ -3191,11 +3608,12 @@ def _maybe_arm_first_home_context_moment(
 def _cache_eviction_protected_paths(queue: asyncio.Queue[Segment], state: StationState) -> set[Path]:
     """Paths an LRU cache eviction pass must never remove.
 
-    Both the real playback queue and the capacity-exempt continuity slot hold
-    ready audio; evicting either would break delivery mid-stream. The slot is
-    absent from the real queue by design, so it is protected explicitly.
+    The real playback queue, capacity-exempt continuity slot, and hidden full
+    sources owned by committed handoffs all remain delivery dependencies.
+    Evicting any of them can turn a later restore or playback into dead air.
     """
     protected = {seg.path for seg in list(getattr(queue, "_queue", ())) if seg.path}
+    protected.update(handoff_original_paths(state))
     if state.continuity_slot is not None and state.continuity_slot.path:
         protected.add(state.continuity_slot.path)
     return protected
@@ -3209,6 +3627,7 @@ async def run_producer(
 ) -> None:
     """Run production with explicit ownership of any late HA refresh request."""
     context_coordinator = _HAContextRefreshCoordinator(config, state)
+    attempt_owner = _ProducerAttemptOwnership.create(config.tmp_dir)
     try:
         await _run_producer_inner(
             queue,
@@ -3216,8 +3635,12 @@ async def run_producer(
             config,
             skip_event,
             context_coordinator=context_coordinator,
+            attempt_owner=attempt_owner,
         )
     finally:
+        # Synchronous scratch cleanup runs before the HA coordinator awaits, so
+        # cancellation cannot leave a private handoff/render alive during close.
+        attempt_owner.discard()
         # This finally covers cancellation anywhere in the producer loop, not
         # just the HA preparation await.  A late task therefore cannot write
         # state after producer shutdown.
@@ -3231,6 +3654,7 @@ async def _run_producer_inner(
     skip_event: asyncio.Event | None = None,
     *,
     context_coordinator: _HAContextRefreshCoordinator,
+    attempt_owner: _ProducerAttemptOwnership,
 ) -> None:
     """Keep the lookahead queue filled with rendered segments for live playback."""
     prev_seg_type = _initial_previous_segment_type(queue, state)
@@ -3309,6 +3733,7 @@ async def _run_producer_inner(
             segment,
             shadow_entry=shadow_entry,
             stale_check=_combined_stale_check,
+            ownership_transfer=attempt_owner.transfer,
         ):
             return False
         prev_seg_type = _adjacency_type_for(segment)
@@ -3643,10 +4068,12 @@ async def _run_producer_inner(
                 state.operator_force_pending = None
                 is_operator_forced = False
         segment: Segment | None = None
+        audio_path: Path | None = None
         prepared_handoff: PreparedMusicHandoff | None = None
         fallback_segment: Segment | None = None
         fallback_audio_path: Path | None = None
         rendered_handoff_tail = False
+        attempt_owner.begin()
 
         def _discard_uncommitted_handoff_artifacts() -> None:
             """Release a rendered-but-unadmitted handoff and its dry fallback.
@@ -3669,7 +4096,7 @@ async def _run_producer_inner(
                 )
             fallback_audio_path = None
             if prepared_handoff is not None:
-                discard_prepared_music_handoff(prepared_handoff)
+                _discard_prepared_handoff(prepared_handoff)
                 prepared_handoff = None
             rendered_handoff_tail = False
 
@@ -4268,6 +4695,8 @@ async def _run_producer_inner(
                                 fallback_audio_path,
                                 prepared_handoff,
                             ) = impossible_result
+                            attempt_owner.own_paths(audio_path, fallback_audio_path)
+                            attempt_owner.own_prepared(prepared_handoff)
                             rendered_handoff_tail = prepared_handoff is not None
                             impossible_tts = True
                         except Exception as exc:
@@ -4298,6 +4727,8 @@ async def _run_producer_inner(
                                     fallback_audio_path,
                                     prepared_handoff,
                                 ) = impossible_result
+                                attempt_owner.own_paths(audio_path, fallback_audio_path)
+                                attempt_owner.own_prepared(prepared_handoff)
                                 rendered_handoff_tail = prepared_handoff is not None
                                 impossible_tts = True
                             except Exception as exc:
@@ -4403,6 +4834,8 @@ async def _run_producer_inner(
                             # shortens the queued song until final admission.
                             handoff_task = asyncio.create_task(_prepare_music_handoff(queue, config, tail_seconds=8.0))
                             trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
+                            xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
+                            attempt_owner.own_paths(trans_voice_path, xfade_out)
                             prosody: dict[str, str] = {}
                             if trans_host.personality.energy > 50:
                                 prosody["rate"] = "+5%"
@@ -4413,6 +4846,7 @@ async def _run_producer_inner(
                                 _path=trans_voice_path,
                                 _prosody=prosody,
                                 _handoff_task=handoff_task,
+                                _xfade_out=xfade_out,
                             ):
                                 with _timed_render_stage(state, "tts"):
                                     await synthesize(
@@ -4424,91 +4858,99 @@ async def _run_producer_inner(
                                         edge_fallback_voice=_host.edge_fallback_voice,
                                         state=state,
                                     )
-                                xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                                 handoff = await _handoff_task
                                 with _timed_render_stage(state, "mix"):
                                     result = await _try_crossfade(
                                         _path,
                                         config,
-                                        xfade_out,
+                                        _xfade_out,
                                         handoff,
                                         keep_voice=True,
                                     )
-                                return result, result == xfade_out, handoff if result == xfade_out else None
+                                return result, result == _xfade_out, handoff if result == _xfade_out else None
 
                             async def _do_dialogue(_lines=lines, _tmp_dir=config.tmp_dir) -> Path:
                                 with _timed_render_stage(state, "tts"):
                                     return await synthesize_dialogue(_lines, _tmp_dir, state=state)
 
                             banter_path: Path
-                            (
+                            transition_render_task = asyncio.create_task(_do_transition())
+                            dialogue_render_task = asyncio.create_task(_do_dialogue())
+                            try:
+                                transition_result, dialogue_result = await _gather_owned_child_tasks(
+                                    [transition_render_task, dialogue_render_task],
+                                    config.tmp_dir,
+                                )
                                 (
-                                    tail_transition_path,
-                                    rendered_handoff_tail,
-                                    prepared_handoff,
-                                ),
-                                banter_path,
-                            ) = await asyncio.gather(
-                                _do_transition(),
-                                _do_dialogue(),
-                            )
+                                    (
+                                        tail_transition_path,
+                                        rendered_handoff_tail,
+                                        prepared_handoff,
+                                    ),
+                                    banter_path,
+                                ) = (transition_result, dialogue_result)
+                                attempt_owner.own_paths(tail_transition_path, banter_path)
+                                attempt_owner.own_prepared(prepared_handoff)
+                            except BaseException:
+                                await _discard_prepared_handoff_task(handoff_task, config.tmp_dir)
+                                _unlink_path_best_effort(trans_voice_path)
+                                _unlink_path_best_effort(xfade_out)
+                                raise
 
                             # Produce a dry/generic alternative before committing
                             # the pair.  A last-moment queue/control race keeps
                             # the original full song and queues this alternative.
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
-                            loop = asyncio.get_running_loop()
+                            attempt_owner.own_path(audio_path)
+                            concat_tasks: list[asyncio.Task] = []
                             try:
                                 if rendered_handoff_tail and prepared_handoff is not None:
                                     fallback_audio_path = config.tmp_dir / f"banter_dry_{uuid4().hex[:8]}.mp3"
-                                    with _timed_render_stage(state, "mix"):
-                                        await asyncio.gather(
-                                            loop.run_in_executor(
-                                                None,
-                                                partial(
-                                                    concat_files,
-                                                    [tail_transition_path, banter_path],
-                                                    audio_path,
-                                                    200,
-                                                    False,
-                                                    strict_duration=True,
-                                                ),
-                                            ),
-                                            loop.run_in_executor(
-                                                None,
-                                                partial(
-                                                    concat_files,
-                                                    [trans_voice_path, banter_path],
-                                                    fallback_audio_path,
-                                                    200,
-                                                    False,
-                                                    strict_duration=True,
-                                                ),
-                                            ),
-                                        )
-                                else:
-                                    with _timed_render_stage(state, "mix"):
-                                        await loop.run_in_executor(
-                                            None,
-                                            partial(
+                                    attempt_owner.own_path(fallback_audio_path)
+                                    concat_tasks = [
+                                        asyncio.create_task(
+                                            _run_owned_thread(
                                                 concat_files,
                                                 [tail_transition_path, banter_path],
                                                 audio_path,
                                                 200,
                                                 False,
                                                 strict_duration=True,
-                                            ),
+                                            )
+                                        ),
+                                        asyncio.create_task(
+                                            _run_owned_thread(
+                                                concat_files,
+                                                [trans_voice_path, banter_path],
+                                                fallback_audio_path,
+                                                200,
+                                                False,
+                                                strict_duration=True,
+                                            )
+                                        ),
+                                    ]
+                                    with _timed_render_stage(state, "mix"):
+                                        await _gather_owned_child_tasks(concat_tasks, config.tmp_dir)
+                                else:
+                                    with _timed_render_stage(state, "mix"):
+                                        await _run_owned_thread(
+                                            concat_files,
+                                            [tail_transition_path, banter_path],
+                                            audio_path,
+                                            200,
+                                            False,
+                                            strict_duration=True,
                                         )
-                            except Exception:
-                                audio_path.unlink(missing_ok=True)
+                            except BaseException:
+                                _unlink_path_best_effort(audio_path)
                                 if fallback_audio_path is not None:
-                                    fallback_audio_path.unlink(missing_ok=True)
+                                    _unlink_path_best_effort(fallback_audio_path)
                                 raise
                             finally:
-                                trans_voice_path.unlink(missing_ok=True)
+                                _unlink_path_best_effort(trans_voice_path)
                                 if tail_transition_path != trans_voice_path:
-                                    tail_transition_path.unlink(missing_ok=True)
-                                banter_path.unlink(missing_ok=True)
+                                    _unlink_path_best_effort(tail_transition_path)
+                                _unlink_path_best_effort(banter_path)
 
                             state.recent_transition_texts.append(trans_text)
                             state.last_banter_script = [
@@ -4615,7 +5057,7 @@ async def _run_producer_inner(
                                 )
                                 audio_path = fallback_canned
                                 if prepared_handoff is not None:
-                                    discard_prepared_music_handoff(prepared_handoff)
+                                    _discard_prepared_handoff(prepared_handoff)
                                     prepared_handoff = None
                                 if fallback_audio_path is not None:
                                     fallback_audio_path.unlink(missing_ok=True)
@@ -4687,22 +5129,23 @@ async def _run_producer_inner(
                 if canned is None:
                     try:
                         if fallback_audio_path is not None and prepared_handoff is not None:
-                            audio_path, fallback_audio_path = await asyncio.gather(
-                                _apply_talk_bed(audio_path, config, state, prefix="banter"),
-                                _apply_talk_bed(
-                                    fallback_audio_path,
-                                    config,
-                                    state,
-                                    prefix="banter_dry",
-                                ),
+                            audio_path, fallback_audio_path = await _apply_paired_talk_beds(
+                                audio_path,
+                                fallback_audio_path,
+                                config,
+                                state,
+                                primary_prefix="banter",
+                                fallback_prefix="banter_dry",
                             )
+                            attempt_owner.own_paths(audio_path, fallback_audio_path)
                         else:
-                            audio_path = await _apply_talk_bed(
+                            audio_path = await _apply_and_adopt_talk_bed(
                                 audio_path,
                                 config,
                                 state,
                                 prefix="banter",
                             )
+                            attempt_owner.own_path(audio_path)
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry banter: %s", exc)
 
@@ -4721,19 +5164,28 @@ async def _run_producer_inner(
                         if sfx_files:
                             sfx_pick = random.choice(sfx_files)
                             humanity_out = config.tmp_dir / f"humanity_{uuid4().hex[:8]}.mp3"
+                            attempt_owner.own_path(humanity_out)
                             try:
                                 with _timed_render_stage(state, "mix"):
-                                    await loop.run_in_executor(
-                                        None, mix_oneshot_sfx, audio_path, sfx_pick, humanity_out, 2.0, -18.0
+                                    await _run_owned_thread(
+                                        mix_oneshot_sfx,
+                                        audio_path,
+                                        sfx_pick,
+                                        humanity_out,
+                                        2.0,
+                                        -18.0,
                                     )
                                 if canned is None:
-                                    audio_path.unlink(missing_ok=True)
+                                    _unlink_path_best_effort(audio_path)
                                 audio_path = humanity_out
                                 _humanity_event_fired = True
                                 logger.info("Studio humanity event: %s", sfx_pick.name)
                             except Exception as exc:
                                 logger.debug("Humanity event skipped: %s", exc)
-                                humanity_out.unlink(missing_ok=True)
+                                _unlink_path_best_effort(humanity_out)
+                            except BaseException:
+                                _unlink_path_best_effort(humanity_out)
+                                raise
 
                 banter_commit = listener_request_commit
                 release_beat_metadata = {}
@@ -4884,6 +5336,7 @@ async def _run_producer_inner(
                     finally:
                         state.end_gen(ok=_gen_ok)
                     flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
+                    attempt_owner.own_path(flash_path)
 
                     # Keep news flashes intelligible; only traffic gets a small urgency nudge.
                     flash_rate: str | None = None
@@ -4891,20 +5344,25 @@ async def _run_producer_inner(
                         flash_rate = "+10%"
 
                     with _timed_render_stage(state, "tts"):
-                        await synthesize(
-                            text,
-                            host.voice,
-                            flash_path,
-                            rate=flash_rate,
-                            engine=host.engine,
-                            edge_fallback_voice=host.edge_fallback_voice,
-                            state=state,
+                        flash_synth_task = asyncio.create_task(
+                            synthesize(
+                                text,
+                                host.voice,
+                                flash_path,
+                                rate=flash_rate,
+                                engine=host.engine,
+                                edge_fallback_voice=host.edge_fallback_voice,
+                                state=state,
+                            )
                         )
+                        await _gather_owned_child_tasks([flash_synth_task], config.tmp_dir)
 
                     # Build a frame-safe handoff candidate without claiming the
                     # tail until the final queue pair commits.
                     flash_handoff = await _prepare_music_handoff(queue, config, tail_seconds=6.0)
+                    attempt_owner.own_prepared(flash_handoff)
                     crossfade_out = config.tmp_dir / f"flash_transition_{uuid4().hex[:8]}.mp3"
+                    attempt_owner.own_path(crossfade_out)
                     with _timed_render_stage(state, "mix"):
                         audio_path = await _try_crossfade(
                             flash_path,
@@ -4917,20 +5375,27 @@ async def _run_producer_inner(
                     if audio_path == crossfade_out and flash_handoff is not None:
                         prepared_handoff = flash_handoff
                         fallback_audio_path = flash_path
+                        attempt_owner.own_paths(audio_path, fallback_audio_path)
                         rendered_handoff_tail = True
                     try:
                         if fallback_audio_path is not None and prepared_handoff is not None:
-                            audio_path, fallback_audio_path = await asyncio.gather(
-                                _apply_talk_bed(audio_path, config, state, prefix="news"),
-                                _apply_talk_bed(
-                                    fallback_audio_path,
-                                    config,
-                                    state,
-                                    prefix="news_dry",
-                                ),
+                            audio_path, fallback_audio_path = await _apply_paired_talk_beds(
+                                audio_path,
+                                fallback_audio_path,
+                                config,
+                                state,
+                                primary_prefix="news",
+                                fallback_prefix="news_dry",
                             )
+                            attempt_owner.own_paths(audio_path, fallback_audio_path)
                         else:
-                            audio_path = await _apply_talk_bed(audio_path, config, state, prefix="news")
+                            audio_path = await _apply_and_adopt_talk_bed(
+                                audio_path,
+                                config,
+                                state,
+                                prefix="news",
+                            )
+                            attempt_owner.own_path(audio_path)
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry news flash: %s", exc)
 
@@ -5164,8 +5629,17 @@ async def _run_producer_inner(
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
 
                 ad_handoff_task = asyncio.create_task(_prepare_music_handoff(queue, config, tail_seconds=8.0))
+                ad_intro_path = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
+                ad_transition_path = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
+                ad_promo_path = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
+                attempt_owner.own_paths(ad_intro_path, ad_transition_path, ad_promo_path)
 
-                async def _build_intro(_handoff_task=ad_handoff_task):
+                async def _build_intro(
+                    _handoff_task=ad_handoff_task,
+                    _ipath=ad_intro_path,
+                    _xout=ad_transition_path,
+                    _ppath=ad_promo_path,
+                ):
                     """Intro: transition LLM → TTS → reserved tail + promo tag."""
                     extra_parts: list[Path] = []
                     try:
@@ -5175,25 +5649,22 @@ async def _run_producer_inner(
                         ihost = random.choice(_sw._regular_hosts(config))
                         itext = random.choice(_sw.AD_BREAK_INTROS)
                         itrack_ref = None
-                    ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
                     with _timed_render_stage(state, "tts"):
                         await synthesize(
                             itext,
                             ihost.voice,
-                            ipath,
+                            _ipath,
                             engine=ihost.engine,
                             edge_fallback_voice=ihost.edge_fallback_voice,
                             state=state,
                         )
-                    xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
                     handoff = await _handoff_task
                     with _timed_render_stage(state, "mix"):
-                        tail_intro = await _try_crossfade(ipath, config, xout, handoff, keep_voice=True)
-                    prepared = handoff if tail_intro == xout else None
-                    dry_intro = ipath
+                        tail_intro = await _try_crossfade(_ipath, config, _xout, handoff, keep_voice=True)
+                    prepared = handoff if tail_intro == _xout else None
+                    dry_intro = _ipath
                     # Promo compliance tag
                     try:
-                        ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
                         if config.ads.voices:
                             promo_voice = config.ads.voices[0]
                             pvoice = promo_voice.voice
@@ -5207,36 +5678,41 @@ async def _run_producer_inner(
                             await synthesize(
                                 "Messaggio promozionale.",
                                 pvoice,
-                                ppath,
+                                _ppath,
                                 rate="+40%",
                                 pitch="-10Hz",
                                 engine=pengine,
                                 edge_fallback_voice=pfallback,
                                 state=state,
                             )
-                        extra_parts.append(ppath)
+                        extra_parts.append(_ppath)
                     except Exception:
                         pass
                     return tail_intro, dry_intro, extra_parts, itext, prepared, itrack_ref
 
-                async def _build_bumpers(_num_spots=num_spots, _loop=loop):
+                bumper_in_path = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
+                mid_bumper_paths = [
+                    config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
+                    for _ in range(max(0, num_spots - 1))
+                    if random.random() < 0.25
+                ]
+                attempt_owner.own_paths(bumper_in_path, *mid_bumper_paths)
+
+                async def _build_bumpers(
+                    _bumper_in=bumper_in_path,
+                    _mid_bumpers=tuple(mid_bumper_paths),
+                ):
                     """Opening bumper + sparse mid-spot bumpers.
 
                     Mid-bumpers only play ~25% of the time to avoid harsh
                     synthetic SFX overwhelming the ad break.
                     """
-                    bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
-                    mid_bumpers = [
-                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
-                        for _ in range(max(0, _num_spots - 1))
-                        if random.random() < 0.25
-                    ]
-                    tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
-                    for mb in mid_bumpers:
-                        tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
+                    tasks = [asyncio.create_task(_run_owned_thread(generate_bumper_jingle, _bumper_in))]
+                    for mb in _mid_bumpers:
+                        tasks.append(asyncio.create_task(_run_owned_thread(generate_bumper_jingle, mb, 0.8)))
                     with _timed_render_stage(state, "mix"):
-                        await asyncio.gather(*tasks)
-                    return bumper_in, mid_bumpers
+                        await _gather_owned_child_tasks(tasks, config.tmp_dir)
+                    return _bumper_in, list(_mid_bumpers)
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
                 from mammamiradio.core.provenance_ctx import (
@@ -5293,36 +5769,62 @@ async def _run_producer_inner(
 
                 _gen_ok = False
                 try:
-                    (
-                        (tail_intro, dry_intro, intro_extra_parts, intro_text, prepared_handoff, intro_track_ref),
-                        scripts,
-                        (bumper_in, mid_bumpers),
-                    ) = await asyncio.gather(
-                        _build_intro(),
-                        _write_ad_scripts(),
-                        _build_bumpers(),
-                    )
+                    intro_task = asyncio.create_task(_build_intro())
+                    scripts_task = asyncio.create_task(_write_ad_scripts())
+                    bumpers_task = asyncio.create_task(_build_bumpers())
+                    try:
+                        intro_result, scripts_result, bumpers_result = await _gather_owned_child_tasks(
+                            [intro_task, scripts_task, bumpers_task],
+                            config.tmp_dir,
+                        )
+                        (
+                            (tail_intro, dry_intro, intro_extra_parts, intro_text, prepared_handoff, intro_track_ref),
+                            scripts,
+                            (bumper_in, mid_bumpers),
+                        ) = (intro_result, scripts_result, bumpers_result)
+                    except BaseException:
+                        await _discard_prepared_handoff_task(ad_handoff_task, config.tmp_dir)
+                        for owned_path in (
+                            ad_intro_path,
+                            ad_transition_path,
+                            ad_promo_path,
+                            bumper_in_path,
+                            *mid_bumper_paths,
+                        ):
+                            _unlink_path_best_effort(owned_path)
+                        raise
                     _gen_ok = True
                 finally:
                     reset_collector(_ad_prov_tok)
                     state.end_gen(ok=_gen_ok)
+                attempt_owner.own_prepared(prepared_handoff)
+                attempt_owner.own_paths(
+                    tail_intro,
+                    dry_intro,
+                    *intro_extra_parts,
+                    bumper_in,
+                    *mid_bumpers,
+                )
                 rendered_handoff_tail = prepared_handoff is not None
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
-                with _timed_render_stage(state, "tts"):
-                    ad_paths = await asyncio.gather(
-                        *(
-                            synthesize_ad(
-                                script,
-                                vm,
-                                config.tmp_dir,
-                                sfx_dir,
-                                state=state,
-                                cache_dir=config.cache_dir,
-                            )
-                            for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                ad_tts_tasks = [
+                    asyncio.create_task(
+                        synthesize_ad(
+                            script,
+                            vm,
+                            config.tmp_dir,
+                            sfx_dir,
+                            state=state,
+                            cache_dir=config.cache_dir,
                         )
                     )
+                    for script, (_, _, _, vm) in zip(scripts, spot_params, strict=False)
+                ]
+                with _timed_render_stage(state, "tts"):
+                    ad_paths = await _gather_owned_child_tasks(ad_tts_tasks, config.tmp_dir)
+                assert all(isinstance(path, Path) for path in ad_paths)
+                attempt_owner.own_paths(*ad_paths)
 
                 # ── PHASE 3: Assemble break_parts in order ──
                 if intro_text:
@@ -5365,10 +5867,11 @@ async def _run_producer_inner(
                 outro_host = random.choice(_sw._regular_hosts(config))
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
                 outro_text = random.choice(_sw.AD_BREAK_OUTROS)
+                attempt_owner.own_paths(bumper_out, outro_path)
 
-                async def _build_closing_bumper(_loop=loop, _path=bumper_out) -> None:
+                async def _build_closing_bumper(_path=bumper_out) -> None:
                     with _timed_render_stage(state, "mix"):
-                        await _loop.run_in_executor(None, generate_bumper_jingle, _path)
+                        await _run_owned_thread(generate_bumper_jingle, _path)
 
                 async def _build_outro_voice(
                     _text=outro_text,
@@ -5385,7 +5888,12 @@ async def _run_producer_inner(
                             state=state,
                         )
 
-                await asyncio.gather(_build_closing_bumper(), _build_outro_voice())
+                closing_bumper_task = asyncio.create_task(_build_closing_bumper())
+                outro_voice_task = asyncio.create_task(_build_outro_voice())
+                await _gather_owned_child_tasks(
+                    [closing_bumper_task, outro_voice_task],
+                    config.tmp_dir,
+                )
                 common_break_parts.append(bumper_out)
                 common_break_parts.append(outro_path)
 
@@ -5393,41 +5901,48 @@ async def _run_producer_inner(
                 tail_break_parts = [tail_intro, *common_break_parts]
                 dry_break_parts = [dry_intro, *common_break_parts]
                 ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
+                attempt_owner.own_path(ad_break_path)
+                concat_tasks: list[asyncio.Task] = []
                 try:
                     if prepared_handoff is not None:
                         fallback_audio_path = config.tmp_dir / f"adbreak_dry_{uuid4().hex[:8]}.mp3"
-                        with _timed_render_stage(state, "mix"):
-                            await asyncio.gather(
-                                loop.run_in_executor(
-                                    None,
+                        attempt_owner.own_path(fallback_audio_path)
+                        concat_tasks = [
+                            asyncio.create_task(
+                                _run_owned_thread(
                                     concat_files,
                                     tail_break_parts,
                                     ad_break_path,
                                     300,
                                     False,
-                                ),
-                                loop.run_in_executor(
-                                    None,
+                                )
+                            ),
+                            asyncio.create_task(
+                                _run_owned_thread(
                                     concat_files,
                                     dry_break_parts,
                                     fallback_audio_path,
                                     300,
                                     False,
-                                ),
-                            )
+                                )
+                            ),
+                        ]
+                        with _timed_render_stage(state, "mix"):
+                            await _gather_owned_child_tasks(concat_tasks, config.tmp_dir)
                     else:
                         with _timed_render_stage(state, "mix"):
-                            await loop.run_in_executor(
-                                None,
+                            await _run_owned_thread(
                                 concat_files,
                                 tail_break_parts,
                                 ad_break_path,
                                 300,
                                 False,
                             )
+                except BaseException:
+                    raise
                 finally:
                     for path in set(tail_break_parts + dry_break_parts):
-                        path.unlink(missing_ok=True)
+                        _unlink_path_best_effort(path)
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
@@ -5451,7 +5966,7 @@ async def _run_producer_inner(
                             fallback_audio_path.unlink(missing_ok=True)
                             fallback_audio_path = None
                         if prepared_handoff is not None:
-                            discard_prepared_music_handoff(prepared_handoff)
+                            _discard_prepared_handoff(prepared_handoff)
                             prepared_handoff = None
                         rendered_handoff_tail = False
                         # Prevent scheduler lock on AD if we reject a full break.
@@ -5502,6 +6017,7 @@ async def _run_producer_inner(
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             _discard_uncommitted_handoff_artifacts()
+            attempt_owner.discard()
             state.finish_render_timing("failed", reason="render_failure")
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -5522,9 +6038,11 @@ async def _run_producer_inner(
                 await asyncio.sleep(0.5)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
+            attempt_owner.begin()
             # Do NOT advance state counters — failed segment doesn't count
 
         if segment:
+            attempt_owner.own_segment(segment)
             segment = await _maybe_add_transition_sting(
                 segment,
                 prev_seg_type,
@@ -5532,6 +6050,7 @@ async def _run_producer_inner(
                 state,
                 suppress_for_handoff=rendered_handoff_tail and prepared_handoff is not None,
             )
+            attempt_owner.own_segment(segment)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             if generation_revision != state.playlist_revision:
                 if generation_source_revision != state.source_revision:
@@ -5622,10 +6141,14 @@ async def _run_producer_inner(
                     prepared=prepared_handoff,
                     shadow_entry=shadow_entry,
                     stale_check=_enqueue_stale_reason,
+                    ownership_transfer=attempt_owner.transfer,
                 )
                 if committed_segment is not None:
+                    # The queue reservation owns the head/successor before any
+                    # best-effort fallback cleanup or bookkeeping can fail.
+                    attempt_owner.transfer()
                     if fallback_segment.ephemeral and not _is_packaged_asset(fallback_segment.path):
-                        fallback_segment.path.unlink(missing_ok=True)
+                        _unlink_path_best_effort(fallback_segment.path)
                     segment = committed_segment
                     fallback_segment = None
                     prepared_handoff = None
@@ -5645,7 +6168,7 @@ async def _run_producer_inner(
             if not handoff_committed and prepared_handoff is not None and fallback_segment is None:
                 # Defensive fail-closed path: never enqueue a crossfaded render
                 # without the dry alternative needed if the pair has gone stale.
-                discard_prepared_music_handoff(prepared_handoff)
+                _discard_prepared_handoff(prepared_handoff)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF)
                 state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF)
@@ -5660,7 +6183,7 @@ async def _run_producer_inner(
                 if prepared_handoff is not None:
                     # Air-next intentionally changes order, so it can never own
                     # real-song tail audio.  Prefer the pre-rendered dry path.
-                    discard_prepared_music_handoff(prepared_handoff)
+                    _discard_prepared_handoff(prepared_handoff)
                     if fallback_segment is not None:
                         _unlink_if_tmp_render(segment, config.tmp_dir)
                         segment = fallback_segment
@@ -5686,6 +6209,7 @@ async def _run_producer_inner(
                     front_insert=True,
                     shadow_entry=shadow_entry,
                     stale_check=_front_insert_stale_check,
+                    ownership_transfer=attempt_owner.transfer,
                 ):
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
@@ -5717,6 +6241,10 @@ async def _run_producer_inner(
                 )
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
+            # Queue admission now owns the selected segment (and, for a music
+            # handoff, its committed head/successor reservation). No later
+            # cancellation in bookkeeping or backoff may delete those files.
+            attempt_owner.transfer()
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
             if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:

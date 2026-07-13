@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +18,15 @@ from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 
 logger = logging.getLogger(__name__)
+
+
+class HandoffPhase(StrEnum):
+    """Private playback lifecycle for one committed music/speech pair."""
+
+    QUEUED = "queued"
+    HEAD_ACTIVE = "head_active"
+    SUCCESSOR_DUE = "successor_due"
+    SUCCESSOR_ACTIVE = "successor_active"
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,7 @@ class HandoffReservation:
     original_duration_sec: float
     original_ephemeral: bool
     head_path: Path
+    phase: HandoffPhase = HandoffPhase.QUEUED
 
 
 def _queue_items(queue) -> list[Segment] | None:
@@ -220,10 +231,17 @@ def _release_reservation(
 def reconcile_handoff_queue_items(state: StationState, items: list[Segment]) -> list[Segment]:
     """Repair handoff pairs after a synchronous queue rewrite.
 
-    A valid unstarted pair must be adjacent.  If the successor disappeared, the
-    original song is restored; if the music head disappeared or moved, the
-    successor is returned for the caller to discard.  A currently playing music
-    head is valid only when its successor remains queue-head.
+    A valid unstarted pair must be adjacent. If the successor disappeared while
+    its music head remains queued, the original song is restored. If the music
+    head itself was removed, the successor is discarded and the removed song is
+    not silently reinserted.
+
+    Once the head has started, its successor is a protected continuation of the
+    same listener timeline. Ordinary rewrites keep it at queue-head, including
+    the small cooperative-scheduling gap after clean head EOF and before the
+    successor is selected. Explicit cuts/removals delete the successor before
+    calling this helper, which then releases the reservation without restoring
+    already-started music.
     """
 
     discarded: list[Segment] = []
@@ -235,14 +253,31 @@ def reconcile_handoff_queue_items(state: StationState, items: list[Segment]) -> 
         music_index = _identity_index(items, reservation.music_segment)
         successor_index = _identity_index(items, reservation.successor_segment)
         music_is_active = active is reservation.music_segment
+        successor_is_active = active is reservation.successor_segment
 
-        if music_is_active:
+        if music_is_active and reservation.phase is HandoffPhase.QUEUED:
+            # Compatibility for a caller that selected the head before adopting
+            # mark_handoff_segment_selected().
+            reservation.phase = HandoffPhase.HEAD_ACTIVE
+
+        if successor_is_active and reservation.phase is not HandoffPhase.SUCCESSOR_ACTIVE:
+            reservation.phase = HandoffPhase.SUCCESSOR_ACTIVE
+
+        if reservation.phase in (HandoffPhase.HEAD_ACTIVE, HandoffPhase.SUCCESSOR_DUE):
             if successor_index == 0:
                 continue
             if successor_index >= 0:
-                discarded.append(items.pop(successor_index))
+                successor = items.pop(successor_index)
+                items.insert(0, successor)
                 changed = True
+                continue
             _release_reservation(state, reservation, restore_music=False)
+            changed = True
+            continue
+
+        if reservation.phase is HandoffPhase.SUCCESSOR_ACTIVE:
+            # The successor has already left the queue. Its send finalizer owns
+            # terminal cleanup, so a simultaneous rewrite must not retire it.
             continue
 
         if music_index >= 0:
@@ -269,25 +304,35 @@ def reconcile_handoff_queue_items(state: StationState, items: list[Segment]) -> 
 
 
 def cancel_active_music_handoff(state: StationState, items: list[Segment]) -> list[Segment]:
-    """Drop the queued tail successor after a current music-head Skip/Panic."""
+    """Drop a successor after an active/due handoff is explicitly cut.
+
+    The compatibility name remains for producer/control callers. Besides a
+    currently selected member, the function handles ``SUCCESSOR_DUE``: during
+    the post-EOF queue-get yield there is intentionally no active Segment, but
+    Skip/Panic/Stop still need an explicit way to cancel that protected tail.
+    """
 
     active = getattr(state, "active_playback_segment", None)
-    if active is None or not active.handoff_id:
-        return []
-    reservation = _reservations(state).get(active.handoff_id)
-    if not isinstance(reservation, HandoffReservation) or reservation.music_segment is not active:
-        return []
-    successor_index = _identity_index(items, reservation.successor_segment)
     discarded: list[Segment] = []
-    if successor_index >= 0:
-        discarded.append(items.pop(successor_index))
-    _release_reservation(state, reservation, restore_music=False)
-    state.continuity_epoch += 1
+    changed = False
+    for reservation in list(_reservations(state).values()):
+        if not isinstance(reservation, HandoffReservation):
+            continue
+        selected_member = active is reservation.music_segment or active is reservation.successor_segment
+        if not selected_member and reservation.phase is not HandoffPhase.SUCCESSOR_DUE:
+            continue
+        successor_index = _identity_index(items, reservation.successor_segment)
+        if successor_index >= 0:
+            discarded.append(items.pop(successor_index))
+        _release_reservation(state, reservation, restore_music=False)
+        changed = True
+    if changed:
+        state.continuity_epoch += 1
     return discarded
 
 
-def retire_handoff_for_started_segment(state: StationState, segment: Segment) -> None:
-    """Forget a pair once its successor begins airing or a head completes safely."""
+def mark_handoff_segment_selected(state: StationState, segment: Segment) -> None:
+    """Synchronously mark a queued pair member as selected by playback."""
 
     handoff_id = segment.handoff_id
     if not handoff_id:
@@ -296,7 +341,124 @@ def retire_handoff_for_started_segment(state: StationState, segment: Segment) ->
     if not isinstance(reservation, HandoffReservation):
         segment.handoff_id = None
         return
-    # The successor's tail is now committed to the listener timeline.  The
-    # original egress temp can be released, but cached originals stay intact.
+    if segment is reservation.music_segment:
+        reservation.phase = HandoffPhase.HEAD_ACTIVE
+        # Air Next's legacy stale-claim guard predates paired handoffs and drops
+        # a queue-head segment carrying this marker before reconciliation runs.
+        # Once the exact predecessor is selected, reservation ownership is the
+        # stronger adjacency proof: reconciliation keeps this successor first,
+        # so the private marker is no longer needed and must not bypass it.
+        reservation.successor_segment.metadata.pop("transition_track_ref", None)
+    elif segment is reservation.successor_segment:
+        reservation.phase = HandoffPhase.SUCCESSOR_ACTIVE
+
+
+def has_cancellable_music_handoff(state: StationState) -> bool:
+    """Return whether playback owns an active or post-EOF handoff."""
+
+    active = getattr(state, "active_playback_segment", None)
+    for reservation in _reservations(state).values():
+        if not isinstance(reservation, HandoffReservation):
+            continue
+        if reservation.phase is HandoffPhase.SUCCESSOR_DUE:
+            return True
+        if active is reservation.music_segment or active is reservation.successor_segment:
+            return True
+    return False
+
+
+def is_protected_handoff_successor(state: StationState, segment: Segment) -> bool:
+    """Return whether capacity management must preserve this queued successor.
+
+    Queue rewrites reconcile pair ordering after they have planned their final
+    topology.  Their capacity planners need the same ownership signal earlier:
+    once a head is active or has reached clean EOF, its successor is no longer
+    an ordinary evictable speech item.
+    """
+
+    active = getattr(state, "active_playback_segment", None)
+    for reservation in _reservations(state).values():
+        if not isinstance(reservation, HandoffReservation) or reservation.successor_segment is not segment:
+            continue
+        return reservation.phase in (HandoffPhase.HEAD_ACTIVE, HandoffPhase.SUCCESSOR_DUE) or (
+            active is reservation.music_segment
+        )
+    return False
+
+
+def handoff_original_sources(state: StationState) -> list[tuple[Path, Segment]]:
+    """Return full sources and identities owned by live reservations."""
+
+    return [
+        (reservation.original_path, reservation.music_segment)
+        for reservation in _reservations(state).values()
+        if isinstance(reservation, HandoffReservation)
+    ]
+
+
+def handoff_original_paths(state: StationState) -> set[Path]:
+    """Return full paths that remain owned by live handoff reservations.
+
+    A queued pair exposes only its shortened head and speech successor in the
+    playback queue. The hidden original must remain cache-eviction protected
+    until the reservation either restores it or retires.
+    """
+
+    return {path for path, _music in handoff_original_sources(state)}
+
+
+def handoff_original_source(state: StationState, segment: Segment) -> tuple[Path, Segment] | None:
+    """Return the full source and music identity affected by removing a pair member."""
+
+    handoff_id = segment.handoff_id
+    if not handoff_id:
+        return None
+    reservation = _reservations(state).get(handoff_id)
+    if not isinstance(reservation, HandoffReservation):
+        return None
+    return reservation.original_path, reservation.music_segment
+
+
+def finish_handoff_segment(
+    state: StationState,
+    segment: Segment,
+    *,
+    completed_cleanly: bool,
+) -> None:
+    """Advance or retire a selected pair member at the send boundary.
+
+    A clean music-head EOF makes the successor due *before* playback clears the
+    active pointer. An unsuccessful head must first be cancelled through
+    :func:`cancel_active_music_handoff` so its queued successor is removed. A
+    successor is terminal regardless of send outcome because its predecessor
+    has already aired and can never be restored safely.
+    """
+
+    handoff_id = segment.handoff_id
+    if not handoff_id:
+        return
+    reservation = _reservations(state).get(handoff_id)
+    if not isinstance(reservation, HandoffReservation):
+        segment.handoff_id = None
+        return
+    if segment is reservation.music_segment:
+        if completed_cleanly:
+            reservation.phase = HandoffPhase.SUCCESSOR_DUE
+        return
     if segment is reservation.successor_segment:
+        _release_reservation(state, reservation, restore_music=False)
+
+
+def retire_handoff_for_started_segment(state: StationState, segment: Segment) -> None:
+    """Compatibility shim for older callers that retired on selection.
+
+    New playback code uses ``mark_handoff_segment_selected`` plus
+    ``finish_handoff_segment`` so the clean-head boundary has an explicit due
+    phase. Preserve the old successor-release behavior for external callers.
+    """
+
+    mark_handoff_segment_selected(state, segment)
+    handoff_id = segment.handoff_id
+    reservation = _reservations(state).get(handoff_id) if handoff_id else None
+    if isinstance(reservation, HandoffReservation) and segment is reservation.successor_segment:
         _release_reservation(state, reservation, restore_music=False)
