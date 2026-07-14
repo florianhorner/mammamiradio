@@ -31,6 +31,30 @@ _TRANSITION_REWRITE_MAP: dict[str, list[str]] = {
         "Un attimo, questa sembra una notizia vera. Purtroppo.",
     ],
 }
+# These are the Normal Mode counterparts to ``_TRANSITION_REWRITE_MAP``.  Keep
+# the Italian map under its historical name: a few callers and hot-reload tests
+# inspect that symbol directly.  The mode-aware helper below is the only path
+# new code should use when selecting a rewrite.
+_TRANSITION_REWRITE_MAP_NORMAL: dict[str, list[str]] = {
+    "banter": [
+        "Hold on, amici — there is one more thing to settle.",
+        "Wait a second, amici — this deserves one more thought.",
+        "Stay with me, amici — the real point is coming now.",
+        "Good catch, amici — we have one more detail to unpack.",
+    ],
+    "ad": [
+        "Hold on, amici — a quick word from our sponsors.",
+        "One second, amici — the sponsors are stepping in.",
+        "Before we carry on, amici — here comes the ad break.",
+        "Stay with us, amici — a brief sponsor message is next.",
+    ],
+    "news_flash": [
+        "One second, amici — a fresh bulletin just reached the desk.",
+        "Hold that thought, amici — something just landed in the newsroom.",
+        "Wait, amici — we may have an update worth hearing.",
+        "Stand by, amici — the desk has a new bulletin.",
+    ],
+}
 _BORING_TRANSITION_STEMS = {"che pezzo", "eh non", "bellissima", "allora", "e adesso"}
 _TRANSITION_STOCK_COPY: dict[bool, dict[str, str]] = {
     False: {
@@ -83,15 +107,29 @@ def _transition_stem(text: str) -> str:
     return " ".join(words[:2])
 
 
-def _massage_transition_text(text: str, next_segment: str, recent_texts: list[str]) -> str:
-    """Replace stale opener patterns when the LLM falls into a rut."""
+def _massage_transition_text(
+    text: str,
+    next_segment: str,
+    recent_texts: list[str],
+    *,
+    super_italian: bool = True,
+) -> str:
+    """Replace stale opener patterns when the LLM falls into a rut.
+
+    ``super_italian`` defaults to ``True`` for compatibility with the original
+    three-argument helper, which always used the Italian rewrite inventory.  The
+    normal-mode caller must pass its active spoken mode explicitly; otherwise a
+    perfectly good English-led transition can be replaced with Italian after
+    the language guard has already accepted it.
+    """
     stem = _transition_stem(text)
     recent_stems = [_transition_stem(item) for item in recent_texts if item]
     repeated = recent_stems.count(stem) >= 1 and stem in _BORING_TRANSITION_STEMS
     if not repeated:
         return text.strip()
 
-    for candidate in _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"]):
+    rewrite_map = _TRANSITION_REWRITE_MAP if super_italian else _TRANSITION_REWRITE_MAP_NORMAL
+    for candidate in rewrite_map.get(next_segment, rewrite_map["banter"]):
         if _transition_stem(candidate) not in recent_stems:
             return candidate
-    return _TRANSITION_REWRITE_MAP.get(next_segment, _TRANSITION_REWRITE_MAP["banter"])[0]
+    return rewrite_map.get(next_segment, rewrite_map["banter"])[0]

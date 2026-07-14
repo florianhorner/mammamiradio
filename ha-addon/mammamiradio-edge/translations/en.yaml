@@ -22,7 +22,7 @@ configuration:
     description: "Set a token to require admin sign-in for the admin API. Leave it empty to trust your home network — any device on your local network can open the admin panel, and changes are still protected against cross-site requests. Set a value to require the token even on your local network, for example when automations need a stable credential."
   super_italian_mode:
     name: Super Italian Mode
-    description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts speak about 70% English with real Italian moments. On: listener UI is Italian and the hosts speak fully in Italian."
+    description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts target about 75% English with real Italian moments. On: listener UI is Italian and the hosts speak fully in Italian."
   chaos_mode_active:
     name: Chaos Mode
     description: "Keeps host-chaos mode enabled across restarts. Turning it on from the admin panel still arms the immediate first strike; boot restore does not."
