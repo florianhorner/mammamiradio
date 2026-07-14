@@ -8,6 +8,8 @@ apart from the ChaosSubtype enum. Reloaded ahead of the scriptwriter facade by
 
 from __future__ import annotations
 
+import random
+
 from mammamiradio.core.models import ChaosSubtype
 
 # Keep the Italian map under its long-standing public name.  Scriptwriter uses
@@ -58,12 +60,12 @@ CHAOS_NORMAL_STOCK_LINES: dict[ChaosSubtype, list[str]] = {
         "Music. Immediately. Before the weather finishes the argument.",
     ],
     ChaosSubtype.IMPOSSIBLE_RECALL: [
-        "That song from earlier is back in the room, wearing wet shoes.",
+        "That song from earlier is back in the room, amici, grazie, wearing wet shoes.",
         "Don't say its name too loudly or it comes through the window.",
         "Too late. Keep it moving.",
     ],
     ChaosSubtype.ICON_MOMENT: [
-        "That is exactly the rule of the icon: never explain it, just point at the ceiling.",
+        "That is exactly the rule of the icon, amici — never explain it, just point at the ceiling, grazie.",
         "Finally, someone said it on the radio.",
         "Music now, out of respect for the ceiling.",
     ],
@@ -123,3 +125,47 @@ AD_BREAK_OUTROS = [
     "Ok, basta pubblicità. Per ora.",
     "Torniamo a noi! Dove eravamo rimasti?",
 ]
+
+# These wrapper inventories are intentionally English-led in Normal Mode.  The
+# Italian ``AD_BREAK_*`` lists stay available under their historical names for
+# compatibility with callers that only need the Super Italian copy (and for
+# existing hot-reload/shape tests).  New producer code should use the selectors
+# below so the active spoken mode is explicit at the final TTS boundary.
+AD_BREAK_NORMAL_INTROS = [
+    "And now... a word from our sponsors, amici!",
+    "But first, a quick ad break — stay with us, amici!",
+    "Stay with us, amici — we'll be right back after these messages!",
+    "A short commercial pause, amici — then we're back to the music!",
+    "One brief word from our sponsors, amici — grazie for staying here!",
+]
+
+AD_BREAK_NORMAL_OUTROS = [
+    "We're back, amici — right into the music!",
+    "Welcome back, amici — let's get moving.",
+    "Back to the music, finally — grazie for staying with us!",
+    "The ads are done, amici — where were we?",
+    "And we're back — thanks for hanging on, amici!",
+]
+
+
+def select_ad_break_intro(super_italian: bool) -> str:
+    """Return one mode-appropriate spoken ad-break intro.
+
+    The selector owns random choice so producer call sites cannot accidentally
+    choose from the Italian compatibility inventory in Normal Mode.
+    """
+    pool = AD_BREAK_INTROS if super_italian else AD_BREAK_NORMAL_INTROS
+    return random.choice(pool)
+
+
+def select_ad_break_outro(super_italian: bool) -> str:
+    """Return one mode-appropriate spoken ad-break outro."""
+    pool = AD_BREAK_OUTROS if super_italian else AD_BREAK_NORMAL_OUTROS
+    return random.choice(pool)
+
+
+def select_ad_promo_tag(super_italian: bool) -> str:
+    """Return the short compliance tag spoken before a sponsored spot."""
+    if super_italian:
+        return "Messaggio promozionale."
+    return "A word from our sponsors, amici."

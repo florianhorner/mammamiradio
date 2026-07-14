@@ -90,6 +90,9 @@ async def test_write_news_flash_each_category(category):
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    # The assertion is about category routing and response shape; preserve the
+    # pre-policy exact fixture while opting this test into the explicit Italian mode.
+    config.super_italian_mode = True
     state = _make_state()
     # played_tracks is a deque (doesn't support slicing); convert to list for test
     state.played_tracks = list(state.played_tracks)

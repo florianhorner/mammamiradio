@@ -2454,6 +2454,151 @@ async def _fire_interrupt(
     return True
 
 
+def _select_ad_wrapper_text(config: StationConfig, selector_name: str, legacy_name: str) -> str:
+    """Select mode-aware ad-break wrapper copy through the host facade.
+
+    Ad assembly runs in the producer, but the spoken-mode copy belongs to the
+    host fallback catalog.  Resolve the selector at call time so hot reloads
+    are observed and old third-party scriptwriter facades remain compatible
+    while they are upgraded.  The legacy list is only a final safety net.
+    """
+    # ``station.language`` is an identity setting; only a Super Italian
+    # Italian station should select the all-Italian wrapper inventory.  This
+    # mirrors the host fallback language seam and keeps a non-Italian station
+    # from receiving Italian ad packaging merely because the personality flag
+    # is enabled.
+    spoken_super_italian = bool(config.super_italian_mode and config.station.language == "it")
+    selector = getattr(_sw, selector_name, None)
+    if callable(selector):
+        try:
+            text = selector(spoken_super_italian)
+        except Exception:  # pragma: no cover - fallback must never block audio
+            text = ""
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+    # During a partial hot-reload the facade can briefly lag the extracted
+    # fallback module.  Look it up dynamically before falling back to the
+    # compatibility constants exported by scriptwriter.
+    try:
+        from mammamiradio.hosts import fallbacks as _fallbacks
+
+        selector = getattr(_fallbacks, selector_name, None)
+        if callable(selector):
+            text = selector(spoken_super_italian)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    except Exception:  # pragma: no cover - compatibility path is best effort
+        pass
+
+    # A partial reload can leave only the historical Italian lists on the
+    # facade. Never use those as a Normal Mode fallback: the language invariant
+    # must survive even when the selector seam is temporarily unavailable.
+    if spoken_super_italian:
+        legacy = getattr(_sw, legacy_name, ())
+        if isinstance(legacy, list | tuple) and legacy:
+            return str(random.choice(legacy)).strip()
+
+    normal_legacy_name = {
+        "select_ad_break_intro": "AD_BREAK_NORMAL_INTROS",
+        "select_ad_break_outro": "AD_BREAK_NORMAL_OUTROS",
+    }.get(selector_name)
+    if normal_legacy_name:
+        normal_legacy = getattr(_sw, normal_legacy_name, ())
+        if isinstance(normal_legacy, list | tuple) and normal_legacy:
+            return str(random.choice(normal_legacy)).strip()
+    if spoken_super_italian:
+        return {
+            "select_ad_break_intro": "E ora... un messaggio dai nostri sponsor!",
+            "select_ad_break_outro": "Bene, siamo tornati!",
+            "select_ad_promo_tag": "Messaggio promozionale.",
+        }.get(selector_name, "Messaggio promozionale.")
+    return {
+        "select_ad_break_intro": "And now... a word from our sponsors, amici!",
+        "select_ad_break_outro": "We're back, amici — right into the music!",
+        "select_ad_promo_tag": "A word from our sponsors, amici.",
+    }.get(selector_name, "A word from our sponsors, amici.")
+
+
+def _select_ad_promo_tag(config: StationConfig) -> str:
+    """Return the compliance tag for the active spoken mode."""
+    # Keep this as a named seam separate from intro/outro selection: promo tags
+    # are part of the final ad transcript and are measured as spoken content.
+    return _select_ad_wrapper_text(config, "select_ad_promo_tag", "AD_PROMO_TAGS") or (
+        "Messaggio promozionale."
+        if config.super_italian_mode and config.station.language == "it"
+        else "A word from our sponsors."
+    )
+
+
+def _best_effort_language_assessment(texts: list[str], config: StationConfig) -> dict | None:
+    """Ask the shared language policy for non-blocking ledger telemetry."""
+    assessor = getattr(_sw, "assess_spoken_texts", None)
+    assessor_accepts_config = True
+    if not callable(assessor):
+        assessor = getattr(_sw, "assess_language", None)
+        assessor_accepts_config = False
+    if not callable(assessor):
+        try:
+            from mammamiradio.hosts import language_policy as _language_policy
+
+            assessor = getattr(_language_policy, "assess_spoken_texts", None)
+            assessor_accepts_config = True
+            if not callable(assessor):
+                assessor = getattr(_language_policy, "assess_language", None)
+                assessor_accepts_config = False
+        except Exception:  # pragma: no cover - policy module is optional during reload
+            assessor = None
+    if not callable(assessor):
+        return None
+
+    try:
+        result = assessor(texts, config) if assessor_accepts_config else assessor(texts)
+    except TypeError:
+        if not assessor_accepts_config:
+            return None
+        try:
+            result = assessor(texts, super_italian=bool(config.super_italian_mode))
+        except Exception:  # pragma: no cover - telemetry must not affect audio
+            return None
+    except Exception:  # pragma: no cover - telemetry must not affect audio
+        return None
+
+    if isinstance(result, dict):
+        return dict(result)
+    # Dataclass-like assessments can be made JSON-safe without importing or
+    # coupling the producer to the policy module's concrete result type.
+    values = getattr(result, "__dict__", None)
+    if isinstance(values, dict):
+        assessment = {key: value for key, value in values.items() if isinstance(key, str)}
+        for name in ("classified_tokens", "english_share", "italian_share", "is_short"):
+            value = getattr(result, name, None)
+            if isinstance(value, bool | int | float | str):
+                assessment[name] = value
+        return assessment
+    # ``LanguageAssessment`` is a frozen, slotted dataclass, so it has no
+    # ``__dict__``.  Copy its scalar fields explicitly without importing the
+    # concrete class (the producer remains independent of policy internals).
+    assessment = {}
+    for name in (
+        "total_tokens",
+        "english_tokens",
+        "italian_tokens",
+        "unclassified_tokens",
+        "classified_tokens",
+        "english_share",
+        "italian_share",
+        "is_short",
+        "is_empty",
+    ):
+        value = getattr(result, name, None)
+        if isinstance(value, bool | int | float | str):
+            assessment[name] = value
+    if assessment:
+        return assessment
+    return None
+
+
 def _emit_segment_prepared(
     state,
     *,
@@ -2461,6 +2606,7 @@ def _emit_segment_prepared(
     role: str,
     final_script: list[str],
     collector,
+    language_assessment: dict | None = None,
 ) -> None:
     """Tier-2: record the FINAL spoken script (post-processing) for one segment.
 
@@ -2477,17 +2623,21 @@ def _emit_segment_prepared(
 
         from mammamiradio.core.ledger import SCHEMA_VERSION
 
-        led.record(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "ts": _time.time(),
-                "record": "segment_prepared",
-                "segment_id": segment_id,
-                "role": role,
-                "final_script": final_script,
-                "llm_call_refs": [c.get("llm_call_id") for c in collector.calls] if collector else [],
-            }
-        )
+        row = {
+            "schema_version": SCHEMA_VERSION,
+            "ts": _time.time(),
+            "record": "segment_prepared",
+            "segment_id": segment_id,
+            "role": role,
+            "final_script": final_script,
+            "llm_call_refs": [c.get("llm_call_id") for c in collector.calls] if collector else [],
+        }
+        # Language policy telemetry is deliberately best-effort.  Keep it as a
+        # structured child field so existing Tier-2 consumers can continue to
+        # join on the stable row shape while the assessor evolves independently.
+        if isinstance(language_assessment, dict):
+            row["language_assessment"] = language_assessment
+        led.record(row)
     except Exception as exc:  # pragma: no cover - provenance must never break audio
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
 
@@ -5016,7 +5166,7 @@ async def _run_producer_inner(
                             ihost, itext, itrack_ref = await _sw.write_transition(state, config, next_segment="ad")
                     except Exception:
                         ihost = random.choice(_sw._regular_hosts(config))
-                        itext = random.choice(_sw.AD_BREAK_INTROS)
+                        itext = _select_ad_wrapper_text(config, "select_ad_break_intro", "AD_BREAK_INTROS")
                         itrack_ref = None
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
                     with _timed_render_stage(state, "tts"):
@@ -5033,8 +5183,14 @@ async def _run_producer_inner(
                         ipath = await _try_crossfade(ipath, config, xout, _music_src)
                     has_music_tail = ipath == xout
                     parts.append(ipath)
-                    # Promo compliance tag
+                    # Promo compliance tag.  This is part of the spoken ad
+                    # transcript and therefore follows the active host mode.
+                    # Keep the transcript empty if its TTS render fails: a
+                    # wrapper that was never appended to ``parts`` was not
+                    # actually heard and must not appear in Tier-2 provenance.
+                    promo_text = ""
                     try:
+                        promo_text = _select_ad_promo_tag(config)
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
                         promo_voice = _safe_ad_promo_voice(config.ads.voices)
                         if promo_voice is not None:
@@ -5047,7 +5203,7 @@ async def _run_producer_inner(
                             pfallback = ihost.edge_fallback_voice
                         with _timed_render_stage(state, "tts"):
                             await synthesize(
-                                "Messaggio promozionale.",
+                                promo_text,
                                 pvoice,
                                 ppath,
                                 rate="+40%",
@@ -5058,8 +5214,8 @@ async def _run_producer_inner(
                             )
                         parts.append(ppath)
                     except Exception:
-                        pass
-                    return parts, itext, has_music_tail, itrack_ref
+                        promo_text = ""
+                    return parts, itext, promo_text, has_music_tail, itrack_ref
 
                 async def _build_bumpers(_num_spots=num_spots, _loop=loop):
                     """Opening bumper + sparse mid-spot bumpers.
@@ -5136,7 +5292,7 @@ async def _run_producer_inner(
                 _gen_ok = False
                 try:
                     (
-                        (intro_parts, intro_text, intro_has_music_tail, intro_track_ref),
+                        (intro_parts, intro_text, promo_text, intro_has_music_tail, intro_track_ref),
                         scripts,
                         (bumper_in, mid_bumpers),
                     ) = await asyncio.gather(
@@ -5194,19 +5350,11 @@ async def _run_producer_inner(
                     if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
                         break_parts.append(mid_bumpers[spot_idx])
 
-                _emit_segment_prepared(
-                    state,
-                    segment_id=_ad_attempt_id,
-                    role="ad_break",
-                    final_script=break_texts,
-                    collector=_ad_collector,
-                )
-
                 # ── PHASE 4: Closing bumper + outro in parallel ──
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
                 outro_host = random.choice(_sw._regular_hosts(config))
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
-                outro_text = random.choice(_sw.AD_BREAK_OUTROS)
+                outro_text = _select_ad_wrapper_text(config, "select_ad_break_outro", "AD_BREAK_OUTROS")
 
                 async def _build_closing_bumper(_loop=loop, _path=bumper_out) -> None:
                     with _timed_render_stage(state, "mix"):
@@ -5230,6 +5378,25 @@ async def _run_producer_inner(
                 await asyncio.gather(_build_closing_bumper(), _build_outro_voice())
                 break_parts.append(bumper_out)
                 break_parts.append(outro_path)
+
+                # Tier-2 must describe the complete spoken break in playback
+                # order.  Keep ``break_texts`` spot-only for existing dashboard
+                # consumers, but include intro/promo/outro in the provenance
+                # transcript and assess that final surface when the policy is
+                # available.  Assessment is non-blocking telemetry.
+                final_break_script = [
+                    text
+                    for text in (intro_text, promo_text, *break_texts, outro_text)
+                    if isinstance(text, str) and text.strip()
+                ]
+                _emit_segment_prepared(
+                    state,
+                    segment_id=_ad_attempt_id,
+                    role="ad_break",
+                    final_script=final_break_script,
+                    collector=_ad_collector,
+                    language_assessment=_best_effort_language_assessment(final_break_script, config),
+                )
 
                 # ── PHASE 5: Final concat (skip loudnorm — all parts pre-normalized) ──
                 if len(break_parts) == 1:

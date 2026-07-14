@@ -36,7 +36,7 @@ After installing, go to the add-on's **Configuration** tab:
 - **Host home context**: A separate privacy and performance choice (default: on). Turn it off to stop the full Home Assistant state polling used for AI host prompts while keeping the integration, entity publishing, and timer interrupts active.
 - **Host context refresh interval**: How often that filtered prompt-context snapshot refreshes (default: 300 seconds).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
-- **Super Italian Mode**: On, the hosts speak fully in Italian and the listener page goes Italian. Off (default), the hosts speak about 70% English with real Italian moments.
+- **Super Italian Mode**: On, the hosts speak fully in Italian and the listener page goes Italian. Off (default), the hosts target about 75% English with real Italian moments.
 - **Chaos Mode**: Restore host-chaos mode across restarts when enabled.
 - **Festival Mode**: Restore theatrical music-competition mode across restarts when enabled.
 - **On-Air Sound**: Toggle the subtle FM-style output colouring (default: off).
