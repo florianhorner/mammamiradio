@@ -15,6 +15,11 @@ go-librespot/state.json
 .cache
 .claude/
 .gstack/
+# Track the shared Conductor contract; keep personal overrides and other
+# workspace-local Conductor state ignored.
+!.conductor/
+.conductor/*
+!.conductor/settings.toml
 *.app
 *.webloc
 .coverage
