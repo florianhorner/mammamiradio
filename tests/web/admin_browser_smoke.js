@@ -687,9 +687,38 @@ async (page) => {
     'resume left stale aria-disabled',
   );
 
-  for (const width of [320, 375]) {
+  await page.locator('#tab-rotazione').click();
+  await page.waitForFunction(
+    () => getComputedStyle(document.getElementById('rotation-pool')).display !== 'none',
+    null,
+    { timeout: 2000 },
+  );
+
+  for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });
     const geometry = await page.evaluate(() => {
+      _st.heading = { active: true, id: 'browser-smoke-hunt' };
+      updatePl([
+        {
+          id: 'browser-smoke-normal',
+          artist: 'Artista del test',
+          title: 'Titolo lungo della traccia normale per provare la larghezza disponibile',
+          display: 'Titolo lungo della traccia normale per provare la larghezza disponibile',
+          source: 'classic',
+          year: 1984,
+          preference: 1,
+        },
+        {
+          id: 'browser-smoke-hunt',
+          artist: 'Artista Record Hunt',
+          title: 'Una traccia Record Hunt con molti metadati e una preferenza attiva',
+          display: 'Una traccia Record Hunt con molti metadati e una preferenza attiva',
+          source: 'jamendo',
+          year: 1994,
+          heading_id: 'browser-smoke-hunt',
+          preference: -1,
+        },
+      ], { total: 2, offset: 0, limit: 2, has_more: false }, true);
       updateNow({
         type: 'music',
         label: 'Un titolo molto lungo per verificare che il nome della canzone non venga tagliato sul telefono',
@@ -729,6 +758,30 @@ async (page) => {
             && labelElement.scrollHeight <= labelElement.clientHeight + 1,
         };
       };
+      const catalogue = [...document.querySelectorAll('#plBody .pl-row')].map((row) => {
+        const rowRect = row.getBoundingClientRect();
+        const title = row.querySelector('.pl-t');
+        const metadata = row.querySelector('.pl-meta');
+        const controls = [...row.querySelectorAll('.pl-check-hit, .pl-grip, .pl-pref, .pl-a .pl-btn, .pl-ban')];
+        return {
+          rowWidth: row.clientWidth,
+          rowScrollWidth: row.scrollWidth,
+          titleWidth: title?.getBoundingClientRect().width || 0,
+          titleVisible: title ? visible(title) : false,
+          metadataText: metadata?.innerText || '',
+          metadataVisible: metadata ? visible(metadata) : false,
+          controls: controls.map((element) => controlGeometry(element)),
+          clippedControls: controls
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              return rect.left < rowRect.left - 0.5
+                || rect.right > rowRect.right + 0.5
+                || rect.top < rowRect.top - 0.5
+                || rect.bottom > rowRect.bottom + 0.5;
+            })
+            .map((element) => element.className),
+        };
+      });
       const overflow = [...document.querySelectorAll('body *')].filter((element) => {
         if (!visible(element)) return false;
         const rect = element.getBoundingClientRect();
@@ -747,6 +800,7 @@ async (page) => {
         overflow,
         airNext,
         coreTransport,
+        catalogue,
         titleFits: nowTitle.scrollWidth <= nowTitle.clientWidth,
         productionFits: productionFeed.scrollWidth <= productionFeed.clientWidth,
         recoveryFits: recoveryLabel.scrollHeight <= recoveryLabel.clientHeight + 1,
@@ -757,6 +811,28 @@ async (page) => {
     assert(
       geometry.titleFits && geometry.productionFits && geometry.recoveryFits,
       `${width}px console text clipped internally`,
+    );
+    assert(geometry.catalogue.length === 2, `${width}px catalogue fixture did not render two rows`);
+    assert(
+      geometry.catalogue.every((row) => row.rowScrollWidth <= row.rowWidth + 1),
+      `${width}px catalogue row acquired internal horizontal overflow: ${JSON.stringify(geometry.catalogue)}`,
+    );
+    assert(
+      geometry.catalogue.every((row) => row.titleVisible && row.titleWidth >= 48),
+      `${width}px catalogue title collapsed: ${JSON.stringify(geometry.catalogue)}`,
+    );
+    assert(
+      geometry.catalogue.every((row) => row.metadataVisible && row.metadataText),
+      `${width}px catalogue metadata disappeared: ${JSON.stringify(geometry.catalogue)}`,
+    );
+    assert(
+      geometry.catalogue.every((row) => row.clippedControls.length === 0),
+      `${width}px catalogue control escaped its row: ${JSON.stringify(geometry.catalogue)}`,
+    );
+    assert(
+      geometry.catalogue.every((row) => row.controls.length === 6
+        && row.controls.every((control) => control.visible && control.width >= 44 && control.height >= 44)),
+      `${width}px catalogue controls lost visibility or touch size: ${JSON.stringify(geometry.catalogue)}`,
     );
     assert(geometry.airNext.length === 4, `${width}px lost an Air Next control: ${JSON.stringify(geometry.airNext)}`);
     assert(
@@ -833,8 +909,8 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 24,
-    viewports: [320, 375],
+    checks: 30,
+    viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,
     blocked_off_origin_requests: [...new Set(blockedOffOriginRequests)],
