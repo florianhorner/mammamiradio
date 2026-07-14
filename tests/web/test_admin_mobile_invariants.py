@@ -250,13 +250,30 @@ def test_production_fetch_failure_replaces_stale_work_with_retry_state() -> None
     """A failed status poll must stop claiming that frozen production is current."""
     text = _read_admin_html()
     unavailable = text[
-        text.index("function renderProductionUnavailable") : text.index("function updateProgrammeRunway")
+        text.index("function renderProductionUnavailable") : text.index("function _setProductionRetryBusy")
     ]
     refresh_fast = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
 
-    assert "In produzione · reconnecting" in unavailable
-    assert "The producer desk will retry automatically." in unavailable
+    assert "In produzione · update delayed" in unavailable
+    assert "Can't update this panel right now. We'll keep trying automatically." in unavailable
+    assert "Try again now" in unavailable
     assert "renderProductionUnavailable();" in refresh_fast
+
+
+def test_production_retry_control_has_44px_touch_target() -> None:
+    """The Try-again-now button must stay tappable on touch devices."""
+    _assert_touch_target(".prod-retry")
+
+
+def test_production_unavailable_stacks_message_and_retry_for_narrow_screens() -> None:
+    """Message and retry control stack in a column so both stay readable at 320px."""
+    css = _admin_css()
+    wrapper = _declarations_for_selector(css, ".prod-unavailable")
+    assert wrapper.get("display") == "flex"
+    assert wrapper.get("flex-direction") == "column"
+    assert wrapper.get("min-width") == "0"
+    label = _declarations_for_selector(css, ".prod-entry .prod-label")
+    assert label.get("min-width") == "0", "the recovery sentence must be allowed to wrap, not overflow."
 
 
 def test_production_render_cannot_starve_stopped_state_updaters() -> None:

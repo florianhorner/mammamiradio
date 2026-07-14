@@ -870,6 +870,31 @@ input[type="range"]:focus-visible {
 }
 .prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
+/* "Update delayed" fallback: the status message stacks above the retry control so
+   both the recovery sentence and the button label stay readable at 320px. */
+.prod-unavailable { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.prod-unavailable .prod-entry { align-items: flex-start; }
+/* The recovery promise is the primary content of this fallback. Unlike routine
+   production labels, never truncate it after two lines on a narrow console. */
+.prod-unavailable .prod-label {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.prod-retry {
+  min-width: 44px; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg-elevated); color: var(--cream);
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  transition: color 150ms, border-color 150ms, background 150ms;
+}
+.prod-retry:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
+.prod-retry:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+.prod-retry.is-busy, .prod-retry:disabled { opacity: 0.6; cursor: default; }
+
 /* Compact non-status segment labels for programme categories */
 .a-programme .segment-inline,
 .lg-row .segment-inline {
@@ -1781,6 +1806,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="mmr-side-label sun" id="productionStateLabel">In produzione · building ahead</div>
             <div id="productionFeed"></div>
           </div>
+          <!-- This region must exist before an outage so assistive technology
+               reliably announces its later text update. -->
+          <div id="productionStatusAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
         </div>
       </div>
     </section>
@@ -3002,14 +3030,69 @@ function renderProduction(st){
   else{feed.innerHTML='';wrap.style.display='none';}
 }
 
+// True while the panel is showing the "update delayed" fallback. Gates the
+// polite atomic status announcement so a screen reader hears it once on ENTRY,
+// not again on every automatic /status poll that keeps failing. Reset to false
+// by the first successfully rendered poll in refreshFast() so a later outage
+// re-announces.
+let _productionUnavailable=false;
+let _productionRetryInFlight=false;
 function renderProductionUnavailable(){
   const wrap=document.getElementById('queue-production');
   const feed=document.getElementById('productionFeed');
   const stateLabel=document.getElementById('productionStateLabel');
   if(!wrap||!feed||!stateLabel)return;
-  stateLabel.textContent='In produzione · reconnecting';
-  feed.innerHTML=`<div class="prod-entry">${statusInline('working','Reconnecting','Producer desk reconnecting')}<span class="prod-label">The producer desk will retry automatically.</span></div>`;
+  stateLabel.textContent='In produzione · update delayed';
   wrap.style.display='';
+  const alreadyUnavailable=_productionUnavailable;
+  if(!alreadyUnavailable){
+    // Entry: announce once through the persistent live region. It already exists
+    // in the DOM, so assistive technology receives this content change reliably.
+    // The button sits outside that region, so its busy label never re-announces
+    // the failure on later automatic polls.
+    _productionUnavailable=true;
+    const announcement=document.getElementById('productionStatusAnnouncement');
+    if(announcement)announcement.textContent="Status update delayed. Can't update this panel right now. We'll keep trying automatically.";
+    feed.innerHTML=`<div class="prod-unavailable">`
+      +`<div class="prod-entry">`
+      +`${statusInline('working','Status update delayed','Status update delayed')}`
+      +`<span class="prod-label">Can't update this panel right now. We'll keep trying automatically.</span></div>`
+      +`<button type="button" class="prod-retry" id="productionRetryBtn" onclick="retryProductionNow(this)">Try again now</button>`
+      +`</div>`;
+    _setProductionRetryBusy(document.getElementById('productionRetryBtn'),_productionRetryInFlight);
+  }else{
+    // Already announced. A subsequent automatic failure must not re-announce or
+    // release an in-flight manual retry; its owner clears the state in finally.
+    if(!_productionRetryInFlight)_setProductionRetryBusy(document.getElementById('productionRetryBtn'),false);
+  }
+}
+function _setProductionRetryBusy(btn,busy){
+  if(!btn)return;
+  btn.disabled=busy;
+  btn.classList.toggle('is-busy',busy);
+  btn.setAttribute('aria-busy',busy?'true':'false');
+  btn.textContent=busy?'Trying…':'Try again now';
+}
+// Manual "Try again now": reuses the existing refreshFast() poll path, shows a
+// pending/busy state while it runs, and stays available while the station is
+// paused (it is not a producer-action control, so updateStopState never inerts it).
+async function retryProductionNow(btn){
+  if(_productionRetryInFlight)return;
+  _productionRetryInFlight=true;
+  _setProductionRetryBusy(btn,true);
+  try{
+    await refreshFast();
+  }catch(_){
+    // refreshFast swallows its own errors; a throw here is defensive only.
+  }finally{
+    _productionRetryInFlight=false;
+    // On success renderProduction() replaced this panel and the button is gone;
+    // on failure the retry still owns the button state until this finally block.
+    // If a newer failure remounted the fallback while this request was finishing,
+    // release that current button too so it cannot stay busy forever.
+    const still=document.getElementById('productionRetryBtn');
+    if(still)_setProductionRetryBusy(still,false);
+  }
 }
 
 // Turn the real rendered-audio runway into a producer-facing promise. The
@@ -5094,6 +5177,7 @@ async function refreshFast(){
 
   if(generation!==_fastPollGeneration)return;
   _st=nextStatus;
+  let productionRendered=false;
   try{
     // Paint the authoritative production state before unrelated widgets. A
     // later renderer failure must not leave yesterday's production row frozen.
@@ -5102,8 +5186,18 @@ async function refreshFast(){
     // the desk could keep showing live On-Air controls over a paused station.
     try{
       renderProduction(_st);
+      productionRendered=true;
     }catch(e){
       console.error('refreshFast production',e);
+      // An authoritative response with an unrenderable production block is not
+      // safe to present as current work. Replace any frozen row with the same
+      // honest recovery state used for a failed status poll, while keeping this
+      // fallback isolated from the paused-state controls below.
+      try{
+        renderProductionUnavailable();
+      }catch(fallbackError){
+        console.error('refreshFast production fallback',fallbackError);
+      }
     }
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
@@ -5127,6 +5221,14 @@ async function refreshFast(){
     // A client-side renderer failure is not evidence that the producer/status
     // source is unavailable. Keep the status-derived production truth visible.
     console.error('refreshFast render',e);
+  }
+  // A successfully rendered authoritative poll clears the unavailable latch so
+  // the next outage is announced fresh on entry rather than staying silent. If
+  // production rendering failed, keep the fallback's announcement state intact.
+  if(productionRendered){
+    _productionUnavailable=false;
+    const productionAnnouncement=document.getElementById('productionStatusAnnouncement');
+    if(productionAnnouncement)productionAnnouncement.textContent='';
   }
 
   const [lrData,hostsData]=await Promise.all([listenerPromise,hostsPromise]);
