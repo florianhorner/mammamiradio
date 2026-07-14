@@ -440,6 +440,79 @@ def test_production_feed_surfaces_operator_trigger() -> None:
     assert "statusInline('working','',segmentText(segmentTypeKey(fp)))" in block
 
 
+def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
+    """The status fallback must use the approved 'update delayed' copy, keep the old
+    producer-jargon copy gone, announce politely on entry only, and wire a retry
+    control to the existing refreshFast() path that survives a paused station."""
+    html = _read_admin_html()
+    block = _function_block(html, "renderProductionUnavailable")
+
+    # Exact approved strings (verbatim).
+    assert "In produzione · update delayed" in block
+    assert "statusInline('working','Status update delayed','Status update delayed')" in block
+    assert "Can't update this panel right now. We'll keep trying automatically." in block
+    assert ">Try again now</button>" in block
+
+    # Old producer-jargon copy is gone from the whole template.
+    assert "In produzione · reconnecting" not in html
+    assert "The producer desk will retry automatically." not in html
+    assert "Producer desk reconnecting" not in html
+    assert "Reconnecting" not in block
+
+    # A persistent polite atomic region exists before the outage; populating it on
+    # entry is reliable across screen readers and avoids repeated poll announcements.
+    live_region = (
+        'id="productionStatusAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"'
+    )
+    assert live_region in html
+    assert "const alreadyUnavailable=_productionUnavailable" in block
+    assert "let _productionRetryInFlight=false" in html
+    assert "if(!alreadyUnavailable){" in block
+    assert "const announcement=document.getElementById('productionStatusAnnouncement')" in block
+    announcement_copy = (
+        "announcement.textContent=\"Status update delayed. Can't update this panel "
+        "right now. We'll keep trying automatically.\""
+    )
+    assert announcement_copy in block
+
+    # Retry control reuses the existing poll path with a visible pending/busy state.
+    assert 'onclick="retryProductionNow(this)"' in block
+    retry = _function_block(html, "retryProductionNow")
+    assert "await refreshFast()" in retry
+    assert "if(_productionRetryInFlight)return" in retry
+    assert "_productionRetryInFlight=true" in retry
+    assert "_productionRetryInFlight=false" in retry
+    busy = _function_block(html, "_setProductionRetryBusy")
+    assert "btn.disabled=busy" in busy
+    assert "'Trying…'" in busy
+
+    # A successfully rendered poll clears the latch so a later outage re-announces.
+    refresh_fast = _function_block(html, "refreshFast")
+    assert refresh_fast.index("renderProduction(_st);") < refresh_fast.index("_productionUnavailable=false")
+    assert "_productionUnavailable=false" in refresh_fast
+    assert "productionAnnouncement.textContent=''" in refresh_fast
+
+    # The retry button is NOT a producer-action control, so it stays available while
+    # the station is paused (updateStopState only inerts the producer-action set).
+    update_stop = _function_block(html, "updateStopState")
+    assert "prod-retry" not in update_stop
+    assert "productionRetryBtn" not in update_stop
+
+
+def test_unrenderable_production_status_replaces_stale_rows_with_fallback() -> None:
+    """A malformed production block must never leave an older live-work row visible."""
+    refresh_fast = _function_block(_read_admin_html(), "refreshFast")
+    production_guard = refresh_fast[
+        refresh_fast.index("try{\n      renderProduction(_st);") : refresh_fast.index("if (_st.station)")
+    ]
+
+    assert "console.error('refreshFast production',e);" in production_guard
+    assert "renderProductionUnavailable();" in production_guard
+    assert production_guard.index("console.error('refreshFast production',e);") < production_guard.index(
+        "renderProductionUnavailable();"
+    )
+
+
 def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
     """Scaletta turns real rendered-audio seconds into the producer-facing
     promise that the hosts are ahead, rather than exposing a cold buffer metric.

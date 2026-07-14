@@ -217,10 +217,183 @@ async (page) => {
   const failedPoll = await page.evaluate(() => ({
     label: productionStateLabel.textContent,
     feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
   }));
-  assert(failedPoll.label.endsWith('reconnecting'), 'failed poll kept a stale production-state label');
+  assert(failedPoll.label.endsWith('update delayed'), 'failed poll kept a stale production-state label');
   assert(!failedPoll.feed.includes('Writing stale copy'), 'failed poll kept stale production copy');
-  assert(failedPoll.feed.includes('retry automatically'), 'failed poll did not give the operator a way out');
+  assert(failedPoll.feed.includes('keep trying automatically'), 'failed poll did not give the operator a way out');
+  assert(failedPoll.feed.includes('Try again now'), 'failed poll did not offer a manual retry control');
+  assert(
+    failedPoll.announcement === "Status update delayed. Can't update this panel right now. We'll keep trying automatically.",
+    'failed poll did not announce the delayed status through the persistent live region',
+  );
+
+  // The recovery action stays usable while the station is paused: it is not a
+  // producer trigger and must not be inerted along with those controls.
+  const pausedRetry = await page.evaluate(() => {
+    updateStopState(true);
+    const btn = document.getElementById('productionRetryBtn');
+    if (!btn) return { existed: false };
+    btn.focus();
+    return {
+      existed: true,
+      disabled: btn.disabled,
+      inert: btn.inert,
+      ariaDisabled: btn.getAttribute('aria-disabled'),
+      focused: document.activeElement === btn,
+      pointerEvents: getComputedStyle(btn).pointerEvents,
+    };
+  });
+  assert(pausedRetry.existed, 'paused fallback lost its Try again now control');
+  assert(
+    !pausedRetry.disabled && !pausedRetry.inert && pausedRetry.ariaDisabled !== 'true'
+      && pausedRetry.focused && pausedRetry.pointerEvents !== 'none',
+    'paused fallback made Try again now unavailable',
+  );
+
+  // A failed manual retry releases its own busy state and keeps the honest
+  // fallback available, even while the station remains paused.
+  statusScenario = 'http_error';
+  const failedRetryStart = await page.evaluate(() => {
+    const btn = document.getElementById('productionRetryBtn');
+    if (!btn) return { existed: false, busy: false };
+    btn.click();
+    return { existed: true, busy: btn.disabled && btn.getAttribute('aria-busy') === 'true' };
+  });
+  assert(failedRetryStart.existed && failedRetryStart.busy, 'failed manual retry did not enter a busy state');
+  await page.waitForFunction(() => !_productionRetryInFlight, null, { timeout: 2000 });
+  const afterFailedRetry = await page.evaluate(() => {
+    const btn = document.getElementById('productionRetryBtn');
+    return {
+      label: productionStateLabel.textContent,
+      feed: productionFeed.innerText,
+      announcement: document.getElementById('productionStatusAnnouncement').textContent,
+      exists: Boolean(btn),
+      disabled: Boolean(btn && btn.disabled),
+      busy: btn && btn.getAttribute('aria-busy'),
+      text: btn && btn.textContent,
+    };
+  });
+  assert(afterFailedRetry.label.endsWith('update delayed'), 'failed manual retry falsely restored current production');
+  assert(afterFailedRetry.feed.includes('keep trying automatically'), 'failed manual retry lost recovery guidance');
+  assert(afterFailedRetry.announcement.includes('Status update delayed'), 'failed manual retry cleared the outage announcement');
+  assert(
+    afterFailedRetry.exists && !afterFailedRetry.disabled && afterFailedRetry.busy === 'false'
+      && afterFailedRetry.text === 'Try again now',
+    'failed manual retry left Try again now busy or unavailable',
+  );
+
+  // Recover, then click the real "Try again now" control and prove it restores
+  // normal production content through the existing refreshFast() poll.
+  statusScenario = 'ok';
+  const retryStart = await page.evaluate(() => {
+    const btn = document.getElementById('productionRetryBtn');
+    if (!btn) return { existed: false, busy: false };
+    btn.click();
+    return { existed: true, busy: btn.disabled && btn.getAttribute('aria-busy') === 'true' };
+  });
+  assert(retryStart.existed, 'failed poll did not mount a Try again now control to click');
+  assert(retryStart.busy, 'manual retry did not report a busy state while polling');
+  await page.waitForFunction(
+    () => productionFeed.innerText.includes('Writing restored copy'),
+    null,
+    { timeout: 2000 },
+  );
+  await page.waitForFunction(() => !_productionRetryInFlight, null, { timeout: 2000 });
+  const afterRetry = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
+  }));
+  assert(afterRetry.label.endsWith('building ahead'), 'manual retry left the update-delayed label after recovery');
+  assert(!afterRetry.feed.includes('Try again now'), 'manual retry left the fallback control after recovery');
+  assert(!afterRetry.announcement, 'manual retry left the delayed-status announcement behind after recovery');
+
+  // A persistent live region announces one outage entry, not every failed poll;
+  // a successful render resets the latch for a later, distinct outage.
+  await page.evaluate(() => {
+    const announcement = document.getElementById('productionStatusAnnouncement');
+    window.__adminSmokeAnnouncementChanges = [];
+    window.__adminSmokeAnnouncementObserver = new MutationObserver(() => {
+      window.__adminSmokeAnnouncementChanges.push(announcement.textContent);
+    });
+    window.__adminSmokeAnnouncementObserver.observe(announcement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  });
+  statusScenario = 'network';
+  await page.evaluate(() => refreshFast());
+  await page.evaluate(() => refreshFast());
+  const firstOutageAnnouncements = await page.evaluate(
+    () => window.__adminSmokeAnnouncementChanges.filter((text) => text.includes('Status update delayed')).length,
+  );
+  statusScenario = 'ok';
+  await page.evaluate(() => refreshFast());
+  await page.evaluate(() => { window.__adminSmokeAnnouncementChanges.length = 0; });
+  statusScenario = 'network';
+  await page.evaluate(() => refreshFast());
+  const laterOutageAnnouncements = await page.evaluate(
+    () => window.__adminSmokeAnnouncementChanges.filter((text) => text.includes('Status update delayed')).length,
+  );
+  statusScenario = 'ok';
+  await page.evaluate(() => {
+    window.__adminSmokeAnnouncementObserver.disconnect();
+    delete window.__adminSmokeAnnouncementObserver;
+    delete window.__adminSmokeAnnouncementChanges;
+    return refreshFast();
+  });
+  assert(
+    firstOutageAnnouncements === 1,
+    'repeated failed polls re-announced the same status outage',
+  );
+  assert(
+    laterOutageAnnouncements === 1,
+    'a recovered later outage was not announced once',
+  );
+
+  // A 200 response is not enough to call the production feed current: if its
+  // production block cannot render, yesterday's backstage row must be replaced
+  // with the same honest update-delayed state as a failed status request.
+  statusPayload = {
+    ...restoredStatus,
+    production: {
+      current: { label: 'Malformed production payload', kind: 'banter' },
+      recent: { not: 'an array' },
+    },
+  };
+  await page.evaluate(() => refreshFast());
+  const malformedProductionPoll = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
+  }));
+  assert(
+    malformedProductionPoll.label.endsWith('update delayed'),
+    'malformed production payload did not switch to update-delayed state',
+  );
+  assert(
+    !malformedProductionPoll.feed.includes('Writing restored copy'),
+    'malformed production payload kept stale production copy',
+  );
+  assert(
+    malformedProductionPoll.announcement.includes('Status update delayed'),
+    'malformed production payload did not announce that the panel was behind',
+  );
+  statusPayload = restoredStatus;
+  await page.evaluate(() => refreshFast());
+  const recoveredMalformedProduction = await page.evaluate(() => ({
+    label: productionStateLabel.textContent,
+    feed: productionFeed.innerText,
+    announcement: document.getElementById('productionStatusAnnouncement').textContent,
+  }));
+  assert(
+    recoveredMalformedProduction.label.endsWith('building ahead')
+      && recoveredMalformedProduction.feed.includes('Writing restored copy')
+      && !recoveredMalformedProduction.announcement,
+    'valid status did not recover from a malformed production payload',
+  );
 
   statusScenario = 'http_error';
   await page.evaluate(() => renderProduction({
@@ -234,8 +407,34 @@ async (page) => {
     label: productionStateLabel.textContent,
     feed: productionFeed.innerText,
   }));
-  assert(failedHttpPoll.label.endsWith('reconnecting'), 'HTTP error was treated as a valid production status');
+  assert(failedHttpPoll.label.endsWith('update delayed'), 'HTTP error was treated as a valid production status');
   assert(!failedHttpPoll.feed.includes('Writing stale HTTP copy'), 'HTTP error kept stale production copy');
+
+  // A newer automatic failure must not clear the busy state owned by a manual
+  // retry that is still waiting for its status response.
+  const heldManualRetry = makeQueuedStatus(restoredStatus, { held: true });
+  const concurrentFailure = makeQueuedStatus({ detail: 'retry still warming' }, { status: 503 });
+  statusScenario = 'queued';
+  statusResponseQueue.push(heldManualRetry, concurrentFailure);
+  await page.evaluate(() => {
+    window.__adminSmokeManualRetry = retryProductionNow(document.getElementById('productionRetryBtn'));
+  });
+  await heldManualRetry.seen;
+  await page.evaluate(() => { window.__adminSmokeConcurrentPoll = refreshFast(); });
+  await concurrentFailure.seen;
+  await concurrentFailure.done;
+  await page.evaluate(() => window.__adminSmokeConcurrentPoll);
+  const retryDuringConcurrentFailure = await page.evaluate(() => {
+    const btn = document.getElementById('productionRetryBtn');
+    return { busy: Boolean(btn && btn.disabled && btn.getAttribute('aria-busy') === 'true') };
+  });
+  assert(
+    retryDuringConcurrentFailure.busy,
+    'concurrent automatic failure cleared the busy state of an in-flight manual retry',
+  );
+  heldManualRetry.release();
+  await heldManualRetry.done;
+  await page.evaluate(() => window.__adminSmokeManualRetry);
 
   statusScenario = 'ok';
   failListenerRequests = true;
@@ -246,7 +445,7 @@ async (page) => {
   }));
   assert(restoredPoll.label.endsWith('building ahead'), 'listener-request failure replaced healthy production state');
   assert(restoredPoll.feed.includes('Writing restored copy'), 'listener-request failure discarded healthy production copy');
-  assert(!restoredPoll.feed.includes('reconnecting'), 'listener-request failure falsely marked the producer desk offline');
+  assert(!restoredPoll.feed.includes('Try again now'), 'listener-request failure falsely marked the producer desk offline');
   failListenerRequests = false;
 
   failHosts = true;
@@ -258,7 +457,7 @@ async (page) => {
   }));
   assert(hostsFailedPoll.label.endsWith('building ahead'), 'hosts failure replaced healthy production state');
   assert(hostsFailedPoll.feed.includes('Writing restored copy'), 'hosts failure discarded healthy production copy');
-  assert(!hostsFailedPoll.feed.includes('reconnecting'), 'hosts failure falsely marked the producer desk offline');
+  assert(!hostsFailedPoll.feed.includes('Try again now'), 'hosts failure falsely marked the producer desk offline');
   failHosts = false;
 
   statusPayload = {
@@ -284,7 +483,7 @@ async (page) => {
     hangingListenerPoll.feed.includes('Writing while requests hang'),
     'never-settling listener request blocked authoritative status',
   );
-  assert(!hangingListenerPoll.label.endsWith('reconnecting'), 'listener timeout falsely marked status unavailable');
+  assert(!hangingListenerPoll.label.endsWith('update delayed'), 'listener timeout falsely marked status unavailable');
 
   statusPayload = {
     ...restoredStatus,
@@ -351,7 +550,7 @@ async (page) => {
     feed: productionFeed.innerText,
   }));
   assert(afterStaleFailure.feed.includes('Healthy after stale failure'), 'stale status failure displaced healthy state');
-  assert(!afterStaleFailure.label.endsWith('reconnecting'), 'stale status failure showed a false reconnecting state');
+  assert(!afterStaleFailure.label.endsWith('update delayed'), 'stale status failure showed a false update-delayed state');
 
   await page.evaluate(() => {
     window.__adminSmokeToasts = [];
@@ -536,6 +735,11 @@ async (page) => {
           recent: [{ label: 'Previous production update remains readable', kind: 'news_flash', ok: true }],
         },
       });
+      // Exercise the fallback's entry render independently of whichever poll
+      // scenario preceded this responsive-layout check.
+      _productionUnavailable = false;
+      renderProductionUnavailable();
+      const recoveryLabel = document.querySelector('.prod-unavailable .prod-label');
       const visible = (element) => {
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
@@ -599,11 +803,15 @@ async (page) => {
         catalogue,
         titleFits: nowTitle.scrollWidth <= nowTitle.clientWidth,
         productionFits: productionFeed.scrollWidth <= productionFeed.clientWidth,
+        recoveryFits: recoveryLabel.scrollHeight <= recoveryLabel.clientHeight + 1,
       };
     });
     assert(geometry.documentScrollWidth <= geometry.documentClientWidth, `${width}px page acquired horizontal scroll`);
     assert(geometry.overflow.length === 0, `${width}px viewport clipped ${JSON.stringify(geometry.overflow)}`);
-    assert(geometry.titleFits && geometry.productionFits, `${width}px console text clipped internally`);
+    assert(
+      geometry.titleFits && geometry.productionFits && geometry.recoveryFits,
+      `${width}px console text clipped internally`,
+    );
     assert(geometry.catalogue.length === 2, `${width}px catalogue fixture did not render two rows`);
     assert(
       geometry.catalogue.every((row) => row.rowScrollWidth <= row.rowWidth + 1),
@@ -701,7 +909,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 22,
+    checks: 30,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,
