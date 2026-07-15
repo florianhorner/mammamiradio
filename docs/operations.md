@@ -83,7 +83,10 @@ That script launches uvicorn with `--reload`, `*.toml` reload support, and `LOG_
 
 ## Conductor
 
-Shared Conductor lifecycle is defined by `scripts/conductor-*.sh` (wired through Conductor's per-workspace `.conductor/settings.toml`, an app-managed file that is not committed):
+Shared Conductor lifecycle is defined by `scripts/conductor-*.sh`. The committed
+`.conductor/settings.toml` carries shared repository behavior, including the
+commit and PR writing contract; machine-specific overrides belong in
+`.conductor/settings.local.toml`, which is managed by the Conductor app:
 
 - setup bootstraps `.venv`, installs dev tooling, and links `.env` from `~/.config/mammamiradio/.env` when present, falling back to `$CONDUCTOR_ROOT_PATH/.env`
 - run exports a workspace-specific port and tmp/cache dirs before delegating to `./start.sh`, and defaults `MAMMAMIRADIO_ALLOW_YTDLP=true`
