@@ -15,7 +15,7 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
   Keep both under this package tree so they are available without rendering in
   standalone and Home Assistant add-on builds.
 - `spoken_assets.json` — reviewed transcript, language, role, and SHA-256 for
-  every MP3 inventoried under recovery/banter/welcome. Missing, changed,
+  every MP3 inventoried under recovery/banter. Missing, changed,
   unlisted, or listener-unsafe speech fails closed. Runtime may admit approved
   recovery and neutral banter speech; welcome discovery stays disabled.
 - `welcome/` — historical generator documentation only. The runtime no longer

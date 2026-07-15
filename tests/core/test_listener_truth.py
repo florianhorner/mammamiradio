@@ -133,6 +133,30 @@ def test_door_unlock_and_non_curated_sources_never_authorize_return_copy():
     assert contains_unsafe_listener_claims("Bentornato Florian.") is True
 
 
+def test_curated_resident_source_without_return_semantics_never_authorizes_return_copy():
+    assert (
+        home_return_authority_for_directive(
+            "ha:person.florian_horner",
+            "Florian ha scelto il prossimo disco.",
+        )
+        is None
+    )
+
+
+def test_unlock_directive_claims_only_the_observed_lock_state():
+    from mammamiradio.home.ha_context import REACTIVE_TRIGGERS
+
+    directive = next(
+        text
+        for entity_id, trigger_state, text, _cooldown in REACTIVE_TRIGGERS
+        if entity_id == "lock.lock_ultra_8d3c" and trigger_state == "unlocked"
+    )
+    lowered = directive.casefold()
+    assert "si è appena sbloccata" in lowered
+    assert "si è appena aperta" not in lowered
+    assert "rumore" not in lowered
+
+
 def test_all_stock_spoken_fallback_inventories_are_listener_truth_safe():
     from mammamiradio.core.config import load_config
     from mammamiradio.hosts import context_cues, fallbacks, scriptwriter, transitions

@@ -68,12 +68,15 @@ class HomeReturnAuthority:
 
 
 def home_return_authority_for_directive(source: str, directive: str) -> HomeReturnAuthority | None:
-    """Derive authority only from the two curated HA person-state triggers."""
+    """Derive authority only from curated directives with return semantics."""
 
     resident_name = _AUTHORIZED_HOME_RETURN_SOURCES.get(str(source or ""))
-    if resident_name is None or resident_name.casefold() not in str(directive or "").casefold():
+    directive_text = str(directive or "")
+    if resident_name is None or resident_name.casefold() not in directive_text.casefold():
         return None
-    digest = hashlib.sha256(f"{source}\0{directive}".encode()).hexdigest()[:16]
+    if find_unsafe_listener_claim(directive_text) not in {"english_return", "italian_return"}:
+        return None
+    digest = hashlib.sha256(f"{source}\0{directive_text}".encode()).hexdigest()[:16]
     return HomeReturnAuthority(
         fact_id=f"resident-return-{digest}",
         source_entity_id=source.removeprefix("ha:"),

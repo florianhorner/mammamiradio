@@ -299,9 +299,9 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
     (
         "lock.lock_ultra_8d3c",
         "unlocked",
-        "La serratura della porta d'ingresso si è appena aperta. Notate soltanto il"
-        " rumore della porta — breve e caldo, senza dedurre chi sia entrato o salutare"
-        " qualcuno come tornato.",
+        "La serratura della porta d'ingresso si è appena sbloccata. Commentate brevemente"
+        " lo sblocco — senza dedurre che la porta si sia aperta, chi sia entrato o"
+        " salutare qualcuno come tornato.",
         300,
     ),
     (

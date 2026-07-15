@@ -57,7 +57,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
 )
-from mammamiradio.core.spoken_assets import is_approved_spoken_asset
+from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
@@ -657,7 +657,12 @@ def _continuity_reservation_segments(
 
     # This asset is deliberately separate from the normal continuity copy: it is
     # the cold-cache, no-clip final fallback and is available without a render.
-    if not selected and _can_add() and emergency_tone.is_file() and emergency_tone not in excluded_paths:
+    if (
+        not selected
+        and _can_add()
+        and emergency_tone not in excluded_paths
+        and is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR)
+    ):
         _add(
             Segment(
                 type=SegmentType.MUSIC,

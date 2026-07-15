@@ -67,7 +67,11 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
-from mammamiradio.core.spoken_assets import approved_spoken_assets, is_approved_spoken_asset
+from mammamiradio.core.spoken_assets import (
+    approved_spoken_assets,
+    is_approved_packaged_audio_asset,
+    is_approved_spoken_asset,
+)
 from mammamiradio.home.authorization import (
     HomeAuthorization,
     HomeAuthorizationMode,
@@ -744,8 +748,8 @@ async def _queue_continuity_bridge(
         return ok
 
     tone_path = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
-    if not tone_path.is_file():
-        logger.error("%s bridge: packaged emergency tone is missing", bridge_type.capitalize())
+    if not is_approved_packaged_audio_asset(tone_path, assets_root=_DEMO_ASSETS_DIR):
+        logger.error("%s bridge: packaged emergency tone is missing or unapproved", bridge_type.capitalize())
         return False
     logger.error(
         "%s bridge: no canned clips or norm cache available — inserting packaged emergency tone",
@@ -907,8 +911,8 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     logger.error(
         "No packaged recovery clips, norm cache, or recovery sweeper available — inserting packaged emergency tone"
     )
-    if not tone_path.is_file():
-        logger.error("Packaged emergency tone recovery asset is missing")
+    if not is_approved_packaged_audio_asset(tone_path, assets_root=_DEMO_ASSETS_DIR):
+        logger.error("Packaged emergency tone recovery asset is missing or unapproved")
         return None
     return Segment(
         type=SegmentType.MUSIC,
@@ -2633,7 +2637,7 @@ async def _fire_interrupt(
     emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
     if alert_sfx.exists():
         state.interrupt_slot = alert_sfx
-    elif emergency_tone.is_file():
+    elif is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR):
         state.interrupt_slot = emergency_tone
     else:
         # No bridge audio at all: hard-cutting here would drain the queue and

@@ -103,30 +103,29 @@ def _make_config():
     return config
 
 
-def _manifest_recovery_clip(root: Path, name: str, payload: bytes) -> Path:
-    """Create one truth-safe content-addressed recovery fixture."""
+def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str = "speech") -> Path:
+    """Create one content-addressed speech or tone recovery fixture."""
 
     recovery = root / "recovery"
-    recovery.mkdir(exist_ok=True)
+    recovery.mkdir(parents=True, exist_ok=True)
     clip = recovery / name
     clip.write_bytes(payload)
-    (root / "spoken_assets.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "assets": [
-                    {
-                        "path": f"recovery/{name}",
-                        "sha256": hashlib.sha256(payload).hexdigest(),
-                        "kind": "speech",
-                        "language": "en",
-                        "transcript": "The station stays on air.",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    manifest_path = root / "spoken_assets.json"
+    assets: list[dict[str, str]] = []
+    if manifest_path.is_file():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(existing.get("assets"), list):
+            assets = [entry for entry in existing["assets"] if entry.get("path") != f"recovery/{name}"]
+    assets.append(
+        {
+            "path": f"recovery/{name}",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "kind": kind,
+            "language": "none" if kind == "tone" else "en",
+            "transcript": "" if kind == "tone" else "The station stays on air.",
+        }
     )
+    manifest_path.write_text(json.dumps({"schema_version": 1, "assets": assets}), encoding="utf-8")
     return clip
 
 
@@ -5972,9 +5971,7 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
     state.queued_segments = [{"id": "bad"}, {"id": "cue"}]
 
     demo_root = tmp_path / "demo"
-    emergency_tone = demo_root / "recovery" / "emergency_tone.mp3"
-    emergency_tone.parent.mkdir(parents=True)
-    emergency_tone.write_bytes(b"tone")
+    _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"tone", kind="tone")
     empty_sfx = tmp_path / "empty_sfx"
     empty_sfx.mkdir()
     original_unlink = Path.unlink
@@ -6009,10 +6006,13 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     demo_root = tmp_path / "assets" / "demo"
-    packaged = demo_root / "recovery" / "continuity_1.mp3"
-    packaged.parent.mkdir(parents=True)
-    packaged.write_bytes(b"\x00" * 2048)
-    (packaged.parent / "emergency_tone.mp3").write_bytes(b"\x00" * 2048)
+    packaged = _manifest_recovery_clip(demo_root, "continuity_1.mp3", b"\x00" * 2048)
+    emergency_tone = _manifest_recovery_clip(
+        demo_root,
+        "emergency_tone.mp3",
+        b"\x00" * 2048,
+        kind="tone",
+    )
     state = _make_state()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     queue.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
@@ -6030,7 +6030,36 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
 
     assert packaged.exists()
     assert queue.empty()
-    assert state.interrupt_slot == packaged.parent / "emergency_tone.mp3"
+    assert state.interrupt_slot == emergency_tone
+
+
+async def test_fire_interrupt_rejects_tampered_manifested_emergency_tone(tmp_path):
+    """A modified packaged tone cannot justify draining the live queue."""
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    demo_root = tmp_path / "assets" / "demo"
+    emergency_tone = _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"reviewed", kind="tone")
+    emergency_tone.write_bytes(b"tampered")
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    state = _make_state()
+    buffered = Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3", metadata={"title": "Buffered"})
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(buffered)
+    state.queued_segments = [{"id": "buffered", "type": "music"}]
+    spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+    ):
+        fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert fired is False
+    assert list(queue._queue) == [buffered]
+    assert state.interrupt_slot is None
 
 
 async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):

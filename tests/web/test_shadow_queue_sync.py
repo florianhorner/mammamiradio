@@ -1803,7 +1803,25 @@ def test_continuity_reservation_precommits_packaged_tone_when_clip_and_cache_are
     demo_root = tmp_path / "assets" / "demo"
     tone = demo_root / "recovery" / "emergency_tone.mp3"
     tone.parent.mkdir(parents=True)
-    tone.write_bytes(b"tone")
+    payload = b"tone"
+    tone.write_bytes(payload)
+    (demo_root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "recovery/emergency_tone.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "tone",
+                        "language": "none",
+                        "transcript": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     with (
         patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
@@ -1815,6 +1833,41 @@ def test_continuity_reservation_precommits_packaged_tone_when_clip_and_cache_are
     assert segment.path == tone
     assert segment.metadata["audio_source"] == "emergency_tone"
     assert segment.metadata["continuity_reservation"] is True
+
+
+def test_continuity_reservation_rejects_tampered_manifested_emergency_tone(tmp_path):
+    demo_root = tmp_path / "assets" / "demo"
+    tone = demo_root / "recovery" / "emergency_tone.mp3"
+    tone.parent.mkdir(parents=True)
+    reviewed = b"reviewed tone"
+    tone.write_bytes(reviewed)
+    (demo_root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "recovery/emergency_tone.mp3",
+                        "sha256": hashlib.sha256(reviewed).hexdigest(),
+                        "kind": "tone",
+                        "language": "none",
+                        "transcript": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = StationState()
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        approved = _continuity_reservation_segments(state, None, 2.0)
+    assert [segment.path for segment in approved] == [tone]
+
+    tone.write_bytes(b"tampered tone")
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        tampered = _continuity_reservation_segments(state, None, 2.0)
+    assert all(segment.path != tone for segment in tampered)
 
 
 def test_continuity_reservation_rejects_unmanifested_or_tampered_spoken_recovery(tmp_path):

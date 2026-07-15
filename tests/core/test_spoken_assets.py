@@ -8,6 +8,7 @@ import json
 from mammamiradio.core import spoken_assets
 from mammamiradio.core.spoken_assets import (
     approved_spoken_assets,
+    is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
     validate_spoken_asset_manifest,
 )
@@ -91,6 +92,27 @@ def test_manifested_tone_is_inventory_valid_but_not_spoken(tmp_path):
 
     assert validate_spoken_asset_manifest(assets_root=tmp_path) == []
     assert approved_spoken_assets("recovery", assets_root=tmp_path) == []
+    assert is_approved_packaged_audio_asset(tone, assets_root=tmp_path) is True
+    assert is_approved_spoken_asset(tone, assets_root=tmp_path) is False
+
+    tone.write_bytes(b"tampered" * 600)
+    assert is_approved_packaged_audio_asset(tone, assets_root=tmp_path) is False
+
+
+def test_local_review_welcome_clip_does_not_invalidate_recovery_manifest(tmp_path):
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    clip = recovery / "continuity.mp3"
+    payload = b"reviewed" * 300
+    clip.write_bytes(payload)
+    welcome = tmp_path / "welcome"
+    welcome.mkdir()
+    (welcome / "local-review.mp3").write_bytes(b"local review only")
+    _write_manifest(tmp_path, [_entry("recovery/continuity.mp3", payload)])
+
+    assert validate_spoken_asset_manifest(assets_root=tmp_path) == []
+    assert is_approved_spoken_asset(clip, assets_root=tmp_path) is True
+    assert approved_spoken_assets("welcome", assets_root=tmp_path) == []
 
 
 def test_symlink_loop_fails_closed_instead_of_raising(tmp_path):

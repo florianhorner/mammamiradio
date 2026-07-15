@@ -11,7 +11,7 @@ from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 
 MANIFEST_FILENAME = "spoken_assets.json"
-DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "welcome")
+DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,12 +118,41 @@ def approved_spoken_assets(subdir: str, *, assets_root: Path = DEMO_ASSETS_DIR) 
 def is_approved_spoken_asset(path: Path, *, assets_root: Path = DEMO_ASSETS_DIR) -> bool:
     """Revalidate one cached path so a changed asset fails closed immediately."""
 
+    entry = _approved_manifest_entry(path, assets_root=assets_root)
+    return entry is not None and entry.kind == "speech"
+
+
+def is_approved_packaged_audio_asset(path: Path, *, assets_root: Path = DEMO_ASSETS_DIR) -> bool:
+    """Return whether a speech or tone asset is declared, intact, and safe."""
+
+    return _approved_manifest_entry(path, assets_root=assets_root) is not None
+
+
+def _approved_manifest_entry(path: Path, *, assets_root: Path) -> SpokenAssetEntry | None:
+    """Resolve one content-addressed entry after validating the whole inventory."""
+
     candidate = Path(path)
+    root = Path(assets_root)
     try:
-        relative = candidate.resolve().relative_to(Path(assets_root).resolve())
+        relative = candidate.resolve().relative_to(root.resolve())
     except (OSError, RuntimeError, ValueError):
-        return False
-    return candidate in approved_spoken_assets(relative.parent.as_posix(), assets_root=assets_root)
+        return None
+    if validate_spoken_asset_manifest(assets_root=root):
+        return None
+    data, _errors = _read_manifest(root)
+    raw_assets = data.get("assets") if data is not None else None
+    if not isinstance(raw_assets, list):
+        return None
+    for index, raw in enumerate(raw_assets):
+        entry, entry_errors = _parse_entry(raw, root=root, prefix=f"assets[{index}]")
+        if entry is None or entry_errors or entry.relative_path != relative.as_posix():
+            continue
+        try:
+            if candidate.is_file() and _sha256(candidate) == entry.sha256:
+                return entry
+        except OSError:
+            return None
+    return None
 
 
 def _read_manifest(root: Path) -> tuple[dict[str, object] | None, list[str]]:
