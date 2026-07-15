@@ -697,7 +697,7 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -2208,7 +2208,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -2273,7 +2273,7 @@ async def test_banter_metadata_includes_transition_track_ref(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", "youtube|abc123"),
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -2344,7 +2344,7 @@ async def test_canned_banter_quality_fallback_clears_transition_track_ref(tmp_pa
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", "youtube|abc123"),
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),

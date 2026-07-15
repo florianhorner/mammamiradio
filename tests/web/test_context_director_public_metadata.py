@@ -16,6 +16,19 @@ def test_public_metadata_recursively_removes_home_context_director_keys():
     assert public == {"title": "Banter", "nested": {"lines": [{"text": "ciao"}]}}
 
 
+def test_public_metadata_removes_listener_session_and_home_return_fences():
+    public = _public_segment_metadata(
+        {
+            "title": "Companionship",
+            "listener_session_epoch": 7,
+            "listener_session_cue": "companionship",
+            "home_return_fact_id": "resident-return-opaque",
+        }
+    )
+
+    assert public == {"title": "Companionship"}
+
+
 def test_public_metadata_scrubs_internal_keys_inside_a_tuple_branch():
     # _without_internal has a dedicated tuple branch; the most sensitive key
     # (the raw HA entity id) must be stripped even when nested inside a tuple.

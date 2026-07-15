@@ -1069,7 +1069,9 @@ async def test_banter_generated_audio_passes_expected_duration_context(tmp_path)
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1111,7 +1113,9 @@ async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tm
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1162,7 +1166,9 @@ async def test_banter_concat_duration_failure_cleans_temporary_parts(tmp_path):
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1220,7 +1226,9 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -2016,7 +2024,7 @@ async def test_news_flash_tts_failure_skips_gracefully(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),

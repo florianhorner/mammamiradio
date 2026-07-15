@@ -368,6 +368,25 @@ async def test_public_status_strict_subset_of_admin():
 
 
 @pytest.mark.asyncio
+async def test_listener_session_diagnostics_are_admin_only_and_legacy_counts_stay_stable():
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    listener_id, _queue = hub.subscribe()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+    hub.unsubscribe(listener_id)
+
+    assert "listener_session" not in public
+    assert "connections_total" not in public
+    assert admin["listeners"] == {"active": 1, "peak": 1, "total": 1}
+    assert admin["connections_total"] == 1
+    assert admin["listener_session"]["epoch"] == 1
+    assert admin["listener_session"]["phase"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_public_status_no_admin_secrets_leak():
     """Listener payload must NOT contain admin-only fields (queue_depth, costs, etc)."""
     app = _make_test_app()

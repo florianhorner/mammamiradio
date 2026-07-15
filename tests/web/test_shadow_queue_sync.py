@@ -15,6 +15,8 @@ the two produces misleading up-next displays.  These tests cover:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import time
 from pathlib import Path
@@ -26,6 +28,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mammamiradio.core.config import load_config
+from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
     GenerationWasteReason,
     PlaylistSource,
@@ -1328,6 +1331,54 @@ def test_continuity_reservation_evicts_only_the_ordinary_tail():
     assert app.state.station_state.continuity_epoch == 1
 
 
+def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_path):
+    """Even a default-reason live control settles every cue it removes."""
+    app = _make_app()
+    app.state.queue = asyncio.Queue(maxsize=1)
+    session = ListenerSession(monotonic=lambda: 1_800.0)
+    session.observe_active_count(1, now=0.0)
+    claim = session.claim_companionship(now=1_800.0)
+    assert claim is not None
+    assert session.mark_companionship_queued(claim.epoch) is True
+    app.state.station_state.listener_session = session
+
+    cue = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "companionship.mp3",
+        duration_sec=5.0,
+        metadata={
+            "queue_id": "cue",
+            "listener_session_epoch": claim.epoch,
+            "listener_session_cue": "companionship",
+        },
+        ephemeral=False,
+    )
+    replacement = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "replacement.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True, "queue_id": "replacement"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(cue)
+    app.state.station_state.queued_segments = [{"id": "cue", "type": "banter"}]
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer._continuity_reservation_segments", return_value=[replacement]),
+    ):
+        evicted = _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
+
+    assert evicted == 1
+    assert list(app.state.queue._queue) == [replacement]
+    assert session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert app.state.station_state.discard_by_reason == {GenerationWasteReason.OPERATOR_PURGE: 1}
+    assert app.state.station_state.queued_segments[0]["id"] == "replacement"
+    assert app.state.queue.get_nowait() is replacement
+    app.state.queue.task_done()
+    assert app.state.queue._unfinished_tasks == 0
+
+
 def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip():
     """Count pressure cannot make listener runway shorter than it was before the guard."""
     app = _make_app()
@@ -1752,7 +1803,25 @@ def test_continuity_reservation_precommits_packaged_tone_when_clip_and_cache_are
     demo_root = tmp_path / "assets" / "demo"
     tone = demo_root / "recovery" / "emergency_tone.mp3"
     tone.parent.mkdir(parents=True)
-    tone.write_bytes(b"tone")
+    payload = b"tone"
+    tone.write_bytes(payload)
+    (demo_root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "recovery/emergency_tone.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "tone",
+                        "language": "none",
+                        "transcript": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     with (
         patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
@@ -1764,6 +1833,79 @@ def test_continuity_reservation_precommits_packaged_tone_when_clip_and_cache_are
     assert segment.path == tone
     assert segment.metadata["audio_source"] == "emergency_tone"
     assert segment.metadata["continuity_reservation"] is True
+
+
+def test_continuity_reservation_rejects_tampered_manifested_emergency_tone(tmp_path):
+    demo_root = tmp_path / "assets" / "demo"
+    tone = demo_root / "recovery" / "emergency_tone.mp3"
+    tone.parent.mkdir(parents=True)
+    reviewed = b"reviewed tone"
+    tone.write_bytes(reviewed)
+    (demo_root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "recovery/emergency_tone.mp3",
+                        "sha256": hashlib.sha256(reviewed).hexdigest(),
+                        "kind": "tone",
+                        "language": "none",
+                        "transcript": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = StationState()
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        approved = _continuity_reservation_segments(state, None, 2.0)
+    assert [segment.path for segment in approved] == [tone]
+
+    tone.write_bytes(b"tampered tone")
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        tampered = _continuity_reservation_segments(state, None, 2.0)
+    assert all(segment.path != tone for segment in tampered)
+
+
+def test_continuity_reservation_rejects_unmanifested_or_tampered_spoken_recovery(tmp_path):
+    demo_root = tmp_path / "assets" / "demo"
+    recovery_dir = demo_root / "recovery"
+    recovery_dir.mkdir(parents=True)
+    clip = recovery_dir / "continuity_1.mp3"
+    clip.write_bytes(b"unreviewed speech")
+    state = StationState()
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        unmanifested = _continuity_reservation_segments(state, None, 4.0)
+    assert all(segment.path != clip for segment in unmanifested)
+
+    reviewed = b"reviewed speech"
+    clip.write_bytes(reviewed)
+    (demo_root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "recovery/continuity_1.mp3",
+                        "sha256": hashlib.sha256(reviewed).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "The station stays on air.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    clip.write_bytes(b"tampered speech")
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", demo_root):
+        tampered = _continuity_reservation_segments(state, None, 4.0)
+    assert all(segment.path != clip for segment in tampered)
 
 
 def test_generation_waste_snapshot_empty_is_not_degraded():

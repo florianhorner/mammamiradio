@@ -36,6 +36,7 @@ from mammamiradio.audio.normalizer import (
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
+from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     ChaosSubtype,
     GenerationWasteReason,
@@ -56,6 +57,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
 )
+from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
 from mammamiradio.home.entity_policy import (
@@ -502,7 +504,7 @@ def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> 
         logger.debug("Moment receipt discard drop failed", exc_info=True)
 
 
-def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None) -> int:
+def _purge_queue_and_shadow(q, state: StationState, *, reason: str) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
     Single home for "purge everything". Every operator purge (stop, panic,
@@ -519,9 +521,8 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str | None = None
     """
     items = _drain_segment_queue(q)
     for seg in items:
-        if reason is not None:
-            state.record_discard(seg, reason=reason, already_counted_in_produced=True)
-            _drop_segment_moment_receipts(state, seg, str(reason))
+        state.record_discard(seg, reason=reason, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, seg, str(reason))
         _unlink_ephemeral_best_effort(seg)
     state.queued_segments.clear()
     return len(items)
@@ -573,7 +574,11 @@ def _continuity_reservation_segments(
         selected.append(segment)
         covered += segment.duration_sec
 
-    if _can_add() and recovery.is_file() and recovery not in excluded_paths:
+    if (
+        _can_add()
+        and recovery not in excluded_paths
+        and is_approved_spoken_asset(recovery, assets_root=_DEMO_ASSETS_DIR)
+    ):
         _add(
             Segment(
                 type=SegmentType.BANTER,
@@ -652,7 +657,12 @@ def _continuity_reservation_segments(
 
     # This asset is deliberately separate from the normal continuity copy: it is
     # the cold-cache, no-clip final fallback and is available without a render.
-    if not selected and _can_add() and emergency_tone.is_file() and emergency_tone not in excluded_paths:
+    if (
+        not selected
+        and _can_add()
+        and emergency_tone not in excluded_paths
+        and is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR)
+    ):
         _add(
             Segment(
                 type=SegmentType.MUSIC,
@@ -739,7 +749,7 @@ def _reserve_continuity_runway(
     config,
     *,
     replace_queue: bool = False,
-    discard_reason: str | None = None,
+    discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
 ) -> int:
@@ -905,9 +915,8 @@ def _reserve_continuity_runway(
         state.continuity_slot = planned_slot
 
     for segment in dropped:
-        if discard_reason is not None:
-            state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
-            _drop_segment_moment_receipts(state, segment, discard_reason)
+        state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, segment, discard_reason)
         _unlink_ephemeral_best_effort(segment)
     _rebuild_queue_shadow(q, state, combined)
     state.continuity_epoch += 1
@@ -2173,7 +2182,7 @@ class LiveStreamHub:
         # playback loop uses this to spot a disconnect/reconnect that happens
         # while it is still reading the current segment, rather than letting a
         # new listener inherit an old pacing origin.
-        self._listener_epoch = 0
+        self._delivery_generation = 0
         self._state: StationState | None = None
         # Set by subscribe() so the playback loop wakes the instant a listener
         # connects to an empty room, instead of sleeping out a fixed poll. Bound
@@ -2182,6 +2191,8 @@ class LiveStreamHub:
 
     def bind_state(self, state: StationState) -> None:
         """Attach station state for listener tracking. Call once at startup."""
+        if self._listeners:
+            raise RuntimeError("LiveStreamHub cannot bind state after listeners are connected")
         self._state = state
 
     def subscribe(self) -> tuple[int, asyncio.Queue[bytes | None]]:
@@ -2192,14 +2203,21 @@ class LiveStreamHub:
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=self._listener_queue_size)
         self._listeners[listener_id] = queue
         if room_was_empty:
-            self._listener_epoch += 1
+            self._delivery_generation += 1
         active = len(self._listeners)
         logger.info("Listener connected (%d active)", active)
         if self._state is not None:
+            transition = self._state.listener_session.observe_active_count(active)
             self._state.listeners_active = active
             self._state.listeners_total += 1
             self._state.listeners_peak = max(self._state.listeners_peak, active)
-            self._state.new_listeners_pending += 1
+            if transition is not None:
+                logger.info(
+                    "Listener session %s (epoch=%d, active=%d)",
+                    transition.kind.value,
+                    transition.epoch,
+                    active,
+                )
         # Wake a playback loop parked on the empty-room wait. The dict insert
         # above happens-before this set(), so the loop's check-clear-recheck
         # sees the new listener and never misses the wakeup.
@@ -2207,14 +2225,14 @@ class LiveStreamHub:
         return listener_id, queue
 
     @property
-    def listener_epoch(self) -> int:
+    def delivery_generation(self) -> int:
         """Return the current empty-room-to-listener generation.
 
         It is intentionally a coarse counter, not a listener identity: it
         tells playback that a fresh room needs a fresh send-ahead cushion while
         retaining no per-listener diagnostic state.
         """
-        return self._listener_epoch
+        return self._delivery_generation
 
     def unsubscribe(self, listener_id: int) -> None:
         """Remove a listener and drop any future broadcast work for it."""
@@ -2222,18 +2240,21 @@ class LiveStreamHub:
             active = len(self._listeners)
             logger.info("Listener disconnected (%d active)", active)
             if self._state is not None:
+                self._state.listener_session.observe_active_count(active)
                 self._state.listeners_active = active
 
     def has_listener(self, listener_id: int) -> bool:
         """Return whether a listener is still subscribed."""
         return listener_id in self._listeners
 
-    async def broadcast(self, chunk: bytes) -> None:
-        """Push one encoded audio chunk to every listener, dropping laggards."""
+    async def broadcast(self, chunk: bytes) -> int:
+        """Push one encoded chunk and return how many listener queues accepted it."""
         slow_listeners = []
+        accepted = 0
         for listener_id, queue in list(self._listeners.items()):
             try:
                 queue.put_nowait(chunk)
+                accepted += 1
             except asyncio.QueueFull:
                 slow_listeners.append(listener_id)
 
@@ -2242,12 +2263,14 @@ class LiveStreamHub:
             self.unsubscribe(listener_id)
         if slow_listeners and self._state is not None:
             self._state.record_slow_listener_drops(len(slow_listeners))
+        return accepted
 
     def close(self) -> None:
         """Signal all listeners to terminate and clear the hub."""
         listeners = list(self._listeners.items())
         self._listeners.clear()
         if self._state is not None:
+            self._state.listener_session.observe_active_count(0)
             self._state.listeners_active = 0
         for _, queue in listeners:
             try:
@@ -2259,6 +2282,94 @@ class LiveStreamHub:
 # Packaged clips are read-only shipped assets, so a probed duration is stable
 # for the process lifetime. Caching it keeps rescue re-serves ffprobe-free.
 _packaged_clip_duration_cache: dict[Path, float] = {}
+
+
+def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
+    """Return whether a segment carries the cue marker and its valid epoch."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("listener_session_cue") != "companionship":
+        return False, None
+    epoch = metadata.get("listener_session_epoch")
+    if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > 0:
+        return True, epoch
+    return True, None
+
+
+def _consume_queue_shadow(segment_queue: asyncio.Queue[Segment], state: StationState, segment: Segment) -> None:
+    """Remove a pulled segment from the admin shadow by identity, reconciling drift.
+
+    The common path verifies and removes the head in O(1).  A mismatch is a
+    correctness signal, not permission to pop an unrelated row: rebuild the
+    projection from the bounded real queue while preserving known row metadata.
+    This function has no await points, so producer and playback cannot interleave
+    during the repair.
+    """
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    expected_id = str(metadata.get("queue_id") or "")
+    shadow = state.queued_segments
+    if shadow and expected_id and str(shadow[0].get("id") or "") == expected_id:
+        shadow.pop(0)
+        return
+
+    if not shadow and not expected_id:
+        return
+
+    actual_remaining = list(getattr(segment_queue, "_queue", ()))
+    prior_rows = {str(row.get("id")): row for row in shadow if row.get("id")}
+    from mammamiradio.scheduling.producer import _queue_shadow_entry
+
+    state.queued_segments = [
+        prior_rows.get(str(item.metadata.get("queue_id") or "")) or _queue_shadow_entry(item)
+        for item in actual_remaining
+    ]
+    logger.warning(
+        "Queue shadow drift repaired while consuming queue_id=%s (shadow=%d, real=%d)",
+        expected_id or "missing",
+        len(shadow),
+        len(actual_remaining),
+    )
+
+
+def _start_stream_segment(
+    app,
+    state: StationState,
+    config,
+    segment: Segment,
+    ha_push_tasks: set[asyncio.Task],
+) -> None:
+    """Publish now-playing state once a segment has truthfully started."""
+
+    previous_provider_event = state.runtime_events[-1] if state.runtime_events else None
+    state.last_air_monotonic = _runtime_monotonic()
+    state.on_stream_segment(segment)
+    if state.runtime_events:
+        current_provider_event = state.runtime_events[-1]
+        if current_provider_event is not previous_provider_event:
+            logger.info("provider_switch_event", extra=current_provider_event.to_dict())
+    logger.info(
+        ">>> NOW STREAMING %s: %s",
+        segment.type.value,
+        segment.metadata.get("title", segment.metadata),
+    )
+
+    if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
+        task = asyncio.create_task(
+            push_state_to_ha(
+                ha_url=config.homeassistant.url,
+                ha_token=config.ha_token,
+                now_streaming=copy.deepcopy(state.now_streaming),
+                current_track=state.current_track,
+                listeners_active=state.listeners_active,
+                session_stopped=state.session_stopped,
+                queue_depth=len(state.queued_segments),
+                station_name=config.display_station_name,
+                artwork_url=config.brand.artwork_url,
+            )
+        )
+        ha_push_tasks.add(task)
+        task.add_done_callback(ha_push_tasks.discard)
 
 
 async def _packaged_recovery_segment(fallback: Path) -> Segment:
@@ -2304,7 +2415,7 @@ async def run_playback_loop(app) -> None:
     # A full disconnect/reconnect can happen while the inner file-send loop is
     # active, so the outer empty-room branch alone is not enough to restore a
     # first-packet cushion for that new listener generation.
-    pacer_listener_epoch = hub.listener_epoch
+    pacer_delivery_generation = hub.delivery_generation
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
     gap_clips_served = 0
@@ -2338,10 +2449,10 @@ async def run_playback_loop(app) -> None:
                     await asyncio.wait_for(hub._listener_arrived.wait(), timeout=1.0)
                 except TimeoutError:
                     pass
-            # If a listener arrived while this branch was parked, it starts a
+            # If a listener connected while this branch was parked, it starts a
             # fresh room epoch after the reset immediately above.  Recording it
             # here prevents a duplicate reset on the next outer iteration.
-            pacer_listener_epoch = hub.listener_epoch
+            pacer_delivery_generation = hub.delivery_generation
             continue
 
         # Priority slot: interrupt bridge audio plays before anything in the queue.
@@ -2550,7 +2661,31 @@ async def run_playback_loop(app) -> None:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
                         continue
 
-        prev_last_provider_event = state.runtime_events[-1] if state.runtime_events else None
+        if pulled_from_queue:
+            _consume_queue_shadow(segment_queue, state, segment)
+
+        is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
+        if is_companionship_cue and (
+            companionship_epoch is None
+            or companionship_epoch != state.listener_session.epoch
+            or state.listener_session.companionship_cue_state is not ListenerSessionCueState.QUEUED
+        ):
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.LISTENER_SESSION_STALE)
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info(
+                "Discarding stale companionship cue before playback (segment_epoch=%s, current_epoch=%s)",
+                companionship_epoch,
+                state.listener_session.epoch,
+            )
+            continue
+
         if state.session_stopped:
             # Stop landed mid-selection: drop this segment instead of airing it.
             # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
@@ -2571,42 +2706,18 @@ async def run_playback_loop(app) -> None:
             state.queue_empty_since = None
             gap_clips_served = 0
             continue
-        state.last_air_monotonic = _runtime_monotonic()
-        state.on_stream_segment(segment)
-        if state.runtime_events:
-            new_last_provider_event = state.runtime_events[-1]
-            if new_last_provider_event is not prev_last_provider_event:
-                logger.info("provider_switch_event", extra=new_last_provider_event.to_dict())
-        if pulled_from_queue and state.queued_segments:
-            state.queued_segments.pop(0)
-        logger.info(
-            ">>> NOW STREAMING %s: %s",
-            segment.type.value,
-            segment.metadata.get("title", segment.metadata),
-        )
 
-        if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-            _ha_task = asyncio.create_task(
-                push_state_to_ha(
-                    ha_url=config.homeassistant.url,
-                    ha_token=config.ha_token,
-                    now_streaming=copy.deepcopy(state.now_streaming),
-                    current_track=state.current_track,
-                    listeners_active=state.listeners_active,
-                    session_stopped=state.session_stopped,
-                    queue_depth=len(state.queued_segments),
-                    station_name=config.display_station_name,
-                    artwork_url=config.brand.artwork_url,
-                )
-            )
-            _ha_push_tasks.add(_ha_task)
-            _ha_task.add_done_callback(_ha_push_tasks.discard)
+        stream_started = False
+        if not is_companionship_cue:
+            _start_stream_segment(app, state, config, segment, _ha_push_tasks)
+            stream_started = True
 
         try:
             bytes_sent = 0
             was_skipped = False
             send_completed_cleanly = False
             terminal_reason = "aborted"
+            companionship_discard_recorded = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -2633,17 +2744,63 @@ async def run_playback_loop(app) -> None:
                             skip_event.clear()
                             break
 
+                        if is_companionship_cue and (
+                            companionship_epoch != state.listener_session.epoch
+                            or state.listener_session.companionship_cue_state
+                            not in {ListenerSessionCueState.QUEUED, ListenerSessionCueState.CONSUMED}
+                        ):
+                            terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                            was_skipped = True
+                            if not stream_started:
+                                state.record_discard(
+                                    segment,
+                                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                                    already_counted_in_produced=pulled_from_queue,
+                                )
+                                companionship_discard_recorded = True
+                            logger.info(
+                                "Stopping stale companionship cue before its next audio chunk "
+                                "(segment_epoch=%s, current_epoch=%s)",
+                                companionship_epoch,
+                                state.listener_session.epoch,
+                            )
+                            break
+
                         # The room can briefly become empty and refill while a
                         # long segment is in flight.  Reset before that new
                         # listener receives a packet so it gets the same
                         # bounded bootstrap cushion as a cold start, without
                         # changing natural segment-boundary pacing.
-                        if hub.listener_epoch != pacer_listener_epoch:
+                        if hub.delivery_generation != pacer_delivery_generation:
                             pacer.reset_timeline("no_listeners")
-                            pacer_listener_epoch = hub.listener_epoch
+                            pacer_delivery_generation = hub.delivery_generation
 
-                        await hub.broadcast(chunk)
-                        bytes_sent += len(chunk)
+                        accepted_listeners = await hub.broadcast(chunk)
+                        if is_companionship_cue and not stream_started:
+                            if accepted_listeners <= 0:
+                                terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                                state.record_discard(
+                                    segment,
+                                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                                    already_counted_in_produced=pulled_from_queue,
+                                )
+                                companionship_discard_recorded = True
+                                logger.info("Abandoning companionship cue because no listener accepted its first chunk")
+                                break
+                            if companionship_epoch is None or not state.listener_session.mark_companionship_consumed(
+                                companionship_epoch
+                            ):
+                                # broadcast() has no await points, so this can only
+                                # happen if lifecycle state was already corrupt.
+                                terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                                was_skipped = True
+                                logger.error("Companionship cue could not transition QUEUED -> CONSUMED")
+                                break
+                            _start_stream_segment(app, state, config, segment, _ha_push_tasks)
+                            stream_started = True
+
+                        if not is_companionship_cue or accepted_listeners > 0:
+                            bytes_sent += len(chunk)
 
                         # Feed the clip ring buffer for "share WTF moment"
                         clip_buf = getattr(app.state, "clip_ring_buffer", None)
@@ -2717,6 +2874,18 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if (
+                is_companionship_cue
+                and not stream_started
+                and not companionship_discard_recorded
+                and companionship_epoch is not None
+                and state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
+            ):
+                state.record_discard(
+                    segment,
+                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                    already_counted_in_produced=pulled_from_queue,
+                )
             _schedule_banter_memory_extraction_after_send(
                 app.state,
                 config,
@@ -6810,6 +6979,10 @@ async def status(
                 "peak": state.listeners_peak,
                 "total": state.listeners_total,
             },
+            # Admin-only alias: this is cumulative HTTP stream connections, not
+            # unique people.  Keep the legacy nested shape unchanged.
+            "connections_total": state.listeners_total,
+            "listener_session": state.listener_session.snapshot().to_dict(),
             "runtime_health": runtime_health,
             "runtime_status": runtime_status,
             "provider_health": provider_health,

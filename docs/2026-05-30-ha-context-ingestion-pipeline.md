@@ -92,7 +92,7 @@ ha_privacy:
 
 When `share_person_presence` is enabled, `person.*` keeps only the home/away state; GPS and tracker attributes are stripped before scoring. With the default config, `person.*` is omitted entirely.
 
-**Decision update (as shipped):** the per-toggle `ha_privacy` opt-in above was not built. To preserve the existing arrival greetings and empty-home mood, `person.*` home/away presence is kept by default (`latitude`/`longitude`/`gps_accuracy`/`user_id`/`device_trackers` stripped via `SENSITIVE_ATTRIBUTE_KEYS`; person events never reach `/public-status`). `device_tracker`, `camera`, and `alarm_control_panel` remain default-deny, and free-text helper domains (`input_text`, `text`) are dropped as secret-bearing. A granular opt-in can revisit this later if multi-resident privacy needs it.
+**Decision update (as shipped):** the per-toggle `ha_privacy` opt-in above was not built. To preserve the empty-home mood and explicitly sourced named-resident facts, `person.*` home/away presence is kept by default (`latitude`/`longitude`/`gps_accuracy`/`user_id`/`device_trackers` stripped via `SENSITIVE_ATTRIBUTE_KEYS`; person events never reach `/public-status`). `device_tracker`, `camera`, and `alarm_control_panel` remain default-deny, and free-text helper domains (`input_text`, `text`) are dropped as secret-bearing. A granular opt-in can revisit this later if multi-resident privacy needs it.
 
 ### L3 — Score "radio interestingness"
 

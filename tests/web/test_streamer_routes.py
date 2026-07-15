@@ -28,7 +28,8 @@ from fastapi import FastAPI
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -41,6 +42,7 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     StreamPacer,
     _ad_cast_status_payload,
+    _consume_queue_shadow,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -299,18 +301,179 @@ async def test_subscribe_returns_id_and_queue():
     assert hub.has_listener(lid)
 
 
-def test_listener_epoch_advances_only_when_an_empty_room_refills():
+@pytest.mark.asyncio
+async def test_broadcast_reports_only_listener_queues_that_accept_the_chunk():
+    hub = LiveStreamHub(listener_queue_size=1)
+    _, accepting = hub.subscribe()
+    accepting.put_nowait(b"already full")
+    _, open_queue = hub.subscribe()
+
+    accepted = await hub.broadcast(b"next")
+
+    assert accepted == 1
+    assert await open_queue.get() == b"next"
+    assert len(hub._listeners) == 1
+
+
+def test_delivery_generation_advances_only_when_an_empty_room_refills():
     hub = LiveStreamHub()
     first, _ = hub.subscribe()
-    assert hub.listener_epoch == 1
+    assert hub.delivery_generation == 1
 
     second, _ = hub.subscribe()
-    assert hub.listener_epoch == 1
+    assert hub.delivery_generation == 1
 
     hub.unsubscribe(first)
     hub.unsubscribe(second)
     hub.subscribe()
-    assert hub.listener_epoch == 2
+    assert hub.delivery_generation == 2
+
+
+def _queue_companionship_cue(app: FastAPI, tmp_path: Path, *, audio: bytes = b"cue audio"):
+    now = [0.0]
+    session = ListenerSession(monotonic=lambda: now[0])
+    app.state.station_state.listener_session = session
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
+    now[0] = 1800.0
+    claim = session.claim_companionship()
+    assert claim is not None
+
+    path = tmp_path / "companionship.mp3"
+    path.write_bytes(audio)
+    queue_id = "companionship-cue"
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=path,
+        duration_sec=1.0,
+        metadata={
+            "title": "Companionship",
+            "queue_id": queue_id,
+            "listener_session_epoch": claim.epoch,
+            "listener_session_cue": "companionship",
+        },
+        ephemeral=False,
+    )
+    assert session.mark_companionship_queued(claim.epoch)
+    app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {
+            "id": queue_id,
+            "type": "banter",
+            "label": "Companionship",
+            "duration_sec": 1.0,
+        }
+    ]
+    return now, listener_id, listener_queue, segment, claim
+
+
+@pytest.mark.asyncio
+async def test_companionship_cue_is_consumed_only_after_a_listener_accepts_audio(tmp_path):
+    app = _make_test_app()
+    _, _, listener_queue, _, claim = _queue_companionship_cue(app, tmp_path)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(listener_queue.get(), timeout=1.0) == b"cue audio"
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert app.state.station_state.listener_session.companionship_cue_state is ListenerSessionCueState.CONSUMED
+        assert app.state.station_state.now_streaming["label"] == "Companionship"
+        assert claim.epoch == app.state.station_state.listener_session.epoch
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_companionship_cue_without_an_accepting_listener_is_abandoned_before_start(tmp_path):
+    app = _make_test_app()
+    _, listener_id, listener_queue, _, _ = _queue_companionship_cue(app, tmp_path)
+
+    async def _reject_first_chunk(_chunk: bytes) -> int:
+        app.state.stream_hub.unsubscribe(listener_id)
+        return 0
+
+    app.state.stream_hub.broadcast = _reject_first_chunk
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        state = app.state.station_state
+        assert listener_queue.empty()
+        assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+        assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+        assert state.now_streaming.get("label") != "Companionship"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stale_queued_companionship_epoch_is_discarded_before_audio(tmp_path):
+    app = _make_test_app()
+    now, listener_id, _, _, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2400.0  # exactly ten empty minutes starts a new station epoch
+    _, new_listener_queue = app.state.stream_hub.subscribe()
+    assert app.state.station_state.listener_session.epoch == claim.epoch + 1
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        state = app.state.station_state
+        assert new_listener_queue.empty()
+        assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+        assert state.queued_segments == []
+        assert state.now_streaming.get("label") != "Companionship"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_companionship_epoch_fence_stops_remaining_chunks_after_epoch_changes(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 32
+    now, listener_id, first_queue, _, claim = _queue_companionship_cue(app, tmp_path, audio=b"x" * 4096)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(first_queue.get(), timeout=1.0)
+        assert app.state.station_state.listener_session.companionship_cue_state is ListenerSessionCueState.CONSUMED
+        app.state.stream_hub.unsubscribe(listener_id)
+        now[0] = 2400.0
+        _, new_listener_queue = app.state.stream_hub.subscribe()
+        assert app.state.station_state.listener_session.epoch == claim.epoch + 1
+
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert new_listener_queue.empty()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_queue_shadow_consumption_repairs_identity_mismatch_without_blind_pop(tmp_path):
+    state = StationState()
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    pulled = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "pulled.mp3",
+        metadata={"queue_id": "pulled", "title": "Pulled"},
+    )
+    remaining = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "remaining.mp3",
+        metadata={"queue_id": "remaining", "title": "Remaining"},
+    )
+    queue.put_nowait(pulled)
+    queue.put_nowait(remaining)
+    assert queue.get_nowait() is pulled
+    state.queued_segments = [
+        {"id": "remaining", "label": "Remaining", "reason": "preserve me"},
+        {"id": "pulled", "label": "Pulled"},
+    ]
+
+    _consume_queue_shadow(queue, state, pulled)
+
+    assert state.queued_segments == [{"id": "remaining", "label": "Remaining", "reason": "preserve me"}]
 
 
 @pytest.mark.asyncio
@@ -1334,14 +1497,11 @@ def test_silence_gate_requires_no_air_not_just_an_empty_queue():
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_uses_legacy_welcome_after_recovery_and_banter_absent(tmp_path):
+async def test_run_playback_loop_never_discovers_legacy_welcome_or_banter_clips(tmp_path):
     app = _make_test_app()
-    app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
     app.state.stream_hub.subscribe()
-
-    welcome_path = tmp_path / "welcome.mp3"
-    welcome_path.write_bytes(b"welcome-audio" * 512)
+    checked_recovery = asyncio.Event()
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -1350,27 +1510,28 @@ async def test_run_playback_loop_timeout_uses_legacy_welcome_after_recovery_and_
 
     def _pick_canned_clip(subdir, *, state=None):
         assert state is app.state.station_state
-        return welcome_path if subdir == "welcome" else None
+        checked_recovery.set()
+        return None
 
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
-        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 3.0
-            while app.state.station_state.now_streaming.get("metadata", {}).get("title") != "Station continuity":
-                if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not stream legacy welcome recovery")
-                await asyncio.sleep(0.01)
+            deadline = time.monotonic() + 1.0
+            while not checked_recovery.is_set():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("playback did not check the approved recovery inventory")
+                await asyncio.sleep(0)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert [call.args[0] for call in pick_canned.call_args_list[:3]] == ["recovery", "banter", "welcome"]
-    assert app.state.station_state.now_streaming["metadata"].get("rescue") is True
-    select_norm_cache_rescue.assert_not_called()
+    assert pick_canned.call_count >= 1
+    assert {call.args[0] for call in pick_canned.call_args_list} == {"recovery"}
+    assert app.state.station_state.now_streaming == {}
 
 
 @pytest.mark.asyncio

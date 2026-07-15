@@ -486,6 +486,11 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "home_fact_fingerprint",
         "home_fact_entity_id",
         "home_fact_policy_revision",
+        "home_return_fact_id",
+        # Listener-session lifecycle metadata is an internal delivery fence.
+        # Public status keeps its pre-feature segment schema unchanged.
+        "listener_session_epoch",
+        "listener_session_cue",
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",

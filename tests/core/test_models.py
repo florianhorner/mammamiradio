@@ -989,6 +989,15 @@ def test_on_stream_segment_counts_canned_clips():
     state.on_stream_segment(seg2)
     assert state.canned_clips_streamed == 2
 
+    # Packaged continuity speech is a rescue rung, not a shareware banter use.
+    rescue = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/continuity.mp3"),
+        metadata={"type": "banter", "canned": True, "rescue": True},
+    )
+    state.on_stream_segment(rescue)
+    assert state.canned_clips_streamed == 2
+
 
 def test_on_stream_segment_adds_generated_banter_to_bleed_pool():
     state = StationState()

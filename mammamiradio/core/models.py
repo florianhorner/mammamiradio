@@ -18,10 +18,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
+from mammamiradio.core.listener_session import ListenerSession
 from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
+    from mammamiradio.core.listener_truth import HomeReturnAuthority
     from mammamiradio.home.authorization import HomeAuthorization
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
     from mammamiradio.home.evening_memory import EveningLedger
@@ -76,6 +78,7 @@ class GenerationWasteReason:
     OPERATOR_BAN = "operator_ban"
     OPERATOR_QUEUE_REMOVE = "operator_queue_remove"
     STALE_PLAYED_TRACK_REF = "stale_played_track_ref"
+    LISTENER_SESSION_STALE = "listener_session_stale"
 
 
 class SegmentType(Enum):
@@ -652,6 +655,7 @@ class StationState:
     # It is cleared on every new banter attempt so a failed render cannot attach
     # an older fact to unrelated speech.
     last_banter_home_fact: PromptFact | None = None
+    last_banter_return_authority: HomeReturnAuthority | None = None
     # Community-inspired Impossible Moments recipe telemetry. Public surfaces
     # may expose only the coarse family labels; recipe internals stay admin-only.
     ha_ritual_context: str = ""
@@ -772,11 +776,16 @@ class StationState:
     anthropic_key_checked_at: float = 0.0
     openai_key_status: KeyStatus = "unverified"
     openai_key_checked_at: float = 0.0
-    # Listener connection tracking for "impossible moments"
+    # Listener connection telemetry.  The hub is authoritative for membership;
+    # listener_session is the identity-free station epoch used by prompts and
+    # persona receipts.
     listeners_active: int = 0
     listeners_peak: int = 0
     listeners_total: int = 0
-    new_listeners_pending: int = 0
+    listener_session: ListenerSession = field(default_factory=ListenerSession, repr=False)
+    listener_session_tasks: set[asyncio.Task] = field(default_factory=set, repr=False)
+    listener_session_persona_retry_at: float = 0.0
+    listener_session_persona_retry_attempts: int = 0
     # Bounded, anonymous stream-delivery diagnostics. These are session-local
     # and exposed only through authenticated /status. Raw listener identity,
     # segment labels/titles, and Home Assistant values never enter these rows.
@@ -1171,12 +1180,19 @@ class StationState:
         totals survive deque eviction; discard_events backs the rolling-window
         waste readout in admin Runtime Status.
         """
+        # Semantic settlement is not telemetry. Do it before every best-effort
+        # observer below so queue removal, overflow, mode changes, and playback
+        # rejection cannot leave a claimed companionship cue retryable.
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if metadata.get("listener_session_cue") == "companionship":
+            cue_epoch = metadata.get("listener_session_epoch")
+            if isinstance(cue_epoch, int) and not isinstance(cue_epoch, bool):
+                self.listener_session.abandon_companionship(cue_epoch)
         try:
             # Isolated from the accounting body below: a director bug must not
             # skip the waste telemetry for this discard (mirrors the guard in
             # on_stream_segment around activate()).
             director = self.home_context_director
-            metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
             home_fact_id = str(metadata.get("home_fact_id") or "")
             # Only a segment carrying a home fact ever holds a reservation. Gate on
             # its id so an ordinary segment's queue_id can never match and release
@@ -1426,8 +1442,9 @@ class StationState:
                 track_display=prev.get("label", ""),
             )
             self.listener.segments_since_taste_mirror += 1
-        # Track canned banter clips at stream time (shareware trial)
-        if segment.metadata.get("canned"):
+        # Track only ordinary canned banter at stream time. Packaged recovery
+        # speech is operational safety audio, never shareware trial content.
+        if segment.type == SegmentType.BANTER and segment.metadata.get("canned") and not segment.metadata.get("rescue"):
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
         fallback_active = is_fallback_active(segment.metadata)

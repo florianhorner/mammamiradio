@@ -56,11 +56,7 @@ def configured_clips() -> tuple[gen.WelcomeClip, ...]:
 
 
 def test_welcome_clip_contract_is_italian_and_well_formed() -> None:
-    """The contract must stay non-empty, .mp3-named, and free of empty text/host.
-
-    The runtime globs welcome/*.mp3, so a clip with a non-mp3 name or blank text
-    would silently never air. This guards the shape the generator promises.
-    """
+    """The local-review contract stays non-empty, mp3-named, and complete."""
     assert gen.WELCOME_CLIPS, "welcome clip contract must not be empty"
     names = [clip.filename for clip in gen.WELCOME_CLIPS]
     assert len(names) == len(set(names)), "welcome clip filenames must be unique"
@@ -185,13 +181,11 @@ async def test_overwrite_failure_preserves_existing_clip(tmp_path, monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatch, configured_clips) -> None:
-    """No partial or raw render may surface under the runtime-globbed clip dir.
+    """No partial or raw render may surface in the top-level review inventory.
 
-    The playback loop serves any ``*.mp3`` directly under welcome/ (Path.glob
-    matches dotfiles too), and the real ``synthesize`` writes a sibling
-    ``.raw.mp3`` next to its target. Both must stay in the staging subdir, so an
-    interrupted generation can never leave a servable partial/un-normalized clip
-    where the station would pick it up.
+    The real ``synthesize`` writes a sibling ``.raw.mp3`` next to its target.
+    Both intermediates stay in the staging subdirectory so a future explicit
+    manifest review can never mistake a partial render for a published clip.
     """
     mid_run_globs: list[list[str]] = []
 
@@ -200,7 +194,7 @@ async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatc
         raw = output_path.with_suffix(".raw.mp3")
         raw.write_bytes(FAKE_MP3_BYTES)
         output_path.write_bytes(FAKE_MP3_BYTES)
-        # Capture what the runtime glob would see while a render is in flight.
+        # Capture what a top-level publication scan sees while rendering.
         mid_run_globs.append([p.name for p in tmp_path.glob("*.mp3")])
         raw.unlink(missing_ok=True)
         return output_path

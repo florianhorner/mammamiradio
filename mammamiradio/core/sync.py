@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS listener_persona (
 -- Seed the default persona row so UPDATE-based methods never no-op
 INSERT OR IGNORE INTO listener_persona (id) VALUES (1);
 
+CREATE TABLE IF NOT EXISTS listener_session_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    process_token TEXT NOT NULL,
+    logical_session_id TEXT NOT NULL,
+    committed_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS track_rules (
     id INTEGER PRIMARY KEY,
     youtube_id TEXT NOT NULL,

@@ -370,6 +370,8 @@ async def startup():
     ):
         logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
     persona_store = PersonaStore(db_path)
+    if not await persona_store.prepare_listener_session_process():
+        logger.warning("Listener-session receipt preparation will retry at the first station epoch")
 
     try:
         bridge_app_version = importlib.metadata.version("mammamiradio")
@@ -674,7 +676,7 @@ async def startup():
         logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
     # Pre-produce music segments in the background so app startup is instant.
-    # If a listener arrives before prewarm finishes, the producer's idle-resume
+    # If a listener connects before prewarm finishes, the producer's idle-resume
     # logic queues a canned clip as an immediate fallback.
     # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
     # constrained addon hardware while still buffering enough for smooth start.
@@ -750,6 +752,11 @@ async def shutdown():
     if verdict_task:
         verdict_task.cancel()
         tasks_to_cancel.append(verdict_task)
+    listener_session_tasks = getattr(getattr(app.state, "station_state", None), "listener_session_tasks", None)
+    if listener_session_tasks:
+        for _session_task in list(listener_session_tasks):
+            _session_task.cancel()
+            tasks_to_cancel.append(_session_task)
     # Fire-and-forget background tasks (queue-from-search / listener song
     # downloads). Cancel them too so an in-flight yt-dlp download can't write to
     # app.state after teardown begins.

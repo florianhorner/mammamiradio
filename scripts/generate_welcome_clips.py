@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the bundled welcome clips into mammamiradio/assets/demo/welcome/.
+"""Generate neutral, local-review clips into assets/demo/welcome/.
 
-Welcome clips are the DJ "interrupting" the broadcast to greet a listener.
-The playback loop reaches for them via _pick_canned_clip("welcome") as one of
-its instant-audio fallbacks (after canned banter, before forced TTS), so an
-empty welcome/ directory quietly removes a rescue rung. This script populates
-that directory from a fixed, Italian-only contract using the station's own TTS
-pipeline, replacing the fragile copy-paste `python -c` snippet that used to
-live in welcome/README.md.
+The runtime deliberately does not discover this directory. This historical
+utility remains useful for voice review, but generated files are not eligible
+for playback unless a future explicit manifest policy admits them.
 
 Defaults to the free Edge engine, so no API key is required to regenerate the
-clips. The clips are committed-asset candidates: run this locally, listen, then
-commit the MP3s if they sound right.
+clips. The fixed lines contain no listener arrival, return, or recognition
+claim.
 
 Usage:
     python scripts/generate_welcome_clips.py                 # write missing clips
@@ -56,11 +52,9 @@ SILENCE_PEAK_DBFS = -80.0
 MIN_CLIP_BYTES = 1024
 MIN_CLIP_DURATION_SEC = 0.5
 
-# Render intermediates here, never directly in the clip dir. The playback loop
-# serves any ``*.mp3`` directly under welcome/ — and Path.glob matches dotfiles —
-# while synthesize() also drops a sibling ``.raw.mp3``. Staging in a subdirectory
-# (still on the same filesystem, so the final publish stays an atomic replace)
-# keeps every partial/raw artifact out of that glob.
+# Render intermediates here, never directly in the clip dir. Synthesis also
+# drops a sibling ``.raw.mp3``; staging preserves a clean review directory and
+# keeps the final publish atomic even though runtime discovery is disabled.
 STAGING_DIRNAME = ".staging"
 
 
@@ -77,19 +71,17 @@ class WelcomeClip:
     voice: str = ""
 
 
-# The contract. Italian-only by design — these match the station identity and
-# its two house hosts (Marco / Giulia). Keep filenames stable: the runtime globs
-# welcome/*.mp3, but committing predictable names keeps regeneration idempotent.
+# The historical contract. Keep filenames stable for reproducible local review.
 # Voice IDs are deliberately resolved from radio.toml below, never frozen here.
 WELCOME_CLIPS: tuple[WelcomeClip, ...] = (
     WelcomeClip(
         "marco_welcome_1.mp3",
         "Marco",
-        "Eyyy, qualcuno si e collegato! Benvenuto, benvenuto!",
+        "Siamo sempre in onda. La musica continua, piano piano.",
     ),
-    WelcomeClip("marco_welcome_2.mp3", "Marco", "Eccolo! Un nuovo ascoltatore! Che bello, che bello!"),
-    WelcomeClip("giulia_welcome_1.mp3", "Giulia", "Benvenuto... vediamo cosa ci hai portato oggi."),
-    WelcomeClip("giulia_welcome_2.mp3", "Giulia", "Oh, qualcuno si e sintonizzato. Finalmente."),
+    WelcomeClip("marco_welcome_2.mp3", "Marco", "Studio B resiste. Un attimo e torna il prossimo disco."),
+    WelcomeClip("giulia_welcome_1.mp3", "Giulia", "La frequenza resta accesa. Nessun dramma, quasi."),
+    WelcomeClip("giulia_welcome_2.mp3", "Giulia", "Mamma Mi Radio continua. La musica sa dove andare."),
 )
 
 
@@ -307,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(
         prog="generate_welcome_clips.py",
-        description="Generate the bundled Italian welcome clips for the demo asset tree.",
+        description="Generate neutral Italian station-continuity clips for local review.",
     )
     parser.add_argument(
         "--output-dir",
