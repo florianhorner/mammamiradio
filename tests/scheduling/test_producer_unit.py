@@ -93,6 +93,10 @@ def _make_state() -> StationState:
 
 def _make_config():
     config = load_config(TOML_PATH)
+    # Producer unit tests exercise Normal Mode unless a test opts into a
+    # special mode explicitly.  Keep them deterministic when another test or
+    # the invoking environment leaves the persisted festival flag enabled.
+    config.party_mode = None
     config.pacing.lookahead_segments = 1
     config.homeassistant.enabled = False
     config.tmp_dir = Path("/tmp/mammamiradio_test")
