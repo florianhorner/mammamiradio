@@ -179,23 +179,17 @@ class TestListenerBehavior:
 
 
 class TestGenerateImpossibleLine:
-    """Tests for generate_impossible_line — zero-config uncanny DJ lines."""
+    """Tests for identity-free time/context lines."""
 
-    def test_first_listener_returns_special_line(self):
-        line = generate_impossible_line(is_first_listener=True)
+    def test_listener_connection_flags_are_not_part_of_the_api(self):
+        line = generate_impossible_line(segments_produced=1)
         assert isinstance(line, str)
         assert len(line) > 0
 
-    def test_new_listener_early_segments(self):
-        line = generate_impossible_line(is_new_listener=True, segments_produced=1)
-        assert isinstance(line, str)
-        assert len(line) > 0
-
-    def test_new_listener_later_segments_uses_normal_path(self):
-        # segments_produced >= 3 bypasses the new-listener early path
+    def test_later_segments_use_normal_path(self):
         with patch("mammamiradio.hosts.context_cues.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = _freeze_time(10)
-            line = generate_impossible_line(is_new_listener=True, segments_produced=5)
+            line = generate_impossible_line(segments_produced=5)
         assert isinstance(line, str)
 
     def test_with_listener_patterns(self):
@@ -256,8 +250,9 @@ class TestUncoveredBranches:
         # 99 is not in any segment range (0-5, 5-8, 8-12, 12-14, 14-18, 18-21, 21-24).
         assert _current_segment_key(99) == "deep_night"
 
-    def test_generate_impossible_line_falls_back_to_new_listener_lines(self):
-        """When all candidate sources are empty, fall through to _NEW_LISTENER_LINES (line 375)."""
+    def test_generate_impossible_line_falls_back_to_safe_stock_lines(self):
+        """When all candidate sources are empty, use a non-arrival stock line."""
+        from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
         from mammamiradio.hosts import context_cues
 
         # Force no listener patterns + empty segment lines + skip day lines (random >= 0.3).
@@ -266,4 +261,4 @@ class TestUncoveredBranches:
             patch("random.random", return_value=0.5),
         ):
             result = context_cues.generate_impossible_line(listener_patterns=None)
-        assert result in context_cues._NEW_LISTENER_LINES
+        assert not contains_unsafe_listener_claims(result)

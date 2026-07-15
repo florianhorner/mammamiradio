@@ -141,7 +141,7 @@ AD_BREAK_NORMAL_INTROS = [
 
 AD_BREAK_NORMAL_OUTROS = [
     "We're back, amici — right into the music!",
-    "Welcome back, amici — let's get moving.",
+    "The ads are done, amici — let's get moving.",
     "Back to the music, finally — grazie for staying with us!",
     "The ads are done, amici — where were we?",
     "And we're back — thanks for hanging on, amici!",

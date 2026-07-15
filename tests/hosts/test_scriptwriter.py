@@ -16,6 +16,7 @@ import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
 from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
+from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.models import (
     LLM_COST_CATEGORIES,
     ChaosSubtype,
@@ -51,6 +52,7 @@ from mammamiradio.hosts.scriptwriter import (
     _personality_modifier,
     _plan_listener_request_block,
     _regular_hosts,
+    repair_banter_without_listener_context,
     write_ad,
     write_banter,
     write_news_flash,
@@ -1500,13 +1502,11 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
 
 
 @pytest.mark.asyncio
-async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(config, state):
-    config.super_italian_mode = True
+async def test_write_banter_has_no_connection_arrival_prompt(config, state):
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
             "lines": [
-                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "New listener, I enter now."},
                 {"host": regulars[0].name, "text": "No, we welcome them ourselves, piano piano."},
                 {"host": regulars[1].name, "text": "Exactly. Guest mic closed, warm room open."},
             ],
@@ -1520,15 +1520,128 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
     ):
-        result, commit = await write_banter(state, config, is_new_listener=True)
+        result, commit = await write_banter(state, config)
 
     prompt = _banter_user_prompt(mock_cls)
-    assert "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!" in prompt
-    assert "GUEST HOST GATE" in prompt
+    assert "new listener" not in prompt.lower()
+    assert "tuned in" not in prompt.lower()
     assert [(host.name, text) for host, text in result] == [
         (regulars[0].name, "No, we welcome them ourselves, piano piano."),
         (regulars[1].name, "Exactly. Guest mic closed, warm room open."),
     ]
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_context_is_bounded_and_returns_proof(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {
+                    "host": regulars[0].name,
+                    "text": "We have had company for roughly half an hour, amici, piano piano.",
+                },
+                {"host": regulars[1].name, "text": "Exactly, the music is still here."},
+            ],
+            "new_joke": None,
+            "listener_session_cue": "companionship",
+            "listener_session_duration_bucket": "30-44_minutes",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    state.persona_store = MagicMock()
+    state.persona_store.get_persona = AsyncMock()
+    state.listener.play_count = 99
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config, companionship_context=context)
+
+    prompt = _banter_user_prompt(mock_cls)
+    assert "COMPANIONSHIP CUE" in prompt
+    assert "roughly half an hour" in prompt
+    assert "listener-epoch" not in prompt
+    assert "1800" not in prompt
+    assert "Station sessions so far" not in prompt
+    assert "<listener_behavior>" not in prompt
+    assert "COMPANIONSHIP PROOF CONTRACT" in prompt
+    assert '"listener_session_cue": "companionship"' in prompt
+    state.persona_store.get_persona.assert_not_awaited()
+    assert len(result) == 2
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert commit.companionship == scriptwriter_module.CompanionshipBanterCommit(
+        duration_bucket=CompanionshipDurationBucket.MINUTES_30_TO_44
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_without_matching_model_proof_is_ordinary(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "We have had company for a while, amici."},
+                {"host": regulars[1].name, "text": "Exactly, the music keeps moving."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_model_fields_without_spoken_context_are_not_proof(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "The studio keeps moving, amici."},
+                {"host": regulars[1].name, "text": "Exactly, the next record is ready."},
+            ],
+            "new_joke": None,
+            "listener_session_cue": "companionship",
+            "listener_session_duration_bucket": "30-44_minutes",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_fallback_carries_no_proof(config, state):
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(side_effect=RuntimeError("provider down")),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
     assert commit is None
 
 
@@ -1541,7 +1654,6 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
         ("listener_request", "LISTENER REQUEST"),
         ("course_change", "RECORD HUNT"),
         ("release_beat", "<release_beat>"),
-        ("new_listener", "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!"),
     ],
 )
 async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, state, blocker, expected_prompt):
@@ -1560,9 +1672,6 @@ async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, 
         state.heading_pending_announcement = "Anni '90"
     elif blocker == "release_beat":
         state.release_campaign = _GuestGateReleaseCampaign()
-    elif blocker == "new_listener":
-        kwargs["is_new_listener"] = True
-
     response_json = json.dumps(
         {
             "lines": [
@@ -1712,8 +1821,11 @@ async def test_write_banter_adds_new_joke(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        await write_banter(state, config)
+        _, commit = await write_banter(state, config)
 
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert len(state.running_jokes) == 0
+    commit.apply_queue_acceptance(state)
     assert "The traffic joke" in state.running_jokes
 
 
@@ -1736,10 +1848,14 @@ async def test_write_banter_stashes_pending_verbal_gag(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        await write_banter(state, config)
+        _, commit = await write_banter(state, config)
 
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert state.pending_verbal_gag is None
+    assert "bathroom fans" not in state.running_jokes
+    commit.apply_queue_acceptance(state)
     assert state.pending_verbal_gag == {"text": "bathroom fans", "punch": 5.0}
-    assert "bathroom fans" in state.running_jokes  # running_jokes still seeded too
+    assert "bathroom fans" in state.running_jokes
 
 
 @pytest.mark.asyncio
@@ -3031,6 +3147,7 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
     ("caller", "category"),
     [
         ("banter", "script_banter"),
+        ("banter_listener_truth_repair", "script_banter"),
         ("news_flash", "script_banter"),
         ("transition", "script_transition"),
         ("ad", "script_ads"),
@@ -3800,7 +3917,7 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
     # Verify persona context was in the prompt
     assert len(captured_prompts) == 1
     prompt_text = captured_prompts[0][0]["content"]
-    assert "listener_memory" in prompt_text
+    assert "station_memory" in prompt_text
     assert "jazz notturno" in prompt_text
 
     # Generation no longer persists persona memory. It only carries a post-air
@@ -3812,6 +3929,46 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
     assert memory.persona_context
     assert memory.source_session == 1
     assert memory.script_lines == [{"host": host_name, "text": "Bentornato!"}]
+
+
+@pytest.mark.asyncio
+async def test_repair_banter_without_listener_context_returns_safe_exchange(config, state):
+    """The final truth fence can obtain a clean exchange without station context."""
+    first_host = config.hosts[0]
+    second_host = config.hosts[1] if len(config.hosts) > 1 else first_host
+    response = {
+        "lines": [
+            None,
+            {"host": first_host.name, "text": "The music keeps moving."},
+            {"host": second_host.name, "text": "And the studio is still awake."},
+            {"host": first_host.name, "text": ""},
+        ]
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert result == [
+        (first_host, "The music keeps moving."),
+        (second_host, "And the studio is still awake."),
+    ]
+    generate.assert_awaited_once()
+    assert "listener-session" not in generate.await_args.kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_repair_banter_without_listener_context_skips_without_llm(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock()) as generate:
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert result is None
+    generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3867,7 +4024,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
             ],
         ),
     ):
-        result, commit = await write_banter(state, config, is_first_listener=True)
+        result, commit = await write_banter(state, config)
 
     assert len(result) == 1
     prompt = captured["prompt"]
@@ -3880,8 +4037,8 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert "HIGH PRIORITY" in prompt
     assert "<listener_behavior>" in prompt
     assert "<arc_phase>" in prompt
-    assert "<listener_memory>" in prompt
-    assert "FIRST listener" in prompt
+    assert "<station_memory>" in prompt
+    assert "FIRST listener" not in prompt
     assert '"persona_updates"' not in prompt
     assert '"song_cues"' not in prompt
     assert state.ha_pending_directive == ""
@@ -3918,27 +4075,28 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
 
 
 @pytest.mark.asyncio
-async def test_write_banter_prompt_includes_new_listener_block_for_non_first_listener(config, state):
-    config.super_italian_mode = True
+async def test_write_banter_prompt_excludes_connection_arrival_block(config, state):
     state.ha_home_mood = "Mood sconosciuto"
+    state.ha_home_mood_en = "Unknown mood"
     state.ha_weather_arc = "Pioggia in avvicinamento"
     captured = {}
 
     async def _fake_generate_json_response(**kwargs):
         captured["prompt"] = kwargs["prompt"]
         return {
-            "lines": [{"host": config.hosts[0].name, "text": "Ci siete?"}],
+            "lines": [{"host": config.hosts[0].name, "text": "The rain is still coming, piano piano."}],
             "new_joke": None,
         }
 
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
-        result, _ = await write_banter(state, config, is_new_listener=True, is_first_listener=False)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     prompt = captured["prompt"]
-    assert "A new listener JUST tuned in right now!" in prompt
+    assert "new listener" not in prompt.lower()
+    assert "tuned in" not in prompt.lower()
     assert "FIRST listener" not in prompt
-    assert "HOME MOOD: Mood sconosciuto" in prompt
+    assert "HOME MOOD: Unknown mood" in prompt
 
 
 @pytest.mark.asyncio

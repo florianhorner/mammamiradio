@@ -6,15 +6,19 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import aiosqlite
 
+from mammamiradio.core.listener_session import LISTENER_SESSION_GAP_SECONDS
+
 logger = logging.getLogger(__name__)
 
-# Session gap threshold — 10 minutes of no listeners = new session
-SESSION_GAP_SECONDS = 600
+# Compatibility export for callers that imported the old threshold.  Session
+# boundaries are now decided by the station-level listener state machine.
+SESSION_GAP_SECONDS = LISTENER_SESSION_GAP_SECONDS
 
 # Max chars per persona field entry
 MAX_FIELD_ENTRY_LEN = 200
@@ -28,17 +32,16 @@ _DEFAULT_ARC_THRESHOLDS = (4, 11, 26)
 _ARC_THRESHOLDS: list[tuple[int, str]] = []
 
 _ARC_DIRECTIVES: dict[str, str] = {
-    "stranger": (
-        "You don't know this listener yet. Be curious. Observe. Seed theories. "
-        "Don't pretend familiarity you haven't earned."
-    ),
+    "stranger": ("No individual identity is known. Keep the voice curious and playful without implying recognition."),
     "acquaintance": (
-        "You're getting to know this listener. Reference past sessions casually. Test which jokes land. Build rapport."
+        "Use station memory and past music casually to build rapport, without implying a specific person returned."
     ),
-    "friend": ('This is a regular. Deep callbacks, inside jokes, comfortable silence. "Remember when..." is natural.'),
+    "friend": (
+        "Use deeper station callbacks and comfortable inside jokes, while keeping "
+        "companionship aggregate and identity-free."
+    ),
     "old_friend": (
-        "This is family. You've been through things together. Legendary callbacks. "
-        "The station wouldn't be the same without them."
+        "Use legendary station callbacks and a warm shared mythology; never claim to recognize an individual listener."
     ),
 }
 
@@ -158,7 +161,7 @@ class ListenerPersona:
         if self.motifs:
             parts.append(f"Music motifs: {', '.join(self.motifs[-5:])}")
         if self.theories:
-            parts.append(f"Theories about the listener: {', '.join(self.theories[-5:])}")
+            parts.append(f"Open station theories: {', '.join(self.theories[-5:])}")
         if self.running_jokes:
             parts.append(f"Running jokes: {', '.join(self.running_jokes[-self.joke_budget :])}")
         if self.callbacks and self.callback_budget > 0:
@@ -167,8 +170,8 @@ class ListenerPersona:
             parts.append(f"Past songs to reference: {', '.join(cb_strs)}")
         if self.personality_guesses:
             parts.append(f"Personality guesses: {', '.join(self.personality_guesses[-3:])}")
-        parts.append(f"Sessions so far: {self.session_count}")
-        return "\n".join(parts) if parts else "First-time listener. No history yet."
+        parts.append(f"Station sessions so far: {self.session_count}")
+        return "\n".join(parts) if parts else "No prior station-session history yet."
 
     def json_size(self) -> int:
         """Approximate byte size of the persona as JSON."""
@@ -178,10 +181,15 @@ class ListenerPersona:
 class PersonaStore:
     """Async SQLite-backed persona storage."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, process_token: str | None = None):
         self.db_path = db_path
-        self._last_listener_at: float = 0.0
         self._session_id: str = ""
+        self._recorded_session_ids: set[str] = set()
+        token = str(process_token or uuid.uuid4().hex).strip()
+        if not token:
+            raise ValueError("process_token must not be empty")
+        self._process_token = token
+        self._listener_receipts_prepared = False
 
     async def get_persona(self) -> ListenerPersona:
         """Read the current listener persona from SQLite."""
@@ -340,43 +348,98 @@ class PersonaStore:
             logger.exception("Failed to get recent plays")
             return []
 
-    def maybe_new_session(self) -> bool:
-        """Check if enough time has passed to consider this a new session.
+    async def prepare_listener_session_process(self) -> bool:
+        """Verify the durable receipt ledger is ready for this process.
 
-        Returns True if session_count should be incremented.
-
-        Note: must only be called from a single async task (the producer loop).
-        The check-then-set on _last_listener_at is not concurrency-safe.
+        Receipts are intentionally append-only.  An older process may retry
+        after a newer process starts, so deleting its committed receipt would
+        turn that retry into a second persona increment.
         """
-        now = time.time()
-        if self._last_listener_at == 0.0 or (now - self._last_listener_at) > SESSION_GAP_SECONDS:
-            self._last_listener_at = now
-            self._session_id = f"s{int(now)}"
-            return True
-        self._last_listener_at = now
-        return False
 
-    async def increment_session(self) -> None:
-        """Bump session_count and detect milestones."""
+        if self._listener_receipts_prepared:
+            return True
         try:
             async with aiosqlite.connect(str(self.db_path)) as db:
+                cursor = await db.execute("SELECT 1 FROM listener_session_receipts LIMIT 1")
+                await cursor.fetchone()
+        except Exception:
+            logger.exception("Failed to prepare listener-session receipts")
+            return False
+        self._listener_receipts_prepared = True
+        return True
+
+    async def start_session(self, session_id: str) -> bool:
+        """Durably increment one logical station epoch once per process.
+
+        The process-unique anonymous token prevents an epoch number reused after
+        restart from colliding with a previous run.  The receipt and persona
+        increment commit in one transaction; the in-memory acknowledgement is
+        deliberately last so a post-commit interruption can retry safely.
+        """
+        normalized_id = str(session_id or "").strip()
+        if not normalized_id:
+            return False
+        if normalized_id in self._recorded_session_ids:
+            return True
+        if not await self.prepare_listener_session_process():
+            return False
+
+        receipt_id = f"{self._process_token}:{normalized_id}"
+
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute("BEGIN IMMEDIATE")
+                await db.execute("INSERT OR IGNORE INTO listener_persona (id) VALUES (1)")
+                await db.execute(
+                    "INSERT OR IGNORE INTO listener_session_receipts "
+                    "(receipt_id, process_token, logical_session_id) VALUES (?, ?, ?)",
+                    (receipt_id, self._process_token, normalized_id),
+                )
+                cursor = await db.execute("SELECT changes()")
+                changes = await cursor.fetchone()
+                inserted = bool(changes and int(changes[0]) == 1)
+                if inserted:
+                    await db.execute(
+                        "UPDATE listener_persona SET session_count = session_count + 1, "
+                        "last_session = datetime('now'), updated_at = datetime('now') WHERE id = 1"
+                    )
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to commit listener session %s", normalized_id)
+            return False
+
+        try:
+            self._acknowledge_session_receipt(normalized_id)
+        except Exception:
+            logger.exception("Listener session committed but acknowledgement was interrupted (%s)", normalized_id)
+            return False
+        logger.info("Listener session committed (%s)", normalized_id)
+        return True
+
+    def _acknowledge_session_receipt(self, normalized_id: str) -> None:
+        """Acknowledge only after the receipt transaction is durable."""
+
+        self._recorded_session_ids.add(normalized_id)
+        self._session_id = normalized_id
+
+    async def _increment_session_row(self) -> bool:
+        """Increment the legacy row for explicit/manual callers."""
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as db:
+                await db.execute("INSERT OR IGNORE INTO listener_persona (id) VALUES (1)")
                 await db.execute(
                     "UPDATE listener_persona SET session_count = session_count + 1, "
-                    "last_session = datetime('now') WHERE id = 1"
+                    "last_session = datetime('now'), updated_at = datetime('now') WHERE id = 1"
                 )
                 await db.commit()
-
-            persona = await self.get_persona()
-            phase = persona.arc_phase
-            milestone = persona.pending_milestone
-            logger.info(
-                "Listener session #%d started (phase: %s%s)",
-                persona.session_count,
-                phase,
-                f", milestone #{milestone}" if milestone else "",
-            )
+            return True
         except Exception:
             logger.exception("Failed to increment session")
+            return False
+
+    async def increment_session(self) -> None:
+        """Bump session_count for an explicit/manual compatibility caller."""
+        await self._increment_session_row()
 
     async def consume_milestone(self) -> None:
         """Mark the current milestone as fired so it won't repeat."""

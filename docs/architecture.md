@@ -23,8 +23,21 @@ Charts / Jamendo / classic eras / local files / demo tracks
                 |
                 v
    streamer.py playback loop -> LiveStreamHub -> /stream and /listen
+                |                    |
+                |                    +-> aggregate active count
+                |                              |
+                |                              v
+                |                       ListenerSession
+                |                    (in-memory station epoch)
+                |                         |             |
+                |          async receipt  |             +-> one cue after
+                |                         v                 30 active minutes
+                |                  PersonaStore                 |
+                |                    (SQLite)                   v
+                |                                  producer.py atomic claim
                 |
-                +-> /public-status and /status
+                +-> /public-status (public contract, no session diagnostics)
+                +-> /status (admin-only anonymous session diagnostics)
 ```
 
 ## Startup flow
@@ -148,7 +161,7 @@ always remains best-effort and never blocks or delays audio.
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
   - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
   - preserves running jokes in `StationState`
-  - snapshots the generated evidence needed for listener/song memory, but persists it only after the final aired banter script has streamed cleanly
+  - snapshots the generated evidence needed for station/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
@@ -209,10 +222,10 @@ prior audio in place and never raises, and emergency / bridge / rescue fills ski
 pipeline entirely so a dead-air rescue is never delayed by an extra encode (leadership
 principle #2, INSTANT AUDIO). The skip is driven by an explicit `rescue` flag stamped
 where each bridge/rescue is built (`_is_rescue_fill()`), **not** by sniffing overloaded
-metadata keys: a canned clip in normal rotation (shareware gold clips / Demo mode) is
-`canned=True` but is **not** a rescue, so it is still coloured — otherwise the first
-host break a new user hears would air studio-clean next to FM music, the exact seam
-this stage removes. The chaos and reactive-interference content stages slot in
+metadata keys. Packaged speech is restricted to the reviewed, content-addressed
+manifest: approved recovery copy enters as rescue audio, while approved neutral
+`banter/` copy remains ordinary banter. Welcome copy and unmanifested directory
+discovery fail closed. The chaos and reactive-interference content stages slot in
 **before** the broadcast chain — effects colour the content, the transmitter colours
 the channel last.
 
@@ -536,20 +549,32 @@ A session's blended TTS estimate records a confirmed paid-provider response befo
 
 A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
-## Compounding listener memory
+## Compounding station memory and truthful listener sessions
 
-`persona.py` maintains a persistent listener profile in SQLite (`cache/mammamiradio.db`). The persona tracks:
+`core/listener_session.py` maintains an in-memory, identity-free station epoch. The stream hub remains authoritative for raw HTTP connection membership, while the session state machine records only station-level presence:
 
-- **Session count**: how many times the listener has tuned in (10-minute gap = new session)
-- **Arc phase**: relationship stage computed from session count — stranger, acquaintance, friend, or old_friend. Each phase shapes callback budgets and joke styles. Milestone sessions (1, 5, 10, 25, 50, 100) inject subtle acknowledgment directives into prompts.
-- **Motifs**: the last 20 played tracks, so hosts can reference past music naturally
-- **Theories**: LLM-generated guesses about who the listener is
-- **Running jokes**: cross-session callbacks that build familiarity
-- **Callbacks used**: structured format `{"song": "...", "context": "..."}` recording which songs were referenced and why
+- A `0 → 1` active-listener edge starts an epoch.
+- Reconnects and empty periods shorter than 600 seconds resume that epoch.
+- At least 600 continuous seconds with no active listeners starts the next epoch.
+- State resets on process restart. No cookie, account, IP/UA fingerprint, or migration identifies a listener.
 
-During banter generation, the persona is loaded into the prompt via `<listener_memory>`, but the hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has listener memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials. First-time listeners get curiosity and intrigue; returning listeners get inside jokes, personal references, and phase-aware banter depth only from content that actually aired.
+`persona.py` maintains the durable station-session counter in SQLite (`cache/mammamiradio.db`). Each epoch creates a process-unique receipt in the append-only `listener_session_receipts` ledger; the producer retries with bounded backoff and acknowledges the in-memory epoch only after the receipt and persona update commit together. A retry after an ambiguous post-commit interruption observes the same receipt and cannot increment twice, including when an older process overlaps a restart. The process token still lets an in-memory epoch number reused after restart represent a distinct durable event. Raw connection telemetry remains operational: `/status.listeners.total` and the admin-only `connections_total` are cumulative HTTP stream connections, not unique people.
+
+The persona tracks motifs, open station theories, running jokes, callbacks, and an arc phase derived from the committed station-session count. Ordinary banter may receive aggregate `<station_memory>`. Listener-session context is absent unless the producer has atomically claimed the one companionship cue available after 1,800 seconds of active listening in the current epoch. Only active-listening time accumulates; an empty grace period contributes zero. The cue prompt contains only a coarse duration bucket (`30-44`, `45-59`, `60-89`, or `90+` minutes) and a fixed identity-free instruction—never an epoch, connection count, exact duration, receipt, or identity.
+
+The cue lifecycle is `UNAVAILABLE → AVAILABLE → ATTEMPTED → QUEUED → CONSUMED` or `ABANDONED`. Only a naturally scheduled ambient banter break may claim it; operator/Chaos/urgent/Home/directive/request/release/ritual/recovery/fallback lanes cannot. Accepted generated copy must return matching proof fields and pass application-owned aggregate-companionship and exact-bucket content checks before the segment receives `listener_session_epoch` and `listener_session_cue="companionship"`. The queue admission boundary marks it queued synchronously. Generation, TTS, quality, admission, purge, stop, queue removal, overflow, fallback, or stale-epoch failure permanently abandons the claim, and stock fallback copy remains untagged.
+
+Playback verifies the stamped epoch before the segment and before every audio chunk. A mismatch is discarded through `GenerationWasteReason.LISTENER_SESSION_STALE` before that chunk reaches the hub. `LiveStreamHub.broadcast()` reports how many listener queues accepted the chunk; only the first positive acceptance moves the cue to `CONSUMED` and publishes now-playing state. The central `StationState.record_discard()` boundary owns abandonment for all unstarted queue cleanup, and the queue shadow verifies the pulled `queue_id` before removing a row, rebuilding from the real bounded queue if the projection ever drifts.
+
+Hosts may build shared station mythology, but may not turn a stream connection into an arrival, return, or identity claim. The final producer boundary checks the assembled transition plus banter text in English and Italian; it makes one bounded identity-free repair attempt and falls back to deterministic safe copy if the repair remains unsafe. A separately authorized, named Home Assistant resident-return fact is line-bound to its source entity; a door unlock or generic presence signal never grants that authority.
+
+The hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has station-memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials.
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
+
+Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/welcome MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Missing, unlisted, changed, malformed, or truth-unsafe speech invalidates the inventory. Runtime playback admits approved recovery and neutral banter speech; welcome copy and unmanifested directory discovery remain disabled. The release-invariants gate validates this manifest.
+
+Anonymous listener-session diagnostics and legacy aggregate listener counters appear only on authenticated `/status`. `/public-status` retains its existing schema and exposes neither session diagnostics, cue metadata, nor listener counters.
 
 ## Song cues
 
@@ -575,13 +600,13 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
-- `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so arrival greetings and the empty-home mood still work; person events never reach `/public-status`
+- `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so the empty-home mood and explicitly sourced named-resident facts can work; person events never reach `/public-status`
 - allowed entities are scored by domain salience, recent changes, area metadata, event activity, and curated-label overrides
 - the prompt receives a bounded top slice (12 entities by default, capped at 2000 characters) rather than the full home snapshot
 - hand-tuned entity labels (curated tier) remain authoritative; unknown entities resolve through a generated catalog backed by Anthropic (`home/catalog.py`, cached locally), then a sanitized HA display name plus area metadata, and are dropped entirely rather than letting a raw entity ID reach a host prompt
 - event diffing, mood classification, and weather narrative arcs continue to feed the existing scriptwriter fields
 - home mood uses the heuristic ladder by default; an experimental LLM scene-namer can be enabled with `MAMMAMIRADIO_HA_MOOD_LLM=true`, caches names for `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`, and falls back to the ladder whenever disabled, unavailable, slow, or invalid
-- 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, arrivals, terrace lights)
+- 7 reactive triggers fire on specific state changes (coffee machine, door unlock, vacuums, verified named-resident transitions, terrace lights); door unlock copy remains identity-neutral and cannot infer who entered
 - banter references are tiered: 1 item by default, up to 2 when a mood scene is active (mood counts toward cap)
 - `home/context_director.py` turns the casual ambient slice into one selected, opaque `PromptFact`: an explicit allowlist covers weather, climate, vacuum, sun, and curated coffee; room-presence needs a per-entity opt-in. It groups weather/climate temperatures into one topic, reserves a fact only after queue admission, starts its 30-minute cooldown at stream start, and releases only an unstarted discarded reservation. Reactive directives, rituals, and weather flashes remain separate programming lanes.
 - the director's `home_fact_*` metadata is internal. `/status` receives only count-based `home_context_director` diagnostics; `/public-status`, queue projections, now-playing metadata, and stream logs remove it recursively.
@@ -701,7 +726,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |

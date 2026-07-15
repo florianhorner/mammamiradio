@@ -48,6 +48,12 @@ from mammamiradio.audio.normalizer import (
 )
 from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
 from mammamiradio.core.config import RadioEventRule, StationConfig
+from mammamiradio.core.listener_session import (
+    ListenerSessionCueClaim,
+    ListenerSessionCueState,
+    persona_session_id,
+)
+from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
@@ -61,6 +67,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.spoken_assets import approved_spoken_assets, is_approved_spoken_asset
 from mammamiradio.home.authorization import (
     HomeAuthorization,
     HomeAuthorizationMode,
@@ -115,6 +122,7 @@ from mammamiradio.playlist.music_admission import classify_youtube_candidate, is
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
+from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
@@ -660,7 +668,7 @@ async def _render_music_track(
         return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
 
 
-_RECOVERY_CLIP_SUBDIRS = ("recovery", "banter", "welcome")
+_RECOVERY_CLIP_SUBDIRS = ("recovery",)
 
 
 def _pick_recovery_clip(state: StationState) -> Path | None:
@@ -1011,15 +1019,228 @@ async def _record_motif(state: StationState, track, config=None, *, listen_durat
         logger.warning("Failed to record motif", exc_info=True)
 
 
-async def _maybe_start_session(state: StationState) -> None:
-    """Check if this is a new listening session and increment the counter."""
+def _sync_listener_session_persona(state: StationState) -> None:
+    """Schedule the pending station-epoch persona receipt off the hub edge.
+
+    Hub membership changes are synchronous and must stay free of SQLite I/O.
+    The producer owns this bounded fire-and-forget task; a failed commit leaves
+    the epoch pending so a later producer boundary retries it.
+    """
     persona_store = getattr(state, "persona_store", None)
     if not persona_store:
         return
-    if persona_store.maybe_new_session():
-        await persona_store.increment_session()
-        persona = await persona_store.get_persona()
-        logger.info("Listener session #%d started", persona.session_count)
+    tasks = getattr(state, "listener_session_tasks", None)
+    if tasks is None:
+        tasks = set()
+        state.listener_session_tasks = tasks
+    for task in list(tasks):
+        if task.done():
+            tasks.discard(task)
+
+    session_state = state.listener_session
+    if tasks:
+        return
+    now = session_state.monotonic_now()
+    if now < float(getattr(state, "listener_session_persona_retry_at", 0.0) or 0.0):
+        return
+
+    epoch = session_state.oldest_pending_persona_epoch
+    if epoch is None:
+        return
+    session_id = persona_session_id(epoch)
+
+    def _schedule_retry() -> None:
+        attempts = min(int(getattr(state, "listener_session_persona_retry_attempts", 0) or 0) + 1, 16)
+        state.listener_session_persona_retry_attempts = attempts
+        state.listener_session_persona_retry_at = session_state.monotonic_now() + min(60.0, 2.0 ** (attempts - 1))
+
+    async def _commit() -> None:
+        try:
+            committed = await persona_store.start_session(session_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Listener session receipt task failed (%s)", session_id)
+            _schedule_retry()
+            return
+        if committed:
+            session_state.mark_persona_recorded(epoch)
+            state.listener_session_persona_retry_attempts = 0
+            state.listener_session_persona_retry_at = 0.0
+            logger.info("Listener session persona receipt acknowledged (epoch=%d)", epoch)
+        elif not committed:
+            _schedule_retry()
+            logger.warning("Listener session persona receipt pending retry (epoch=%d)", epoch)
+
+    task = asyncio.create_task(_commit())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+def _abandon_unowned_companionship_attempt(state: StationState) -> bool:
+    """Settle a producer-owned claim that never became an admitted segment."""
+
+    session = state.listener_session
+    if session.companionship_cue_state is not ListenerSessionCueState.ATTEMPTED:
+        return False
+    return session.abandon_companionship(session.epoch)
+
+
+def _companionship_banter_eligible(
+    state: StationState,
+    *,
+    natural_banter: bool,
+    chaos_subtype: ChaosSubtype | None,
+    is_operator_forced: bool,
+    prompt_fact: PromptFact | None,
+    script_llm_available: bool,
+    special_mode_active: bool = False,
+) -> bool:
+    """Return whether this is a plain naturally scheduled ambient break."""
+
+    if (
+        not natural_banter
+        or chaos_subtype is not None
+        or is_operator_forced
+        or not script_llm_available
+        or special_mode_active
+    ):
+        return False
+    if prompt_fact is not None:
+        return False
+    if (
+        state.ha_pending_directive
+        or state.pending_requests
+        or state.heading_pending_announcement
+        or state.ha_running_gag
+        or state.operator_force_pending is not None
+    ):
+        return False
+    campaign = state.release_campaign
+    if campaign is not None and bool(getattr(campaign, "enabled", False)):
+        try:
+            if campaign.is_due():
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _companionship_metadata_for_generated_banter(
+    state: StationState,
+    claim: ListenerSessionCueClaim | None,
+    commit: object | None,
+) -> dict[str, str | int]:
+    """Transfer a valid generated cue claim onto its eventual Segment."""
+
+    if claim is None:
+        return {}
+    marker = getattr(commit, "companionship", None)
+    marker_bucket = getattr(marker, "duration_bucket", None)
+    session = state.listener_session
+    if (
+        marker_bucket != claim.prompt_context.duration_bucket
+        or session.epoch != claim.epoch
+        or session.active_count <= 0
+        or session.companionship_cue_state is not ListenerSessionCueState.ATTEMPTED
+    ):
+        session.abandon_companionship(claim.epoch)
+        return {}
+    return {
+        "listener_session_epoch": claim.epoch,
+        "listener_session_cue": "companionship",
+    }
+
+
+def _companionship_admission_stale_reason(state: StationState, segment: Segment | None) -> str | None:
+    """Fence an attempted cue at every producer admission check."""
+
+    if segment is None or not isinstance(segment.metadata, dict):
+        return None
+    if segment.metadata.get("listener_session_cue") != "companionship":
+        return None
+    epoch = segment.metadata.get("listener_session_epoch")
+    session = state.listener_session
+    if (
+        not isinstance(epoch, int)
+        or isinstance(epoch, bool)
+        or epoch != session.epoch
+        or session.active_count <= 0
+        or session.companionship_cue_state is not ListenerSessionCueState.ATTEMPTED
+    ):
+        return GenerationWasteReason.LISTENER_SESSION_STALE
+    return None
+
+
+def _mark_companionship_segment_queued(state: StationState, segment: Segment) -> None:
+    """Commit QUEUED synchronously inside the queue-admission boundary."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("listener_session_cue") != "companionship":
+        return
+    epoch = metadata.get("listener_session_epoch")
+    if (
+        not isinstance(epoch, int)
+        or isinstance(epoch, bool)
+        or not state.listener_session.mark_companionship_queued(epoch)
+    ):
+        raise RuntimeError("companionship cue admission lost its listener-session claim")
+
+
+async def _consume_queued_banter_milestone(state: StationState, commit: object | None) -> None:
+    """Persist a milestone only after the truth-safe banter enters the queue."""
+
+    consume_milestone = getattr(commit, "consume_queued_milestone", None)
+    if callable(consume_milestone):
+        await consume_milestone(state)
+
+
+async def _listener_truth_guard(
+    state: StationState,
+    config: StationConfig,
+    lines: list[tuple[HostPersonality, str]],
+    *,
+    transition_text: str | None = None,
+) -> tuple[list[tuple[HostPersonality, str]], str | None, bool, bool]:
+    """Validate the final spoken copy and perform one bounded repair.
+
+    Returns ``(lines, transition, changed, transition_replaced)``.  The check is
+    deliberately after transition and banter assembly, immediately before TTS.
+    """
+    assembled = ([transition_text] if transition_text is not None else []) + [text for _host, text in lines]
+    return_authority = state.last_banter_return_authority
+    unsafe_without_authority = contains_unsafe_listener_claims(assembled)
+    if not contains_unsafe_listener_claims(assembled, return_authority=return_authority):
+        if not unsafe_without_authority:
+            state.last_banter_return_authority = None
+        return lines, transition_text, False, False
+
+    logger.warning("Discarding listener-arrival wording at final banter boundary; attempting one repair")
+    # No deferred state from the rejected exchange may travel with the repair.
+    state.pending_verbal_gag = None
+    state.last_banter_home_fact = None
+    state.last_banter_return_authority = None
+    repaired_lines = await _sw.repair_banter_without_listener_context(state, config)
+    if repaired_lines is None or contains_unsafe_listener_claims(text for _host, text in repaired_lines):
+        logger.error("Listener-truth repair remained unsafe; abandoning generated banter")
+        repaired_lines = _sw._banter_fallback_pools(config)[0]
+
+    repaired_transition = transition_text
+    transition_replaced = False
+    if repaired_transition is not None and contains_unsafe_listener_claims(repaired_transition):
+        repaired_transition = _sw.listener_truth_safe_transition_text(config, "banter")
+        transition_replaced = True
+
+    final_texts = ([repaired_transition] if repaired_transition is not None else []) + [
+        text for _host, text in repaired_lines
+    ]
+    if contains_unsafe_listener_claims(final_texts):
+        # This is a deterministic last fence, not another generation attempt.
+        repaired_lines = _sw._banter_fallback_pools(config)[0]
+        if repaired_transition is not None:
+            repaired_transition = _sw.listener_truth_safe_transition_text(config, "banter")
+            transition_replaced = True
+    return repaired_lines, repaired_transition, True, transition_replaced
 
 
 # SFX assets (alert jingle used as interrupt bridge audio).
@@ -1759,6 +1980,7 @@ async def _enqueue_with_egress(
     front_insert: bool = False,
     shadow_entry: dict | None = None,
     stale_check: StaleCheck | None = None,
+    admission_callback: Callable[[Segment], None] | None = None,
 ) -> bool:
     """The single funnel every segment passes through on its way to the playback queue.
 
@@ -1781,6 +2003,8 @@ async def _enqueue_with_egress(
     # never leaves a coloured egress tmp render orphaned on disk.
     if front_insert and shadow_entry is None:  # operator air-next must always supply a shadow entry
         raise ValueError("front_insert enqueue requires a shadow_entry")
+    if front_insert and admission_callback is not None:
+        raise ValueError("front_insert enqueue does not support an admission_callback")
     if not front_insert and shadow_entry is None:
         shadow_entry = _queue_shadow_entry(segment)
     pre_egress_path = segment.path  # clean source for speech-bed reuse (see _remember_enqueued)
@@ -1817,6 +2041,22 @@ async def _enqueue_with_egress(
             logger.error("Stale %s escaped atomic queue retraction", segment.type.value)
         state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
         return False
+    if admission_callback is not None:
+        try:
+            admission_callback(segment)
+        except Exception:
+            removed = _remove_exact_queued_segment(queue, segment)
+            if removed:
+                _discard_rejected_admission(
+                    state,
+                    segment,
+                    GenerationWasteReason.LISTENER_SESSION_STALE,
+                    phase="queue admission callback",
+                )
+            else:  # pragma: no cover - no await permits a consumer interleave
+                logger.error("Queue admission callback failed after segment escaped")
+            state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
+            return False
     assert shadow_entry is not None
     state.queued_segments.append(shadow_entry)
     _remember_enqueued(state, segment, pre_egress_path)
@@ -1992,28 +2232,30 @@ def _should_defer_for_runway(queue: asyncio.Queue[Segment], lookahead_segments: 
 
 
 def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
-    """Pick a pre-bundled clip from assets/demo/{subdir}/, avoiding recent repeats.
+    """Pick reviewed, content-addressed recovery or neutral banter speech."""
 
-    For banter clips, respects the shareware trial limit: after SHAREWARE_CANNED_LIMIT
-    clips have been streamed to the listener, returns None to force TTS fallback.
-    Recovery and welcome clips are not subject to the limit.
-    """
-    # Shareware gate: stop serving canned banter after the trial limit
-    if subdir == "banter" and state and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
-        logger.info("Shareware limit reached (%d clips streamed), forcing TTS", state.canned_clips_streamed)
+    # Welcome globs were connection-edge speech sources and remain disabled.
+    # Neutral banter may participate only when its transcript and hash are
+    # explicitly present in the fail-closed spoken-asset manifest.
+    if subdir not in {"recovery", "banter"}:
+        return None
+    if subdir == "banter" and state is not None and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
         return None
     if subdir not in _canned_clip_cache:
-        clip_dir = _DEMO_ASSETS_DIR / subdir
-        _canned_clip_cache[subdir] = list(clip_dir.glob("*.mp3")) if clip_dir.is_dir() else []
+        _canned_clip_cache[subdir] = approved_spoken_assets(subdir, assets_root=_DEMO_ASSETS_DIR)
     clips = _canned_clip_cache[subdir]
     if not clips:
         return None
     # Avoid recently played clips
     eligible = [c for c in clips if c.name not in _recently_played_clips]
-    eligible = [c for c in eligible if _clip_is_serviceable(c)]
+    eligible = [
+        c for c in eligible if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
+    ]
     if not eligible:
         _recently_played_clips.clear()
-        eligible = [c for c in clips if _clip_is_serviceable(c)]
+        eligible = [
+            c for c in clips if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
+        ]
     if not eligible:
         return None
     pick = random.choice(eligible)
@@ -2401,18 +2643,16 @@ async def _fire_interrupt(
         logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
         return False
 
-    # Drain the lookahead queue so no buffered music leaks between bridge and banter.
-    purged = 0
-    while not queue.empty():
-        try:
-            seg = queue.get_nowait()
-            state.record_discard(seg, reason=GenerationWasteReason.INTERRUPT, already_counted_in_produced=True)
-            if seg.ephemeral and not _is_packaged_asset(seg.path):
-                seg.path.unlink(missing_ok=True)
-            queue.task_done()
-            purged += 1
-        except Exception:
-            break
+    # Drain through the shared queue-mutation boundary so every segment is
+    # settled even if one temporary-file unlink fails.  In particular, a
+    # queued companionship cue must be abandoned before the interrupt fires,
+    # and asyncio.Queue task accounting must stay balanced.
+    purged = drop_matching_segments(
+        queue,
+        state,
+        should_drop=lambda _segment: True,
+        reason=GenerationWasteReason.INTERRUPT,
+    )
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
@@ -2872,7 +3112,8 @@ class _HAContextRefreshCoordinator:
 
     def _suppress_stale_handoffs(self) -> None:
         """Drop not-yet-rendered HA event material once its source is over-age."""
-        if self._state.ha_pending_directive_source == "ha":
+        directive_source = self._state.ha_pending_directive_source
+        if directive_source == "ha" or directive_source.startswith("ha:"):
             _mark_moment_dropped(
                 self._state,
                 self._state.ha_pending_directive_moment_id,
@@ -3326,6 +3567,7 @@ async def run_producer(
             context_coordinator=context_coordinator,
         )
     finally:
+        _abandon_unowned_companionship_attempt(state)
         # This finally covers cancellation anywhere in the producer loop, not
         # just the HA preparation await.  A late task therefore cannot write
         # state after producer shutdown.
@@ -3395,6 +3637,7 @@ async def _run_producer_inner(
         *,
         shadow_entry: dict | None = None,
         stale_check: StaleCheck | None = None,
+        admission_callback: Callable[[Segment], None] | None = None,
     ) -> bool:
         """Queue a segment unless the operator stopped the session mid-generation."""
         nonlocal prev_seg_type
@@ -3412,12 +3655,14 @@ async def _run_producer_inner(
         def _home_fact_is_stale(_segment: Segment = segment) -> bool:
             return not _home_fact_policy_is_current(_segment)
 
-        def _combined_stale_check() -> bool:
+        def _combined_stale_check() -> bool | str | None:
             # Discard if EITHER the caller's staleness gate (continuity epoch,
             # source/playlist/chaos) OR the home-fact policy check fires.
-            if stale_check is not None and stale_check():
-                return True
-            return _home_fact_is_stale()
+            if stale_check is not None:
+                verdict = stale_check()
+                if verdict:
+                    return verdict
+            return True if _home_fact_is_stale() else None
 
         if not await _enqueue_with_egress(
             queue,
@@ -3426,6 +3671,7 @@ async def _run_producer_inner(
             segment,
             shadow_entry=shadow_entry,
             stale_check=_combined_stale_check,
+            admission_callback=admission_callback,
         ):
             return False
         prev_seg_type = _adjacency_type_for(segment)
@@ -3568,6 +3814,10 @@ async def _run_producer_inner(
                 producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
     while True:
+        # Any ATTEMPTED cue reaching a new producer cycle failed before queue
+        # ownership transferred. Settle it before considering another break.
+        _abandon_unowned_companionship_attempt(state)
+        _sync_listener_session_persona(state)
         if observed_continuity_epoch != state.continuity_epoch:
             # A streamer control rebuilt the queue outside this coroutine. Re-read
             # its final tail before producing again so a removed song cannot lend
@@ -3720,6 +3970,7 @@ async def _run_producer_inner(
         generation_chaos_epoch = state.chaos_cutover_epoch
         chaos_subtype: ChaosSubtype | None = None
         is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
+        natural_banter_candidate = False
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
             state.chaos_last_degraded_reason = ""
@@ -3744,6 +3995,7 @@ async def _run_producer_inner(
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
             seg_type = next_segment_type(state, config.pacing)
+            natural_banter_candidate = seg_type == SegmentType.BANTER
             if seg_type in _RUNWAY_GOVERNED_TYPES:
                 should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)
                 if should_defer:
@@ -3757,10 +4009,12 @@ async def _run_producer_inner(
         if seg_type == SegmentType.MUSIC and not state.playlist:
             logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
             seg_type = SegmentType.BANTER
+            natural_banter_candidate = False
             if is_operator_forced:
                 state.operator_force_pending = None
                 is_operator_forced = False
         segment: Segment | None = None
+        companionship_claim: ListenerSessionCueClaim | None = None
         generation_revision = state.playlist_revision
         # source_revision bumps ONLY on a true source switch (switch_playlist),
         # while playlist_revision also bumps on benign in-place edits (shuffle/
@@ -3772,24 +4026,6 @@ async def _run_producer_inner(
         # A completed render from before that change must never refill the queue
         # after the reservation has made its safety promise.
         generation_continuity_epoch = state.continuity_epoch
-
-        def _enqueue_stale_reason(
-            captured_revision: int = generation_revision,
-            captured_source_revision: int = generation_source_revision,
-            captured_chaos_epoch: int = generation_chaos_epoch,
-            captured_continuity_epoch: int = generation_continuity_epoch,
-        ) -> str | None:
-            if state.session_stopped:
-                return GenerationWasteReason.SESSION_STOPPED
-            if captured_source_revision != state.source_revision:
-                return GenerationWasteReason.STALE_SOURCE
-            if captured_revision != state.playlist_revision:
-                return GenerationWasteReason.STALE_PLAYLIST
-            if captured_chaos_epoch != state.chaos_cutover_epoch:
-                return GenerationWasteReason.STALE_CHAOS
-            if captured_continuity_epoch != state.continuity_epoch:
-                return GenerationWasteReason.STALE_CONTINUITY
-            return None
 
         success_callback: Callable[[], None] | None = None
         banter_commit = None
@@ -3938,7 +4174,8 @@ async def _run_producer_inner(
                 elif isinstance(result, str):
                     state.ha_pending_directive = result
                     state.ha_pending_directive_moment_id = ""  # not a ritual moment
-                    state.ha_pending_directive_source = "ha"
+                    source_entity_id = str(getattr(result, "entity_id", "") or "")
+                    state.ha_pending_directive_source = f"ha:{source_entity_id}" if source_entity_id else "ha"
             radio_gag_events: list[HomeEvent] = []
             ritual_gag_events: list[HomeEvent] = []
             ritual_interrupt: _PendingRitualInterrupt | None = None
@@ -4303,6 +4540,7 @@ async def _run_producer_inner(
                     )
                 state.last_banter_ritual_moment_id = ""
                 state.last_banter_home_fact = None
+                state.last_banter_return_authority = None
 
                 def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
                     ritual_id = state.last_banter_ritual_moment_id
@@ -4311,14 +4549,6 @@ async def _run_producer_inner(
                     state.last_banter_ritual_moment_id = ""
                     _mark_moment_dropped(state, state.ha_running_gag_moment_id, reason, f"{context}:gag")
                     state.ha_running_gag_moment_id = ""
-
-                # Track listening sessions for compounding persona
-                await _maybe_start_session(state)
-
-                # Capture new-listener count (defer clearing until segment succeeds)
-                _new_listener_count = state.new_listeners_pending
-                _is_new_listener = _new_listener_count > 0
-                _is_first_listener = _is_new_listener and state.listeners_active == 1
 
                 impossible_tts = False
                 canned = None
@@ -4348,42 +4578,35 @@ async def _run_producer_inner(
                     except Exception:
                         logger.debug("Home context director selection failed", exc_info=True)
 
-                if chaos_subtype is None and not _sw.has_script_llm(config):
-                    # No LLM — use canned clips + impossible TTS lines
-                    if _is_new_listener:
+                if _companionship_banter_eligible(
+                    state,
+                    natural_banter=natural_banter_candidate,
+                    chaos_subtype=chaos_subtype,
+                    is_operator_forced=is_operator_forced,
+                    prompt_fact=prompt_fact,
+                    script_llm_available=_sw.has_script_llm(config),
+                    special_mode_active=config.party_mode is not None,
+                ):
+                    companionship_claim = state.listener_session.claim_companionship()
+
+                if chaos_subtype is None and not _sw.has_script_llm(config) and not impossible_tts:
+                    # Use canned clips for first 2, then impossible TTS as the gold closer
+                    if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
+                        canned = _pick_canned_clip("banter", state=state)
+                    if not canned:
                         line = generate_impossible_line(
                             segments_produced=state.segments_produced,
                             listener_patterns=state.listener.patterns,
-                            is_new_listener=True,
-                            is_first_listener=_is_first_listener,
                         )
-                        logger.info("Impossible moment (new listener): %s", line[:60])
+                        logger.info("Impossible moment (no LLM): %s", line[:60])
                         try:
                             audio_path = await _synthesize_impossible_moment(
                                 line, config, state, _adjacent_music_source(state)
                             )
                             impossible_tts = True
                         except Exception as exc:
-                            logger.warning("Impossible moment TTS failed: %s", exc)
-
-                    if not impossible_tts:
-                        # Use canned clips for first 2, then impossible TTS as the gold closer
-                        if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
+                            logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
                             canned = _pick_canned_clip("banter", state=state)
-                        if not canned:
-                            line = generate_impossible_line(
-                                segments_produced=state.segments_produced,
-                                listener_patterns=state.listener.patterns,
-                            )
-                            logger.info("Impossible moment (no LLM): %s", line[:60])
-                            try:
-                                audio_path = await _synthesize_impossible_moment(
-                                    line, config, state, _adjacent_music_source(state)
-                                )
-                                impossible_tts = True
-                            except Exception as exc:
-                                logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
-                                canned = _pick_canned_clip("banter", state=state)
 
                 banter_expected_min_duration_sec: float | None = None
                 banter_expected_line_count: int | None = None
@@ -4411,14 +4634,23 @@ async def _run_producer_inner(
                                 lines, listener_request_commit = await _sw.write_banter(
                                     state,
                                     config,
-                                    is_new_listener=_is_new_listener,
-                                    is_first_listener=_is_first_listener,
                                     chaos_subtype=chaos_subtype,
                                 )
                                 _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
                                 state.end_gen(ok=_gen_ok)
+                            (
+                                lines,
+                                _unused_transition,
+                                truth_changed,
+                                _transition_replaced,
+                            ) = await _listener_truth_guard(state, config, lines)
+                            if truth_changed:
+                                _abandon_release_beat_commit(state, listener_request_commit)
+                                _release_campaign_abandon_in_flight(state)
+                                _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
+                                listener_request_commit = None
                             line_texts = [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -4452,10 +4684,11 @@ async def _run_producer_inner(
                                 banter_task = _sw.write_banter(
                                     state,
                                     config,
-                                    is_new_listener=_is_new_listener,
-                                    is_first_listener=_is_first_listener,
                                     prompt_fact=prompt_fact,
                                     use_directed_home_context=use_directed_home_context,
+                                    companionship_context=(
+                                        companionship_claim.prompt_context if companionship_claim is not None else None
+                                    ),
                                 )
                                 (
                                     (trans_host, trans_text, trans_track_ref),
@@ -4468,6 +4701,21 @@ async def _run_producer_inner(
                             finally:
                                 reset_collector(_prov_tok)
                                 state.end_gen(ok=_gen_ok)
+                            (
+                                lines,
+                                guarded_transition,
+                                truth_changed,
+                                transition_replaced,
+                            ) = await _listener_truth_guard(state, config, lines, transition_text=trans_text)
+                            assert guarded_transition is not None
+                            trans_text = guarded_transition
+                            if truth_changed:
+                                _abandon_release_beat_commit(state, listener_request_commit)
+                                _release_campaign_abandon_in_flight(state)
+                                _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
+                                listener_request_commit = None
+                            if transition_replaced:
+                                trans_track_ref = None
                             line_texts = [trans_text] + [text for _host, text in lines]
                             _emit_segment_prepared(
                                 state,
@@ -4739,6 +4987,11 @@ async def _run_producer_inner(
                                 humanity_out.unlink(missing_ok=True)
 
                 banter_commit = listener_request_commit
+                companionship_metadata = _companionship_metadata_for_generated_banter(
+                    state,
+                    companionship_claim,
+                    banter_commit if canned is None and not impossible_tts else None,
+                )
                 release_beat_metadata = {}
                 memory_extraction_metadata = {}
                 if canned is None and not impossible_tts:
@@ -4752,6 +5005,10 @@ async def _run_producer_inner(
                 attach_moment_ids = canned is None and not impossible_tts
                 home_fact = state.last_banter_home_fact if attach_moment_ids else None
                 home_fact_metadata: dict[str, str | int] = home_fact.segment_metadata() if home_fact is not None else {}
+                home_return_authority = state.last_banter_return_authority if attach_moment_ids else None
+                home_return_metadata: dict[str, str] = (
+                    {"home_return_fact_id": home_return_authority.fact_id} if home_return_authority is not None else {}
+                )
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -4780,8 +5037,10 @@ async def _run_producer_inner(
                         "ritual_moment_id": ritual_moment_id if attach_moment_ids and ritual_moment_id else None,
                         "gag_moment_id": gag_moment_id if attach_moment_ids and gag_moment_id else None,
                         **home_fact_metadata,
+                        **home_return_metadata,
                         **release_beat_metadata,
                         **memory_extraction_metadata,
+                        **companionship_metadata,
                     },
                     ephemeral=canned is None,
                 )
@@ -4790,11 +5049,10 @@ async def _run_producer_inner(
                 # elected row then simply never airs and ages out honestly).
                 state.last_banter_ritual_moment_id = ""
                 state.last_banter_home_fact = None
+                state.last_banter_return_authority = None
 
                 def _banter_callback(
                     *,
-                    _is_new_listener=_is_new_listener,
-                    _new_listener_count=_new_listener_count,
                     _listener_request_commit=listener_request_commit,
                     _used_generated_banter=(canned is None and not impossible_tts),
                     _first_home_context_moment_pending=first_home_context_moment_pending,
@@ -4805,19 +5063,17 @@ async def _run_producer_inner(
                     _gag_moment_attached=bool(attach_moment_ids and gag_moment_id),
                     _ledger=state.evening_ledger,
                     _cache_dir=config.cache_dir,
-                    _pending_gag=state.pending_verbal_gag,
                     _vledger=state.verbal_gag_ledger,
                     _segment=segment,
                 ) -> None:
                     state.after_banter()
-                    if _is_new_listener:
-                        state.new_listeners_pending = max(0, state.new_listeners_pending - _new_listener_count)
                     if _used_generated_banter and _listener_request_commit is not None:
                         _listener_request_commit.apply(
                             state,
                             config,
                             queue_id=str(_segment.metadata.get("queue_id") or ""),
                         )
+                    pending_gag = state.pending_verbal_gag
                     if (
                         _used_generated_banter
                         and _first_home_context_moment_pending
@@ -4848,10 +5104,10 @@ async def _run_producer_inner(
                     # ledger ONLY now that the banter actually queued (B-i). A
                     # discarded banter never reaches this callback, so it never
                     # plants a travelable gag whose setup the listener never heard.
-                    if _pending_gag and _vledger is not None:
+                    if pending_gag and _vledger is not None:
                         _vledger.add_gag(
-                            _pending_gag.get("text", ""),
-                            punch=_pending_gag.get("punch"),
+                            pending_gag.get("text", ""),
+                            punch=pending_gag.get("punch"),
                             now=time.time(),
                         )
                     state.pending_verbal_gag = None
@@ -5480,6 +5736,9 @@ async def _run_producer_inner(
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
+            if companionship_claim is not None:
+                state.listener_session.abandon_companionship(companionship_claim.epoch)
+                companionship_claim = None
             state.finish_render_timing("failed", reason="render_failure")
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -5594,6 +5853,26 @@ async def _run_producer_inner(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
+
+            def _enqueue_stale_reason(
+                captured_segment: Segment = segment,
+                captured_revision: int = generation_revision,
+                captured_source_revision: int = generation_source_revision,
+                captured_chaos_epoch: int = generation_chaos_epoch,
+                captured_continuity_epoch: int = generation_continuity_epoch,
+            ) -> str | None:
+                if state.session_stopped:
+                    return GenerationWasteReason.SESSION_STOPPED
+                if captured_source_revision != state.source_revision:
+                    return GenerationWasteReason.STALE_SOURCE
+                if captured_revision != state.playlist_revision:
+                    return GenerationWasteReason.STALE_PLAYLIST
+                if captured_chaos_epoch != state.chaos_cutover_epoch:
+                    return GenerationWasteReason.STALE_CHAOS
+                if captured_continuity_epoch != state.continuity_epoch:
+                    return GenerationWasteReason.STALE_CONTINUITY
+                return _companionship_admission_stale_reason(state, captured_segment)
+
             # Stable per-segment id: the shared queue publication helper stamps
             # this on both the audio and its Scaletta row before admission.
             shadow_entry = _queue_shadow_entry(segment)
@@ -5658,6 +5937,11 @@ async def _run_producer_inner(
                     segment,
                     shadow_entry=shadow_entry,
                     stale_check=_enqueue_stale_reason,
+                    admission_callback=(
+                        partial(_mark_companionship_segment_queued, state)
+                        if segment.metadata.get("listener_session_cue") == "companionship"
+                        else None
+                    ),
                 ):
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
@@ -5704,6 +5988,12 @@ async def _run_producer_inner(
             if "error" not in segment.metadata and not segment.metadata.get("rescue"):
                 if success_callback:
                     success_callback()
+                if (
+                    segment.type == SegmentType.BANTER
+                    and not segment.metadata.get("canned")
+                    and banter_commit is not None
+                ):
+                    await _consume_queued_banter_milestone(state, banter_commit)
                 state.failed_segments = 0  # Reset backoff on success
                 _drain_guard_queued = False  # Real segment landed — allow drain guard to fire again if needed
                 # #144/#146: Launch background normalization of the predicted next music track.

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mammamiradio.core.listener_session import ListenerSession
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
 from mammamiradio.web import status_payload as status_payload_mod
 from mammamiradio.web.streamer import (
@@ -77,6 +78,33 @@ async def test_hub_double_unsubscribe():
     hub.unsubscribe(lid)  # should not raise
 
 
+def test_hub_membership_is_the_single_listener_session_authority():
+    clock = [0.0]
+    state = StationState(listener_session=ListenerSession(monotonic=lambda: clock[0]))
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+
+    first, _ = hub.subscribe()
+    second, _ = hub.subscribe()
+    assert state.listeners_active == len(hub._listeners) == 2
+    assert state.listeners_total == 2
+    assert state.listener_session.epoch == 1
+
+    hub.unsubscribe(first)
+    assert state.listeners_active == len(hub._listeners) == 1
+    assert state.listener_session.epoch == 1
+
+    hub.unsubscribe(second)
+    assert state.listeners_active == len(hub._listeners) == 0
+    assert state.listener_session.snapshot(now=clock[0]).phase == "grace"
+
+    clock[0] = 599.999
+    resumed, _ = hub.subscribe()
+    assert state.listeners_active == len(hub._listeners) == 1
+    assert state.listener_session.epoch == 1
+    hub.unsubscribe(resumed)
+
+
 # ---------------------------------------------------------------------------
 # _purge_segment_queue
 # ---------------------------------------------------------------------------
@@ -109,7 +137,7 @@ async def test_purge_queue_and_shadow_drains_and_clears(tmp_path):
     state = StationState()
     state.queued_segments = [{"type": "music", "label": "A"}, {"type": "banter", "label": "B"}]
 
-    purged = _purge_queue_and_shadow(q, state)
+    purged = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
 
     assert purged == 1
     assert q.empty()
@@ -129,7 +157,7 @@ async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
     state = StationState()
     state.queued_segments = [{"label": "x"}]
 
-    purged = _purge_queue_and_shadow(q, state)
+    purged = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
 
     assert purged == 2
     assert state.queued_segments == []
@@ -157,7 +185,7 @@ async def test_purge_queue_and_shadow_keeps_packaged_asset_even_if_ephemeral(tmp
     state = StationState()
     state.queued_segments = [{"label": "asset"}, {"label": "tmp"}]
 
-    assert _purge_queue_and_shadow(q, state) == 2
+    assert _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE) == 2
     assert packaged.exists()
     assert not tmp_render.exists()
     assert _is_packaged_asset(packaged) is True

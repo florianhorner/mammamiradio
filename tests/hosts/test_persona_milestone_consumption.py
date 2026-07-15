@@ -112,7 +112,7 @@ async def test_write_banter_keeps_session_five_milestone_after_provider_failure(
 
 
 @pytest.mark.asyncio
-async def test_write_banter_consumes_session_five_milestone_once_after_valid_exchange(config, persona_state):
+async def test_write_banter_defers_session_five_milestone_until_exchange_is_accepted(config, persona_state):
     state, store = persona_state
     await _seed_session_five(store)
 
@@ -124,10 +124,15 @@ async def test_write_banter_consumes_session_five_milestone_once_after_valid_exc
         ),
         patch.object(store, "consume_milestone", new=consume_milestone),
     ):
-        result, _ = await write_banter(state, config)
+        result, commit = await write_banter(state, config)
+        assert len(result) == 2
+        consume_milestone.assert_not_awaited()
+        await _assert_session_five_milestone_pending(store)
+        assert commit is not None
+        commit.apply_queue_acceptance(state)
+        await commit.consume_queued_milestone(state)
+        consume_milestone.assert_awaited_once_with()
 
-    assert len(result) == 2
-    consume_milestone.assert_awaited_once_with()
     persona = await store.get_persona()
     assert persona.pending_milestone is None
     assert persona.arc_metadata["milestones_fired"] == [5]

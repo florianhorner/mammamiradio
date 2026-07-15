@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
+from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    ChaosSubtype,
+    GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
     PlaylistSource,
@@ -29,11 +35,16 @@ from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
-from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
+from mammamiradio.hosts.scriptwriter import (
+    BanterCommit,
+    CompanionshipBanterCommit,
+    ListenerRequestCommit,
+)
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
     _apply_ritual_recipe_matches,
+    _listener_truth_guard,
     _pick_canned_clip,
     run_producer,
 )
@@ -86,6 +97,33 @@ def _make_config():
     config.homeassistant.enabled = False
     config.tmp_dir = Path("/tmp/mammamiradio_test")
     return config
+
+
+def _manifest_recovery_clip(root: Path, name: str, payload: bytes) -> Path:
+    """Create one truth-safe content-addressed recovery fixture."""
+
+    recovery = root / "recovery"
+    recovery.mkdir(exist_ok=True)
+    clip = recovery / name
+    clip.write_bytes(payload)
+    (root / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": f"recovery/{name}",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "The station stays on air.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return clip
 
 
 def _fake_path(*_args, **_kwargs) -> Path:
@@ -1092,15 +1130,11 @@ def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_pick_canned_clip_respects_shareware_limit(tmp_path):
-    """After SHAREWARE_CANNED_LIMIT clips streamed, _pick_canned_clip returns None for banter."""
+def test_pick_canned_clip_requires_each_kind_to_be_manifested(tmp_path):
+    """A recovery manifest never implicitly revives banter or welcome assets."""
     from mammamiradio.scheduling import producer
 
-    # Create fake banter clips
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    for i in range(5):
-        (banter_dir / f"clip_{i}.mp3").write_bytes(b"\x00" * 2048)
+    recovery = _manifest_recovery_clip(tmp_path, "continuity.mp3", b"reviewed" * 300)
 
     # Temporarily override demo assets dir and clear caches
     orig = producer._DEMO_ASSETS_DIR
@@ -1111,22 +1145,61 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
     try:
         state = StationState()
 
-        # Under limit: should return a clip
-        assert _pick_canned_clip("banter", state=state) is not None
+        assert _pick_canned_clip("recovery", state=state) == recovery
+        assert _pick_canned_clip("banter", state=state) is None
+        assert _pick_canned_clip("welcome", state=state) is None
 
-        # At limit: should return None
+        # The approved recovery rung is a safety asset, not shareware banter.
         state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
         assert _pick_canned_clip("banter", state=state) is None
-
-        # Welcome clips are NOT subject to the limit
-        welcome_dir = tmp_path / "welcome"
-        welcome_dir.mkdir()
-        (welcome_dir / "welcome_1.mp3").write_bytes(b"\x00" * 2048)
-        assert _pick_canned_clip("welcome", state=state) is not None
+        assert _pick_canned_clip("welcome", state=state) is None
     finally:
         producer._DEMO_ASSETS_DIR = orig
         producer._recently_played_clips.clear()
         producer._canned_clip_cache.clear()
+
+
+def test_pick_canned_clip_allows_only_manifested_truth_safe_banter(tmp_path):
+    """Neutral canned banter is eligible only through the reviewed manifest."""
+    from mammamiradio.scheduling import producer
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    payload = b"reviewed neutral banter" * 200
+    clip = banter_dir / "neutral.mp3"
+    clip.write_bytes(payload)
+    (tmp_path / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "banter/neutral.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "The music keeps the room warm.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_root = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+    try:
+        state = StationState()
+        assert _pick_canned_clip("banter", state=state) == clip
+        state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
+        assert _pick_canned_clip("banter", state=state) is None
+        assert _pick_canned_clip("welcome", state=StationState()) is None
+    finally:
+        producer._DEMO_ASSETS_DIR = original_root
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
 
 
 def test_pick_canned_clip_returns_none_when_dir_missing(tmp_path):
@@ -1161,7 +1234,7 @@ def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
     try:
         result = _pick_canned_clip("banter", state=StationState())
         assert result is None
-        assert producer._canned_clip_cache.get("banter") == []
+        assert producer._canned_clip_cache["banter"] == []
     finally:
         producer._DEMO_ASSETS_DIR = orig
         producer._canned_clip_cache.clear()
@@ -1255,7 +1328,7 @@ async def test_error_recovery_inserts_recovery_sweeper_when_no_canned_clips(tmp_
 
 @pytest.mark.asyncio
 async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_sweeper(caplog):
-    """When recovery/banter/welcome clips are unavailable, producer logs and inserts a sweeper."""
+    """When approved recovery clips are unavailable, producer logs and inserts a sweeper."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -1297,7 +1370,7 @@ async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_swe
     finally:
         producer._last_music_file = orig_last_music
 
-    assert picked_subdirs[:3] == ["recovery", "banter", "welcome"]
+    assert picked_subdirs == ["recovery"]
     assert any(
         "No packaged recovery clips, norm cache, or last-known-good music available" in record.message
         for record in caplog.records
@@ -1334,11 +1407,11 @@ async def test_record_motif_persists_to_persona(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_increments_count(tmp_path):
-    """_maybe_start_session bumps session_count on a fresh PersonaStore."""
+async def test_listener_session_receipt_increments_count(tmp_path):
+    """The producer drains one pending station epoch into PersonaStore."""
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
-    from mammamiradio.scheduling.producer import _maybe_start_session
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     db_path = tmp_path / "persona.db"
     init_db(db_path)
@@ -1348,8 +1421,10 @@ async def test_maybe_start_session_increments_count(tmp_path):
 
     state = StationState()
     state.persona_store = store
+    state.listener_session.observe_active_count(1, now=0.0)
 
-    await _maybe_start_session(state)
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
 
     persona = await store.get_persona()
     assert persona.session_count == 1
@@ -2709,6 +2784,7 @@ async def test_enqueue_failure_demotes_carried_moment_receipt(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -3115,18 +3191,15 @@ def test_pick_canned_clip_returns_none_for_empty_dir(tmp_path):
     assert result is None
 
 
-def test_pick_canned_clip_returns_file(tmp_path):
-    """_pick_canned_clip returns a path when clips exist."""
+def test_pick_canned_clip_returns_manifested_recovery_file(tmp_path):
+    """_pick_canned_clip returns a reviewed, hash-valid recovery path."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    clip1 = banter_dir / "clip1.mp3"
-    clip1.write_bytes(b"\x00" * 2048)
+    clip1 = _manifest_recovery_clip(tmp_path, "clip1.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        result = _pick_canned_clip("banter")
+        result = _pick_canned_clip("recovery")
     assert result == clip1
     assert list(_recently_played_clips) == ["clip1.mp3"]
 
@@ -3135,16 +3208,14 @@ def test_pick_canned_clip_rejects_deleted_cached_path(tmp_path):
     """A cached Path that vanished is skipped instead of returned."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    clip = tmp_path / "banter" / "gone.mp3"
-    clip.parent.mkdir()
-    clip.write_bytes(b"\x00" * 2048)
+    clip = _manifest_recovery_clip(tmp_path, "gone.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        assert _pick_canned_clip("banter") == clip
+        assert _pick_canned_clip("recovery") == clip
         clip.unlink()
         _recently_played_clips.clear()
-        assert _pick_canned_clip("banter") is None
+        assert _pick_canned_clip("recovery") is None
     assert list(_recently_played_clips) == []
 
 
@@ -3152,14 +3223,11 @@ def test_pick_canned_clip_rejects_tiny_cached_path(tmp_path):
     """A truncated cached clip is skipped without ffprobe work."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    tiny = banter_dir / "tiny.mp3"
-    tiny.write_bytes(b"\x00" * 1024)
+    _manifest_recovery_clip(tmp_path, "tiny.mp3", b"x" * 1024)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        assert _pick_canned_clip("banter") is None
+        assert _pick_canned_clip("recovery") is None
     assert list(_recently_played_clips) == []
 
 
@@ -3167,15 +3235,12 @@ def test_pick_canned_clip_clears_recently_played_when_exhausted(tmp_path):
     """When all clips are recently played, the cache resets and re-picks."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    clip1 = banter_dir / "clip1.mp3"
-    clip1.write_bytes(b"\x00" * 2048)
+    clip1 = _manifest_recovery_clip(tmp_path, "clip1.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     _recently_played_clips.append("clip1.mp3")  # Mark the only clip as recently played
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        result = _pick_canned_clip("banter")
+        result = _pick_canned_clip("recovery")
     assert result == clip1
     # recently_played should have been cleared and then clip1 re-added
     assert "clip1.mp3" in _recently_played_clips
@@ -3282,52 +3347,697 @@ async def test_record_motif_skips_when_no_persona_store():
 
 
 # ---------------------------------------------------------------------------
-# _maybe_start_session unit tests
+# _sync_listener_session_persona unit tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_no_persona_store():
-    """_maybe_start_session returns early when no persona_store."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_no_persona_store():
+    """The receipt scheduler returns early when no persona_store exists."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     state.persona_store = None
-    await _maybe_start_session(state)
+    _sync_listener_session_persona(state)
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_new_session():
-    """_maybe_start_session increments session when new."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_schedules_one_pending_epoch():
+    """Only the station epoch receipt, not a timer, schedules persistence."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     mock_persona = MagicMock()
-    mock_persona.maybe_new_session.return_value = True
-    mock_persona.increment_session = AsyncMock()
-    mock_persona_data = MagicMock()
-    mock_persona_data.session_count = 5
-    mock_persona.get_persona = AsyncMock(return_value=mock_persona_data)
+    mock_persona.start_session = AsyncMock(return_value=True)
     state.persona_store = mock_persona
+    state.listener_session.observe_active_count(1, now=0.0)
 
-    await _maybe_start_session(state)
-    mock_persona.increment_session.assert_awaited_once()
-    mock_persona.get_persona.assert_awaited_once()
+    _sync_listener_session_persona(state)
+    tasks = list(state.listener_session_tasks)
+    assert len(tasks) == 1
+    await asyncio.gather(*tasks)
+    mock_persona.start_session.assert_awaited_once_with("listener-epoch-1")
+    assert state.listener_session.pending_persona_epochs == ()
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_not_new():
-    """_maybe_start_session does nothing when not a new session."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_does_nothing_without_pending_epoch():
+    """No active epoch means there is no persona receipt to schedule."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     mock_persona = MagicMock()
-    mock_persona.maybe_new_session.return_value = False
-    mock_persona.increment_session = AsyncMock()
+    mock_persona.start_session = AsyncMock()
     state.persona_store = mock_persona
 
-    await _maybe_start_session(state)
-    mock_persona.increment_session.assert_not_awaited()
+    _sync_listener_session_persona(state)
+    mock_persona.start_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listener_session_receipt_failure_uses_capped_monotonic_backoff():
+    """A failed commit stays pending without hot-looping the database."""
+    from mammamiradio.core.listener_session import ListenerSession
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
+
+    clock = [0.0]
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: clock[0])
+    state.listener_session.observe_active_count(1)
+    mock_persona = MagicMock()
+    mock_persona.start_session = AsyncMock(side_effect=[False, True])
+    state.persona_store = mock_persona
+
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert state.listener_session.pending_persona_epochs == (1,)
+    assert state.listener_session_persona_retry_at == pytest.approx(1.0)
+
+    _sync_listener_session_persona(state)
+    assert mock_persona.start_session.await_count == 1
+    clock[0] = 0.999
+    _sync_listener_session_persona(state)
+    assert mock_persona.start_session.await_count == 1
+
+    clock[0] = 1.0
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert mock_persona.start_session.await_count == 2
+    assert state.listener_session.pending_persona_epochs == ()
+    assert state.listener_session_persona_retry_at == 0.0
+    assert state.listener_session_persona_retry_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_listener_session_receipt_exception_keeps_epoch_pending():
+    from mammamiradio.core.listener_session import ListenerSession
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
+
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: 10.0)
+    state.listener_session.observe_active_count(1)
+    mock_persona = MagicMock()
+    mock_persona.start_session = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    state.persona_store = mock_persona
+
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert state.listener_session.pending_persona_epochs == (1,)
+    assert state.listener_session_persona_retry_at == pytest.approx(11.0)
+
+
+def _claimed_companionship_state():
+    from mammamiradio.core.listener_session import ListenerSession
+
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: 1_800.0)
+    state.listener_session.observe_active_count(1, now=0.0)
+    claim = state.listener_session.claim_companionship(now=1_800.0)
+    assert claim is not None
+    return state, claim
+
+
+@pytest.mark.parametrize(
+    "blocked_field",
+    [
+        "not_natural",
+        "chaos",
+        "operator",
+        "no_llm",
+        "prompt_fact",
+        "directive",
+        "request",
+        "heading",
+        "ritual_gag",
+        "special_mode",
+        "release_campaign",
+    ],
+)
+def test_companionship_claim_eligibility_excludes_priority_lanes(blocked_field):
+    from mammamiradio.home.context_director import PromptFact
+    from mammamiradio.scheduling.producer import _companionship_banter_eligible
+
+    state = _make_state()
+    kwargs = {
+        "natural_banter": True,
+        "chaos_subtype": None,
+        "is_operator_forced": False,
+        "prompt_fact": None,
+        "script_llm_available": True,
+        "special_mode_active": False,
+    }
+    if blocked_field == "not_natural":
+        kwargs["natural_banter"] = False
+    elif blocked_field == "chaos":
+        kwargs["chaos_subtype"] = ChaosSubtype.FOURTH_WALL
+    elif blocked_field == "operator":
+        kwargs["is_operator_forced"] = True
+    elif blocked_field == "no_llm":
+        kwargs["script_llm_available"] = False
+    elif blocked_field == "prompt_fact":
+        kwargs["prompt_fact"] = PromptFact("f", "weather.home", "weather", "x", "Rain", 1)
+    elif blocked_field == "directive":
+        state.ha_pending_directive = "React now"
+    elif blocked_field == "request":
+        state.pending_requests.append({"type": "message"})
+    elif blocked_field == "heading":
+        state.heading_pending_announcement = "New direction"
+    elif blocked_field == "ritual_gag":
+        state.ha_running_gag = "A ritual callback"
+    elif blocked_field == "special_mode":
+        kwargs["special_mode_active"] = True
+    elif blocked_field == "release_campaign":
+        state.release_campaign = SimpleNamespace(enabled=True, is_due=lambda: True)
+
+    assert _companionship_banter_eligible(state, **kwargs) is False
+
+
+def test_companionship_generated_proof_stamps_segment_and_admission_marks_queued():
+    from mammamiradio.scheduling.producer import (
+        _companionship_metadata_for_generated_banter,
+        _mark_companionship_segment_queued,
+    )
+
+    state, claim = _claimed_companionship_state()
+    commit = SimpleNamespace(
+        companionship=SimpleNamespace(duration_bucket=claim.prompt_context.duration_bucket),
+    )
+    metadata = _companionship_metadata_for_generated_banter(state, claim, commit)
+    segment = Segment(type=SegmentType.BANTER, path=Path("cue.mp3"), metadata=metadata)
+
+    assert metadata == {"listener_session_epoch": 1, "listener_session_cue": "companionship"}
+    _mark_companionship_segment_queued(state, segment)
+    assert state.listener_session.companionship_cue_state.value == "queued"
+
+
+@pytest.mark.asyncio
+async def test_natural_banter_claims_generates_and_queues_companionship_once(tmp_path):
+    """The full producer lane transfers one claim through proof to queue admission."""
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    consume_milestone = AsyncMock()
+    state.persona_store = SimpleNamespace(consume_milestone=consume_milestone)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+    seen_contexts = []
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs.get("companionship_context")
+        seen_contexts.append(context)
+        assert context is not None
+        return (
+            [(host, "Siamo ancora qui, insieme alla musica.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+                persona_milestone=5,
+                pending_joke={"text": "the queued studio umbrella", "punch": 4.0},
+            ),
+        )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Continuiamo.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert len(seen_contexts) == 1
+    assert segment.metadata["listener_session_epoch"] == 1
+    assert segment.metadata["listener_session_cue"] == "companionship"
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
+    assert state.listener_session.claim_companionship() is None
+    assert "the queued studio umbrella" in state.running_jokes
+    consume_milestone.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_companionship_stale_after_egress_records_listener_session_reason(tmp_path):
+    """The main queue funnel must preserve the cue's concrete stale reason."""
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We've had company for roughly half an hour.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+            ),
+        )
+
+    async def _disconnect_during_egress(segment, _config):
+        state.listener_session.observe_active_count(0, now=1801.0)
+        state.listeners_active = 0
+        return segment
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_disconnect_during_egress),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not state.discard_by_reason.get(GenerationWasteReason.LISTENER_SESSION_STALE):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("listener-session stale admission was not recorded")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert not state.discard_by_reason.get(GenerationWasteReason.EGRESS_STALE)
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+
+
+def test_companionship_fallback_without_generated_proof_abandons_and_is_not_stamped():
+    from mammamiradio.scheduling.producer import _companionship_metadata_for_generated_banter
+
+    state, claim = _claimed_companionship_state()
+    assert _companionship_metadata_for_generated_banter(state, claim, None) == {}
+    assert state.listener_session.companionship_cue_state.value == "abandoned"
+
+
+def test_unowned_companionship_attempt_is_settled_once_and_never_reopened():
+    from mammamiradio.scheduling.producer import _abandon_unowned_companionship_attempt
+
+    state, _claim = _claimed_companionship_state()
+    assert _abandon_unowned_companionship_attempt(state) is True
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert _abandon_unowned_companionship_attempt(state) is False
+    assert state.listener_session.claim_companionship() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_stage", ["generation", "tts", "quality"])
+async def test_companionship_generation_pipeline_failures_abandon_without_retry(tmp_path, failed_stage):
+    from mammamiradio.audio.audio_quality import AudioQualityError
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    consume_milestone = AsyncMock()
+    state.persona_store = SimpleNamespace(consume_milestone=consume_milestone)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        if failed_stage == "generation":
+            raise RuntimeError("writer failed")
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We have had company for a while, piano piano.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+                persona_milestone=5,
+                pending_joke={"text": "the unheard studio umbrella", "punch": 4.0},
+            ),
+        )
+
+    async def _synthesize(*_args, **_kwargs):
+        if failed_stage == "tts":
+            raise RuntimeError("voice failed")
+        return generated_audio
+
+    def _quality(*_args, **_kwargs):
+        if failed_stage == "quality":
+            raise AudioQualityError("generated break is not airable")
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_quality),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.listener_session.companionship_cue_state is not ListenerSessionCueState.ABANDONED:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError(f"{failed_stage} failure did not settle the companionship cue")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.listener_session.claim_companionship() is None
+    assert "the unheard studio umbrella" not in state.running_jokes
+    assert state.pending_verbal_gag is None
+    consume_milestone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_companionship_quality_fallback_is_ordinary_and_does_not_reuse_failed_cue(tmp_path):
+    from mammamiradio.audio.audio_quality import AudioQualityError
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+    canned_audio = tmp_path / "canned.mp3"
+    canned_audio.write_bytes(b"canned audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We have had company for a while, piano piano.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+            ),
+        )
+
+    quality_calls = 0
+
+    def _quality(*_args, **_kwargs):
+        nonlocal quality_calls
+        quality_calls += 1
+        if quality_calls == 1:
+            raise AudioQualityError("generated break is not airable")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_quality),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_audio),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.path == canned_audio
+    assert segment.metadata["canned"] is True
+    assert "listener_session_epoch" not in segment.metadata
+    assert "listener_session_cue" not in segment.metadata
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert state.listener_session.claim_companionship() is None
+
+
+def test_companionship_admission_fence_rejects_disconnect_before_queue():
+    from mammamiradio.scheduling.producer import _companionship_admission_stale_reason
+
+    state, claim = _claimed_companionship_state()
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("cue.mp3"),
+        metadata={"listener_session_epoch": claim.epoch, "listener_session_cue": "companionship"},
+    )
+    state.listener_session.observe_active_count(0, now=1_801.0)
+
+    assert _companionship_admission_stale_reason(state, segment) == GenerationWasteReason.LISTENER_SESSION_STALE
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        GenerationWasteReason.QUALITY_GATE_REJECT,
+        GenerationWasteReason.SESSION_STOPPED,
+        GenerationWasteReason.STALE_SOURCE,
+        GenerationWasteReason.STALE_PLAYLIST,
+        GenerationWasteReason.STALE_CHAOS,
+        GenerationWasteReason.STALE_CONTINUITY,
+        GenerationWasteReason.AIR_NEXT_OVERFLOW,
+        GenerationWasteReason.EGRESS_STALE,
+        GenerationWasteReason.OPERATOR_PURGE,
+        GenerationWasteReason.OPERATOR_STOP,
+        GenerationWasteReason.OPERATOR_PANIC,
+        GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
+        GenerationWasteReason.LISTENER_SESSION_STALE,
+    ],
+)
+def test_record_discard_centrally_abandons_companionship_for_every_queue_path(reason):
+    state, claim = _claimed_companionship_state()
+    assert state.listener_session.mark_companionship_queued(claim.epoch) is True
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("cue.mp3"),
+        metadata={"listener_session_epoch": claim.epoch, "listener_session_cue": "companionship"},
+    )
+
+    state.record_discard(segment, reason=reason)
+    assert state.listener_session.companionship_cue_state.value == "abandoned"
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_repairs_final_assembled_copy():
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "Abbiamo compagnia da un po', ma la musica decide tutto.")]
+    unsafe_lines = [(config.hosts[0], "Someone just tuned in, apparently.")]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        lines, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+            transition_text="And back to the music.",
+        )
+
+    assert changed is True
+    assert transition_replaced is False
+    assert transition == "And back to the music."
+    assert lines == safe_lines
+    repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return():
+    from mammamiradio.core.listener_truth import home_return_authority_for_directive
+
+    config = _make_config()
+    state = _make_state()
+    state.last_banter_return_authority = home_return_authority_for_directive(
+        "ha:person.florian_horner",
+        "Florian è appena tornato a casa. Un caloroso bentornato.",
+    )
+    lines = [(config.hosts[0], "Bentornato Florian.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(),
+    ) as repair:
+        guarded, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            lines,
+        )
+
+    assert guarded == lines
+    assert transition is None
+    assert changed is False
+    assert transition_replaced is False
+    assert state.last_banter_return_authority is not None
+    repair.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_rejects_unbound_named_return():
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "The music continues, amici.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            [(config.hosts[0], "Bentornato Florian.")],
+        )
+
+    assert guarded == safe_lines
+    assert changed is True
+    repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_abandons_second_unsafe_generation():
+    config = _make_config()
+    state = _make_state()
+    unsafe_lines = [(config.hosts[0], "Qualcuno si è appena sintonizzato.")]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=unsafe_lines),
+    ):
+        lines, transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+        )
+
+    from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
+
+    assert changed is True
+    assert transition is None
+    assert not contains_unsafe_listener_claims(text for _host, text in lines)
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_replaces_unsafe_transition():
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "La musica continua, e noi pure.")]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ):
+        lines, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            safe_lines,
+            transition_text="Welcome back, amici.",
+        )
+
+    assert changed is True
+    assert transition_replaced is True
+    assert transition is not None
+    assert "Welcome back" not in transition
+    assert lines == safe_lines
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("generated_text", "expected_accepted"),
+    [
+        ("The studio keeps moving, piano piano.", True),
+        ("Someone just tuned in, apparently.", False),
+    ],
+)
+async def test_producer_applies_banter_mutations_only_after_final_truth_acceptance(
+    tmp_path,
+    generated_text,
+    expected_accepted,
+):
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    safe_repair = [(host, "The music continues without guessing who is listening.")]
+    commit = BanterCommit(pending_joke={"text": "the studio umbrella", "punch": 4.0})
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, generated_text)], commit),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.repair_banter_without_listener_context",
+            new_callable=AsyncMock,
+            return_value=safe_repair,
+        ) as repair,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert ("the studio umbrella" in state.running_jokes) is expected_accepted
+    if expected_accepted:
+        repair.assert_not_awaited()
+    else:
+        repair.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -5230,6 +5940,64 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path):
+    """Cleanup failure cannot strand later cue work or corrupt queue accounting."""
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state, claim = _claimed_companionship_state()
+    assert state.listener_session.mark_companionship_queued(claim.epoch) is True
+    bad_path = tmp_path / "locked.mp3"
+    bad_path.write_bytes(b"locked")
+    cue_path = tmp_path / "cue.mp3"
+    cue_path.write_bytes(b"cue")
+    bad = Segment(type=SegmentType.MUSIC, path=bad_path, ephemeral=True, metadata={"queue_id": "bad"})
+    cue = Segment(
+        type=SegmentType.BANTER,
+        path=cue_path,
+        ephemeral=False,
+        metadata={
+            "queue_id": "cue",
+            "listener_session_epoch": claim.epoch,
+            "listener_session_cue": "companionship",
+        },
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(bad)
+    queue.put_nowait(cue)
+    state.queued_segments = [{"id": "bad"}, {"id": "cue"}]
+
+    demo_root = tmp_path / "demo"
+    emergency_tone = demo_root / "recovery" / "emergency_tone.mp3"
+    emergency_tone.parent.mkdir(parents=True)
+    emergency_tone.write_bytes(b"tone")
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    original_unlink = Path.unlink
+
+    def _unlink_with_one_failure(path: Path, *args, **kwargs):
+        if path == bad_path:
+            raise PermissionError("locked test render")
+        return original_unlink(path, *args, **kwargs)
+
+    spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch.object(Path, "unlink", new=_unlink_with_one_failure),
+    ):
+        fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert fired is True
+    assert queue.empty()
+    assert queue._unfinished_tasks == 0
+    assert state.queued_segments == []
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 2
+    assert bad_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     """Interrupt queue purges must not delete packaged demo assets."""
     from mammamiradio.core.models import InterruptSpec
@@ -5252,6 +6020,7 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
         patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch("mammamiradio.scheduling.queue_mutations._DEMO_ASSETS_DIR", demo_root),
     ):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 

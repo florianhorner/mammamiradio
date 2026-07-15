@@ -27,6 +27,8 @@ import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_model
+from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
+from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
@@ -162,6 +164,7 @@ def _warn_budget_pressure(output_tokens: object, budget: object, caller: str | N
 
 _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "banter": "script_banter",
+    "banter_listener_truth_repair": "script_banter",
     "direction": "script_banter",
     "news_flash": "script_banter",
     "transition": "script_transition",
@@ -309,6 +312,13 @@ class GuestHostBanterCooldownCommit:
             state.guest_host_banter_cooldown_remaining = max(0, state.guest_host_banter_cooldown_remaining - 1)
 
 
+@dataclass(frozen=True)
+class CompanionshipBanterCommit:
+    """Proof that accepted generated copy used the bounded cue prompt."""
+
+    duration_bucket: CompanionshipDurationBucket
+
+
 @dataclass
 class BanterCommit:
     """Deferred banter state updates, applied only after banter queues."""
@@ -318,8 +328,28 @@ class BanterCommit:
     release_beat: ReleaseBeatBanterCommit | None = None
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None
     memory_extraction: MemoryExtractionCommit | None = None
+    companionship: CompanionshipBanterCommit | None = None
+    persona_milestone: int | None = None
+    pending_joke: dict[str, str | float | None] | None = None
+
+    def apply_queue_acceptance(self, state: StationState) -> None:
+        """Apply synchronous mutations at the successful queue boundary."""
+
+        if self.pending_joke is not None:
+            joke_text = str(self.pending_joke.get("text") or "").strip()
+            if joke_text:
+                state.add_joke(joke_text)
+                state.pending_verbal_gag = dict(self.pending_joke)
+
+    async def consume_queued_milestone(self, state: StationState) -> None:
+        """Consume a milestone only after its truth-safe banter has queued."""
+
+        persona_store = getattr(state, "persona_store", None)
+        if self.persona_milestone is not None and persona_store is not None:
+            await persona_store.consume_milestone()
 
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
+        self.apply_queue_acceptance(state)
         if self.listener_request is not None:
             self.listener_request.apply(state)
         if self.heading_announcement is not None:
@@ -336,12 +366,18 @@ def _banter_commit(
     release_beat: ReleaseBeatBanterCommit | None = None,
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None,
     memory_extraction: MemoryExtractionCommit | None = None,
+    companionship: CompanionshipBanterCommit | None = None,
+    persona_milestone: int | None = None,
+    pending_joke: dict[str, str | float | None] | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
     if (
         heading_announcement is None
         and release_beat is None
         and guest_host_cooldown is None
         and memory_extraction is None
+        and companionship is None
+        and persona_milestone is None
+        and pending_joke is None
     ):
         return listener_request
     return BanterCommit(
@@ -350,6 +386,9 @@ def _banter_commit(
         release_beat=release_beat,
         guest_host_cooldown=guest_host_cooldown,
         memory_extraction=memory_extraction,
+        companionship=companionship,
+        persona_milestone=persona_milestone,
+        pending_joke=pending_joke,
     )
 
 
@@ -1941,8 +1980,8 @@ Rules:
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
-- START MID-CONVERSATION: sometimes begin as if the listener tuned in halfway through
-  an argument or a laugh. No setup. Just drop in.
+- START MID-CONVERSATION: sometimes begin in the middle of an ongoing host argument
+  or laugh. No setup and no claim about when anyone began listening. Just drop in.
 - ANSWERED INTERRUPTIONS: a host may cut off with "Lo so, ma comunque—" only when a different
   host immediately answers or counters it. The final line of every exchange is a complete thought.
 - ABSURDIST TANGENT: at least once per exchange, someone says something that has no
@@ -1982,11 +2021,10 @@ async def write_banter(
     state: StationState,
     config: StationConfig,
     *,
-    is_new_listener: bool = False,
-    is_first_listener: bool = False,
     chaos_subtype: ChaosSubtype | None = None,
     prompt_fact: PromptFact | None = None,
     use_directed_home_context: bool = False,
+    companionship_context: CompanionshipPromptContext | None = None,
 ) -> tuple[list[tuple[HostPersonality, str]], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -2122,7 +2160,7 @@ async def write_banter(
     # Listener behavior patterns (generic, never personal)
     listener_block = ""
     behavior_desc = state.listener.describe_for_prompt()
-    if behavior_desc:
+    if behavior_desc and companionship_context is None:
         listener_block = f"""
 <listener_behavior>
 {behavior_desc}
@@ -2131,29 +2169,22 @@ Never say "the data shows" or reference tracking. Maintain plausible deniability
 </listener_behavior>
 """
 
-    # New listener awareness — the "benvenuto" impossible moment
-    new_listener_block = ""
-    if is_first_listener:
-        new_listener_block = """
-IMPOSSIBLE MOMENT: Someone JUST tuned in — they are the FIRST listener!
-Acknowledge this naturally. Be excited but not desperate. "Finalmente qualcuno ci ascolta!"
-This is the WOW moment — the listener just connected and immediately hears the DJ notice.
-"""
-    elif is_new_listener:
-        new_listener_block = """
-IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!
-Acknowledge this subtly — "oh, abbiamo compagnia" or "qualcuno si è sintonizzato".
-Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
-"""
-
-    # Compounding listener memory — persona built across sessions
+    # Compounding station memory — persona built across station sessions.  The
+    # prompt receives only coarse, identity-free session context; it must never
+    # turn an HTTP connection edge into a claim about a person.
     persona_block = ""
     arc_phase_block = ""
     persona_ctx = ""
     persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
     milestone: int | None = None
-    if persona_store:
+    listener_session_block = ""
+    if companionship_context is not None:
+        listener_session_block = (
+            f"\n<listener_session>\n{companionship_context.to_prompt_context()}\n</listener_session>\n"
+        )
+
+    if persona_store and companionship_context is None:
         try:
             from mammamiradio.hosts.persona import _ARC_DIRECTIVES
 
@@ -2167,7 +2198,9 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
             milestone = persona.pending_milestone
             milestone_line = ""
             if milestone:
-                milestone_line = f"\nMilestone: session #{milestone}. Acknowledge indirectly."
+                milestone_line = (
+                    f"\nStation milestone: session #{milestone}. Acknowledge only as shared station continuity."
+                )
             arc_phase_block = f"""
 <arc_phase>
 Phase: {phase} (session #{persona.session_count})
@@ -2176,14 +2209,12 @@ Directive: {directive}{milestone_line}
 """
             if persona_ctx:
                 persona_block = f"""
-<listener_memory>
+<station_memory>
 {persona_ctx}
-Use this to make the listener feel recognized — callback old songs, reference
-running jokes from past sessions, build on your theories about who's listening.
-Never explain HOW you remember. Just casually reference things as if it's natural.
-The more sessions they've had, the more familiar and personal you should sound.
-First-time listeners get curiosity and intrigue. Returning listeners get inside jokes.
-</listener_memory>
+Use this as aggregate station mythology — callback old songs, reference running
+jokes from past sessions, and build on open station theories. Never claim that a
+specific person has arrived, returned, tuned in, or is being identified.
+</station_memory>
 """
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
@@ -2209,6 +2240,10 @@ CHAOS DIRECTION:
     raw_pending_directive = state.ha_pending_directive
     raw_pending_directive_moment_id = state.ha_pending_directive_moment_id
     raw_pending_directive_source = state.ha_pending_directive_source
+    return_authority = home_return_authority_for_directive(
+        raw_pending_directive_source,
+        raw_pending_directive,
+    )
     pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
     consumed_pending_directive = False
     if pending_directive:
@@ -2252,7 +2287,7 @@ Make this the focus of this banter break. It happened just now — react natural
     release_beat_schema = ""
     release_beat_commit: ReleaseBeatBanterCommit | None = None
     release_campaign = getattr(state, "release_campaign", None)
-    if chaos_subtype is None and release_campaign is not None:
+    if companionship_context is None and chaos_subtype is None and release_campaign is not None:
         try:
             release_offer = release_campaign.begin_attempt()
         except Exception:
@@ -2295,7 +2330,7 @@ beat in the lines you wrote. Otherwise set it false.
             chaos_subtype is not None,
             listener_request_block,
             release_beat_block,
-            new_listener_block,
+            listener_session_block,
         )
     )
     if heading_announcement and raw_heading is not None and raw_heading_announcement_id and not record_hunt_blocked:
@@ -2346,7 +2381,7 @@ beat in the lines you wrote. Otherwise set it false.
             bool(course_change_block),
             bool(listener_request_block),
             bool(release_beat_block),
-            bool(new_listener_block),
+            bool(listener_session_block),
         )
     )
     if guest_regulars:
@@ -2379,7 +2414,7 @@ GUEST HOST GATE:
         or release_beat_block
         or festival_block
         or chaos_subtype is not None
-        or new_listener_block
+        or listener_session_block
     )
     exchange_count = _banter_exchange_count(warranted=warranted_long)
     home_fact_schema = (
@@ -2391,6 +2426,18 @@ GUEST HOST GATE:
         if prompt_fact is not None
         else "\nHOME FACT CONTRACT: Return home_fact_id as null.\n"
     )
+    companionship_proof_schema = ""
+    companionship_proof_instruction = ""
+    if companionship_context is not None:
+        duration_bucket = companionship_context.duration_bucket.value
+        companionship_proof_schema = (
+            f', "listener_session_cue": "companionship", "listener_session_duration_bucket": "{duration_bucket}"'
+        )
+        companionship_proof_instruction = (
+            "\nCOMPANIONSHIP PROOF CONTRACT: If the lines actually use the companionship cue, return "
+            f"listener_session_cue as 'companionship' and listener_session_duration_bucket as {duration_bucket!r}. "
+            "Otherwise return both fields as null.\n"
+        )
 
     prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
@@ -2400,9 +2447,9 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}{home_fact_instruction}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}{companionship_proof_schema}}}"""
 
     try:
         data = await _generate_json_response_with_language_guard(
@@ -2549,26 +2596,22 @@ Return JSON:
         # Normal Mode copy.
         if not _normal_mode_language_ok([text for _, text in result], config):
             raise ValueError("banter response violated Normal Mode language mix after post-processing")
-        # A milestone belongs to an accepted generated exchange, not merely a
-        # prompt attempt. Every response-shape, language, sanitation,
-        # de-duplication, and turn-taking guard above must pass first.
-        if milestone is not None and persona_store is not None:
-            await persona_store.consume_milestone()
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
         state.last_banter_home_fact = prompt_fact
+        state.last_banter_return_authority = return_authority
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
         # cross-domain ledger at QUEUE time (B-i). pending is set ONLY on this
         # success path; the producer resets it to None before each banter so a
         # canned/failed banter never leaves a stale gag to commit.
+        pending_joke: dict[str, str | float | None] | None = None
         new_joke = data.get("new_joke")
         if new_joke:
             gag_text, gag_punch = _normalize_new_joke(new_joke)
             if gag_text:
-                state.add_joke(gag_text)
-                state.pending_verbal_gag = {"text": gag_text, "punch": gag_punch}
+                pending_joke = {"text": gag_text, "punch": gag_punch}
 
         if release_beat_commit is not None:
             release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
@@ -2592,7 +2635,7 @@ Return JSON:
                     "listener_request": listener_request_block,
                     "reactive_directive": reactive_block,
                     "course_change": course_change_block,
-                    "new_listener": new_listener_block,
+                    "listener_session": listener_session_block,
                     "listener_behavior": listener_block,
                     "arc_phase": arc_phase_block,
                     "release_beat": release_beat_block,
@@ -2604,16 +2647,37 @@ Return JSON:
             )
 
         logger.info("Generated banter: %d lines", len(result))
+        companionship_commit = None
+        if companionship_context is not None:
+            proof_fields_match = (
+                data.get("listener_session_cue") == "companionship"
+                and data.get("listener_session_duration_bucket") == companionship_context.duration_bucket.value
+            )
+            copy_uses_context = companionship_context.is_used_by(text for _host, text in result)
+            if proof_fields_match and copy_uses_context:
+                companionship_commit = CompanionshipBanterCommit(
+                    duration_bucket=companionship_context.duration_bucket,
+                )
+            else:
+                logger.warning(
+                    "Generated banter omitted valid companionship proof (fields=%s, copy=%s)",
+                    proof_fields_match,
+                    copy_uses_context,
+                )
         return result, _banter_commit(
             listener_request_commit,
             heading_announcement_commit,
             release_beat_commit,
             guest_host_cooldown_commit,
             memory_extraction_commit,
+            companionship_commit,
+            milestone,
+            pending_joke,
         )
 
     except Exception as e:
         state.last_banter_home_fact = None
+        state.last_banter_return_authority = None
         if prompt_fact is not None:
             director = getattr(state, "home_context_director", None)
             if director is not None:
@@ -2658,6 +2722,73 @@ Return JSON:
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
         return random.choice(_banter_fallback_pools(config)), None
+
+
+async def repair_banter_without_listener_context(
+    state: StationState,
+    config: StationConfig,
+) -> list[tuple[HostPersonality, str]] | None:
+    """Make one bounded, identity-free repair after a final truth violation.
+
+    This path intentionally does not load PersonaStore, listener-session state,
+    pending requests, or one-shot directives.  It is a pure replacement
+    exchange; the producer keeps no commit from the rejected first result.
+    """
+    if not has_script_llm(config):
+        return None
+
+    hosts = _regular_hosts(config)
+    fallback_host = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
+    host_names = {host.name.casefold(): host for host in hosts}
+    recent = [_sanitize_prompt_data(track.display) for track in list(state.played_tracks)[-2:]]
+    prompt = f"""Write a short two-host radio exchange in JSON.
+
+Recent music: {recent if recent else "the show opening"}
+Use only the station world, the music, and broad time-of-day context.
+Do not mention listeners, audience arrivals, tuning in, joining, returning,
+welcoming anyone back, or identifying who is listening. Aggregate phrases such
+as "we have company" are allowed only when they do not imply a new arrival.
+{language_mode_rule(config.super_italian_mode, config.station.language)}
+Every cut-off must be answered by a different host and the final line must be complete.
+Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
+
+    try:
+        data = await _generate_json_response_with_language_guard(
+            prompt=prompt,
+            config=config,
+            state=state,
+            model=resolve_model(config.models, "banter", "anthropic"),
+            max_tokens=_BANTER_MAX_TOKENS,
+            caller="banter_listener_truth_repair",
+        )
+    except Exception:
+        logger.warning("Listener-truth banter repair failed", exc_info=True)
+        return None
+
+    raw_lines = data.get("lines")
+    if not isinstance(raw_lines, list):
+        return None
+    result: list[tuple[HostPersonality, str]] = []
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, dict):
+            continue
+        text = raw_line.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
+        if _is_local_guest_host_name(host.name):
+            continue
+        result.append((host, _fix_wrong_station_names(text.strip(), config.display_station_name)))
+
+    if not result:
+        return None
+    if not _normal_mode_language_ok([text for _host, text in result], config):
+        return None
+    if not _banter_turn_taking_ok(result):
+        return None
+    if contains_unsafe_listener_claims(text for _host, text in result):
+        return None
+    return result
 
 
 NEWS_FLASH_CATEGORIES = {
@@ -2777,6 +2908,11 @@ def _transition_fallbacks(config: StationConfig) -> dict[str, str]:
 def _transition_fallback_text(config: StationConfig, next_segment: str) -> str:
     """Return complete transition stock copy for the station's active spoken mode."""
     return _transition_stock_copy(next_segment, super_italian=_spoken_fallback_language(config) == "it")
+
+
+def listener_truth_safe_transition_text(config: StationConfig, next_segment: str = "banter") -> str:
+    """Return deterministic transition copy safe for the final truth boundary."""
+    return _transition_fallback_text(config, next_segment)
 
 
 def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:

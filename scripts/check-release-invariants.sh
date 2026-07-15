@@ -53,6 +53,12 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py"; then
+    ok "packaged spoken assets are manifest-bound and listener-truth safe"
+else
+    fail "packaged spoken asset manifest validation failed"
+fi
+
 # ── 3. Test: _pick_canned_clip returns None (missing packaged clip scenario) ──
 echo ""
 echo "3. Test coverage — missing packaged recovery scenario"

@@ -167,8 +167,9 @@ DROP_DOMAINS = {
 }
 DROP_ENTITY_CATEGORIES = {"diagnostic", "config"}
 DROP_DEVICE_CLASSES = {"signal_strength", "battery", "timestamp"}
-# person is intentionally NOT denied: home/away presence drives arrival greetings
-# and the empty-home mood. GPS/location and identity attributes are stripped via
+# person is intentionally NOT denied: an explicit named entity may authorize one
+# line-bound resident-return fact, and aggregate presence drives the empty-home
+# mood. GPS/location and identity attributes are stripped via
 # SENSITIVE_ATTRIBUTE_KEYS, and person events are filtered from /public-status.
 PRIVACY_DENY_DOMAINS = {"device_tracker", "camera", "alarm_control_panel"}
 SENSITIVE_ATTRIBUTE_KEYS = {
@@ -298,8 +299,9 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
     (
         "lock.lock_ultra_8d3c",
         "unlocked",
-        "La porta d'ingresso si è appena aperta. Dite 'bentornato' come se aveste"
-        " sentito la porta — breve, caldo, non forzato.",
+        "La serratura della porta d'ingresso si è appena aperta. Notate soltanto il"
+        " rumore della porta — breve e caldo, senza dedurre chi sia entrato o salutare"
+        " qualcuno come tornato.",
         300,
     ),
     (
@@ -336,6 +338,17 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
 ]
 
 _reactive_cooldowns: dict[str, float] = {}
+
+
+class ReactiveDirective(str):
+    """String-compatible directive carrying its curated HA source entity."""
+
+    entity_id: str
+
+    def __new__(cls, value: str, *, entity_id: str):
+        instance = super().__new__(cls, value)
+        instance.entity_id = entity_id
+        return instance
 
 
 class ThresholdTrigger(TypedDict):
@@ -1538,7 +1551,7 @@ def check_reactive_triggers(
             if now - _reactive_cooldowns.get(cooldown_key, 0.0) < cooldown:
                 continue
             _reactive_cooldowns[cooldown_key] = now
-            return directive
+            return ReactiveDirective(directive, entity_id=entity_id)
 
     if current_states is not None:
         for trigger in THRESHOLD_TRIGGERS:
@@ -1557,7 +1570,7 @@ def check_reactive_triggers(
             if now - _reactive_cooldowns.get(cooldown_key, 0.0) < trigger["cooldown"]:
                 continue
             _reactive_cooldowns[cooldown_key] = now
-            return trigger["directive"]
+            return ReactiveDirective(trigger["directive"], entity_id=eid)
 
     return None
 
