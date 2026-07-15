@@ -3868,11 +3868,19 @@ def test_record_discard_centrally_abandons_companionship_for_every_queue_path(re
 
 
 @pytest.mark.asyncio
-async def test_listener_truth_guard_repairs_final_assembled_copy():
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "Someone just tuned in, apparently.",
+        "Looks like we have a new friend with us.",
+        "Rieccoti con noi!",
+    ],
+)
+async def test_listener_truth_guard_repairs_final_assembled_copy(unsafe_text):
     config = _make_config()
     state = _make_state()
     safe_lines = [(config.hosts[0], "Abbiamo compagnia da un po', ma la musica decide tutto.")]
-    unsafe_lines = [(config.hosts[0], "Someone just tuned in, apparently.")]
+    unsafe_lines = [(config.hosts[0], unsafe_text)]
     with patch(
         f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
         new=AsyncMock(return_value=safe_lines),
@@ -3919,6 +3927,34 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
     assert transition_replaced is False
     assert state.last_banter_return_authority is not None
     repair.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_rejects_return_line_that_names_another_resident():
+    from mammamiradio.core.listener_truth import home_return_authority_for_directive
+
+    config = _make_config()
+    state = _make_state()
+    state.last_banter_return_authority = home_return_authority_for_directive(
+        "ha:person.florian_horner",
+        "Florian è appena tornato a casa. Un caloroso bentornato.",
+    )
+    safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            [(config.hosts[0], "Florian is back with Sabrina.")],
+        )
+
+    assert guarded == safe_lines
+    assert changed is True
+    assert state.last_banter_return_authority is None
+    repair.assert_awaited_once()
 
 
 @pytest.mark.asyncio

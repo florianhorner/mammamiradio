@@ -21,8 +21,9 @@ _CURATED_RESIDENT_NAMES_PATTERN = "|".join(
     re.escape(name) for name in sorted(set(_AUTHORIZED_HOME_RETURN_SOURCES.values()))
 )
 _GENERIC_AUDIENCE_PATTERN = re.compile(
-    r"\b(?:you|your|listener\w*|audience|everyone|everybody|anyone|"
-    r"friends?|folks?|guys?|all|voi|tu|tutti|chiunque|amici?|ragazz\w*|gente|ascoltator\w*)\b",
+    r"\b(?:you|your|listener\w*|audience|everyone|everybody|anyone|someone|somebody|people|"
+    r"they|them|their|(?:another|other)\s+person|friends?|folks?|guys?|all|voi|tu|tutti|"
+    r"chiunque|qualcuno|qualcun\s+altr\w*|loro|altri|amici?|ragazz\w*|gente|ascoltator\w*)\b",
     re.IGNORECASE,
 )
 
@@ -46,6 +47,12 @@ class HomeReturnAuthority:
 
         if not isinstance(text, str) or _GENERIC_AUDIENCE_PATTERN.search(text):
             return False
+        authorized_name = self.resident_name.casefold()
+        for resident_name in set(_AUTHORIZED_HOME_RETURN_SOURCES.values()):
+            if resident_name.casefold() == authorized_name:
+                continue
+            if re.search(rf"\b{re.escape(resident_name)}\b", text, re.IGNORECASE):
+                return False
         name = re.escape(self.resident_name)
         addressed_name = rf"{name}(?=\s*(?:[,!?.;:—–-]|$))"
         patterns = (
@@ -88,18 +95,26 @@ _UNSAFE_LISTENER_CLAIM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "english_arrival",
         re.compile(
-            r"\b(?:someone|somebody|the\s+listener|a\s+listener|our\s+listener)\s+(?:has\s+)?(?:just\s+)?"
-            r"(?:tuned\s+in|joined|connected|arrived|is\s+(?:listening|here))\b"
+            r"\b(?:someone|somebody|the\s+listener|a\s+listener|our\s+listener|"
+            r"(?:a|our)\s+(?:new|first)\s+friend|our\s+(?:new|first)\s+(?:bit\s+of\s+)?company|company)"
+            r"\s+(?:has\s+)?(?:just\s+)?(?:tuned\s+in|joined|connected|arrived|"
+            r"found\s+(?:us|the\s+station|this\s+station)|is\s+(?:listening|here))\b"
             r"|\b(?:just|right\s+now|finally)\s+(?:tuned\s+in|joined|connected|arrived)\b"
             r"|\byou(?:'ve|\s+have|\s+are|'re)?\s+(?:just\s+)?"
             r"(?:tuned\s+in|joined(?:\s+us)?|connected|arrived)\b"
-            r"|\bthanks\s+for\s+(?:tuning\s+in|joining\s+us|connecting)\b",
+            r"|\bthanks\s+for\s+(?:tuning\s+in|joining\s+us|connecting)\b"
+            r"|\b(?:looks?\s+like\s+)?we\s+(?:have|got)\s+(?:a\s+)?(?:new|first)\s+friend\b"
+            r"|\b(?:finally|at\s+last)\s*,?\s+(?:we\s+(?:have|got)|we've\s+got)\s+company\b"
+            r"|\b(?:we\s+(?:have|got)|we've\s+got)\s+company\s+(?:now|at\s+last)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "english_listener_arrival_label",
-        re.compile(r"\b(?:a|the|our)\s+(?:new|first)\s+listener\b|\b(?:new|first)\s+listener\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:(?:a|the|our)\s+)?(?:new|first)\s+(?:listener|friend|(?:bit\s+of\s+)?company)\b",
+            re.IGNORECASE,
+        ),
     ),
     (
         "english_return",
@@ -142,16 +157,20 @@ _UNSAFE_LISTENER_CLAIM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:qualcuno|un[oa]\s+ascoltator\w*)\b"
             r"|\bci\s+(?:ha|hanno)\s+(?:appena\s+)?raggiunt\w*(?:\s+qualcuno)?\b"
             r"|\bqualcuno\s+ci\s+(?:ha|hanno)\s+(?:appena\s+)?raggiunt\w*\b"
+            r"|\bqualcuno\s+ha\s+(?:appena\s+)?trovat\w*\s+(?:la|questa)\s+stazione\b"
             r"|\bgrazie\s+(?:per|di)\s+(?:esserti|esservi|essere)\s+"
             r"(?:sintonizzat\w*|collegat\w*|unit\w*)\b"
-            r"|\bun[oa]?\s+(?:nuov[oa]\s+)?arriv\w*\b",
+            r"|\bun[oa]?\s+(?:nuov[oa]\s+)?arriv\w*\b"
+            r"|\b(?:sembra\s+che\s+)?abbiamo\s+un[oa]\s+nuov[oa]\s+amic\w*\s+con\s+noi\b"
+            r"|\bfinalmente\s+abbiamo\s+compagnia\b"
+            r"|\babbiamo\s+compagnia\s+(?:adesso|ora|finalmente)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "italian_listener_arrival_label",
         re.compile(
-            r"\b(?:nuov[oa]|prim[oa])\s+ascoltator\w*\b"
+            r"\b(?:nuov[oa]|prim[oa])\s+(?:ascoltator\w*|amic\w*|compagnia)\b"
             r"|\bfinalmente\s+qualcuno\s+(?:ci\s+)?ascolt\w*\b"
             r"|\bqualcuno\s+ci\s+ascolt\w*\b",
             re.IGNORECASE,
@@ -166,6 +185,7 @@ _UNSAFE_LISTENER_CLAIM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|\b(?:di\s+nuovo|ancora)\s+(?:qui\s+)?con\s+noi\b"
             r"|\b(?:sei|siete|ti\s+sei|vi\s+siete)\s+(?:appena\s+)?tornat\w*\b"
             r"|\becco(?:ti|vi)\s+(?:qui\s+)?di\s+nuovo\b"
+            r"|\briecco(?:ti|vi)(?:\s+(?:qui|con\s+noi))?\b"
             r"|\bgrazie\s+(?:per|di)\s+(?:esserti|esservi|essere)\s+tornat\w*\b"
             r"|\b(?:che\s+bello|che\s+piacere|felic[ei]|content[ioe]|bellissimo)\s+(?:di\s+)?"
             r"(?:riaver(?:ti|vi)|riveder(?:ti|vi)|ritrovar(?:ti|vi))(?:\s+(?:qui|con\s+noi))?\b"

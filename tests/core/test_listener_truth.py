@@ -17,6 +17,12 @@ from mammamiradio.core.listener_truth import (
         "Someone just tuned in.",
         "A listener just joined.",
         "A new listener joined us right now.",
+        "Looks like we have a new friend with us.",
+        "It seems we've got a new friend in the studio.",
+        "Someone just found the station.",
+        "Our first bit of company has arrived.",
+        "Finally, we have company.",
+        "We've got company now.",
         "You have just joined us.",
         "Thanks for tuning in.",
         "Welcome back, amici.",
@@ -37,6 +43,9 @@ from mammamiradio.core.listener_truth import (
         "Qualcuno si è appena sintonizzato.",
         "Qualcuno si è unito a noi.",
         "Ci ha appena raggiunto qualcuno.",
+        "Qualcuno ha appena trovato la stazione.",
+        "Sembra che abbiamo una nuova amica con noi.",
+        "Finalmente abbiamo compagnia.",
         "Grazie per esserti sintonizzato.",
         "Ti sei appena sintonizzato.",
         "Voi vi siete appena collegati.",
@@ -47,6 +56,7 @@ from mammamiradio.core.listener_truth import (
         "Bentornati, amici.",
         "Ben ritrovata.",
         "Eccoti qui di nuovo.",
+        "Rieccoti con noi!",
         "Qualcuno è tornato.",
         "Sabrina è tornata.",
         "Grazie per essere tornati.",
@@ -98,6 +108,11 @@ def test_named_resident_return_requires_curated_fact_and_same_line_name():
     assert (
         contains_unsafe_listener_claims("Welcome back, Florian. Sabrina is back.", return_authority=authority) is True
     )
+    assert contains_unsafe_listener_claims("Florian is back with Sabrina.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Florian is back alongside Sabrina.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Florian is back, and Sabrina is home.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Florian is back with someone.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Bentornato Florian con qualcun altro.", return_authority=authority) is True
     assert (
         contains_unsafe_listener_claims(
             "Welcome back, Florian. Somebody just returned.",
