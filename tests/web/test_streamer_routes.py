@@ -3529,6 +3529,37 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_panic_cut_uses_capacity_exempt_slot_as_playable_runway(tmp_path):
+    """Panic may cut when the protected slot, rather than the queue head, is ready."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    slot_path = tmp_path / "capacity_exempt_slot.mp3"
+    slot_path.write_bytes(b"slot")
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0}
+    assert app.state.queue.empty()
+    assert app.state.skip_event.is_set()
+    assert state.continuity_slot is slot
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 5
+
+
+@pytest.mark.asyncio
 async def test_panic_cut_when_idle():
     """Panic while nothing is playing: skip_event stays unset, force_next still set to music."""
     from mammamiradio.core.models import SegmentType

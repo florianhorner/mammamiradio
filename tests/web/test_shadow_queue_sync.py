@@ -1801,6 +1801,45 @@ def test_replace_continuity_reservation_preserves_ready_head_and_slot_when_no_au
     assert len(app.state.station_state.queued_segments) == 1
 
 
+def test_failed_replacement_uses_valid_slot_as_only_runway_and_advances_epoch_only_for_queue_mutation(tmp_path):
+    """A ready capacity-exempt slot survives while an invalid queue is removed once."""
+    app = _make_app()
+    invalid = [_queue_segment(f"Invalid tail {index}", duration_sec=180.0) for index in range(2)]
+    for index, segment in enumerate(invalid):
+        segment.path = tmp_path / f"missing_tail_{index}.mp3"
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [{"label": segment.metadata["title"]} for segment in invalid]
+    slot = _queue_segment("Existing capacity-exempt slot", duration_sec=4.44)
+    slot.path = tmp_path / "existing_capacity_exempt_slot.mp3"
+    slot.path.write_bytes(b"slot")
+    slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = slot
+    app.state.station_state.continuity_epoch = 19
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        first_dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+        epoch_after_mutation = app.state.station_state.continuity_epoch
+        second_dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert first_dropped == 2
+    assert second_dropped == 0
+    assert app.state.queue.empty()
+    assert app.state.station_state.queued_segments == []
+    assert app.state.station_state.continuity_slot is slot
+    assert epoch_after_mutation == 20
+    assert app.state.station_state.continuity_epoch == epoch_after_mutation
+
+
 def test_replace_continuity_reservation_promotes_first_playable_segment_past_missing_head(tmp_path):
     """A broken head cannot hide ready audio later in the queue during fallback."""
     app = _make_app()
@@ -1831,6 +1870,45 @@ def test_replace_continuity_reservation_promotes_first_playable_segment_past_mis
     assert list(app.state.queue._queue) == [playable]
     assert app.state.station_state.continuity_epoch == 12
     assert len(app.state.station_state.queued_segments) == 1
+
+
+@pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
+def test_failed_replacement_rejects_unsafe_head_and_retains_later_safe_segment(tmp_path, rejection):
+    """Exclusion policy and durable bans cannot hide the next safe queued segment."""
+    app = _make_app()
+    unsafe_head = _queue_segment("Unsafe head", duration_sec=180.0)
+    unsafe_head.path = tmp_path / "unsafe_head.mp3"
+    unsafe_head.path.write_bytes(b"unsafe")
+    unsafe_head.metadata.update({"artist": "Unsafe Artist", "title_only": "Unsafe Song"})
+    safe = _queue_segment("Safe segment", duration_sec=180.0)
+    safe.path = tmp_path / "safe_segment.mp3"
+    safe.path.write_bytes(b"safe")
+    tail = _queue_segment("Later tail", duration_sec=180.0)
+    tail.path = tmp_path / "later_safe_tail.mp3"
+    tail.path.write_bytes(b"tail")
+    for segment in (unsafe_head, safe, tail):
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"label": segment.metadata["title"]} for segment in (unsafe_head, safe, tail)
+    ]
+    excluded_paths = {unsafe_head.path} if rejection == "excluded" else None
+    if rejection == "blocklisted":
+        app.state.station_state.blocklist = {
+            ("unsafe artist", "unsafe song"): {"display": "Unsafe Artist - Unsafe Song"}
+        }
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+            excluded_paths=excluded_paths,
+        )
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == [safe]
+    assert app.state.station_state.queued_segments[0]["label"] == "Safe segment"
 
 
 @pytest.mark.asyncio
