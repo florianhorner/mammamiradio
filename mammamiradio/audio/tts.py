@@ -10,7 +10,7 @@ import os
 import re
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -92,6 +92,37 @@ _MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
 _DISCLAIMER_RATE_BY_FORMAT = {
     "classic_pitch": "+55%",
 }
+
+
+class TTSUnavailableError(RuntimeError):
+    """Every configured route for required speech failed."""
+
+
+def _prioritized_failure(results: list[object | BaseException]) -> BaseException | None:
+    """Keep cancellation and total voice outage semantics across fan-outs."""
+
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            return result
+    for result in results:
+        if isinstance(result, TTSUnavailableError):
+            return result
+    return next((result for result in results if isinstance(result, Exception)), None)
+
+
+async def _settle_owned(*awaitables: Awaitable[object]) -> list[object | BaseException]:
+    """Await owned concurrent work to completion, including during cancellation.
+
+    Shielding matters for TTS normalization: cancelling an asyncio wrapper does
+    not stop an FFmpeg worker already running in the executor.  Scratch cleanup
+    is therefore only safe after the aggregate future has actually settled.
+    """
+    settled = asyncio.gather(*awaitables, return_exceptions=True)
+    try:
+        return list(await asyncio.shield(settled))
+    except asyncio.CancelledError:
+        await settled
+        raise
 
 
 def _looks_like_openai_voice(voice: str) -> bool:
@@ -331,9 +362,9 @@ async def synthesize_openai(
         raw_path.write_bytes(audio_bytes)
 
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+        _unlink_many([raw_path])  # clean up orphaned raw file on any failure
         raise
 
     logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
@@ -384,9 +415,9 @@ async def synthesize_azure(
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
         raise
 
     logger.info("Synthesized (Azure): %s (%s)", output_path.name, voice)
@@ -453,9 +484,9 @@ async def synthesize_elevenlabs(
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
         raise
 
     logger.info("Synthesized (ElevenLabs): %s (%s)", output_path.name, voice)
@@ -480,7 +511,8 @@ async def synthesize(
 
     engine="openai" uses the registry-selected OpenAI speech model. Falls back
     to edge-tts if the key or registry route is unavailable. When falling back,
-    uses edge_fallback_voice if set.
+    uses edge_fallback_voice if set, then the house Edge voice. If every route
+    fails, partial artifacts are removed and ``TTSUnavailableError`` is raised.
 
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.
@@ -621,16 +653,19 @@ async def synthesize(
 
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-            raw_path.unlink(missing_ok=True)
+            _unlink_many([raw_path])
 
             logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
             return output_path
         except Exception as e:
-            raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+            _unlink_many([raw_path])  # clean up orphaned raw file on any failure
             logger.error("TTS failed with %s: %s", edge_voice, e)
+            final_error = e
             # Memoize the failure so subsequent segments skip this voice.
             _failed_edge_voices.add(edge_voice)
-            # Retry with a fallback voice before resorting to silence
+            # Retry with the station's house voice after the configured Edge
+            # fallback. Required speech must never degrade into generated
+            # silence: the caller owns the canned/music/continuity rescue.
             fallback = _EDGE_DEFAULT_FALLBACK_VOICE
             if edge_voice != fallback:
                 try:
@@ -639,15 +674,15 @@ async def synthesize(
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-                    raw_path.unlink(missing_ok=True)
+                    _unlink_many([raw_path])
                     logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
                     return output_path
                 except Exception as e2:
-                    raw_path.unlink(missing_ok=True)  # clean up on fallback failure too
+                    _unlink_many([raw_path])  # clean up on fallback failure too
                     logger.error("Fallback TTS also failed: %s", e2)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, generate_silence, output_path, 2.0)
-            return output_path
+                    final_error = e2
+            _unlink_speech_artifacts([output_path])
+            raise TTSUnavailableError("all configured TTS routes are unavailable") from final_error
 
 
 async def synthesize_ad(
@@ -782,31 +817,84 @@ async def synthesize_ad(
         if part.type in ("voice", "sfx", "pause") and (part.type != "voice" or part.text)
     ]
 
-    # Launch motif generation + all parts concurrently
+    # Launch motif generation + all parts concurrently.  Every owned task must
+    # settle before cleanup: a sibling can still be writing from an executor
+    # after another required voice has already failed.
     part_tasks = [_render_part(p, path) for p, path in renderable]
-    if motif_path and sonic_sig:
+    motif_result: Path | None = None
+    try:
+        if motif_path and sonic_sig:
 
-        async def _gen_motif():
-            try:
-                await loop.run_in_executor(None, _render_brand_motif, motif_path)
-                return motif_path
-            except Exception as e:
-                logger.warning("Brand motif generation failed, skipping: %s", e)
-                return None
+            async def _gen_motif():
+                try:
+                    await loop.run_in_executor(None, _render_brand_motif, motif_path)
+                    return motif_path
+                except Exception as e:
+                    logger.warning("Brand motif generation failed, skipping: %s", e)
+                    _unlink_many([motif_path])
+                    return None
 
-        all_results = await asyncio.gather(_gen_motif(), *part_tasks)
-        motif_result = all_results[0]
+            all_results = await _settle_owned(_gen_motif(), *part_tasks)
+            motif_value = all_results[0]
+            if isinstance(motif_value, Path):
+                motif_result = motif_value
+            results = all_results[1:]
+        else:
+            results = await _settle_owned(*part_tasks)
+    except BaseException:
+        _unlink_speech_artifacts([path for _, path in renderable])
+        if motif_path:
+            _unlink_many([motif_path])
+        raise
+
+    # Base exceptions (notably cancellation) remain fatal even for decorative
+    # parts. Ordinary SFX/pause errors are optional; required voice errors are
+    # not. Inspect only after every sibling above has settled.
+    fatal = next(
+        (result for result in results if isinstance(result, BaseException) and not isinstance(result, Exception)),
+        None,
+    )
+    if fatal is not None:
+        _unlink_speech_artifacts([path for _, path in renderable])
         if motif_result:
-            ad_parts.append(motif_result)
-        results = all_results[1:]
-    else:
-        results = await asyncio.gather(*part_tasks)
+            _unlink_many([motif_result])
+        raise fatal
 
-    voice_sfx_parts = [r for r in results if r is not None]
+    voice_failures: list[Exception] = []
+    successful_results: list[Path] = []
+    for (part, part_path), result in zip(renderable, results, strict=True):
+        if isinstance(result, Exception):
+            if part.type == "voice":
+                voice_failures.append(result)
+            else:
+                logger.warning("Optional ad %s part failed, skipping: %s", part.type, result)
+                _unlink_speech_artifacts([part_path])
+            continue
+        if isinstance(result, Path):
+            successful_results.append(result)
+        elif part.type == "voice":
+            voice_failures.append(TTSUnavailableError("required ad voice produced no audio"))
 
-    if not voice_sfx_parts:
-        # Fallback: synthesize brand name with the configured engine so cloud
-        # voices aren't silently downgraded to edge-tts on this path.
+    if voice_failures:
+        _unlink_speech_artifacts(
+            [path for _, path in renderable] + successful_results,
+        )
+        if motif_result:
+            _unlink_many([motif_result])
+        raise next(
+            (failure for failure in voice_failures if isinstance(failure, TTSUnavailableError)),
+            voice_failures[0],
+        )
+
+    has_required_voice = any(part.type == "voice" for part, _ in renderable)
+    if not has_required_voice:
+        # SFX-only, pause-only, and empty scripts still get a spoken brand.  A
+        # decorative part is never allowed to masquerade as a complete ad.
+        _unlink_speech_artifacts(
+            [path for _, path in renderable] + successful_results,
+        )
+        if motif_result:
+            _unlink_many([motif_result])
         fallback_path = tmp_dir / f"ad_fallback_{uuid4().hex[:8]}.mp3"
         await synthesize(
             script.brand,
@@ -820,15 +908,28 @@ async def synthesize_ad(
         )
         return fallback_path
 
+    if motif_result:
+        ad_parts.append(motif_result)
+
+    voice_sfx_parts = successful_results
+
     # Concatenate voice+sfx parts
     if len(voice_sfx_parts) == 1:
         voice_path = voice_sfx_parts[0]
     else:
         voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
         # Skip loudnorm — each part already normalized by synthesize()
-        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
-        for p in voice_sfx_parts:
-            p.unlink(missing_ok=True)
+        try:
+            concat_results = await _settle_owned(
+                loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
+            )
+            concat_failure = _prioritized_failure(concat_results)
+            if concat_failure is not None:
+                raise concat_failure
+        except BaseException:
+            _unlink_speech_artifacts([*voice_sfx_parts, voice_path])
+            raise
+        _unlink_many(voice_sfx_parts)
 
     # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
     # Layer order (quietest → loudest): foley → env bed → music bed → voice.
@@ -843,19 +944,29 @@ async def synthesize_ad(
 
     # Generate all three beds concurrently
     _dur = voice_duration + 1.0
-    bed_tasks: list = [
+    bed_paths = [bed_path]
+    bed_tasks: list[Awaitable[object]] = [
         loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
     ]
     if env_name:
         _env = env_name
         _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
         _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
+        bed_paths.extend((_env_bed_path, _foley_path))
         bed_tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
         bed_tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
     try:
-        await asyncio.gather(*bed_tasks)
-    except Exception as e:
-        logger.warning("Bed generation failed: %s", e)
+        bed_results = await _settle_owned(*bed_tasks)
+    except BaseException:
+        _unlink_many(bed_paths)
+        _unlink_speech_artifacts([voice_path])
+        if motif_result:
+            _unlink_many([motif_result])
+        raise
+    for bed_result, generated_path in zip(bed_results, bed_paths, strict=True):
+        if isinstance(bed_result, BaseException):
+            logger.warning("Bed generation failed for %s: %s", generated_path.name, bed_result)
+            _unlink_many([generated_path])
 
     # Mix foley first (quietest layer — ambient texture under everything else)
     if foley_path and foley_path.exists():
@@ -973,7 +1084,18 @@ def _validate_dialogue_part(path: Path, *, line_number: int) -> None:
 
 def _unlink_many(paths: list[Path]) -> None:
     for path in paths:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            # Cleanup is best-effort.  Never replace the synthesis failure or
+            # cancellation that selected this path with a filesystem error.
+            logger.warning("Could not remove TTS scratch file %s: %s", path, exc)
+
+
+def _unlink_speech_artifacts(paths: list[Path]) -> None:
+    """Remove final and raw speech outputs, tolerating duplicate paths."""
+    artifacts = {artifact for path in paths for artifact in (path, path.with_suffix(".raw.mp3"))}
+    _unlink_many(list(artifacts))
 
 
 async def synthesize_dialogue(
@@ -994,8 +1116,8 @@ async def synthesize_dialogue(
     # For multi-line dialogue: skip per-line loudnorm (just re-encode to station format),
     # concat, then do one final loudnorm on the assembled segment. Reduces N passes → 1.
     # For single-line: one full loudnorm pass is correct and avoids an extra encode cycle.
-    parts = list(
-        await asyncio.gather(
+    try:
+        results = await _settle_owned(
             *(
                 synthesize(
                     text,
@@ -1012,7 +1134,19 @@ async def synthesize_dialogue(
                 for (host, text), path in zip(lines, paths, strict=True)
             )
         )
-    )
+    except BaseException:
+        _unlink_speech_artifacts(paths)
+        raise
+
+    failure = _prioritized_failure(results)
+    if failure is not None:
+        _unlink_speech_artifacts(paths)
+        raise failure
+
+    parts = [result for result in results if isinstance(result, Path)]
+    if len(parts) != len(paths):
+        _unlink_speech_artifacts(paths)
+        raise TTSUnavailableError("required dialogue voice produced no audio")
 
     if not multi_line:
         return parts[0]
@@ -1023,13 +1157,16 @@ async def synthesize_dialogue(
     # by the banter quality gate in the producer instead.
     loop = asyncio.get_running_loop()
     try:
-        await asyncio.gather(
+        validation_results = await _settle_owned(
             *(
                 loop.run_in_executor(None, partial(_validate_dialogue_part, part, line_number=idx))
                 for idx, part in enumerate(parts, start=1)
             )
         )
-    except Exception:
+        validation_failure = _prioritized_failure(validation_results)
+        if validation_failure is not None:
+            raise validation_failure
+    except BaseException:
         _unlink_many(parts)
         raise
 
@@ -1052,5 +1189,5 @@ async def synthesize_dialogue(
         except Exception:
             _unlink_many([raw_path, output_path])
             raise
-    raw_path.unlink(missing_ok=True)
+    _unlink_many([raw_path])
     return output_path

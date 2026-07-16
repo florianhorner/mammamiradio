@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import httpx
@@ -46,7 +47,7 @@ from mammamiradio.audio.normalizer import (
     refresh_track_metadata,
     save_track_metadata,
 )
-from mammamiradio.audio.tts import synthesize, synthesize_ad, synthesize_dialogue
+from mammamiradio.audio.tts import TTSUnavailableError, synthesize, synthesize_ad, synthesize_dialogue
 from mammamiradio.core.config import RadioEventRule, StationConfig
 from mammamiradio.core.listener_session import (
     ListenerSessionCueClaim,
@@ -105,6 +106,7 @@ from mammamiradio.home.ritual_recipes import RitualRecipeMatch, commit_ritual_re
 from mammamiradio.home.scene_namer import resolve_home_mood
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
+    AdScript,
     AdVoice,
     SonicWorld,
     _cast_voices,
@@ -130,6 +132,105 @@ from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
+
+
+async def _gather_all_settled(
+    *awaitables: Awaitable[object],
+    scratch: set[Path] | None = None,
+) -> tuple[object | BaseException, ...]:
+    """Await every sibling before exposing the first failure to its caller.
+
+    ``asyncio.gather`` normally returns as soon as one sibling raises while the
+    remaining executor-backed work keeps running.  Audio renderers must not
+    clean their shared scratch directory until those siblings have really
+    settled, otherwise an FFmpeg worker can publish a file after cleanup.
+    Shielding the group also lets an orderly producer cancellation wait for the
+    already-started workers before the surrounding ``finally`` blocks unlink
+    their paths.
+    """
+
+    if not awaitables:
+        return ()
+    group = asyncio.gather(*awaitables, return_exceptions=True)
+    try:
+        results = tuple(await asyncio.shield(group))
+    except asyncio.CancelledError:
+        results = tuple(await asyncio.shield(group))
+        if scratch is not None:
+            _remember_settled_audio_paths(results, scratch)
+        raise
+    if scratch is not None:
+        _remember_settled_audio_paths(results, scratch)
+    return results
+
+
+def _raise_first_settled_error(results: tuple[object | BaseException, ...]) -> None:
+    """Raise the most important error from an all-settled result tuple.
+
+    Cancellation must retain control-flow priority.  A total required-voice
+    outage comes next so a simultaneous decorative renderer failure cannot
+    hide it and leave scheduler due-state stuck on the same spoken segment.
+    """
+
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            raise result
+    for result in results:
+        if isinstance(result, TTSUnavailableError):
+            raise result
+    for result in results:
+        if isinstance(result, Exception):
+            raise result
+
+
+def _remember_settled_audio_paths(value: object, scratch: set[Path]) -> None:
+    """Collect successful sibling outputs so a later failure can remove them."""
+
+    if isinstance(value, Path):
+        scratch.add(value)
+    elif isinstance(value, list | tuple | set):
+        for item in value:
+            _remember_settled_audio_paths(item, scratch)
+
+
+def _unlink_render_paths(*paths: Path) -> None:
+    """Best-effort removal that preserves the caller's active failure."""
+
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            # Cleanup must not mask the TTS outage/cancellation that caused it
+            # or prevent the producer from entering its recovery ladder.
+            logger.warning("Could not remove render scratch file %s: %s", path, exc)
+
+
+def _unlink_render_scratch(scratch: set[Path]) -> None:
+    """Remove every registered render partial after its workers have settled."""
+
+    _unlink_render_paths(*scratch)
+    scratch.clear()
+
+
+def _reset_due_counters_after_tts_failure(state: StationState, seg_type: SegmentType) -> None:
+    """Release scheduler due-state after required speech cannot be rendered.
+
+    This is intentionally narrower than the success callbacks: recovery audio
+    is not a successful news flash, ident, or ad, but retrying the same due item
+    on the very next cycle would create a tight failure loop.
+    """
+
+    if seg_type == SegmentType.AD:
+        state.songs_since_ad = 0
+    elif seg_type == SegmentType.NEWS_FLASH:
+        state.songs_since_news = 0
+        state.songs_since_banter = 0
+    elif seg_type == SegmentType.BANTER:
+        state.songs_since_banter = 0
+    elif seg_type == SegmentType.STATION_ID:
+        state.segments_since_station_id = 0
+    elif seg_type == SegmentType.TIME_CHECK:
+        state.segments_since_time_check = 0
 
 
 def _direct_campaign_default_voice(brand: AdBrand, voices: dict[str, AdVoice]) -> AdVoice | None:
@@ -4034,6 +4135,12 @@ async def _run_producer_inner(
         success_callback: Callable[[], None] | None = None
         banter_commit = None
         post_failure_backoff: float | None = None
+        # Paths owned by this render attempt.  Parallel workers are always
+        # settled before an exception reaches the outer recovery block, which
+        # can then remove every partial without racing a late FFmpeg publish.
+        # Successful sibling return paths are registered below; a TTS task that
+        # fails before returning owns deletion of its raw/partial outputs.
+        render_failure_scratch: set[Path] = set()
 
         async def _sleep_post_failure_backoff(delay: float | None) -> None:
             if delay is not None:
@@ -4608,6 +4715,11 @@ async def _run_producer_inner(
                                 line, config, state, _adjacent_music_source(state)
                             )
                             impossible_tts = True
+                        except TTSUnavailableError as exc:
+                            logger.warning("Impossible TTS unavailable; trying canned fallback: %s", exc)
+                            canned = _pick_canned_clip("banter", state=state)
+                            if canned is None:
+                                raise
                         except Exception as exc:
                             logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
                             canned = _pick_canned_clip("banter", state=state)
@@ -4733,6 +4845,8 @@ async def _run_producer_inner(
 
                             # Synthesize transition + dialogue in parallel
                             trans_voice_path = config.tmp_dir / f"trans_{uuid4().hex[:8]}.mp3"
+                            trans_xfade_path = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
+                            render_failure_scratch.update({trans_voice_path, trans_xfade_path})
                             prosody: dict[str, str] = {}
                             if trans_host.personality.energy > 50:
                                 prosody["rate"] = "+5%"
@@ -4743,7 +4857,8 @@ async def _run_producer_inner(
                                 _path=trans_voice_path,
                                 _prosody=prosody,
                                 _music_src=_adjacent_music_source(state),
-                            ):
+                                _xfade_path=trans_xfade_path,
+                            ) -> tuple[Path, bool]:
                                 with _timed_render_stage(state, "tts"):
                                     await synthesize(
                                         _text,
@@ -4754,20 +4869,23 @@ async def _run_producer_inner(
                                         edge_fallback_voice=_host.edge_fallback_voice,
                                         state=state,
                                     )
-                                xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
                                 with _timed_render_stage(state, "mix"):
-                                    result = await _try_crossfade(_path, config, xfade_out, _music_src)
-                                return result, result == xfade_out
+                                    result = await _try_crossfade(_path, config, _xfade_path, _music_src)
+                                return result, result == _xfade_path
 
                             async def _do_dialogue(_lines=lines, _tmp_dir=config.tmp_dir) -> Path:
                                 with _timed_render_stage(state, "tts"):
                                     return await synthesize_dialogue(_lines, _tmp_dir, state=state)
 
-                            banter_path: Path
-                            (trans_voice_path, has_music_tail), banter_path = await asyncio.gather(
+                            settled_banter_audio = await _gather_all_settled(
                                 _do_transition(),
                                 _do_dialogue(),
+                                scratch=render_failure_scratch,
                             )
+                            _raise_first_settled_error(settled_banter_audio)
+                            transition_result = cast(tuple[Path, bool], settled_banter_audio[0])
+                            banter_path = cast(Path, settled_banter_audio[1])
+                            trans_voice_path, has_music_tail = transition_result
 
                             # Concat: transition + banter (both pre-normalized)
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
@@ -4796,7 +4914,41 @@ async def _run_producer_inner(
                             state.last_banter_script = [
                                 {"host": trans_host.name, "text": trans_text, "type": "transition"},
                             ] + [{"host": h.name, "text": t} for h, t in lines]
+                    except TTSUnavailableError as exc:
+                        if chaos_subtype is not None:
+                            _unlink_render_scratch(render_failure_scratch)
+                            state.chaos_audio_failures += 1
+                            state.chaos_last_degraded_reason = "audio_failure"
+                            logger.warning("Chaos speech unavailable; trying canned fallback: %s", exc)
+                            canned = _pick_canned_clip("banter", state=state)
+                            if canned is None:
+                                if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
+                                    state.chaos_pending = None
+                                    state.chaos_last_degraded_reason = "strike_abandoned"
+                                    logger.error(
+                                        "Chaos first-strike abandoned after %d failures",
+                                        state.chaos_audio_failures,
+                                    )
+                                raise
+                            banter_expected_min_duration_sec = None
+                            banter_expected_line_count = None
+                            audio_path = canned
+                            _drop_unqueued_banter_receipts("canned_fallback", "chaos-canned-fallback")
+                            state.last_banter_script = [
+                                {
+                                    "host": "Radio",
+                                    "text": "(pre-recorded chaos fallback)",
+                                    "type": "chaos_audio_fallback",
+                                    "chaos_subtype": chaos_subtype.value,
+                                }
+                            ]
+                        else:
+                            _abandon_release_beat_commit(state, listener_request_commit)
+                            _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
+                            _release_campaign_abandon_in_flight(state)
+                            raise
                     except Exception as exc:
+                        _unlink_render_scratch(render_failure_scratch)
                         if chaos_subtype is not None:
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
@@ -5120,6 +5272,8 @@ async def _run_producer_inner(
 
             elif seg_type == SegmentType.NEWS_FLASH:
                 logger.info("Producing NEWS FLASH")
+                flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
+                render_failure_scratch.add(flash_path)
 
                 try:
                     state.set_gen("writing", "news_flash", "Writing a news flash")
@@ -5141,8 +5295,6 @@ async def _run_producer_inner(
                         _gen_ok = True
                     finally:
                         state.end_gen(ok=_gen_ok)
-                    flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
-
                     # Keep news flashes intelligible; only traffic gets a small urgency nudge.
                     flash_rate: str | None = None
                     if category == "traffic":
@@ -5179,7 +5331,11 @@ async def _run_producer_inner(
                             logger.warning("Talk bed generation failed, using dry news flash: %s", exc)
 
                     state.last_banter_script = [{"host": host.name, "text": text, "type": "news_flash"}]
+                except TTSUnavailableError:
+                    _unlink_render_paths(flash_path)
+                    raise
                 except Exception as exc:
+                    _unlink_render_paths(flash_path)
                     logger.warning("News flash TTS failed, skipping: %s", exc)
                     state.finish_render_timing("failed", reason="render_failure")
                     continue
@@ -5213,12 +5369,13 @@ async def _run_producer_inner(
                 sb = config.sonic_brand
                 # Use full ident text, or fall back to station name
                 ident_text = sb.full_ident or config.display_station_name
+                voice_path = config.tmp_dir / f"stid_voice_{uuid4().hex[:8]}.mp3"
+                sting_path = config.tmp_dir / f"stid_sting_{uuid4().hex[:8]}.mp3"
+                audio_path = config.tmp_dir / f"stid_{uuid4().hex[:8]}.mp3"
+                render_failure_scratch.update({voice_path, sting_path, audio_path})
 
                 try:
                     # Generate voice tag + musical sting in parallel
-                    voice_path = config.tmp_dir / f"stid_voice_{uuid4().hex[:8]}.mp3"
-                    sting_path = config.tmp_dir / f"stid_sting_{uuid4().hex[:8]}.mp3"
-
                     # Use configured sweeper voice, or a random host
                     sweeper_voice = sb.sweeper_voice
                     sweeper_engine = sb.sweeper_engine
@@ -5261,18 +5418,26 @@ async def _run_producer_inner(
                                 _notes,
                             )
 
-                    await asyncio.gather(_build_station_voice(), _build_station_sting())
+                    station_results = await _gather_all_settled(
+                        _build_station_voice(),
+                        _build_station_sting(),
+                        scratch=render_failure_scratch,
+                    )
+                    _raise_first_settled_error(station_results)
 
                     # Mix voice over sting
-                    audio_path = config.tmp_dir / f"stid_{uuid4().hex[:8]}.mp3"
                     with _timed_render_stage(state, "mix"):
                         await loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path)
-                    voice_path.unlink(missing_ok=True)
-                    sting_path.unlink(missing_ok=True)
+                except TTSUnavailableError:
+                    _unlink_render_paths(audio_path)
+                    raise
                 except Exception as exc:
+                    _unlink_render_paths(audio_path)
                     logger.warning("Station ID generation failed: %s", exc)
                     state.finish_render_timing("failed", reason="render_failure")
                     continue
+                finally:
+                    _unlink_render_paths(voice_path, sting_path)
 
                 segment = Segment(
                     type=SegmentType.STATION_ID,
@@ -5288,6 +5453,8 @@ async def _run_producer_inner(
                 try:
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.display_station_name
                     audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
+                except TTSUnavailableError:
+                    raise
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
                     state.finish_render_timing("failed", reason="render_failure")
@@ -5313,9 +5480,11 @@ async def _run_producer_inner(
                 else:
                     time_text = f"{hour_str} e {minute} su {station_name}."
 
+                voice_path = config.tmp_dir / f"time_voice_{uuid4().hex[:8]}.mp3"
+                chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
+                audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
+                render_failure_scratch.update({voice_path, chime_path, audio_path})
                 try:
-                    voice_path = config.tmp_dir / f"time_voice_{uuid4().hex[:8]}.mp3"
-                    chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"
                     host = random.choice(_sw._regular_hosts(config))
                     loop = asyncio.get_running_loop()
 
@@ -5340,16 +5509,24 @@ async def _run_producer_inner(
                         with _timed_render_stage(state, "mix"):
                             await _loop.run_in_executor(None, generate_tone, _path, 1047, 0.3)
 
-                    await asyncio.gather(_build_time_voice(), _build_time_chime())
-                    audio_path = config.tmp_dir / f"time_{uuid4().hex[:8]}.mp3"
+                    time_results = await _gather_all_settled(
+                        _build_time_voice(),
+                        _build_time_chime(),
+                        scratch=render_failure_scratch,
+                    )
+                    _raise_first_settled_error(time_results)
                     with _timed_render_stage(state, "mix"):
                         await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
-                    chime_path.unlink(missing_ok=True)
-                    voice_path.unlink(missing_ok=True)
+                except TTSUnavailableError:
+                    _unlink_render_paths(audio_path)
+                    raise
                 except Exception as exc:
+                    _unlink_render_paths(audio_path)
                     logger.warning("Time check generation failed: %s", exc)
                     state.finish_render_timing("failed", reason="render_failure")
                     continue
+                finally:
+                    _unlink_render_paths(chime_path, voice_path)
 
                 segment = Segment(
                     type=SegmentType.TIME_CHECK,
@@ -5418,7 +5595,10 @@ async def _run_producer_inner(
                 # ── PHASE 1: Fan out intro pipeline + all LLM calls + bumpers in parallel ──
                 # These are all independent: intro doesn't need scripts, scripts don't need bumpers
 
-                async def _build_intro(_music_src=_adjacent_music_source(state)):
+                async def _build_intro(
+                    _music_src=_adjacent_music_source(state),
+                    _scratch=render_failure_scratch,
+                ):
                     """Intro: transition LLM → TTS → crossfade + promo tag."""
                     parts = []
                     try:
@@ -5429,6 +5609,7 @@ async def _run_producer_inner(
                         itext = _select_ad_wrapper_text(config, "select_ad_break_intro", "AD_BREAK_INTROS")
                         itrack_ref = None
                     ipath = config.tmp_dir / f"ad_intro_{uuid4().hex[:8]}.mp3"
+                    _scratch.add(ipath)
                     with _timed_render_stage(state, "tts"):
                         await synthesize(
                             itext,
@@ -5449,9 +5630,11 @@ async def _run_producer_inner(
                     # wrapper that was never appended to ``parts`` was not
                     # actually heard and must not appear in Tier-2 provenance.
                     promo_text = ""
+                    ppath: Path | None = None
                     try:
                         promo_text = _select_ad_promo_tag(config)
                         ppath = config.tmp_dir / f"promo_tag_{uuid4().hex[:8]}.mp3"
+                        _scratch.add(ppath)
                         promo_voice = _safe_ad_promo_voice(config.ads.voices)
                         if promo_voice is not None:
                             pvoice = promo_voice.voice
@@ -5474,10 +5657,16 @@ async def _run_producer_inner(
                             )
                         parts.append(ppath)
                     except Exception:
+                        if ppath is not None:
+                            _unlink_render_paths(ppath)
                         promo_text = ""
                     return parts, itext, promo_text, has_music_tail, itrack_ref
 
-                async def _build_bumpers(_num_spots=num_spots, _loop=loop):
+                async def _build_bumpers(
+                    _num_spots=num_spots,
+                    _loop=loop,
+                    _scratch=render_failure_scratch,
+                ):
                     """Opening bumper + sparse mid-spot bumpers.
 
                     Mid-bumpers only play ~25% of the time to avoid harsh
@@ -5489,11 +5678,13 @@ async def _run_producer_inner(
                         for _ in range(max(0, _num_spots - 1))
                         if random.random() < 0.25
                     ]
+                    _scratch.update({bumper_in, *mid_bumpers})
                     tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
                     for mb in mid_bumpers:
                         tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
                     with _timed_render_stage(state, "mix"):
-                        await asyncio.gather(*tasks)
+                        bumper_results = await _gather_all_settled(*tasks)
+                        _raise_first_settled_error(bumper_results)
                     return bumper_in, mid_bumpers
 
                 # Fan out: intro + LLM scripts + bumpers all in parallel
@@ -5531,9 +5722,9 @@ async def _run_producer_inner(
                 async def _write_ad_scripts(
                     _spot_params=tuple(spot_params),
                     _callback_gag_text=_cb_gag_text,
-                ):
+                ) -> list[AdScript]:
                     with _timed_render_stage(state, "script"):
-                        return await asyncio.gather(
+                        script_results = await _gather_all_settled(
                             *(
                                 _sw.write_ad(
                                     brand,
@@ -5548,18 +5739,28 @@ async def _run_producer_inner(
                                 for i, (brand, af, sn, vm) in enumerate(_spot_params)
                             )
                         )
+                    _raise_first_settled_error(script_results)
+                    # Runtime mocks and alternate scriptwriter implementations
+                    # can be structurally compatible without being the concrete
+                    # dataclass.  Error filtering above is the runtime contract;
+                    # the cast only restores the static type after all-settled.
+                    return [cast(AdScript, result) for result in script_results]
 
                 _gen_ok = False
                 try:
-                    (
-                        (intro_parts, intro_text, promo_text, intro_has_music_tail, intro_track_ref),
-                        scripts,
-                        (bumper_in, mid_bumpers),
-                    ) = await asyncio.gather(
+                    phase_one_results = await _gather_all_settled(
                         _build_intro(),
                         _write_ad_scripts(),
                         _build_bumpers(),
+                        scratch=render_failure_scratch,
                     )
+                    _raise_first_settled_error(phase_one_results)
+                    intro_value, scripts_value, bumper_value = phase_one_results
+                    intro_result = cast(tuple[list[Path], str, str, bool, str | None], intro_value)
+                    scripts = cast(list[AdScript], scripts_value)
+                    bumper_result = cast(tuple[Path, list[Path]], bumper_value)
+                    intro_parts, intro_text, promo_text, intro_has_music_tail, intro_track_ref = intro_result
+                    bumper_in, mid_bumpers = bumper_result
                     _gen_ok = True
                 finally:
                     reset_collector(_ad_prov_tok)
@@ -5567,7 +5768,7 @@ async def _run_producer_inner(
 
                 # ── PHASE 2: Fan out all ad TTS synthesis in parallel ──
                 with _timed_render_stage(state, "tts"):
-                    ad_paths = await asyncio.gather(
+                    ad_results = await _gather_all_settled(
                         *(
                             synthesize_ad(
                                 script,
@@ -5579,8 +5780,11 @@ async def _run_producer_inner(
                                 default_voice=_direct_campaign_default_voice(brand, vm),
                             )
                             for script, (brand, _, _, vm) in zip(scripts, spot_params, strict=False)
-                        )
+                        ),
+                        scratch=render_failure_scratch,
                     )
+                _raise_first_settled_error(ad_results)
+                ad_paths = [cast(Path, ad_result) for ad_result in ad_results]
 
                 # ── PHASE 3: Assemble break_parts in order ──
                 if intro_text:
@@ -5614,6 +5818,7 @@ async def _run_producer_inner(
                 bumper_out = config.tmp_dir / f"bumper_out_{uuid4().hex[:8]}.mp3"
                 outro_host = random.choice(_sw._regular_hosts(config))
                 outro_path = config.tmp_dir / f"ad_outro_{uuid4().hex[:8]}.mp3"
+                render_failure_scratch.update({bumper_out, outro_path})
                 outro_text = _select_ad_wrapper_text(config, "select_ad_break_outro", "AD_BREAK_OUTROS")
 
                 async def _build_closing_bumper(_loop=loop, _path=bumper_out) -> None:
@@ -5635,7 +5840,12 @@ async def _run_producer_inner(
                             state=state,
                         )
 
-                await asyncio.gather(_build_closing_bumper(), _build_outro_voice())
+                closing_results = await _gather_all_settled(
+                    _build_closing_bumper(),
+                    _build_outro_voice(),
+                    scratch=render_failure_scratch,
+                )
+                _raise_first_settled_error(closing_results)
                 break_parts.append(bumper_out)
                 break_parts.append(outro_path)
 
@@ -5663,6 +5873,7 @@ async def _run_producer_inner(
                     ad_break_path = break_parts[0]
                 else:
                     ad_break_path = config.tmp_dir / f"adbreak_{uuid4().hex[:8]}.mp3"
+                    render_failure_scratch.add(ad_break_path)
                     try:
                         with _timed_render_stage(state, "mix"):
                             await loop.run_in_executor(
@@ -5674,8 +5885,7 @@ async def _run_producer_inner(
                                 False,
                             )
                     finally:
-                        for p in break_parts:
-                            p.unlink(missing_ok=True)
+                        _unlink_render_paths(*break_parts)
 
                 if not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
                     try:
@@ -5739,6 +5949,9 @@ async def _run_producer_inner(
 
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
+            if isinstance(e, TTSUnavailableError):
+                _reset_due_counters_after_tts_failure(state, seg_type)
+            _unlink_render_scratch(render_failure_scratch)
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             if companionship_claim is not None:
                 state.listener_session.abandon_companionship(companionship_claim.epoch)
@@ -5764,6 +5977,12 @@ async def _run_producer_inner(
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             # Do NOT advance state counters — failed segment doesn't count
+        except BaseException:
+            # Cancellation is not recoverable audio work, but all-settled
+            # fan-outs have finished their executor-backed siblings by here.
+            # Remove their outputs before preserving cancellation semantics.
+            _unlink_render_scratch(render_failure_scratch)
+            raise
 
         if segment:
             actual_seg_type = _adjacency_type_for(segment)

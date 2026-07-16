@@ -543,7 +543,12 @@ just static parameters.
 
 **ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. Intended for custom character voices in ads, sweepers, and guest bits.
 
-Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
+Fallback chain: cloud TTS failure or missing credentials →
+`edge_fallback_voice` (so the role falls back to its own Edge voice, not a
+stranger) → the house Edge fallback → `TTSUnavailableError`. The final failure
+deletes partial speech files and lets required voice reach the producer's
+music/continuity rescue ladder; it never substitutes generated silence for
+speech.
 
 A session's blended TTS estimate records a confirmed paid-provider response before local raw-file I/O or normalization. If that local processing later fails and the role falls back to Edge, the session still includes the paid request; missing credentials, provider errors, and Edge-only synthesis remain uncounted. This is a conservative session estimate, not invoice-level provider reconciliation.
 
@@ -809,14 +814,13 @@ This repo is biased toward "keep the station on air."
 - producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; packaged recovery clips are non-ephemeral package resources and every producer/playback segment-cleanup path guards `mammamiradio/assets/demo/` before unlinking; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
+- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
 - missing yt-dlp falls back to local files or demo tracks
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
-
-**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. Closing that separate TTS path remains follow-up work.
 
 ## File map
 

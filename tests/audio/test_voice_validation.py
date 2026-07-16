@@ -8,9 +8,9 @@ Four mandatory guards from the WS3-B charter:
   4. capabilities.py surfaces tts_degraded state when a host is on a
      substituted voice.
 
-Plus Scenario 2 (empty fallback): if the backend fails entirely AFTER the
-pre-flight pass, the synthesize path still produces an output file instead
-of raising.
+Plus Scenario 2 (runtime outage): if the backend fails entirely AFTER the
+pre-flight pass, the synthesize path raises its typed internal failure without
+leaving a silent or partial speech file.
 """
 
 from __future__ import annotations
@@ -248,9 +248,9 @@ async def test_runtime_voice_failure_is_memoized_no_repeat_calls(tmp_path):
 @pytest.mark.asyncio
 async def test_fallback_voice_itself_not_added_to_failed_set(tmp_path):
     """If the fallback voice is the one failing, we still record it but
-    don't recurse infinitely — synthesize must return a silence file."""
+    don't recurse infinitely — synthesize must fail closed."""
     from mammamiradio.audio import tts as tts_mod
-    from mammamiradio.audio.tts import reset_voice_failures, synthesize
+    from mammamiradio.audio.tts import TTSUnavailableError, reset_voice_failures, synthesize
 
     reset_voice_failures()
 
@@ -261,24 +261,17 @@ async def test_fallback_voice_itself_not_added_to_failed_set(tmp_path):
         async def save(self, path):
             raise RuntimeError("all voices down")
 
-    silence_calls: list[Path] = []
-
-    def _silence(path, duration):
-        silence_calls.append(path)
-        _touch(path)
-        return path
-
     with (
         patch.object(tts_mod.edge_tts, "Communicate", _AlwaysFail),
         patch.object(tts_mod, "normalize", side_effect=lambda src, dst, **kw: _touch(dst)),
-        patch.object(tts_mod, "generate_silence", side_effect=_silence),
+        patch.object(tts_mod, "generate_silence") as silence,
     ):
         out = tmp_path / "out.mp3"
-        result = await synthesize("ciao", "it-IT-IsabellaNeural", out)
+        with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+            await synthesize("ciao", "it-IT-IsabellaNeural", out)
 
-    # When every voice fails, silence is the final output.
-    assert result == out
-    assert len(silence_calls) >= 1, "generate_silence must produce a valid output"
+    assert not out.exists()
+    silence.assert_not_called()
 
     reset_voice_failures()
 
@@ -328,17 +321,16 @@ def test_capabilities_clean_when_all_voices_valid():
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: backend entirely unreachable after pre-flight pass → silence path
+# Scenario 2: backend entirely unreachable after pre-flight pass → typed failure
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scenario2_backend_unreachable_still_produces_output(tmp_path):
+async def test_scenario2_backend_unreachable_fails_closed(tmp_path):
     """After pre-flight validation passes, if edge-tts is entirely unreachable
-    at runtime (network down, API moved, etc.), synthesize must still hand
-    back an output file — silence is acceptable, dead air is not."""
+    at runtime, synthesize must not turn the failed speech into silent audio."""
     from mammamiradio.audio import tts as tts_mod
-    from mammamiradio.audio.tts import reset_voice_failures, synthesize
+    from mammamiradio.audio.tts import TTSUnavailableError, reset_voice_failures, synthesize
 
     reset_voice_failures()
 
@@ -349,23 +341,17 @@ async def test_scenario2_backend_unreachable_still_produces_output(tmp_path):
         async def save(self, path):
             raise ConnectionError("edge-tts endpoint unreachable")
 
-    silence_out: list[Path] = []
-
-    def _silence(path, duration):
-        silence_out.append(path)
-        _touch(path)
-        return path
-
     with (
         patch.object(tts_mod.edge_tts, "Communicate", _NetworkDown),
         patch.object(tts_mod, "normalize", side_effect=lambda src, dst, **kw: _touch(dst)),
-        patch.object(tts_mod, "generate_silence", side_effect=_silence),
+        patch.object(tts_mod, "generate_silence") as silence,
     ):
         out = tmp_path / "out.mp3"
-        result = await synthesize("ciao", "it-IT-IsabellaNeural", out)
+        with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+            await synthesize("ciao", "it-IT-IsabellaNeural", out)
 
-    assert result == out
-    assert silence_out, "generate_silence must be called when backend is unreachable"
+    assert not out.exists()
+    silence.assert_not_called()
 
     reset_voice_failures()
 
