@@ -59,6 +59,7 @@ Sacred files at the repo root (one viewport, one job each):
 
 Everything else lives under `docs/`:
 
+- `docs/status-quo.md` - dated product and market status
 - `docs/architecture.md` - runtime flow, queue model, and audio pipeline
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
