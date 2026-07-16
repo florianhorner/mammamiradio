@@ -5429,24 +5429,35 @@ async function refreshFast(){
   if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
   if(hostsData){renderHosts(hostsData.hosts||[]);_hostsOk=true;}
 }
-async function fetchSlowJson(path){
-  const response=await fetch(_base+path,{headers:H()});
-  if(!response.ok)throw new Error(`${path} returned ${response.status}`);
-  return response.json();
+const SLOW_POLL_DEADLINE_MS=10000;
+let _slowPollGeneration=0;
+async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),deadlineMs);
+  try{
+    const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
+    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
+    const payload=await response.json();
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    return payload;
+  }finally{clearTimeout(deadline);}
 }
 async function refreshSlow(){
+  const generation=++_slowPollGeneration;
   if(_caps===null){
     _capsState='checking';
     updateSourceControls(_st,_caps);
   }
   const capabilitiesPromise=fetchSlowJson('/api/capabilities')
     .then(caps=>{
+      if(generation!==_slowPollGeneration)return;
       _caps=caps;
       _capsState='ready';
       updateSystems(_caps,_st);
       updateSourceControls(_st,_caps);
     })
     .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
       if(_caps===null){
         _capsState='error';
         updateSourceControls(_st,_caps);
@@ -5454,9 +5465,16 @@ async function refreshSlow(){
       console.error('refreshSlow capabilities',e);
     });
   const setupPromise=fetchSlowJson('/api/setup/status')
-    .then(setup=>renderSetup(setup))
-    .catch(e=>console.error('refreshSlow setup',e));
+    .then(setup=>{
+      if(generation!==_slowPollGeneration)return;
+      renderSetup(setup);
+    })
+    .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
+      console.error('refreshSlow setup',e);
+    });
   await Promise.all([capabilitiesPromise,setupPromise]);
+  if(generation!==_slowPollGeneration)return;
   loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
   syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
 }
