@@ -4054,8 +4054,11 @@ function emptyPoolRecoveryState(st,caps,capsState){
     return {action:'library',message:'The rotation is empty. Add a source from Library tools to start again.'};
   }
   const goldenPath=st?.golden_path||caps?.golden_path||{};
+  const hasSetupGuidance=Boolean(String(goldenPath.detail||'').trim());
   const detail=goldenPath.stage==='needs_music_source'
-    ?String(goldenPath.detail||'No music source is configured. Open setup to add one.')
+    ?hasSetupGuidance
+      ?'No music source is configured. Open setup for configuration details.'
+      :'No music source is configured. Open setup to add one.'
     :'No import source is available. Open setup to review the current music source.';
   return {action:'setup',message:`The rotation is empty. ${detail}`};
 }
