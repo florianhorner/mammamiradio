@@ -7,6 +7,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEDIA_PYTHON="python3"
+if ! "$MEDIA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    if [ -x .venv/bin/python ]; then
+        MEDIA_PYTHON=".venv/bin/python"
+    else
+        MEDIA_PYTHON="python3.11"
+    fi
+fi
 
 PASS=0
 FAIL=0
@@ -53,7 +61,7 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"; then
     ok "packaged spoken assets are manifest-bound and listener-truth safe"
 else
     fail "packaged spoken asset manifest validation failed"
@@ -88,7 +96,7 @@ echo ""
 echo "5. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
-if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+if "$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT" <<'PY'
 import sys
 value = float(sys.argv[1])
 raise SystemExit(0 if value <= 5.0 else 1)
@@ -121,10 +129,20 @@ fi
 echo ""
 echo "6. Release beat manifest"
 
-if python3 "$SCRIPT_DIR/validate-release-beat.py"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"; then
     ok "release beat manifest is absent, disabled, or schema-valid"
 else
     fail "release beat manifest validation failed"
+fi
+
+# ── 7. Strict media-rights gate ───────────────────────────────────────────────
+echo ""
+echo "7. Strict media-rights gate"
+
+if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
+    ok "starter catalog evidence, bytes, audio, and packaging are release-ready"
+else
+    fail "strict media proof failed — release/publish paths must remain blocked"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

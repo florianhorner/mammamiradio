@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/florianhorner/mammamiradio/proof/media/ha-green-release-receipt.schema.json",
+  "title": "Mamma Mi Radio Home Assistant Green cold-launch receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_kind",
+    "release_version",
+    "source_commit",
+    "run_id",
+    "recorded_at",
+    "hardware",
+    "timing",
+    "assertions"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "evidence_kind": {
+      "enum": [
+        "ha_green_cold_launch",
+        "example"
+      ]
+    },
+    "release_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "machine",
+        "detected_from"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "[Hh]ome [Aa]ssistant [Gg]reen"
+        },
+        "machine": {
+          "enum": [
+            "aarch64",
+            "arm64"
+          ]
+        },
+        "detected_from": {
+          "enum": [
+            "/proc/device-tree/model",
+            "/sys/firmware/devicetree/base/model"
+          ]
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "boot_to_tcp_ms",
+        "connection_to_first_byte_ms"
+      ],
+      "properties": {
+        "metric": {
+          "const": "listener_connection_to_first_accepted_non_silent_manifest_starter_byte"
+        },
+        "boot_to_tcp_ms": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60000
+        },
+        "connection_to_first_byte_ms": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      }
+    },
+    "assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cache_empty",
+        "outbound_network_blocked",
+        "manifest_attributed_starter",
+        "non_silent",
+        "provider",
+        "basis"
+      ],
+      "properties": {
+        "cache_empty": {
+          "const": true
+        },
+        "outbound_network_blocked": {
+          "const": true
+        },
+        "manifest_attributed_starter": {
+          "const": true
+        },
+        "non_silent": {
+          "const": true
+        },
+        "provider": {
+          "const": "incompetech"
+        },
+        "basis": {
+          "const": "bundled_manifest"
+        }
+      }
+    }
+  }
+}

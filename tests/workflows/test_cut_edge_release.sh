@@ -80,7 +80,9 @@ chmod +x "$MOCK_BIN/gh"
 { printf '#!%s\n' "$BASH_BIN"; cat <<'MOCK'
 echo "$*" >> "$PYTHON_MOCK_LOG"
 case "$1" in
+  "-c") exit 0 ;;
   "scripts/validate-release-beat.py") exit "${PYTHON_MOCK_RC:-0}" ;;
+  "scripts/media-proof.py") exit "${PYTHON_MEDIA_RC:-0}" ;;
   *) echo "MOCK python3: unexpected invocation '$*'" >&2; exit 99 ;;
 esac
 MOCK
@@ -146,6 +148,7 @@ never_created_pr() { ! grep -q "pr create" "$GH_MOCK_LOG"; }
 never_committed()  { ! grep -q "^commit" "$GIT_MOCK_LOG"; }
 never_pushed()     { ! grep -q "^push" "$GIT_MOCK_LOG"; }
 validator_called_for() { grep -q "scripts/validate-release-beat.py --channel edge --target-sha $1" "$PYTHON_MOCK_LOG"; }
+media_gate_called() { grep -q "scripts/media-proof.py --quick" "$PYTHON_MOCK_LOG"; }
 
 # Case 1: happy path — HEAD itself is the newest green build => pin HEAD, open PR.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
@@ -155,6 +158,7 @@ created_pr                           || fail "happy path should open a PR"
 grep -q "cut edge release $MAIN_SHORT" "$GIT_MOCK_LOG" || fail "commit message should pin $MAIN_SHORT"
 grep -q "edge-release/$MAIN_SHORT" "$GIT_MOCK_LOG"     || fail "should branch on $MAIN_SHORT"
 validator_called_for "$MAIN_SHORT"                    || fail "happy path should validate release beat for $MAIN_SHORT"
+media_gate_called                                      || fail "happy path should run the strict media gate"
 pass "happy path pins HEAD and opens PR"
 
 # Case 2: tests-only HEAD — newest green build is the OLDER commit => pin OLDER.
@@ -270,6 +274,16 @@ never_created_pr     || fail "release-beat validation failure must not open a PR
 never_pushed         || fail "release-beat validation failure must not push"
 pass "release-beat validation failure blocks edge cut before commit/push/PR"
 
+# Case 14: strict media proof fails => HARD-fail before release-beat validation,
+# commit, push, or PR creation.
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" PYTHON_MEDIA_RC=8
+[ "$RUN_RC" -ne 0 ]  || fail "media proof failure must hard-fail (got $RUN_RC)"
+media_gate_called     || fail "media proof failure case should call the strict gate"
+never_committed       || fail "media proof failure must not commit"
+never_created_pr      || fail "media proof failure must not open a PR"
+never_pushed          || fail "media proof failure must not push"
+pass "strict media proof failure blocks edge cut before commit/push/PR"
+
 # Safety: the test must never have mutated the real repo, branch, or edge config.
 [ "$(git rev-parse HEAD)" = "$ORIG_HEAD" ]                 || fail "test mutated real HEAD"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$ORIG_BRANCH" ]  || fail "test changed the real branch"
@@ -277,4 +291,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 13 cut-edge-release cases passed."
+echo "All 14 cut-edge-release cases passed."

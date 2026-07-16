@@ -18,6 +18,42 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Validate physical HA Green release evidence
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python scripts/validate-ha-green-release-evidence.py \
+            --release-version "$VERSION" \
+            --current-commit "$(git rev-parse HEAD^{commit})" \
+            --output ha-green-release-proof.json
+
+      - name: Upload HA Green release proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ha-green-release-proof-standalone-${{ github.sha }}
+          path: ha-green-release-proof.json
+          if-no-files-found: error
+
+      - name: Install FFmpeg for strict media validation
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Strict media-rights gate
+        run: python scripts/media-proof.py --quick --output media-proof.json
+
+      - name: Upload strict media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-standalone-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
 
       - name: Log in to Container Registry
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0

@@ -4,9 +4,22 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/addon-build.yml"
       - "ha-addon/**"
       - "mammamiradio/**"
+      - "proof/media/**"
+      - "scripts/media-proof.py"
+      - "scripts/starter-catalog.py"
+      - "scripts/validate-addon.sh"
+      - "scripts/validate-starter-media.py"
+      - "tests/media/**"
+      - "tests/playlist/test_jamendo_transient.py"
+      - "tests/playlist/test_legacy_media.py"
+      - "tests/scheduling/test_queue_mutations.py"
+      - "tests/web/test_streamer_routes_extended.py"
       - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements-dev.txt"
       - "radio.toml"
       - "model_registry.toml"
   workflow_dispatch:
@@ -36,6 +49,24 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install FFmpeg for strict media validation
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Strict media-rights gate
+        run: python scripts/media-proof.py --quick --output media-proof.json
+
+      - name: Upload strict media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-quick-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
+
       - name: Validate add-on invariants
         run: bash scripts/validate-addon.sh
 
@@ -63,7 +94,6 @@ jobs:
     needs: validate
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -88,19 +118,14 @@ jobs:
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push stable add-on image
+      - name: Build add-on image without publishing
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ha-addon/mammamiradio
           file: ha-addon/mammamiradio/Dockerfile
           platforms: ${{ matrix.platform }}
-          push: true
+          load: true
+          push: false
           build-args: |
             BUILD_FROM=${{ matrix.base }}
             BUILD_VERSION=${{ needs.validate.outputs.addon_version }}
@@ -111,9 +136,125 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
+      - name: Export unpushed image
+        env:
+          SHA_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          SHORT_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.short_sha }}
+          IMAGE_TAR: ${{ runner.temp }}/addon-image-${{ matrix.arch }}.tar
+        run: |
+          set -euo pipefail
+          docker image inspect "$SHA_REF" "$SHORT_REF" >/dev/null
+          docker save --output "$IMAGE_TAR" "$SHA_REF" "$SHORT_REF"
+
+      - name: Upload unpushed image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: addon-image-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/addon-image-${{ matrix.arch }}.tar
+          if-no-files-found: error
+          compression-level: 0
+
+  media-proof:
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install full media-proof dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install uv==0.10.11
+          python -m pip install -e . -r requirements-dev.txt
+
+      - name: Download unpushed amd64 image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: addon-image-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/images/amd64
+
+      - name: Download unpushed aarch64 image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: addon-image-aarch64-${{ github.sha }}
+          path: ${{ runner.temp }}/images/aarch64
+
+      - name: Load both unpushed images
+        run: |
+          set -euo pipefail
+          docker load --input "$RUNNER_TEMP/images/amd64/addon-image-amd64.tar"
+          docker load --input "$RUNNER_TEMP/images/aarch64/addon-image-aarch64.tar"
+
+      - name: Prove source, packages, and both built images
+        env:
+          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
+        run: |
+          python scripts/media-proof.py \
+            --amd64-image "$AMD64_IMAGE" \
+            --aarch64-image "$AARCH64_IMAGE" \
+            --output media-proof.json
+
+      - name: Upload full media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-full-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
+
+  push:
+    runs-on: ubuntu-latest
+    needs: [validate, media-proof]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64]
+    steps:
+      - name: Download proven image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: addon-image-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/image
+
+      - name: Load proven image
+        env:
+          IMAGE_TAR: ${{ runner.temp }}/image/addon-image-${{ matrix.arch }}.tar
+        run: docker load --input "$IMAGE_TAR"
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish proven SHA and edge images
+        env:
+          SHA_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          SHORT_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ needs.validate.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          docker image inspect "$SHA_REF" "$SHORT_REF" >/dev/null
+          docker push "$SHA_REF"
+          docker push "$SHORT_REF"
+
   smoke:
     runs-on: ubuntu-latest
-    needs: build
+    needs: push
     permissions:
       contents: read
       packages: read

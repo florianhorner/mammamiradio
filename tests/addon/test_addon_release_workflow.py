@@ -293,15 +293,34 @@ def test_release_workflow_latest_toctou_guard():
 
 
 def test_release_workflow_build_needs_preflight():
-    """Promote job must declare needs: pre-flight and smoke-prebuilt."""
+    """Promote job must wait for pre-flight, full media proof, and smoke."""
     text = _workflow_text()
     promote_section = re.search(r"\n  promote:\n((?:    .+\n|\n)*)", text)
     assert promote_section, "Could not locate `promote:` job in addon-release.yml"
     promote_block = promote_section.group(1)
-    assert "needs: [pre-flight, smoke-prebuilt]" in promote_block, (
-        "promote job must wait for both pre-flight and the prebuilt SHA smoke test.\n"
+    assert "needs: [pre-flight, media-proof, smoke-prebuilt]" in promote_block, (
+        "promote job must wait for pre-flight, both-image media proof, and the prebuilt SHA smoke test.\n"
         "Without this, stable tags could be published before the source artifact is proven."
     )
+
+
+def test_release_workflow_proves_both_sha_images_before_promotion():
+    """Stable promotion must inspect both exact per-arch SHA images with QEMU."""
+    text = _workflow_text()
+    proof_section = re.search(r"\n  media-proof:\n((?:    .+\n|\n)*)", text)
+    assert proof_section, "Could not locate 'media-proof:' job in addon-release.yml"
+    proof_block = proof_section.group(1)
+
+    assert "needs: pre-flight" in proof_block
+    assert "docker/setup-qemu-action@" in proof_block
+    assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in proof_block
+    assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in proof_block
+    assert "--amd64-image" in proof_block
+    assert "--aarch64-image" in proof_block
+    assert "--output media-proof.json" in proof_block
+    assert "if: always()" in proof_block
+    assert "name: media-proof-stable-${{ github.sha }}" in proof_block
+    assert "if-no-files-found: error" in proof_block
 
 
 def test_release_workflow_runs_smoke_test():
@@ -313,7 +332,7 @@ def test_release_workflow_runs_smoke_test():
     assert "github.sha" in prebuilt_block, (
         "smoke-prebuilt must pull :${{ github.sha }} before stable tags are promoted."
     )
-    assert "needs: pre-flight" in prebuilt_block
+    assert "needs: [pre-flight, media-proof]" in prebuilt_block
 
     smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", text)
     assert smoke_section, "Could not locate `smoke:` job in addon-release.yml"
