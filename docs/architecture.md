@@ -323,14 +323,19 @@ normalized-cache candidate passes the same final blocklist rule as every other
 music admission, so a banned song cannot re-enter through this instant-audio
 path.
 
-A replacement control supersedes an earlier reservation: it clears ordinary and
-protected queued audio, clears any out-of-band `continuity_slot`, and creates a
-fresh reservation for the new action. The resulting queue and shadow projection
-must therefore describe exactly the same final order. Each rebuild advances
-`continuity_epoch`; producer work and startup prewarm capture that epoch and
-discard their result if it changed before queue admission, including after
-egress. This prevents an older render from refilling a runway deliberately held
-for a newer control action.
+A successful replacement control supersedes an earlier reservation: it clears
+ordinary and protected queued audio, clears any out-of-band `continuity_slot`,
+and creates a fresh reservation for the new action. The resulting queue and
+shadow projection therefore describe exactly the same final order. If no fresh
+reservation can be built, the control fails closed instead: it keeps the first
+immediately playable queued segment and any valid capacity-exempt slot, drops
+only the remaining queued work to reopen producer capacity, and never cuts the
+current segment into an empty runway. Every rebuild that drops queued work
+advances `continuity_epoch`, including this conservative fallback, so an
+in-flight render cannot refill the freed tail. An assetless control that cannot
+mutate the queue leaves the epoch unchanged. Producer work and startup prewarm
+capture that epoch and discard their result if it changed before queue admission,
+including after egress.
 
 After a continuity rebuild, tail adjacency is recomputed from the resulting
 queue rather than retained from discarded work. Recovery audio and the emergency
@@ -798,9 +803,10 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 `source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
-above: existing reservations and fallback slots cannot survive a later source
-switch, and `continuity_epoch` prevents a render begun before the cutover from
-being admitted after it.
+above. A successful replacement supersedes existing reservations and fallback
+slots. If no replacement audio is ready, the current segment is not cut and the
+last safe runway remains in place; the source revision still prevents a render
+begun for the prior source from being admitted after the switch.
 
 ## Failure model
 

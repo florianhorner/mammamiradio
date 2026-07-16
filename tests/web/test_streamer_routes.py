@@ -1369,6 +1369,65 @@ async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp
 
 
 @pytest.mark.asyncio
+async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(tmp_path):
+    """A song banned after reservation never reaches air; recovery takes over."""
+    app = _make_test_app()
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    blocked_path = tmp_path / "norm_late_ban_128k.mp3"
+    blocked_path.write_bytes(b"blocked-audio" * 1024)
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+            "continuity_reservation_id": "late-blocked-slot",
+        },
+        ephemeral=False,
+    )
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 101.2])),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while not state.stream_log:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not fall through to recovery")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.continuity_slot is None
+    assert state.stream_log[0].metadata.get("canned") is True
+    assert state.stream_log[0].metadata.get("rescue") is True
+    assert all(entry.metadata.get("continuity_reservation_id") != "late-blocked-slot" for entry in state.stream_log)
+    assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
+
+
+@pytest.mark.asyncio
 async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
     """A packaged clip's duration is probed once (as rescue) then reused, so
     rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
@@ -3447,6 +3506,26 @@ async def test_panic_cut_while_streaming():
     # Stale rows are replaced by an audible protected reservation.
     assert len(state.queued_segments) == app.state.queue.qsize() == 1
     assert state.queued_segments[0]["reason"] == "Protected continuity audio."
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
+    """Panic still steers recovery, but never cuts current audio into an empty queue."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json()["ok"] is True
+    assert app.state.queue.empty()
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 5
 
 
 @pytest.mark.asyncio

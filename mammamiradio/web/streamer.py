@@ -540,6 +540,34 @@ def _indexed_audio_path_is_file(path: Path) -> bool:
         return False
 
 
+def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
+    """Return the durable blocklist identity carried by a ready segment."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return (
+        str(metadata.get("artist") or "").strip().lower(),
+        str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+    )
+
+
+def _segment_is_immediately_playable(
+    state: StationState,
+    segment: Segment,
+    *,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+) -> bool:
+    """Return whether a queued/slot segment is safe to use as live runway now."""
+    excluded_paths = excluded_paths or set()
+    excluded_track_keys = excluded_track_keys or set()
+    if segment.path in excluded_paths:
+        return False
+    if segment.type is SegmentType.MUSIC:
+        key = _segment_blocklist_key(segment)
+        if key in state.blocklist or key in excluded_track_keys:
+            return False
+    return _indexed_audio_path_is_file(segment.path)
+
+
 def _continuity_reservation_segments(
     state: StationState,
     config,
@@ -701,6 +729,37 @@ def _continuity_slot_seconds(state: StationState) -> float:
     return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
 
 
+def _claim_continuity_slot(state: StationState) -> Segment | None:
+    """Claim the capacity-exempt slot only if it is still safe to broadcast.
+
+    A durable ban can land after reservation but before the queue drains. This
+    last-mile gate keeps that newly banned cached song off air without letting
+    stale slot state block the normal empty-queue recovery ladder.
+    """
+    slot = state.continuity_slot
+    if slot is None or _continuity_slot_seconds(state) <= 0:
+        return None
+    if slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist:
+        logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
+        state.continuity_slot = None
+        return None
+    state.continuity_slot = None
+    return slot
+
+
+def _playable_runway_available(q, state: StationState) -> bool:
+    """Return whether cutting the current segment has ready audio behind it."""
+    queued = list(getattr(q, "_queue", ()))
+    if queued and _segment_is_immediately_playable(state, queued[0]):
+        return True
+    slot = state.continuity_slot
+    return bool(
+        slot is not None
+        and _continuity_slot_seconds(state) > 0
+        and not (slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist)
+    )
+
+
 def _continuity_slot_status(state: StationState) -> dict | None:
     """Admin-only projection of the capacity-exempt safety reservation."""
     duration_sec = _continuity_slot_seconds(state)
@@ -765,28 +824,18 @@ def _reserve_continuity_runway(
     q = app_state.queue
     excluded_paths = excluded_paths or set()
     excluded_track_keys = excluded_track_keys or set()
-    # A replace action supersedes every prior safety promise too. A stale
-    # capacity-exempt slot is intentionally invisible to the real queue, so it
-    # must be cleared before the old queue can be replaced.
-    if replace_queue:
-        state.continuity_slot = None
-
     existing = list(getattr(q, "_queue", ()))
     current_queue = list(existing)
     protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
     ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
 
     slot = state.continuity_slot
-    slot_metadata = slot.metadata if slot is not None and isinstance(slot.metadata, dict) else {}
-    slot_key = (
-        str(slot_metadata.get("artist") or "").strip().lower(),
-        str(slot_metadata.get("title_only") or slot_metadata.get("title") or "").strip().lower(),
-    )
-    slot_is_excluded = bool(
-        slot is not None
-        and (slot.path in excluded_paths or slot_key in state.blocklist or slot_key in excluded_track_keys)
-    )
-    if slot_is_excluded:
+    if slot is not None and not _segment_is_immediately_playable(
+        state,
+        slot,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+    ):
         state.continuity_slot = None
         slot = None
 
@@ -824,10 +873,53 @@ def _reserve_continuity_runway(
     if not reservation:
         logger.warning("No packaged or cache continuity audio available for live control")
         if replace_queue:
-            purged = _purge_queue_and_shadow(q, state, reason=discard_reason)
-            state.last_enqueued_type = None
-            state.continuity_epoch += 1
-            return purged
+            # Replacement is transactional with respect to ready audio. Keep
+            # the first playable queued segment (plus any valid out-of-band
+            # slot), but discard every other queued item so the producer has
+            # capacity to recover. If neither is ready, mutate nothing: the
+            # caller must not cut the current audio.
+            playable_index = next(
+                (
+                    index
+                    for index, segment in enumerate(current_queue)
+                    if _segment_is_immediately_playable(
+                        state,
+                        segment,
+                        excluded_paths=excluded_paths,
+                        excluded_track_keys=excluded_track_keys,
+                    )
+                ),
+                None,
+            )
+            playable_head = current_queue[playable_index] if playable_index is not None else None
+            slot_ready = bool(
+                state.continuity_slot is not None
+                and _segment_is_immediately_playable(
+                    state,
+                    state.continuity_slot,
+                    excluded_paths=excluded_paths,
+                    excluded_track_keys=excluded_track_keys,
+                )
+            )
+            if playable_head is None and not slot_ready:
+                return 0
+            survivors = [playable_head] if playable_head is not None else []
+            failure_dropped = (
+                current_queue[:playable_index] + current_queue[playable_index + 1 :]
+                if playable_index is not None
+                else current_queue
+            )
+            for segment in failure_dropped:
+                state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
+                _drop_segment_moment_receipts(state, segment, discard_reason)
+                _unlink_ephemeral_best_effort(segment)
+            if failure_dropped:
+                _rebuild_queue_shadow(q, state, survivors)
+                # Queue capacity has changed, so producer work captured before
+                # this conservative rebuild must not refill the freed tail.
+                # Keep the epoch stable only for the true no-mutation path.
+                state.continuity_epoch += 1
+            return len(failure_dropped)
         return 0
 
     if not replace_queue and protected_ready > 0:
@@ -851,6 +943,8 @@ def _reserve_continuity_runway(
     if replace_queue:
         dropped = existing
         existing = []
+        # The replacement is fully built before the prior slot is superseded.
+        state.continuity_slot = None
     else:
         existing = ordinary
     combined = existing + reservation
@@ -2120,9 +2214,11 @@ def _apply_loaded_source(
     # Immediate cutover: the protected queue is now in its final state; cut the
     # current playback only after it exists.
     skipped = False
-    if state.now_streaming:
+    if state.now_streaming and _playable_runway_available(request.app.state.queue, state):
         request.app.state.skip_event.set()
         skipped = True
+    elif state.now_streaming:
+        logger.warning("Source changed without a ready cutover bridge; current audio will finish")
 
     logger.info(
         "Loaded source %s: %s (%d tracks), purged %d queued segments%s",
@@ -2478,13 +2574,11 @@ async def run_playback_loop(app) -> None:
         segment: Segment
         if _bridge_segment is not None:
             segment = _bridge_segment
-        elif segment_queue.empty() and _continuity_slot_seconds(state) > 0:
+        elif segment_queue.empty() and (continuity_slot := _claim_continuity_slot(state)) is not None:
             # The guard could not reserve capacity without displacing a ready
             # air-next item. It is intentionally consumed only after the normal
             # queue (and any interrupt bridge) has no audio left.
-            segment = state.continuity_slot
-            assert segment is not None  # narrowed by the ready-slot check above
-            state.continuity_slot = None
+            segment = continuity_slot
             state.queue_empty_since = None
             gap_clips_served = 0
         else:
@@ -3966,8 +4060,10 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
         replace_queue=True,
         discard_reason=GenerationWasteReason.OPERATOR_PANIC,
     )
-    if state.now_streaming:
+    if state.now_streaming and _playable_runway_available(request.app.state.queue, state):
         request.app.state.skip_event.set()
+    elif state.now_streaming:
+        logger.warning("Panic cut withheld because no playable runway is ready; current audio will finish")
     # force_next is set AFTER skip_event to avoid the producer consuming it
     # before the current segment has been cut.
     state.force_next = SegmentType.MUSIC
