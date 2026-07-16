@@ -175,22 +175,73 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 
 /* ── QUICK ACTIONS ── */
 .quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.course-banner {
-  display: grid; gap: 3px;
-  width: 100%; margin-top: 8px; padding: 9px 11px;
-  border: 1px solid rgba(244,208,72,0.18); border-radius: 8px;
-  background: rgba(20,17,15,0.34); color: rgba(245,237,216,0.78);
-  font-size: 12px; min-width: 0; overflow-wrap: break-word;
+
+/* ── RECORD HUNT ──
+   Rotazione has one creative action: steer the next stretch. Source imports and
+   pool maintenance stay in the quiet Library tools disclosure below the list. */
+.record-hunt {
+  position: relative; overflow: hidden;
+  margin-bottom: 24px; padding: 20px;
+  border: 1px solid rgba(244,208,72,0.30); border-radius: 10px;
+  background: var(--surface-strong);
 }
-.course-banner[data-active="true"] { border-color: rgba(244,208,72,0.32); background: rgba(244,208,72,0.07); }
-.record-hunt-truth { min-width: 0; line-height: 1.35; }
+.record-hunt::before {
+  content: ""; position: absolute; top: 0; left: 28px; right: 28px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(244,208,72,0.72), transparent);
+}
+.record-hunt-label {
+  margin: 0 0 7px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em; line-height: 1.35; text-transform: uppercase;
+}
+.record-hunt-copy {
+  margin: 0 0 16px; color: var(--cream);
+  font-size: 16px; font-weight: 600; line-height: 1.35;
+}
+.record-hunt-copy strong { color: var(--sun); }
+.record-hunt-form {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px;
+}
+.record-hunt-form .search-input {
+  min-height: 52px; font-size: 16px;
+  background: var(--bg-elevated); border-color: rgba(245,237,216,0.22);
+}
+.record-hunt-button {
+  min-width: 126px; min-height: 52px; padding: 10px 18px;
+  color: var(--bg); background: var(--sun2); border-color: var(--sun2);
+  box-shadow: 0 3px 14px rgba(236,204,48,0.24);
+}
+.record-hunt-button:hover { color: var(--bg); background: var(--sun); border-color: var(--sun); }
+.record-hunt-button.loading { opacity: 0.72; pointer-events: none; }
+.record-hunt-status {
+  display: grid; grid-template-columns: minmax(0,1fr) auto;
+  gap: 10px; align-items: center;
+  margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.record-hunt-status-copy {
+  display: grid; grid-template-columns: 18px minmax(0,1fr);
+  gap: 3px 10px; min-width: 0; width: 100%;
+  overflow-wrap: break-word;
+}
+.record-hunt-status-shape {
+  grid-row: 1 / span 2; color: var(--muted);
+  font-family: var(--font-mono); font-size: 15px; font-weight: 700; line-height: 1.3;
+}
+.record-hunt-status-shape.ready { color: var(--ok-text); }
+.record-hunt-status-shape.working { color: var(--sun); }
+.record-hunt-status-shape.idle { color: var(--muted); }
+.record-hunt-status-shape.working { animation: record-hunt-pulse 1.4s ease-in-out infinite; }
+.record-hunt-truth { min-width: 0; color: var(--cream-dk); font-size: 13px; line-height: 1.35; overflow-wrap: break-word; }
+.record-hunt-truth b { color: var(--sun); font-weight: 700; }
 .record-hunt-stage {
-  min-width: 0; color: rgba(245,237,216,0.48); font-family: var(--font-mono);
-  font-size: 10px; line-height: 1.3;
+  grid-column: 2; min-width: 0; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.3;
 }
-.course-banner[data-active="false"] .record-hunt-stage { display: none; }
-.course-banner b { color: var(--sun2); font-weight: 700; }
-.course-banner[data-active="false"] b { color: rgba(245,237,216,0.58); }
+.record-hunt-status-copy[data-active="false"] .record-hunt-stage { display: none; }
+.record-hunt-reset { min-width: 44px; min-height: 44px; white-space: nowrap; }
+.record-hunt-reset[hidden] { display: none; }
+@keyframes record-hunt-pulse { 50% { opacity: 0.38; transform: scale(0.84); } }
 
 /* ── SCRIPT BOX ── */
 .script-box {
@@ -396,14 +447,13 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ── PLAYLIST / SEARCH ── */
+.rotation-library-label {
+  margin: 0 0 10px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase;
+}
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
-.direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
-.direction-row .quick-add-label { flex-shrink: 0; }
-.direction-row .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
-.direction-row .btn-direction { min-height: 44px; padding: 10px 16px; }
-.direction-row .btn-direction.loading,
-.direction-row .btn-direction:disabled,
-.direction-row .search-input:disabled { opacity: 0.65; pointer-events: none; }
+.library-search .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -1206,6 +1256,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .super-italian-switch input:checked + .super-italian-slider::after { animation: none !important; }
   .ha input[type="range"].tt-settling::-webkit-slider-thumb,
   .ha input[type="range"].tt-settling::-moz-range-thumb { animation: none !important; }
+  .record-hunt-status-shape.working { animation: none; }
 }
 
 @media (max-width: 768px) {
@@ -1237,8 +1288,11 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-content { padding: 16px 16px; }
   .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
   .lg-row .ts { font-size: 9px; }
-  .search-row, .direction-row { flex-direction: column; align-items: stretch; }
-  .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row { flex-direction: column; align-items: stretch; }
+  .search-row .btn, .record-hunt-form .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .record-hunt-form { grid-template-columns: 1fr; }
+  .record-hunt-status { grid-template-columns: 1fr; }
+  .record-hunt-reset { justify-self: start; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
   /* Catalogue rows use one explicit stacked grid through 768px. Every direct
@@ -1460,13 +1514,50 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   background: rgba(37,99,235,0.08);
   box-shadow: inset 2px 0 0 var(--ok);
 }
-.rotation-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+.rotation-library { margin-top: 2px; }
+.library-tools {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.library-tools summary {
+  display: flex; align-items: center; min-height: 52px;
+  color: var(--text-secondary); cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 600;
+}
+.library-tools summary::-webkit-details-marker { display: none; }
+.library-tools summary::before {
+  content: "+"; width: 20px; color: var(--sun);
+  font-family: var(--font-mono); font-size: 17px; font-weight: 500;
+}
+.library-tools[open] summary::before { content: "−"; }
+.library-tools-banned {
+  display: inline-grid; place-items: center;
+  min-width: 20px; min-height: 20px; margin-left: 7px; padding: 0 5px;
+  border-radius: 999px; color: var(--cream); background: var(--lancia2);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700; line-height: 1;
+}
+.library-tools-banned[hidden] { display: none; }
+.library-tools-body {
+  display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 16px; padding: 0 0 17px;
+}
+.library-tools-group { min-width: 0; }
+.library-tools-group .quick-actions { align-items: center; }
+.library-tools-group .rotation-library-label { margin-bottom: 8px; }
+.library-tools-danger { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.empty-pool-recovery {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 12px; padding: 12px;
+  border: 1px dashed rgba(244,208,72,0.42); border-radius: 8px;
+  color: var(--text-secondary); font-size: 12px; line-height: 1.4;
+}
+.empty-pool-recovery[hidden] { display: none; }
+.empty-pool-recovery .btn { flex: 0 0 auto; min-height: 44px; }
+@media (max-width: 768px) {
+  .library-tools-body { grid-template-columns: 1fr; }
+  .empty-pool-recovery { flex-direction: column; align-items: stretch; }
+  .empty-pool-recovery .btn { width: 100%; }
 }
 /* Bulk-select toolbar (appears only when ≥1 song is checked) */
 .rotation-select {
@@ -1894,53 +1985,68 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
       </header>
-      <div class="rotation-toolbar">
-        <div class="quick-actions" id="playlistSourceControls">
-          <span class="quick-add-label">Add:</span>
-          <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
-          <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+      <section class="record-hunt" aria-labelledby="recordHuntHeading">
+        <p class="record-hunt-label">Record Hunt</p>
+        <p class="record-hunt-copy" id="recordHuntHeading">Steer what the station <strong>becomes next.</strong></p>
+        <div class="record-hunt-form" id="directionControls">
+          <label class="sr-only" for="directionInput">Describe the records to hunt</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="Italian '90s electronica" autocomplete="off" aria-label="Direction" aria-describedby="recordHuntHeading" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-trigger record-hunt-button btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt records</button>
         </div>
-        <div class="quick-actions" id="playlistPoolControls">
-          <span class="quick-add-label">Pool:</span>
-          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
-          <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
-          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+        <div class="record-hunt-status">
+          <div class="record-hunt-status-copy" id="courseBanner" data-active="false" role="status" aria-live="polite">
+            <span class="record-hunt-status-shape idle" id="recordHuntStatusShape" aria-label="status: idle">&#9675;</span>
+            <span class="record-hunt-truth" id="recordHuntTruth">Auto rotation is ready for a new direction.</span>
+            <span class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"></span>
+          </div>
+          <button type="button" class="btn btn-util record-hunt-reset" id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>
         </div>
-        <div class="quick-actions" id="headingControls" aria-label="Record Hunt presets">
-          <span class="quick-add-label">Record Hunt:</span>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_70s" onclick="setHeading('classic_70s',this)">Anni '70</button>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
-          <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
+      </section>
+      <section class="rotation-library" aria-label="Rotation library">
+        <p class="rotation-library-label">Find a specific record</p>
+        <div class="rotation-select" id="plSelectBar" style="display:none">
+          <span id="plSelCount">0 selected</span>
+          <button type="button" class="btn btn-chip" onclick="selectAllPl()">Select all</button>
+          <button type="button" class="btn btn-chip" onclick="clearPlSel()">Clear</button>
+          <button type="button" class="btn btn-chip btn-ban" onclick="banSelected()">Ban selected</button>
         </div>
-        <div class="direction-row" id="directionControls">
-          <label class="quick-add-label" for="directionInput">Find records:</label>
-          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
-          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt</button>
+        <div class="search-row library-search">
+          <label for="searchInput" class="sr-only">Search music</label>
+          <input type="text" class="search-input" id="searchInput" placeholder="Search this rotation or the web..." autocomplete="off" aria-label="Search music">
+          <button type="button" class="btn btn-util" data-stopped-exempt onclick="doSearch()">Search</button>
         </div>
-        <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
-          <span class="record-hunt-truth">Record Hunt: <b>Auto rotation</b></span>
-          <span class="record-hunt-stage" aria-hidden="true"></span>
+        <div id="searchResults"></div>
+        <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo bans in <strong>Library tools</strong>.</div>
+        <div id="plBody"></div>
+        <div class="empty-pool-recovery" id="emptyPoolRecovery" role="status" hidden>
+          <span id="emptyPoolRecoveryText"></span>
+          <button type="button" class="btn btn-util" id="emptyPoolLibraryBtn" data-stopped-exempt onclick="openLibraryTools()">Open Library tools</button>
+          <button type="button" class="btn btn-util" aria-controls="setupGroup" id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()">Open setup</button>
         </div>
-      </div>
-      <div class="rotation-select" id="plSelectBar" style="display:none">
-        <span id="plSelCount">0 selected</span>
-        <button type="button" class="btn btn-chip" onclick="selectAllPl()">Select all</button>
-        <button type="button" class="btn btn-chip" onclick="clearPlSel()">Clear</button>
-        <button type="button" class="btn btn-chip btn-ban" onclick="banSelected()">Ban selected</button>
-      </div>
-      <div class="search-row">
-        <label for="searchInput" class="sr-only">Search music</label>
-        <input type="text" class="search-input" id="searchInput" placeholder="Search rotation and the web..." autocomplete="off" aria-label="Search music">
-        <button type="button" class="btn btn-util" data-stopped-exempt onclick="doSearch()">Search</button>
-      </div>
-      <div id="searchResults"></div>
-      <div id="banlistPanel" style="display:none"></div>
-      <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo your bans with the <strong>Banned</strong> button above.</div>
-      <div id="plBody"></div>
+      </section>
+      <details class="library-tools" id="libraryTools">
+        <summary>Library tools <span class="library-tools-banned" id="libraryToolsBannedCount" hidden></span></summary>
+        <div class="library-tools-body">
+          <section class="library-tools-group" id="sourceImportGroup">
+            <p class="rotation-library-label">Add a source</p>
+            <div class="quick-actions" id="playlistSourceControls">
+              <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
+              <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
+            </div>
+          </section>
+          <section class="library-tools-group" id="playlistPoolControls">
+            <p class="rotation-library-label">Manage the library</p>
+            <div class="quick-actions">
+              <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
+              <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
+            </div>
+            <div class="library-tools-danger">
+              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+            </div>
+          </section>
+        </div>
+        <div id="banlistPanel" style="display:none"></div>
+      </details>
     </section>
 
     <!-- Diretta zone -->
@@ -2239,7 +2345,7 @@ const _base = (() => {
   if (p.endsWith('/admin')) return p.slice(0, -6);
   return p === '' ? '' : p;
 })();
-let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
+let _st={}, _caps=null, _capsState='checking', _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
 let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
 let _programmeFilter='all', _lastProgrammeHash='', _lastRunwayHash='';
@@ -3529,7 +3635,11 @@ function openSetupPanel(){
   if(motore)motore.click();
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
-  setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
+  const summary=details?.querySelector('summary');
+  setTimeout(()=>{
+    summary?.focus({preventScroll:true});
+    details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+  },50);
 }
 function renderGuidedSetupStrip(setup){
   const strip=document.getElementById('setupStrip');
@@ -3927,7 +4037,8 @@ function playlistPreferenceRevision(){
 }
 function playlistRenderSignature(page){
   const p=page||{};
-  return [p.revision??'',playlistPreferenceRevision(),p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
+  const heading=_st?.heading||{};
+  return [p.revision??'',playlistPreferenceRevision(),heading.active?'1':'0',heading.id||'',p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
 }
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
@@ -3936,12 +4047,46 @@ function sourceControlVisibility(caps){
     charts_reload:Boolean(capabilities.charts_reload),
   };
 }
+function emptyPoolRecoveryState(st,caps,capsState){
+  const visibility=sourceControlVisibility(caps);
+  const sourcesAvailable=visibility.jamendo||visibility.charts_reload;
+  if(capsState==='checking'){
+    return {action:'setup',message:'The rotation is empty. Checking available music sources…'};
+  }
+  if(capsState==='error'){
+    return {action:'setup',message:'The rotation is empty. Could not check available music sources. Open setup to review configuration.'};
+  }
+  if(sourcesAvailable){
+    return {action:'library',message:'The rotation is empty. Add a source from Library tools to start again.'};
+  }
+  const goldenPath=st?.golden_path||caps?.golden_path||{};
+  const hasSetupGuidance=Boolean(String(goldenPath.detail||'').trim());
+  const rawDetail=hasSetupGuidance?String(goldenPath.detail||'').trim():'';
+  const detailLooksTechnical=/\bMAMMAMIRADIO_[A-Z0-9_]+\b|(?:^|\s)(?:\.{0,2}\/|[A-Za-z0-9_.-]+\/)|\b[A-Z][A-Z0-9_]{2,}=/i.test(rawDetail);
+  const detail=goldenPath.stage==='needs_music_source'
+    ?hasSetupGuidance&&!detailLooksTechnical
+      ?rawDetail
+      :hasSetupGuidance
+        ?'No music source is configured. Open setup for configuration details.'
+        :'No music source is configured. Open setup to add one.'
+    :'No import source is available. Open setup to review the current music source.';
+  return {action:'setup',message:`The rotation is empty. ${detail}`};
+}
 function updateSourceControls(st,caps){
   const jamBtn=document.getElementById('sourceJamendoBtn');
   const chartsBtn=document.getElementById('sourceChartsBtn');
+  const sourceGroup=document.getElementById('sourceImportGroup');
   const visibility=sourceControlVisibility(caps);
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
+  if(sourceGroup)sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload;
+  updateEmptyPoolRecovery(st,caps);
+}
+function openLibraryTools(){
+  const tools=document.getElementById('libraryTools');
+  if(!tools)return;
+  tools.open=true;
+  tools.scrollIntoView({block:'nearest',behavior:recordHuntReducedMotion()?'auto':'smooth'});
 }
 async function shufflePlaylist(el){
   flash(el);
@@ -3986,6 +4131,7 @@ async function setHeading(kind,el){
   await refreshFast();
 }
 let _directionPending=false;
+let _headingMutationGeneration=0;
 function handleDirectionKey(event){
   if(event.key!=='Enter' || event.repeat || event.isComposing)return;
   event.preventDefault();
@@ -4035,11 +4181,25 @@ function clearRecordHuntOptimistic(){
   _recordHuntOptimistic={active:false,label:'',startedAt:0};
   stopRecordHuntBusywork();
 }
-function renderRecordHuntDesk(active,truthHtml,{busy=false,resetBusy=false,stageText=''}={}){
+function renderRecordHuntDesk(active,truthHtml,{busy=false,resetBusy=false,stageText='',status='',resetLabel='Back to auto'}={}){
   const banner=document.getElementById('courseBanner');
   if(!banner)return;
+  const truth=document.getElementById('recordHuntTruth');
+  const stage=document.getElementById('recordHuntStage');
+  const reset=document.getElementById('clearHeadingBtn');
+  const shape=document.getElementById('recordHuntStatusShape');
   banner.dataset.active=active?'true':'false';
-  banner.innerHTML=`<span class="record-hunt-truth">${truthHtml}</span><span class="record-hunt-stage" aria-hidden="true">${busy?'':esc(stageText)}</span>`;
+  if(truth)truth.innerHTML=truthHtml;
+  if(stage)stage.textContent=busy?'':stageText;
+  if(reset)reset.hidden=!active;
+  if(reset)reset.textContent=resetLabel;
+  if(shape){
+    const canonicalStatus=status||(busy?'working':active?'ready':'idle');
+    const glyph={ready:'✓',working:'●',idle:'○'}[canonicalStatus]||'○';
+    shape.textContent=glyph;
+    shape.setAttribute('aria-label',`status: ${canonicalStatus}`);
+    for(const state of STATUS_STATES)shape.classList.toggle(state,state===canonicalStatus);
+  }
   if(busy)startRecordHuntBusywork(resetBusy);
   else stopRecordHuntBusywork();
 }
@@ -4048,6 +4208,7 @@ async function setDirectionText(el){
   const input=document.getElementById('directionInput');
   const text=(input?.value||'').trim();
   if(!text){toast('Type a direction and try again.');return;}
+  const mutationGeneration=++_headingMutationGeneration;
   flash(el);
   _directionPending=true;
   if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
@@ -4057,6 +4218,7 @@ async function setDirectionText(el){
     // 60s client-side ceiling so a hung request can't leave the control stuck
     // on "Hunting..." forever with no way out — it rejects into catch below.
     const r=await api('POST','/api/direction',{text},60000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
     if(!r.ok){
       clearRecordHuntOptimistic();
       toast(r.message||wayOut('shape that set'));
@@ -4080,6 +4242,7 @@ async function setDirectionText(el){
     if(input)input.value='';
     await refreshFast();
   }catch(e){
+    if(mutationGeneration!==_headingMutationGeneration)return;
     // The 60s client ceiling can fire while the station is still finding songs —
     // that's not an outage. Refresh so the Course banner shows the real state
     // instead of claiming we couldn't reach the studio.
@@ -4094,21 +4257,35 @@ async function setDirectionText(el){
   }finally{
     _directionPending=false;
     if(input){input.disabled=false;input.removeAttribute('aria-busy');}
-    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt';}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt records';}
   }
 }
 async function clearHeading(el){
+  _headingMutationGeneration+=1;
+  const mutationGeneration=_headingMutationGeneration;
   flash(el);
   clearRecordHuntOptimistic();
-  const r=await api('POST','/api/heading/clear',{});
-  if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
-  toast('Back to auto.');
-  await refreshFast();
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
+  try{
+    const r=await api('POST','/api/heading/clear',{},15000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
+    if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
+    renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.');
+    toast('Back to auto.');
+    await refreshFast();
+  }catch(_){
+    if(mutationGeneration!==_headingMutationGeneration)return;
+    // Keep the active Hunt visible: the request may not have reached the
+    // station, and the next status poll will reconcile if only the reply was lost.
+    toast(offlineMsg());
+  }finally{
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');}
+  }
 }
 function renderRecordHuntPending(label){
   const safeLabel=esc(label||'that vibe');
   _recordHuntOptimistic={active:true,label:label||'that vibe',startedAt:Date.now()};
-  renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${safeLabel}</b>`,{busy:true,resetBusy:true});
+  renderRecordHuntDesk(true,`Hunting for <b>${safeLabel}</b>`,{busy:true,resetBusy:true});
 }
 function updateHeadingBanner(st){
   const heading=st?.heading||{};
@@ -4121,17 +4298,17 @@ function updateHeadingBanner(st){
       const label=esc(heading.label||'that vibe');
       const count=Number(heading.tagged_count||0);
       if(phase==='hunting'||heading.resolving){
-        renderRecordHuntDesk(true,`Record Hunt is searching for <b>${label}</b>`,{busy:true});
+        renderRecordHuntDesk(true,`Hunting for <b>${label}</b>`,{busy:true});
       }else if(phase==='complete'){
-        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> played through. Back on auto.`);
+        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> played through. Back on auto.`,{status:'idle',resetLabel:'Clear completed Hunt'});
       }else{
-        const found=count>0?` - ${count} Hunt pick${count===1?'':'s'} highlighted`:'';
-        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> is shaping the next stretch${found}`);
+        const found=count>0?` · ${count} Hunt pick${count===1?'':'s'} favored next`:'';
+        renderRecordHuntDesk(true,`Steering toward <b>${label}</b>${found}`);
       }
     }else if(_recordHuntOptimistic.active){
-      renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>`,{busy:true});
+      renderRecordHuntDesk(true,`Hunting for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>`,{busy:true});
     }else{
-      renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>');
+      renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.');
     }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
@@ -4159,6 +4336,20 @@ function sourceChip(source){
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
 function _plKey(artist,title){return JSON.stringify([(artist||'').trim().toLowerCase(),(title||'').trim().toLowerCase()]);}
+function updateEmptyPoolRecovery(st=_st,caps=_caps){
+  const recovery=document.getElementById('emptyPoolRecovery');
+  const text=document.getElementById('emptyPoolRecoveryText');
+  const libraryButton=document.getElementById('emptyPoolLibraryBtn');
+  const setupButton=document.getElementById('emptyPoolSetupBtn');
+  if(!recovery)return;
+  const empty=!_plRows.length;
+  recovery.hidden=!empty;
+  if(!empty)return;
+  const state=emptyPoolRecoveryState(st,caps,_capsState);
+  if(text)text.textContent=state.message;
+  if(libraryButton)libraryButton.hidden=state.action!=='library';
+  if(setupButton)setupButton.hidden=state.action!=='setup';
+}
 function updatePl(tracks,page,force){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
@@ -4179,7 +4370,8 @@ function updatePl(tracks,page,force){
   const renderSig=playlistRenderSignature(_plPage);
   if(!force&&renderSig===_plRenderSig)return;
   _plRenderSig=renderSig;
-  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
+  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';updateEmptyPoolRecovery();return}
+  updateEmptyPoolRecovery();
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const activeHeadingId=_st?.heading?.active?_st.heading.id:'';
   const filter=_plFilter.toLowerCase();
@@ -4314,6 +4506,8 @@ async function banSelected(){
 function setBanCount(n){
   const badge=document.getElementById('banlistCount');
   if(badge){if(n>0){badge.textContent=n;badge.style.display='';}else{badge.style.display='none';badge.textContent='';}}
+  const toolsBadge=document.getElementById('libraryToolsBannedCount');
+  if(toolsBadge){if(n>0){toolsBadge.textContent=`${n} banned`;toolsBadge.hidden=false;}else{toolsBadge.hidden=true;toolsBadge.textContent='';}}
   const hint=document.getElementById('banHint');
   if(hint)hint.style.display=n>0?'none':'';
 }
@@ -4326,7 +4520,9 @@ async function refreshBanCount(){
 async function toggleBanlist(){
   const panel=document.getElementById('banlistPanel');
   const btn=document.getElementById('banlistToggle');
+  const tools=document.getElementById('libraryTools');
   if(!panel)return;
+  if(tools)tools.open=true;
   if(panel.style.display!=='none'){panel.style.display='none';panel.innerHTML='';if(btn){btn.setAttribute('aria-expanded','false');btn.classList.remove('active');}return;}
   await renderBanlist();
   if(btn){btn.setAttribute('aria-expanded','true');btn.classList.add('active');}
@@ -5245,17 +5441,54 @@ async function refreshFast(){
   if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
   if(hostsData){renderHosts(hostsData.hosts||[]);_hostsOk=true;}
 }
-async function refreshSlow(){
+const SLOW_POLL_DEADLINE_MS=10000;
+let _slowPollGeneration=0;
+async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),deadlineMs);
   try{
-    const [cr,or]=await Promise.all([fetch(_base+'/api/capabilities',{headers:H()}),fetch(_base+'/api/setup/status',{headers:H()})]);
-    _caps=await cr.json();
-    const setup=await or.json();
-    updateSystems(_caps,_st);
+    const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
+    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
+    const payload=await response.json();
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    return payload;
+  }finally{clearTimeout(deadline);}
+}
+async function refreshSlow(){
+  const generation=++_slowPollGeneration;
+  if(_caps===null){
+    _capsState='checking';
     updateSourceControls(_st,_caps);
-    renderSetup(setup);
-    loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
-    syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
-  }catch(e){console.error('refreshSlow',e)}
+  }
+  const capabilitiesPromise=fetchSlowJson('/api/capabilities')
+    .then(caps=>{
+      if(generation!==_slowPollGeneration)return;
+      _caps=caps;
+      _capsState='ready';
+      updateSystems(_caps,_st);
+      updateSourceControls(_st,_caps);
+    })
+    .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
+      if(_caps===null){
+        _capsState='error';
+        updateSourceControls(_st,_caps);
+      }
+      console.error('refreshSlow capabilities',e);
+    });
+  const setupPromise=fetchSlowJson('/api/setup/status')
+    .then(setup=>{
+      if(generation!==_slowPollGeneration)return;
+      renderSetup(setup);
+    })
+    .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
+      console.error('refreshSlow setup',e);
+    });
+  await Promise.all([capabilitiesPromise,setupPromise]);
+  if(generation!==_slowPollGeneration)return;
+  loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
+  syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
 }
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 

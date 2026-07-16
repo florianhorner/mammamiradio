@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
 CANONICAL_STATUS_STATES = {"ready", "working", "degraded", "blocked", "idle"}
 
@@ -81,24 +82,50 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
-def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
+def test_record_hunt_card_has_phase_copy_and_wrapping_guard() -> None:
     html = _read_admin_html()
     block = _function_block(html, "updateHeadingBanner")
-    style = re.search(r"\.course-banner\s*\{([^}]*)\}", html, re.DOTALL)
+    card = re.search(r"\.record-hunt\s*\{([^}]*)\}", html, re.DOTALL)
+    status = re.search(r"\.record-hunt-status-copy\s*\{([^}]*)\}", html, re.DOTALL)
 
-    assert style is not None
-    assert "min-width: 0" in style.group(1)
-    assert "overflow-wrap: break-word" in style.group(1)
-    assert 'class="record-hunt-truth"' in html
-    assert 'class="record-hunt-stage" aria-hidden="true"' in html
-    assert "Record Hunt: <b>Auto rotation</b>" in html
+    assert card is not None
+    assert "background: var(--surface-strong)" in card.group(1)
+    assert status is not None
+    assert "min-width: 0" in status.group(1)
+    assert "overflow-wrap: break-word" in status.group(1)
+    assert 'class="record-hunt-status-copy" id="courseBanner"' in html
+    assert 'class="record-hunt-truth" id="recordHuntTruth"' in html
+    assert 'class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"' in html
+    assert "Auto rotation is ready for a new direction." in html
     assert "Record Hunt:" in block
-    assert "Record Hunt is searching for" in block
-    assert "Record Hunt is opening the back room for" in html
-    assert "is shaping the next stretch" in block
+    assert "Hunting for" in block
+    assert "Steering toward" in block
     assert "Hunt pick" in block
     assert "played through. Back on auto." in block
     assert "Course:" not in block
+
+
+def test_record_hunt_pulse_is_scoped_without_overriding_global_status_pulse() -> None:
+    """Record Hunt must not redefine the animation used by global status chips."""
+    html = _read_admin_html()
+    base_css = BASE_CSS.read_text(encoding="utf-8")
+
+    assert ".record-hunt-status-shape.working { animation: record-hunt-pulse" in html
+    assert "@keyframes record-hunt-pulse" in html
+    assert "@keyframes status-pulse" not in html
+    assert "@keyframes status-pulse" in base_css
+    assert "0%, 100% { opacity: 0.4; }" in base_css
+
+
+def test_record_hunt_reset_is_active_only_and_survives_status_renders() -> None:
+    html = _read_admin_html()
+    desk = _function_block(html, "renderRecordHuntDesk")
+
+    assert 'id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>' in html
+    assert "const reset=document.getElementById('clearHeadingBtn');" in desk
+    assert "if(reset)reset.hidden=!active;" in desk
+    assert "banner.innerHTML" not in desk
+    assert ".record-hunt-reset[hidden] { display: none; }" in html
 
 
 def test_record_hunt_matches_are_visible_in_rotation_rows() -> None:
@@ -139,9 +166,9 @@ def test_record_hunt_pending_guard_blocks_stale_auto_rotation_poll() -> None:
     block = _function_block(_read_admin_html(), "updateHeadingBanner")
 
     assert "}else if(_recordHuntOptimistic.active){" in block
-    assert "Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
-    assert "renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>')" in block
-    assert block.index("_recordHuntOptimistic.active") < block.index("Record Hunt: <b>Auto rotation</b>")
+    assert "Hunting for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
+    assert "renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.')" in block
+    assert block.index("_recordHuntOptimistic.active") < block.index("Auto rotation is ready for a new direction.")
 
 
 def test_failed_direction_clears_pending_record_hunt_before_refresh() -> None:

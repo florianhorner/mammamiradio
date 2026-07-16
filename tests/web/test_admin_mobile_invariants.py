@@ -486,30 +486,38 @@ def test_compact_deck_is_complete() -> None:
     assert 'class="mmr-tabbar"' in deck
 
 
-def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
-    """Record Hunt's two-line desk and chips must not create horizontal overflow."""
+def test_record_hunt_card_and_library_tools_are_mobile_safe() -> None:
+    """The Hunt card and its quieter supporting tools cannot overflow on phones."""
     css = _admin_css()
     phone_css = _phone_css()
 
-    direction_phone = _declarations_for_selector(phone_css, ".direction-row")
-    banner = _declarations_for_selector(css, ".course-banner")
+    hunt_form = _declarations_for_selector(css, ".record-hunt-form")
+    hunt_form_phone = _declarations_for_selector(phone_css, ".record-hunt-form")
+    banner = _declarations_for_selector(css, ".record-hunt-status-copy")
     truth = _declarations_for_selector(css, ".record-hunt-truth")
     stage = _declarations_for_selector(css, ".record-hunt-stage")
     phone_row = _declarations_for_selector(phone_css, ".pl-row")
     phone_meta = _declarations_for_selector(phone_css, ".pl-meta")
+    tools_phone = _declarations_for_selector(phone_css, ".library-tools-body")
+    recovery_phone = _declarations_for_selector(phone_css, ".empty-pool-recovery")
     chips = _declarations_for_selector(css, ".pl-chips")
     phone_chips = _declarations_for_selector(phone_css, ".pl-chips")
     phone_actions = _declarations_for_selector(phone_css, ".pl-a")
     phone_ban = _declarations_for_selector(phone_css, ".pl-ban")
 
-    assert direction_phone.get("flex-direction") == "column"
-    assert direction_phone.get("align-items") == "stretch"
+    assert hunt_form.get("display") == "grid"
+    assert hunt_form.get("grid-template-columns") == "minmax(0,1fr) auto"
+    assert hunt_form_phone.get("grid-template-columns") == "1fr"
     assert banner.get("display") == "grid"
     assert banner.get("width") == "100%"
     assert banner.get("min-width") == "0"
     assert "break-word" in banner.get("overflow-wrap", "")
     assert truth.get("min-width") == "0"
     assert stage.get("min-width") == "0"
+    assert tools_phone.get("grid-template-columns") == "1fr"
+    assert recovery_phone.get("flex-direction") == "column"
+    assert recovery_phone.get("align-items") == "stretch"
+    assert css.rfind(".library-tools-body { grid-template-columns: 1fr; }") > css.index(".library-tools-body {")
     assert chips.get("min-width") == "0"
     assert phone_row.get("display") == "grid"
     assert phone_row.get("grid-template-columns") == "44px 44px 32px minmax(0, 1fr)"
@@ -526,6 +534,35 @@ def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
     assert phone_ban.get("grid-row") == "3"
     assert "grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto" not in phone_css
     assert "white-space: nowrap" in css[css.index(".hunt-pick") : css.index(".pl-a {")]
+
+    _assert_touch_target(".record-hunt-button")
+    _assert_touch_target(".record-hunt-reset")
+
+
+def test_rotation_uses_hunt_first_markup_with_capability_safe_library_recovery() -> None:
+    """The markup has one creative Hunt action; tools stay in a disclosure."""
+    text = _read_admin_html()
+    rotation = text[text.index('id="rotation-pool"') : text.index("<!-- Diretta zone -->")]
+    tools = rotation[rotation.index('id="libraryTools"') :]
+
+    assert rotation.index('class="record-hunt"') < rotation.index('class="rotation-library"')
+    assert rotation.index('class="rotation-library"') < rotation.index('id="libraryTools"')
+    assert 'id="directionBtn"' in rotation
+    assert "Hunt records" in rotation
+    assert "headingControls" not in rotation
+    assert "data-heading-kind" not in rotation
+    assert "enrichPlaylistSource('classic_" not in rotation
+    assert 'id="sourceChartsBtn"' in tools
+    assert 'id="sourceJamendoBtn"' in tools
+    assert 'id="purgePoolBtn"' in tools
+    assert 'id="emptyPoolRecovery"' in rotation
+    assert 'id="emptyPoolLibraryBtn"' in rotation
+    assert 'id="emptyPoolSetupBtn"' in rotation
+    assert 'id="emptyPoolLibraryBtn" data-stopped-exempt onclick="openLibraryTools()"' in rotation
+    assert 'id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()"' in rotation
+    assert "function emptyPoolRecoveryState(st,caps,capsState)" in text
+    assert "Checking available music sources" in text
+    assert "No library source is available in this setup." not in text
 
 
 def test_rotation_rows_group_metadata_without_dropping_actions() -> None:
