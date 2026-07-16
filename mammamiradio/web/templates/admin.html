@@ -4131,6 +4131,7 @@ async function setHeading(kind,el){
   await refreshFast();
 }
 let _directionPending=false;
+let _headingMutationGeneration=0;
 function handleDirectionKey(event){
   if(event.key!=='Enter' || event.repeat || event.isComposing)return;
   event.preventDefault();
@@ -4207,6 +4208,7 @@ async function setDirectionText(el){
   const input=document.getElementById('directionInput');
   const text=(input?.value||'').trim();
   if(!text){toast('Type a direction and try again.');return;}
+  const mutationGeneration=++_headingMutationGeneration;
   flash(el);
   _directionPending=true;
   if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
@@ -4216,6 +4218,7 @@ async function setDirectionText(el){
     // 60s client-side ceiling so a hung request can't leave the control stuck
     // on "Hunting..." forever with no way out — it rejects into catch below.
     const r=await api('POST','/api/direction',{text},60000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
     if(!r.ok){
       clearRecordHuntOptimistic();
       toast(r.message||wayOut('shape that set'));
@@ -4239,6 +4242,7 @@ async function setDirectionText(el){
     if(input)input.value='';
     await refreshFast();
   }catch(e){
+    if(mutationGeneration!==_headingMutationGeneration)return;
     // The 60s client ceiling can fire while the station is still finding songs —
     // that's not an outage. Refresh so the Course banner shows the real state
     // instead of claiming we couldn't reach the studio.
@@ -4257,6 +4261,7 @@ async function setDirectionText(el){
   }
 }
 async function clearHeading(el){
+  _headingMutationGeneration+=1;
   flash(el);
   clearRecordHuntOptimistic();
   if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
