@@ -2021,7 +2021,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <div class="empty-pool-recovery" id="emptyPoolRecovery" role="status" hidden>
           <span id="emptyPoolRecoveryText"></span>
           <button type="button" class="btn btn-util" id="emptyPoolLibraryBtn" data-stopped-exempt onclick="openLibraryTools()">Open Library tools</button>
-          <button type="button" class="btn btn-util" id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()">Open setup</button>
+          <button type="button" class="btn btn-util" aria-controls="setupGroup" id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()">Open setup</button>
         </div>
       </section>
       <details class="library-tools" id="libraryTools">
@@ -3635,7 +3635,11 @@ function openSetupPanel(){
   if(motore)motore.click();
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
-  setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
+  const summary=details?.querySelector('summary');
+  setTimeout(()=>{
+    summary?.focus({preventScroll:true});
+    details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+  },50);
 }
 function renderGuidedSetupStrip(setup){
   const strip=document.getElementById('setupStrip');
