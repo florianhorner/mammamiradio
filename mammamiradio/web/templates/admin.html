@@ -4262,16 +4262,19 @@ async function setDirectionText(el){
 }
 async function clearHeading(el){
   _headingMutationGeneration+=1;
+  const mutationGeneration=_headingMutationGeneration;
   flash(el);
   clearRecordHuntOptimistic();
   if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
   try{
     const r=await api('POST','/api/heading/clear',{},15000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
     if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
     renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.');
     toast('Back to auto.');
     await refreshFast();
   }catch(_){
+    if(mutationGeneration!==_headingMutationGeneration)return;
     // Keep the active Hunt visible: the request may not have reached the
     // station, and the next status poll will reconcile if only the reply was lost.
     toast(offlineMsg());
