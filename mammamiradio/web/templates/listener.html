@@ -76,6 +76,8 @@
       <div class="eyebrow" id="np-eyebrow">{{ copy.get('np_on_air', 'On Air') }}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}</div>
       <div class="title" id="np-track">{{ copy.get('tuning_in', 'Tuning in…') }}</div>
       <div class="artist" id="np-artist"></div>
+      <a class="mmr-credits-trigger mmr-credits-trigger-inline" id="music-credits-inline"
+         href="#music-credits-dialog" hidden>{{ copy.get('music_credits', 'Music credits') }}</a>
     </div>
     <div class="mmr-np-progress" aria-hidden="true">
       <div class="mmr-np-progress-inner">
@@ -289,10 +291,31 @@
       <a href="#palinsesto" lang="it">Palinsesto</a>
       <a href="#dediche" lang="it">Dediche</a>
       <a href="#about">About</a>
+      <a class="mmr-credits-trigger" id="music-credits-footer" href="#music-credits-dialog">{{ copy.get('music_credits', 'Music credits') }}</a>
       <button id="pwa-install-btn" type="button" class="foot-link-btn" hidden>{{ copy.get('install_app', 'Install app') }}</button>
     </div>
   </div>
 </footer>
+
+<dialog class="mmr-credits-dialog" id="music-credits-dialog" aria-labelledby="music-credits-title">
+  <div class="mmr-credits-shell">
+    <header class="mmr-credits-header">
+      <h2 id="music-credits-title" tabindex="-1">{{ copy.get('credits_dialog_title', 'Music credits') }}</h2>
+      <button class="mmr-credits-close" id="music-credits-close" type="button">{{ copy.get('credits_close', 'Close') }}</button>
+    </header>
+    <div class="mmr-credits-scroll">
+      <section aria-labelledby="music-credits-current-title">
+        <h3 id="music-credits-current-title">{{ copy.get('current_track_credit', 'Current track credit') }}</h3>
+        <div id="music-credits-current" class="mmr-current-credit"></div>
+        <div id="music-credits-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+      </section>
+      <section aria-labelledby="music-credits-catalog-title">
+        <h3 id="music-credits-catalog-title">{{ copy.get('included_music_catalog', 'Included music catalog') }}</h3>
+        <ul id="music-credits-catalog" class="mmr-credits-catalog"></ul>
+      </section>
+    </div>
+  </div>
+</dialog>
 
 <audio id="radio-audio" preload="none" crossorigin="anonymous"></audio>
 

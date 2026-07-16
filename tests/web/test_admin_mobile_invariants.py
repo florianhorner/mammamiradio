@@ -782,11 +782,14 @@ def test_more_upcoming_row_not_card_styled_on_phone() -> None:
 
 
 def test_playlist_source_controls_are_non_destructive_by_default() -> None:
-    """Era/Jamendo controls should enrich rotation, not replace the live queue."""
+    """Era controls enrich rotation; transient Jamendo is never a quick-add source."""
     text = _read_admin_html()
     assert "enrichPlaylistSource(" in text
     assert "loadPlaylistSource(" not in text
     assert "'/api/playlist/enrich'" in text
+    assert 'id="sourceJamendoBtn"' not in text
+    assert "jamendo://default" not in text
+    assert 'id="jamendoSourceRow"' in text
 
 
 def test_purge_pool_toast_is_honest_when_source_clear_is_not_persisted() -> None:

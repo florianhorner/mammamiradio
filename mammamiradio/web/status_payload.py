@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import math
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track, safe_media_attribution_dict
+from mammamiradio.playlist.downloader import external_media_enabled
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
-from mammamiradio.web.assets import _ASSETS_DIR
 
 
 def _page_bounds(offset: int, limit: int, *, default_limit: int, max_limit: int) -> tuple[int, int]:
@@ -64,8 +63,7 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Build a single, explicit music onboarding status for UI surfaces."""
     global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
-    env_allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
-    allow_ytdlp = bool(getattr(config, "allow_ytdlp", env_allow_ytdlp))
+    allow_ytdlp = external_media_enabled(bool(getattr(config, "allow_ytdlp", False)))
     cache_key = (
         allow_ytdlp,
         getattr(state, "playlist_revision", 0),
@@ -80,12 +78,17 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     ):
         return _golden_path_cache
 
-    has_demo_assets = _has_any_mp3(_ASSETS_DIR / "demo" / "music")
+    try:
+        from mammamiradio.media.starter import load_starter_catalog
+
+        has_starter_assets = bool(load_starter_catalog(require_complete=True).entries)
+    except (OSError, ValueError, RuntimeError):
+        has_starter_assets = False
     has_local_music = _has_any_mp3(Path("music"))
 
     sources: list[str] = []
-    if has_demo_assets:
-        sources.append("bundled demo tracks")
+    if has_starter_assets:
+        sources.append("attributed starter collection")
     if has_local_music:
         sources.append("local music/*.mp3 files")
     playlist = getattr(state, "playlist", None)
@@ -123,10 +126,10 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "stage": "needs_music_source",
         "blocking": True,
         "headline": "No music source configured.",
-        "detail": "Set MAMMAMIRADIO_ALLOW_YTDLP=true or add MP3 files to music/.",
+        "detail": "The attributed starter package is incomplete. Add operator-cleared MP3 files to music/.",
         "steps": [
-            "Set MAMMAMIRADIO_ALLOW_YTDLP=true for chart music, or",
-            "Place MP3 files in the music/ directory.",
+            "Complete the bundled starter-media proof, or",
+            "Place operator-cleared MP3 files in the music/ directory.",
         ],
         **shared,
     }
@@ -433,7 +436,32 @@ def _serialize_track(track: Track, *, preferences: object | None = None) -> dict
     }
     if preferences is not None:
         payload["preference"] = _track_preference_score(track, preferences)
+    attribution = safe_media_attribution_dict(track.attribution)
+    if attribution is not None:
+        payload["music_attribution"] = attribution
     return payload
+
+
+def _public_starter_catalog() -> list[dict[str, object]]:
+    """Return only release-ready manifest facts for the listener credits dialog."""
+    try:
+        from mammamiradio.media.starter import load_starter_catalog
+
+        catalog = load_starter_catalog(require_complete=True)
+    except (OSError, ValueError, RuntimeError):
+        return []
+    return [
+        {
+            "title": entry.title,
+            "artist": entry.artist,
+            "isrc": entry.isrc,
+            "license_id": entry.license_id,
+            "license_url": entry.license_url,
+            "official_piece_url": entry.official_piece_url,
+            "modification_notice": entry.modification_notice,
+        }
+        for entry in catalog.entries
+    ]
 
 
 def _paginated_tracks(
@@ -499,6 +527,20 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        # Provider operation identity is intentionally process-private.  The
+        # validated music_attribution object below is the only provider fact
+        # added to public now-playing metadata.
+        "provider_track_id",
+        "lease_id",
+        "operation_id",
+        "boot_id",
+        "provider_epoch",
+        "client_id_fingerprint",
+        "artifact_path",
+        "artifact_sha256",
+        "source_revision",
+        "fetched_at",
+        "transform_description",
     }
 )
 
@@ -522,7 +564,16 @@ def _public_segment_metadata(metadata: object) -> dict:
         return copy.deepcopy(value)
 
     public = _without_internal(metadata)
-    return public if isinstance(public, dict) else {}
+    if not isinstance(public, dict):
+        return {}
+    if "music_attribution" in public:
+        raw_attribution = public.get("music_attribution")
+        attribution = safe_media_attribution_dict(raw_attribution if isinstance(raw_attribution, dict) else None)
+        if attribution is None:
+            public.pop("music_attribution", None)
+        else:
+            public["music_attribution"] = attribution
+    return public
 
 
 def _public_now_streaming_payload(now_streaming: dict | None) -> dict:

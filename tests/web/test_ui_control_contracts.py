@@ -1029,17 +1029,18 @@ class TestSourceControlVisibilityContract:
         assert data["charts_reload"] is True
 
     @pytest.mark.asyncio
-    async def test_admin_html_binds_source_buttons_to_capability_flags_only(self):
+    async def test_admin_html_keeps_jamendo_out_of_quick_add_and_charts_capability_gated(self):
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/admin", headers=AUTH)
 
         html = resp.text
-        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert 'id="sourceJamendoBtn"' not in html
+        assert 'id="jamendoSourceRow"' in html
+        assert 'id="jamendoSettings"' in html
         assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
         assert "function sourceControlVisibility(caps)" in html
-        assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html
         assert "jamendoSourceAvailable" not in html
 

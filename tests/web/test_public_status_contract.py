@@ -16,10 +16,12 @@ Cathedral standard:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
@@ -98,6 +100,124 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+
+
+@pytest.mark.asyncio
+async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_attribution():
+    app = _make_test_app()
+    app.state.config.playlist.jamendo_enabled = True
+    app.state.config.playlist.jamendo_client_id = "private_client_123"
+    app.state.config.playlist.jamendo_noncommercial_acknowledged = True
+    app.state.config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION
+    app.state.jamendo_provider = SimpleNamespace(
+        status=lambda: {
+            "state": "ready",
+            "ready": True,
+            "in_flight": False,
+            "last_success_age_sec": 4,
+            "last_failure_code": None,
+            "rejected_count": 2,
+            "stream_url": "https://storage.jamendo.com/file.mp3?token=private",
+            "filesystem_path": "/tmp/jamendo/private/normalized.mp3",
+            "boot_id": "private-boot",
+            "operation_id": "private-operation",
+            "lease_id": "private-lease",
+        }
+    )
+    attribution = {
+        "provider": "jamendo",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://www.jamendo.com/track/12345/example",
+        "credit": "Artist - Track, provided by Jamendo, CC-BY-4.0",
+        "modified": True,
+        "basis": "provider_reported",
+    }
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Artist - Track",
+        "started": 1.0,
+        "duration_sec": 180.0,
+        "metadata": {
+            "title": "Artist - Track",
+            "artist": "Artist",
+            "source_kind": "jamendo",
+            "provider_track_id": "12345",
+            "operation_id": "private-operation",
+            "lease_id": "private-lease",
+            "artifact_path": "/tmp/jamendo/private/normalized.mp3",
+            "music_attribution": attribution,
+        },
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_response = await client.get("/public-status")
+        admin_response = await client.get("/status")
+
+    public = public_response.json()
+    admin = admin_response.json()
+    assert "jamendo" not in public
+    assert public["now_streaming"]["metadata"] == {
+        "title": "Artist - Track",
+        "artist": "Artist",
+        "source_kind": "jamendo",
+        "music_attribution": attribution,
+    }
+    assert admin["now_streaming"] == public["now_streaming"]
+    assert admin["jamendo"] == {
+        "enabled": True,
+        "state": "ready",
+        "client_id_configured": True,
+        "noncommercial_acknowledged": True,
+        "terms_scope": "noncommercial_api_use",
+        "provider_confirmation": "pending",
+        "ready": True,
+        "in_flight": False,
+        "last_success_age_sec": 4,
+        "last_failure_code": None,
+        "rejected_count": 2,
+    }
+    for private_value in (
+        "private_client_123",
+        "token=private",
+        "/tmp/jamendo/private",
+        "private-boot",
+        "private-operation",
+        "private-lease",
+    ):
+        assert private_value not in public_response.text
+        assert private_value not in admin_response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_status_reports_playing_until_disabled_jamendo_track_finishes():
+    app = _make_test_app()
+    app.state.config.playlist.jamendo_enabled = False
+    app.state.config.playlist.jamendo_client_id = "private_client_123"
+    app.state.config.playlist.jamendo_noncommercial_acknowledged = True
+    app.state.config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION
+    app.state.jamendo_provider = SimpleNamespace(
+        status=lambda: {
+            "state": "playing",
+            "ready": False,
+            "in_flight": False,
+            "last_success_age_sec": 4,
+            "last_failure_code": None,
+            "rejected_count": 0,
+        }
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert "jamendo" not in public
+    assert admin["jamendo"]["enabled"] is False
+    assert admin["jamendo"]["state"] == "playing"
+    assert admin["jamendo"]["ready"] is False
+    assert admin["jamendo"]["in_flight"] is False
 
 
 @pytest.mark.asyncio
