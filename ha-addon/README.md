@@ -25,12 +25,15 @@ The store shows two apps from this repository:
 
 Install one or the other; they cannot run at the same time (both use port 8000). See the [add-on release runbook](../docs/runbooks/ha-addon.md#edge-channel-dev-releases) for Edge details.
 
+Both add-ons use the same attributed offline starter catalog. Neither image
+contains the `yt-dlp` distribution, Python module, or executable; legacy
+extractor-enablement settings are ignored.
+
 ## Configuration
 
 After installing, go to the add-on's **Configuration** tab:
 
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
-- **Jamendo Client ID** (optional): Enables CC-licensed music from Jamendo. Get a free client ID at [devportal.jamendo.com](https://devportal.jamendo.com). Leave empty to use other available music sources.
 - **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant Integration**: The master Home Assistant connection (default: on). It enables entity publishing, optional host context, and timer interrupts. Turn it off only when the station should run without Home Assistant access.
 - **Host home context**: A separate privacy and performance choice (default: on). Turn it off to stop the full Home Assistant state polling used for AI host prompts while keeping the integration, entity publishing, and timer interrupts active.
@@ -46,17 +49,34 @@ After installing, go to the add-on's **Configuration** tab:
 
 ### Provider keys (not in the Configuration tab)
 
-AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder. You do not need them to start: without an AI key, the hosts use stock copy and fallback voices. Music is separate — live charts need outbound access, or configure a Jamendo client ID in the app's advanced options. Save one AI host key from **Motore → Setup → AI hosts**, which writes the file for you. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts; `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY` are optional premium voice providers. Keys saved through the old Configuration-tab fields by earlier versions move into the secrets file automatically the first time the updated add-on starts; non-empty file values win per key.
+The offline starter catalog needs no key and no network. AI/TTS credentials
+live in `/config/secrets.env` inside the add-on config folder. Without an AI
+key, the hosts use stock copy and fallback voices. Save one AI host key from
+**Motore → Setup → AI hosts**, which writes the file for you.
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts;
+`AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and `ELEVENLABS_API_KEY` are optional
+premium voice providers. Keys saved through the old Configuration-tab fields
+by earlier versions move into the secrets file automatically the first time the
+updated add-on starts; non-empty file values win per key.
+
+Jamendo is a separate, optional music source under **Motore → Setup → Music
+sources**. It is off by default and requires both your client ID and an explicit
+non-commercial-use acknowledgement. Tracks are prepared one at a time and
+deleted after play or cancellation. License facts shown by the app are
+provider-reported, and provider confirmation for this station model remains
+pending. Read the [music-source and rights guide](../docs/music-sources.md)
+before enabling it.
 
 ## Usage
 
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
-3. Confirm the log shows `Producer started` and `/readyz` returns `"ready": true`. No provider key is required, but a full music rotation still needs live-chart access or Jamendo
+3. Confirm the log shows `Producer started` and `/readyz` returns `"ready": true`. The complete attributed starter rotation works offline without a provider key
 4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
 5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from **Motore → Setup → AI hosts** to unlock live AI hosts
 6. Review **Home context preview** and mute any entity the hosts should never use. Casual host breaks use one rotating safe cue at most; room-presence remains off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** are separate: turn host context off to stop prompt-context polling while keeping entity publishing and timer interrupts. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
-7. Install the HACS integration for the controllable `media_player.mammamiradio`
+7. Optionally configure Jamendo under **Motore → Setup → Music sources** after reviewing and accepting the current non-commercial-use boundary
+8. Install the HACS integration for the controllable `media_player.mammamiradio`
    entity and native `media-source://mammamiradio/live` casting
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.

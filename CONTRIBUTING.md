@@ -23,7 +23,14 @@ Full prerequisites, run modes, tests, lint, and commit-message rules below.
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-No AI key is required to run the station: host writing falls back to stock copy and fallback voices. Music is separate. With `MAMMAMIRADIO_ALLOW_YTDLP=true`, the app can use live charts when the network permits; Jamendo is the other network source. In a source checkout, you can also put MP3s in the repo-local `music/` directory. That development path is not mounted by the stock Docker Compose or Home Assistant packages. The bundled recovery clip can cover a thin queue, but it is not a music rotation.
+No AI or music-provider key is required to run the station: host writing falls
+back to stock copy and fallback voices, while the attributed starter collection
+provides offline music. Jamendo is an explicit, default-off, acknowledged
+non-commercial transient option. A source checkout may also use MP3s in the
+repo-local `music/` directory; those remain operator-supplied and are not
+project-cleared. External extraction requires the standalone `external-media`
+extra plus an explicit enablement flag and is absent from both Home Assistant
+add-ons. See [Music sources and rights boundaries](docs/music-sources.md).
 
 ## Local setup
 
@@ -127,6 +134,80 @@ scripts/validate-addon.sh
 ```
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
+
+## Bundled starter media
+
+`mammamiradio/assets/starter/catalog.json` is the only starter-catalog
+authority. Do not add a parallel title list, hand-edit hashes, copy audio into
+the package directly, or use the workflow for an arbitrary URL. The tooling
+reports source and audio facts; a human still owns the full audition and rights
+review.
+
+Acquire only one exact predeclared Incompetech row:
+
+```bash
+python scripts/starter-catalog.py acquire --isrc USUAN1900056
+```
+
+The command prints a candidate ID and writes source evidence under ignored
+`tmp/starter-media/`. Stage that exact candidate into the deterministic station
+format:
+
+```bash
+python scripts/starter-catalog.py stage --candidate <candidate-id>
+```
+
+Listen to `staged.mp3` from start to finish. Create a decision file outside the
+repository (for example `/tmp/starter-decision.json`) with this exact shape:
+
+```json
+{
+  "schema_version": "1",
+  "isrc": "USUAN1900056",
+  "reviewed_at": "2026-07-16T12:00:00Z",
+  "reviewer_role": "release maintainer",
+  "listened_from_start_to_finish": true,
+  "title_and_artist_match": true,
+  "no_unexpected_speech_or_restricted_content": true,
+  "editorially_approved": true,
+  "license_evidence_reviewed": true
+}
+```
+
+Do not set a field to `true` without performing that review. Approval installs
+the derivative, redacted receipt, and manifest row as one bounded operation:
+
+```bash
+python scripts/starter-catalog.py approve \
+  --candidate <candidate-id> \
+  --replace USUAN1900056 \
+  --decisions /tmp/starter-decision.json
+```
+
+Then inspect the manifest/audio/receipt diff and run:
+
+```bash
+make media-check
+make media-proof
+```
+
+`media-check` is the fast offline manifest, evidence, byte, and audio gate.
+`media-proof` additionally proves wheel, sdist, amd64/aarch64 add-on image,
+FFprobe, extractor-containment, and Jamendo-transience parity. A release remains
+blocked until all twelve exact derivatives total at least 45 minutes, remain at
+or below 75 MiB, and have complete evidence and audition receipts. Release
+evidence also needs 20 cold Home Assistant Green listener runs with p95 first
+accepted non-silent starter byte at or below two seconds.
+
+To replace a mistaken approval before publication, revert the derivative,
+receipt, and the same manifest row together; never leave one of the three at a
+new revision. Discarding an unapproved ignored candidate changes no packaged
+state. The starter shuffle bag derives its cycle identity from the manifest
+digest, plays all twelve before repeating, and starts a fresh complete cycle
+when a new catalog is loaded; do not add or edit separate cycle-reset state.
+
+A bundled-media change also updates the Unreleased sections in both changelogs.
+Version files change only in an explicitly authorized release.
 
 ### Auditioning a new ad voice
 

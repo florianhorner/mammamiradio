@@ -5,7 +5,7 @@ This repo's workspace lifecycle for [Conductor](https://conductor.run) is define
 ## Scripts
 
 - `scripts/conductor-setup.sh` — bootstraps the workspace venv and dev dependencies. Looks for `~/.config/mammamiradio/.env`, then falls back to `$CONDUCTOR_ROOT_PATH/.env`, and symlinks the first match into the workspace.
-- `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and sets `MAMMAMIRADIO_ALLOW_YTDLP=true` by default.
+- `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and keeps `MAMMAMIRADIO_ALLOW_YTDLP=false`. External extraction is a deliberate standalone opt-in that also requires the optional `external-media` package extra; the default Conductor run uses local-or-starter music.
 - `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived.
 
 ## Commit and PR convention contract

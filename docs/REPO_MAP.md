@@ -15,8 +15,9 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Ads (brands, voices, campaign spines)              | `mammamiradio/hosts/ad_creative.py`          |
 | Foreign/competitor station-name scrubbing (spoken + now-playing) | `mammamiradio/hosts/station_name_guard.py` |
 | Post-air listener/song memory extraction          | `mammamiradio/hosts/memory_extractor.py`   |
-| Music sources (charts, Jamendo, local files)       | `mammamiradio/playlist/playlist.py`          |
-| yt-dlp / Jamendo / local file fetch                | `mammamiradio/playlist/downloader.py`        |
+| Durable base sources (starter, local, optional standalone external) | `mammamiradio/playlist/playlist.py` |
+| Transient Jamendo stream lease and artifact       | `mammamiradio/playlist/jamendo_transient.py` |
+| Optional standalone extraction / local normalization | `mammamiradio/playlist/downloader.py`     |
 | Per-track rules ("skip the bridge", anthems)       | `mammamiradio/playlist/track_rules.py`       |
 | Per-track machine-derived song memory              | `mammamiradio/playlist/song_cues.py`         |
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |

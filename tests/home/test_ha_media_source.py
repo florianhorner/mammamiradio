@@ -270,8 +270,8 @@ def test_first_listen_funnel_documents_the_hacs_speaker_proof() -> None:
     assert "mute individual\nentities locally" in readme
     assert "turn **Host home context** off to stop full-state polling" in readme
     assert "optional HACS speaker" in readme
-    assert "No AI key is required for your first listen" in readme
-    assert "A reachable music source is still required" in readme
+    assert "No AI key, provider account, or network music source is required for your first" in readme
+    assert "offline, attributed twelve-track Incompetech" in readme
     assert "Host home context** is on by default" in rendered_readme
     assert "not sent to an AI provider" in readme
     assert "## Check the app (operators)" in readme

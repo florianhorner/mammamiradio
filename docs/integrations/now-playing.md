@@ -52,19 +52,28 @@ check the status code before parsing the body.
   "now_playing": {
     "segment_class": "music",
     "segment_type": "music",
-    "title": "Volare",
+    "title": "Carefree",
     "started_at": 1746500000.0,
-    "duration_estimate_sec": 210.0,
-    "artist": "Domenico Modugno",
-    "artwork": "https://example.test/art.jpg",
-    "album": "Mr Volare",
-    "year": 1958,
-    "external_ids": { "spotify": "v01", "youtube": "y01" },
+    "duration_estimate_sec": 205.0,
+    "artist": "Kevin MacLeod",
+    "artwork": null,
+    "album": null,
+    "year": null,
+    "external_ids": {},
+    "music_attribution": {
+      "provider": "incompetech",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+      "credit": "\"Carefree\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "modified": true,
+      "basis": "bundled_manifest"
+    },
     "host": null,
     "context": {}
   },
   "up_next": [
-    { "segment_class": "music",  "segment_type": "music",  "title": "Sapore di Sale",  "predicted": false },
+    { "segment_class": "music",  "segment_type": "music",  "title": "Miami Viceroy",  "predicted": false },
     { "segment_class": "voice",  "segment_type": "banter", "title": "Host banter",     "predicted": true  }
   ],
   "session_state": "live",
@@ -89,7 +98,7 @@ The stable bucket your UI branches on. Three classes, plus a sentinel:
 
 | `segment_class` | Meaning | Use case |
 | --- | --- | --- |
-| `music` | A track. `artist`, `artwork`, `external_ids`, `album`, `year` populated when known. | Render a music card. |
+| `music` | A track. `artist`, `artwork`, `external_ids`, `album`, `year`, and `music_attribution` populated when known. | Render a music card and an optional factual credits link. |
 | `voice` | A host segment (banter, news flash). `host` populated. | Render a host card with the host's name. |
 | `interstitial` | Ad, station ID, time check, sweeper. Title-only. | Render a station card (no track shape). |
 | `unavailable` | Transient: skipping, unknown future segment type. | Render a generic "on air" state without trying to populate music fields. |
@@ -132,6 +141,26 @@ mutation. Updated when:
 The `changed_at` value is folded into the weak ETag (see below) so
 consumers using `If-None-Match` will only revalidate when state actually
 moves.
+
+### `music_attribution` (additive in schema v1)
+
+Music rows may include `music_attribution` without changing
+`schema_version: "1"`. Consumers must tolerate the field being absent: local
+operator files intentionally do not receive a project license claim, and an
+older or unknown source may have no safe attribution object.
+
+| Field | Meaning |
+| --- | --- |
+| `provider` | Public source label such as `incompetech` or `jamendo`. |
+| `license_id`, `license_url` | The listed license and validated public license URL. Current accepted music uses CC BY 3.0 or 4.0. |
+| `source_url` | Validated public track/source page, never the private audio stream URL. |
+| `credit` | Complete factual credit text suitable for display. |
+| `modified` | Whether Mamma Mi Radio normalized/transcoded the bytes. |
+| `basis` | `bundled_manifest` for hash-pinned starter media or `provider_reported` for Jamendo's current report. |
+
+`provider_reported` and a prepared/playing track are not a clearance verdict.
+Render source and license links as external, untrusted URLs: allow HTTPS only,
+validate the expected public hosts, and use `rel="noopener noreferrer"`.
 
 ## Caching: ETag + Cache-Control
 
