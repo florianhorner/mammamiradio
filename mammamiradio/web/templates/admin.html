@@ -4057,10 +4057,14 @@ function emptyPoolRecoveryState(st,caps,capsState){
   }
   const goldenPath=st?.golden_path||caps?.golden_path||{};
   const hasSetupGuidance=Boolean(String(goldenPath.detail||'').trim());
+  const rawDetail=hasSetupGuidance?String(goldenPath.detail||'').trim():'';
+  const detailLooksTechnical=/\bMAMMAMIRADIO_[A-Z0-9_]+\b|(?:^|\s)(?:\.{0,2}\/|[A-Za-z0-9_.-]+\/)|\b[A-Z][A-Z0-9_]{2,}=/i.test(rawDetail);
   const detail=goldenPath.stage==='needs_music_source'
-    ?hasSetupGuidance
-      ?'No music source is configured. Open setup for configuration details.'
-      :'No music source is configured. Open setup to add one.'
+    ?hasSetupGuidance&&!detailLooksTechnical
+      ?rawDetail
+      :hasSetupGuidance
+        ?'No music source is configured. Open setup for configuration details.'
+        :'No music source is configured. Open setup to add one.'
     :'No import source is available. Open setup to review the current music source.';
   return {action:'setup',message:`The rotation is empty. ${detail}`};
 }
