@@ -101,18 +101,20 @@ def test_find_local_matches_by_title(track, music_dir):
     assert result == mp3
 
 
-def test_find_demo_asset_matches_by_cache_key(track, tmp_path):
-    from mammamiradio.playlist.downloader import _find_demo_asset
+def test_resolver_never_consults_unmanifested_demo_music(track, cache_dir, music_dir, tmp_path):
+    import mammamiradio.playlist.downloader as downloader
 
-    demo_dir = tmp_path / "demo_assets" / "music"
-    demo_dir.mkdir(parents=True)
-    demo_file = demo_dir / f"{track.cache_key}_demo.mp3"
+    demo_file = tmp_path / "assets" / "demo" / "music" / f"{track.cache_key}.mp3"
+    demo_file.parent.mkdir(parents=True)
     demo_file.touch()
 
-    with patch("mammamiradio.playlist.downloader._DEMO_ASSETS_DIR", demo_dir):
-        result = _find_demo_asset(track)
+    # Even if a future edit accidentally reintroduces a matching helper, the
+    # concrete-source resolver must not call it or admit those bytes.
+    with patch.object(downloader, "_find_demo_asset", return_value=demo_file, create=True) as demo_lookup:
+        result = downloader._resolve_cached_or_local(track, cache_dir, music_dir)
 
-    assert result == demo_file
+    assert result is None
+    demo_lookup.assert_not_called()
 
 
 # --- _download_sync: cache hit ---
@@ -125,8 +127,23 @@ def test_cache_hit_returns_immediately(track, cache_dir, music_dir):
     cached.write_text("fake audio")
     (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
-    result = _download_sync(track, cache_dir, music_dir)
+    with patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True):
+        result = _download_sync(track, cache_dir, music_dir)
     assert result == cached
+
+
+def test_external_cache_is_ineligible_when_effective_gate_is_off(track, cache_dir, music_dir):
+    from mammamiradio.playlist.downloader import _download_sync
+
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.write_text("previously downloaded audio")
+
+    with patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False):
+        result = _download_sync(track, cache_dir, music_dir)
+
+    assert result != cached
+    assert result.name == f"_failed_{track.cache_key}.mp3"
+    assert result.read_text() == "yt-dlp disabled"
 
 
 # --- _download_sync: local file found ---
@@ -143,20 +160,21 @@ def test_local_file_found(track, cache_dir, music_dir):
     assert result == local_mp3
 
 
-def test_download_sync_prefers_demo_asset(track, cache_dir, music_dir, tmp_path):
+def test_download_sync_ignores_unmanifested_demo_asset(track, cache_dir, music_dir, tmp_path):
     from mammamiradio.playlist.downloader import _download_sync
 
     demo_dir = tmp_path / "demo_assets" / "music"
     demo_dir.mkdir(parents=True)
     demo_file = demo_dir / f"{track.cache_key}.mp3"
     demo_file.write_text("demo audio")
-    (music_dir / f"{track.cache_key}.mp3").write_text("local audio")
+    local_file = music_dir / f"{track.cache_key}.mp3"
+    local_file.write_text("local audio")
     (cache_dir / f"_failed_{track.cache_key}.mp3").write_text("prior failure")
 
-    with patch("mammamiradio.playlist.downloader._DEMO_ASSETS_DIR", demo_dir):
-        result = _download_sync(track, cache_dir, music_dir)
+    result = _download_sync(track, cache_dir, music_dir)
 
-    assert result == demo_file
+    assert result == local_file
+    assert demo_file.exists()
 
 
 # --- _download_sync: yt-dlp success ---
@@ -440,7 +458,7 @@ def test_ytdlp_import_error_marks_track_unavailable(track, cache_dir, music_dir)
 
     expected_path = cache_dir / f"_failed_{track.cache_key}.mp3"
     assert result == expected_path
-    assert result.read_text().startswith("yt-dlp failed:")
+    assert result.read_text() == "yt-dlp disabled"
 
 
 def test_ytdlp_disabled_uses_failed_marker_not_real_cache_path(track, cache_dir, music_dir):
@@ -468,7 +486,8 @@ async def test_download_track_async(track, cache_dir, music_dir):
     cached = cache_dir / f"{track.cache_key}.mp3"
     cached.write_text("cached audio")
 
-    result = await download_track(track, cache_dir, music_dir)
+    with patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True):
+        result = await download_track(track, cache_dir, music_dir)
     assert result == cached
 
 
@@ -621,6 +640,23 @@ def test_search_ytdlp_metadata_disabled_returns_empty():
 
     with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
         assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+def test_external_media_gate_requires_both_opt_in_and_optional_module():
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    with patch("mammamiradio.playlist.downloader._load_external_media_module") as load:
+        assert external_media_enabled(configured=False) is False
+        load.assert_not_called()
+
+    with patch(
+        "mammamiradio.playlist.downloader._load_external_media_module",
+        side_effect=RuntimeError("optional module missing"),
+    ):
+        assert external_media_enabled(configured=True) is False
+
+    with patch("mammamiradio.playlist.downloader._load_external_media_module", return_value=MagicMock()):
+        assert external_media_enabled(configured=True) is True
 
 
 def test_search_ytdlp_metadata_import_error_returns_empty():
@@ -1298,34 +1334,6 @@ def test_evict_cache_lru_skips_protected_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _find_demo_asset: cache hit on second call
-# ---------------------------------------------------------------------------
-
-
-def test_find_demo_asset_cache_hit_on_second_call(tmp_path):
-    """_find_demo_asset must return a cached result without re-globbing on repeat calls."""
-    import mammamiradio.playlist.downloader as _dl
-    from mammamiradio.playlist.downloader import _find_demo_asset
-
-    track = Track(title="Test Song", artist="Test Artist", duration_ms=180000)
-    demo_dir = tmp_path / "demo_music"
-    demo_dir.mkdir()
-    mp3 = demo_dir / f"{track.title.lower()}.mp3"
-    mp3.touch()
-
-    # Reset module-level cache so we start clean
-    _dl._demo_files_cache = None
-
-    with patch("mammamiradio.playlist.downloader._DEMO_ASSETS_DIR", demo_dir):
-        result1 = _find_demo_asset(track)
-        # Second call: cache should be set, glob should NOT be called again
-        result2 = _find_demo_asset(track)
-
-    assert result1 == mp3
-    assert result2 == mp3
-
-
-# ---------------------------------------------------------------------------
 # _find_local: TTL cache hit path
 # ---------------------------------------------------------------------------
 
@@ -1357,7 +1365,7 @@ def test_find_local_uses_ttl_cache(tmp_path):
 
 
 def test_download_external_sync_cache_hit(tmp_path):
-    """_download_external_sync must return the cached file immediately."""
+    """Enabled external media may reuse its own cached file."""
     from mammamiradio.playlist.downloader import _download_external_sync
 
     cache_dir = tmp_path / "cache"
@@ -1368,8 +1376,26 @@ def test_download_external_sync_cache_hit(tmp_path):
     cached = cache_dir / f"{track.cache_key}.mp3"
     cached.touch()
 
-    result = _download_external_sync(track, cache_dir, music_dir)
+    with patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True):
+        result = _download_external_sync(track, cache_dir, music_dir)
     assert result == cached
+
+
+def test_download_external_sync_rejects_cached_external_bytes_when_disabled(tmp_path):
+    from mammamiradio.playlist.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(title="Cached", artist="Artist", duration_ms=180000)
+    (cache_dir / f"{track.cache_key}.mp3").touch()
+
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
+        pytest.raises(RuntimeError, match="yt-dlp is disabled"),
+    ):
+        _download_external_sync(track, cache_dir, music_dir)
 
 
 def test_download_external_sync_local_file(tmp_path):
@@ -1422,11 +1448,12 @@ async def test_download_external_track_returns_path(tmp_path):
     expected = cache_dir / f"{track.cache_key}.mp3"
     expected.touch()
 
-    result = await download_external_track(track, cache_dir, music_dir=tmp_path / "music")
+    with patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True):
+        result = await download_external_track(track, cache_dir, music_dir=tmp_path / "music")
     assert result == expected
 
 
-def test_jamendo_direct_url_failure_does_not_fall_back_to_ytdlp(tmp_path):
+def test_persistent_jamendo_direct_url_never_reaches_any_downloader(tmp_path):
     from mammamiradio.playlist.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
@@ -1443,14 +1470,12 @@ def test_jamendo_direct_url_failure_does_not_fall_back_to_ytdlp(tmp_path):
     )
 
     with (
-        patch("mammamiradio.playlist.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
-        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
         patch("mammamiradio.playlist.downloader._download_ytdlp") as mock_ytdlp,
+        pytest.raises(RuntimeError, match="persistent Jamendo track acquisition is retired"),
     ):
-        result = _download_sync(track, cache_dir, music_dir)
+        _download_sync(track, cache_dir, music_dir)
 
-    assert result.name == f"_failed_{track.cache_key}.mp3"
-    assert result.read_text() == "jamendo direct-url failed: fetch failed"
+    assert list(cache_dir.iterdir()) == []
     mock_ytdlp.assert_not_called()
 
 
@@ -1549,13 +1574,12 @@ def test_jamendo_without_direct_url_blocks_ytdlp(tmp_path):
     )
 
     with (
-        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
         patch("mammamiradio.playlist.downloader._download_ytdlp") as mock_ytdlp,
+        pytest.raises(RuntimeError, match="persistent Jamendo track acquisition is retired"),
     ):
-        result = _download_sync(track, cache_dir, music_dir)
+        _download_sync(track, cache_dir, music_dir)
 
-    assert result.name == f"_failed_{track.cache_key}.mp3"
-    assert result.read_text() == "jamendo fallback blocked"
+    assert list(cache_dir.iterdir()) == []
     mock_ytdlp.assert_not_called()
 
 

@@ -1,5 +1,5 @@
 name: Mamma Mi Radio
-description: AI-powered Italian radio station — two AI hosts banter, react to your home, and play music from Jamendo or live Italian charts. Real radio feel, no subscriptions.
+description: AI-powered Italian radio station — two AI hosts banter, react to your home, and start with an attributed offline music collection. Optional Jamendo expansion, no subscriptions.
 slug: mammamiradio
 version: 2.18.0
 stage: stable
@@ -56,4 +56,3 @@ schema:
   songs_between_banter: int(2,60)?
   songs_between_ads: int(1,60)?
   ad_spots_per_break: int(1,5)?
-  jamendo_client_id: password?

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mammamiradio.audio.normalizer import normalize
 from mammamiradio.core.models import Track
+from mammamiradio.playlist.downloader import _load_external_media_module, external_media_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def _resolve_cookies_arg() -> list[str]:
     """Try Chrome, Firefox, Safari in order for cookie extraction."""
     for browser in ("chrome", "firefox", "safari"):
         try:
-            import yt_dlp
+            yt_dlp = _load_external_media_module()
 
             with yt_dlp.YoutubeDL({"cookiesfrombrowser": (browser,), "quiet": True}) as ydl:
                 ydl.cookiejar  # noqa: B018 — just test access
@@ -127,7 +128,10 @@ def _sync_playlist_blocking(
     config=None,
 ) -> list[Track]:
     """Download playlist tracks to cache and write metadata to SQLite."""
-    import yt_dlp
+    configured = getattr(config, "allow_ytdlp", None) if config is not None else None
+    if not external_media_enabled(configured):
+        raise RuntimeError("external media is unavailable in this installation")
+    yt_dlp = _load_external_media_module()
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 

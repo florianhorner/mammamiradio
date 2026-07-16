@@ -6,7 +6,7 @@ import random
 import re
 from pathlib import Path
 
-from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_cache_source, load_track_metadata
 from mammamiradio.core.models import SegmentType, StationState, Track
 from mammamiradio.playlist.downloader import is_rejected_cache_key
 
@@ -73,6 +73,20 @@ def _norm_cache_key(path: Path) -> str:
     return match.group("cache_key")
 
 
+def norm_cache_origin_is_eligible(path: Path, *, allow_external_media: bool = False) -> bool:
+    """Return whether a persisted normalized artifact has a playable origin.
+
+    Operator-local origins are always eligible. Starter artifacts play directly
+    from the canonical package and must never be impersonated by a cache sidecar.
+    Extractor origins remain coupled to the effective optional capability, while
+    legacy unknown, demo, and persistent Jamendo origins fail closed.
+    """
+    allowed_sources = {"local"}
+    if allow_external_media:
+        allowed_sources.update({"classic", "youtube"})
+    return load_track_cache_source(path) in allowed_sources
+
+
 def _recent_music_identity_keys(state: StationState) -> set[str]:
     recent_keys: set[str] = set()
     if state.now_streaming:
@@ -108,7 +122,13 @@ def _choose_rescue_candidate(paths: list[Path]) -> Path:
     return random.choice(paths)
 
 
-def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
+def select_norm_cache_rescue(
+    cache_dir: Path,
+    state: StationState,
+    *,
+    require_known_origin: bool = False,
+    allow_external_media: bool = False,
+) -> Path | None:
     """Pick a cache rescue clip without replaying the current/recent song first.
 
     A banned song must never re-air, even through the rescue path — so blocklisted
@@ -116,6 +136,12 @@ def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | Non
     banned (nothing left) the rescue degrades to ``None`` and the caller's next layer
     (canned clip / forced banter) keeps audio flowing rather than airing a banned song."""
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    if require_known_origin:
+        norm_files = [
+            path
+            for path in norm_files
+            if norm_cache_origin_is_eligible(path, allow_external_media=allow_external_media)
+        ]
     norm_files = [path for path in norm_files if not is_rejected_cache_key(_norm_cache_key(path))]
     blocklist = getattr(state, "blocklist", None)
     if blocklist:

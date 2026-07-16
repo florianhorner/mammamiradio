@@ -40,6 +40,7 @@ def _extract_python_snippet(
     provider_file: Path | None = None,
     supervisor_api: str = "http://127.0.0.1:1",
     recovery_marker: Path | None = None,
+    jamendo_migration_marker: Path | None = None,
 ) -> str:
     """Extract the Python body from the python3 -c "..." block in run.sh,
     substituting the real options and secrets file paths."""
@@ -60,6 +61,8 @@ def _extract_python_snippet(
     raw = raw.replace("$SUPERVISOR_API", supervisor_api)
     marker_path = recovery_marker or (options_file.parent / "recovery-marker-not-set")
     raw = raw.replace("$RECOVERY_MARKER_FILE", str(marker_path))
+    jamendo_marker_path = jamendo_migration_marker or (options_file.parent / "jamendo-migration-marker-not-set")
+    raw = raw.replace("$JAMENDO_MIGRATION_MARKER_FILE", str(jamendo_marker_path))
     # Shell escapes single-quotes as '\'' inside double-quoted strings; undo that
     raw = raw.replace("\\'", "'")
     return textwrap.dedent(raw)
@@ -82,6 +85,7 @@ def _run_parser(
     env: dict[str, str] | None = None,
     keep_dir: Path | None = None,
     recovery_marker: Path | None = None,
+    jamendo_migration_marker: Path | None = None,
 ) -> tuple[int, str, str]:
     """Write options to a temp file, run the parser snippet, return (returncode, stdout, stderr)."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -96,6 +100,7 @@ def _run_parser(
             provider_path,
             supervisor_api=supervisor_api or "http://127.0.0.1:1",
             recovery_marker=recovery_marker,
+            jamendo_migration_marker=jamendo_migration_marker,
         )
         result = subprocess.run(
             [sys.executable, "-c", snippet],
@@ -283,8 +288,8 @@ def test_parser_skips_empty_keys():
     assert "OPENAI_API_KEY" not in exports
 
 
-def test_parser_hidden_optional_keys_can_be_absent_or_blank():
-    """Schema-only legacy fields must be quiet when unset, but still export when explicitly saved."""
+def test_parser_legacy_secret_keys_can_be_absent_or_blank():
+    """Removed legacy fields stay quiet when unset or blank."""
     hidden_optional_env = {
         "jamendo_client_id": "JAMENDO_CLIENT_ID",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
@@ -364,6 +369,101 @@ def test_parser_exports_all_supported_keys():
     assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "false"
     assert exports["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "600"
     assert exports["JAMENDO_CLIENT_ID"] == "abc123"
+
+
+def test_parser_migrates_legacy_jamendo_id_before_removing_option():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base = Path(tmp_dir)
+        marker = base / "jamendo-migrated-v1"
+        rc, stdout, _ = _run_parser(
+            {"station_name": "Test", "jamendo_client_id": "legacy-client"},
+            keep_dir=base,
+            jamendo_migration_marker=marker,
+        )
+
+        assert rc == 0
+        exports = _parse_exports(stdout)
+        assert exports["JAMENDO_CLIENT_ID"] == "legacy-client"
+        assert "MAMMAMIRADIO_JAMENDO_ENABLED" not in exports
+        assert "MAMMAMIRADIO_JAMENDO_ACKNOWLEDGED" not in exports
+        secrets_path = base / "secrets.env"
+        assert secrets_path.read_text() == "JAMENDO_CLIENT_ID=legacy-client\n"
+        assert secrets_path.stat().st_mode & 0o777 == 0o600
+        assert json.loads((base / "options.json").read_text()) == {"station_name": "Test"}
+        assert marker.read_text() == "v1\n"
+        notice = (
+            "Jamendo client ID imported from an earlier version. Review and enable it only for non-commercial API use."
+        )
+        warning_lines = [line for line in stdout.splitlines() if "[mammamiradio] WARNING:" in line]
+        expected_warning = "echo " + shlex.quote("[mammamiradio] WARNING: " + notice) + " >&2"
+        assert warning_lines.count(expected_warning) == 1
+        assert all("legacy-client" not in line for line in warning_lines)
+
+        rc, repeated_stdout, _ = _run_parser(
+            {"station_name": "Test"},
+            provider_env_text="JAMENDO_CLIENT_ID=legacy-client\n",
+            keep_dir=base,
+            jamendo_migration_marker=marker,
+        )
+        assert rc == 0
+        assert expected_warning not in repeated_stdout
+
+
+def test_parser_jamendo_migration_retries_without_deleting_legacy_value_on_failure():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base = Path(tmp_dir)
+        options_path = base / "options.json"
+        options_path.write_text(json.dumps({"jamendo_client_id": "keep-me"}))
+        marker = base / "jamendo-migrated-v1"
+        missing_parent_secret = base / "missing" / "secrets.env"
+        snippet = _extract_python_snippet(
+            options_path,
+            missing_parent_secret,
+            jamendo_migration_marker=marker,
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            env=_scrubbed_env(),
+        )
+
+        assert result.returncode == 0
+        assert "will retry next boot" in result.stdout
+        assert json.loads(options_path.read_text())["jamendo_client_id"] == "keep-me"
+        assert not marker.exists()
+        assert "JAMENDO_CLIENT_ID" not in _parse_exports(result.stdout)
+
+
+def test_parser_jamendo_migration_is_idempotent_after_success():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base = Path(tmp_dir)
+        marker = base / "jamendo-migrated-v1"
+        rc, _, _ = _run_parser(
+            {"jamendo_client_id": "once-only"},
+            keep_dir=base,
+            jamendo_migration_marker=marker,
+        )
+        assert rc == 0
+
+        options_path = base / "options.json"
+        secrets_path = base / "secrets.env"
+        snippet = _extract_python_snippet(
+            options_path,
+            secrets_path,
+            jamendo_migration_marker=marker,
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            env=_scrubbed_env(),
+        )
+
+        assert result.returncode == 0
+        assert _parse_exports(result.stdout)["JAMENDO_CLIENT_ID"] == "once-only"
+        assert secrets_path.read_text().count("JAMENDO_CLIENT_ID=") == 1
 
 
 def test_parser_quality_profile_defaults_to_balanced():
@@ -480,13 +580,10 @@ def test_addon_manifest_ha_context_defaults_for_new_installs():
 
 
 def test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visible():
-    # jamendo_client_id stays a real, settable schema-only field (hidden behind
-    # HA's disclosure, not a secret leak concern). The five provider keys are
-    # fully removed from schema (see test_addon_schema_has_no_provider_secret_fields
-    # in test_repo_scripts.py) — a schema-only field is still a valid Supervisor
-    # option, so hiding it from the UI would not have closed the #688 leak.
-    hidden_optional = ("jamendo_client_id",)
+    # All provider IDs/keys are file-backed. A schema-only field is still a
+    # settable, persisted Supervisor option, so removal must cover both blocks.
     removed_entirely = (
+        "jamendo_client_id",
         "anthropic_api_key",
         "openai_api_key",
         "azure_speech_key",
@@ -502,13 +599,6 @@ def test_addon_manifest_hides_legacy_optional_fields_but_keeps_admin_token_visib
         assert re.search(r"(?m)^  admin_token: \"\"$", options_block.group(1)), (
             f"{config} must keep admin_token visible because blank means trusting the LAN"
         )
-        for key in hidden_optional:
-            assert not re.search(rf"(?m)^  {key}:", options_block.group(1)), (
-                f"{config} should hide {key} behind HA's unused optional fields disclosure"
-            )
-            assert re.search(rf"(?m)^  {key}: .*\?$", schema_block.group(1)), (
-                f"{config} must keep {key} as an optional schema key"
-            )
         for key in removed_entirely:
             assert not re.search(rf"(?m)^  {key}:", options_block.group(1)), f"{config} must not have {key} in options"
             assert not re.search(rf"(?m)^  {key}:", schema_block.group(1)), (
@@ -628,6 +718,7 @@ def test_parser_recovers_legacy_keys_from_supervisor_store_and_persists():
             rc2, stdout2, _ = _run_parser(
                 {"station_name": "X"},
                 persisted,
+                keep_dir=base,
                 env={"SUPERVISOR_TOKEN": "tok-123"},
             )
             assert rc2 == 0

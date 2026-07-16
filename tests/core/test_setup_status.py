@@ -151,6 +151,39 @@ def test_build_setup_status_non_demo_launch_copy():
     assert "listener view" in payload["launch"]["post_launch"]
 
 
+def test_addon_setup_reports_external_media_as_intentionally_unavailable(monkeypatch):
+    config = load_config()
+    config.is_addon = True
+    config.allow_ytdlp = True  # legacy/config drift must not change image truth
+    monkeypatch.setattr("mammamiradio.playlist.downloader.external_media_enabled", lambda _configured: True)
+
+    payload = build_setup_status(config, StationState())
+    external = next(item for item in payload["preflight_checks"] if item["key"] == "ytdlp")
+    playlist = next(item for item in payload["preflight_checks"] if item["key"] == "playlist_loaded")
+
+    assert external["status"] == "ok"
+    assert external["label"] == "External media"
+    assert "intentionally unavailable" in external["detail"]
+    assert external["where"] == "not included in add-on image"
+    assert external["repair"].startswith("No action required")
+    assert playlist["status"] == "warn"
+    assert playlist["detail"] == "No verified base music is currently loaded."
+
+
+def test_standalone_setup_warns_only_when_requested_extra_is_missing(monkeypatch):
+    config = load_config()
+    config.is_addon = False
+    config.allow_ytdlp = True
+    monkeypatch.setattr("mammamiradio.playlist.downloader.external_media_enabled", lambda _configured: False)
+
+    payload = build_setup_status(config, StationState())
+    external = next(item for item in payload["preflight_checks"] if item["key"] == "ytdlp")
+
+    assert external["status"] == "warn"
+    assert "was requested" in external["detail"]
+    assert "mammamiradio[external-media]" in external["repair"]
+
+
 def test_guided_setup_openai_only_marks_ai_hosts_ready():
     config = load_config()
     config.openai_api_key = "sk-openai"

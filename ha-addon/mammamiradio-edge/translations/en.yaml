@@ -44,6 +44,3 @@ configuration:
   ad_spots_per_break:
     name: Ads per break
     description: "How many advert spots run back to back in a single ad break. Also adjustable live from the admin panel; the value survives a restart."
-  jamendo_client_id:
-    name: Jamendo Client ID (Advanced)
-    description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.

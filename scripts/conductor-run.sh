@@ -19,8 +19,8 @@ elif [ -f "$ROOT/.env" ]; then
   set +a
 fi
 
-# yt-dlp is the default music source for local dev
-export MAMMAMIRADIO_ALLOW_YTDLP="${MAMMAMIRADIO_ALLOW_YTDLP:-true}"
+# External extraction is an explicit standalone opt-in, even in local dev.
+export MAMMAMIRADIO_ALLOW_YTDLP="${MAMMAMIRADIO_ALLOW_YTDLP:-false}"
 
 RUNTIME_ROOT="$ROOT/.context/conductor"
 export MAMMAMIRADIO_BIND_HOST="${MAMMAMIRADIO_BIND_HOST:-127.0.0.1}"

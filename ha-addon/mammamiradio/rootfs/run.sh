@@ -11,6 +11,7 @@ OPTIONS_FILE="/data/options.json"
 SECRETS_FILE="/config/secrets.env"
 SUPERVISOR_API="${SUPERVISOR_API:-http://supervisor}"
 RECOVERY_MARKER_FILE="${RECOVERY_MARKER_FILE:-/data/.provider_recovery_checked}"
+JAMENDO_MIGRATION_MARKER_FILE="${JAMENDO_MIGRATION_MARKER_FILE:-/data/.jamendo_client_id_migrated_v1}"
 if [ -f "$OPTIONS_FILE" ] || [ -f "$SECRETS_FILE" ]; then
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
@@ -64,7 +65,15 @@ def parse_secret_value(raw_value, line_no):
         return parts[0].strip()
     return value
 
-secret_keys = tuple(env_key for _, env_key in provider_option_map)
+provider_secret_keys = tuple(env_key for _, env_key in provider_option_map)
+jamendo_secret_keys = (
+    'JAMENDO_CLIENT_ID',
+    'MAMMAMIRADIO_JAMENDO_ENABLED',
+    'MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED',
+    'MAMMAMIRADIO_JAMENDO_ACK_REVISION',
+)
+secret_keys = provider_secret_keys + jamendo_secret_keys
+file_backed_keys = set()
 if os.path.exists('$SECRETS_FILE'):
     try:
         with open('$SECRETS_FILE', encoding='utf-8') as secret_file:
@@ -90,6 +99,7 @@ if os.path.exists('$SECRETS_FILE'):
                     continue
                 if value:
                     provider_values[key] = value
+                    file_backed_keys.add(key)
     except OSError:
         warning('could not read /config/secrets.env')
 
@@ -109,12 +119,16 @@ if os.path.exists('$SECRETS_FILE'):
 # transient failure keeps retrying on later boots instead of losing the
 # recovery chance permanently.
 RECOVERY_MARKER = '$RECOVERY_MARKER_FILE'
-missing_keys = [k for k in secret_keys if not provider_values.get(k)]
+missing_keys = [k for k in provider_secret_keys if not provider_values.get(k)]
 supervisor_token = os.environ.get('SUPERVISOR_TOKEN') or os.environ.get('HASSIO_TOKEN') or ''
 recovered = {}
+supervisor_request_attempted = False
+supervisor_store_checked = False
+supervisor_stored_options = {}
 if missing_keys and supervisor_token and not os.path.exists(RECOVERY_MARKER):
     try:
         import urllib.request
+        supervisor_request_attempted = True
         req = urllib.request.Request(
             '$SUPERVISOR_API/addons/self/info',
             headers={'Authorization': 'Bearer ' + supervisor_token},
@@ -123,6 +137,8 @@ if missing_keys and supervisor_token and not os.path.exists(RECOVERY_MARKER):
             info = json.load(resp)
         stored = (info.get('data') or {}).get('options') or {}
         if isinstance(stored, dict):
+            supervisor_stored_options = stored
+            supervisor_store_checked = True
             for opt_key, env_key in provider_option_map:
                 if env_key in missing_keys:
                     val = stored.get(opt_key, '')
@@ -160,6 +176,121 @@ if recovered:
     except Exception as exc:
         warning(f'could not persist recovered provider keys to secrets.env: {exc}')
 
+# Jamendo used to be a schema-only Supervisor option. Move it into the same
+# owner-only secrets file, but use a dedicated versioned marker: the older
+# provider recovery marker may already exist on upgraded installations. The
+# migration deliberately carries only the client ID. With no enable flag or
+# current terms acknowledgement, recovered credentials remain inactive.
+JAMENDO_MIGRATION_MARKER = '$JAMENDO_MIGRATION_MARKER_FILE'
+if not os.path.exists(JAMENDO_MIGRATION_MARKER):
+    legacy_jamendo_present = 'jamendo_client_id' in opts
+    legacy_jamendo = str(opts.get('jamendo_client_id') or '').strip()
+    jamendo_value = str(provider_values.get('JAMENDO_CLIENT_ID') or '').strip()
+    migration_authoritative = bool(jamendo_value) or legacy_jamendo_present
+
+    if not jamendo_value and legacy_jamendo:
+        jamendo_value = legacy_jamendo
+
+    # Once the schema no longer accepts jamendo_client_id, Supervisor may have
+    # removed it from /data/options.json before this process starts. Query the
+    # authoritative stored options once under the new marker in that case.
+    if not jamendo_value and not legacy_jamendo_present and supervisor_token and not supervisor_request_attempted:
+        try:
+            import urllib.request
+            supervisor_request_attempted = True
+            req = urllib.request.Request(
+                '$SUPERVISOR_API/addons/self/info',
+                headers={'Authorization': 'Bearer ' + supervisor_token},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                info = json.load(resp)
+            stored = (info.get('data') or {}).get('options') or {}
+            if isinstance(stored, dict):
+                supervisor_stored_options = stored
+                supervisor_store_checked = True
+                stored_value = stored.get('jamendo_client_id', '')
+                if stored_value:
+                    jamendo_value = str(stored_value).strip()
+        except Exception as exc:
+            warning(f'could not check Supervisor for legacy Jamendo client ID: {exc}')
+
+    if not jamendo_value and not legacy_jamendo_present and supervisor_store_checked:
+        stored_value = supervisor_stored_options.get('jamendo_client_id', '')
+        if stored_value:
+            jamendo_value = str(stored_value).strip()
+        migration_authoritative = True
+
+    try:
+        if jamendo_value:
+            if 'JAMENDO_CLIENT_ID' not in file_backed_keys:
+                existing_lines = []
+                if os.path.exists('$SECRETS_FILE'):
+                    with open('$SECRETS_FILE', encoding='utf-8') as secret_file:
+                        existing_lines = secret_file.read().splitlines()
+                secrets_dir = os.path.dirname('$SECRETS_FILE') or '.'
+                fd, tmp_name = tempfile.mkstemp(prefix='.secrets-', dir=secrets_dir)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as tmp_file:
+                        new_lines = existing_lines + ['JAMENDO_CLIENT_ID=' + shlex.quote(jamendo_value)]
+                        tmp_file.write('\n'.join(new_lines) + '\n')
+                    os.chmod(tmp_name, 0o600)
+                    os.replace(tmp_name, '$SECRETS_FILE')
+                    file_backed_keys.add('JAMENDO_CLIENT_ID')
+                except Exception:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+            else:
+                os.chmod('$SECRETS_FILE', 0o600)
+            provider_values['JAMENDO_CLIENT_ID'] = jamendo_value
+
+        # Remove the legacy option only after its non-empty value is durably
+        # file-backed. An empty legacy field can be removed directly.
+        if legacy_jamendo_present:
+            if legacy_jamendo and 'JAMENDO_CLIENT_ID' not in file_backed_keys:
+                raise OSError('Jamendo client ID was not persisted')
+            remaining_options = dict(opts)
+            remaining_options.pop('jamendo_client_id', None)
+            options_dir = os.path.dirname('$OPTIONS_FILE') or '.'
+            fd, tmp_name = tempfile.mkstemp(prefix='.options-', dir=options_dir)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as tmp_file:
+                    json.dump(remaining_options, tmp_file, separators=(',', ':'), sort_keys=True)
+                    tmp_file.write('\n')
+                os.chmod(tmp_name, 0o600)
+                os.replace(tmp_name, '$OPTIONS_FILE')
+                opts = remaining_options
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+
+        if migration_authoritative:
+            marker_dir = os.path.dirname(JAMENDO_MIGRATION_MARKER) or '.'
+            fd, tmp_name = tempfile.mkstemp(prefix='.jamendo-migration-', dir=marker_dir)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as marker_file:
+                    marker_file.write('v1\n')
+                os.chmod(tmp_name, 0o600)
+                os.replace(tmp_name, JAMENDO_MIGRATION_MARKER)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            if legacy_jamendo or jamendo_value:
+                warning(
+                    'Jamendo client ID imported from an earlier version. '
+                    'Review and enable it only for non-commercial API use.'
+                )
+    except Exception as exc:
+        warning(f'could not migrate legacy Jamendo client ID; will retry next boot: {exc}')
+
 for env_key in secret_keys:
     val = provider_values.get(env_key, '')
     if val:
@@ -168,7 +299,6 @@ for env_key in secret_keys:
 for key in (
     'station_name',
     'admin_token',
-    'jamendo_client_id',
 ):
     val = opts.get(key, '')
     if val:
@@ -259,8 +389,10 @@ else
     echo "[mammamiradio] Home Assistant integration disabled by add-on option"
 fi
 
-# ---- Enable yt-dlp as primary music source ----
-export MAMMAMIRADIO_ALLOW_YTDLP="true"
+# ---- External media is unavailable in both current add-on channels ----
+# Override inherited/legacy values: Stable and Edge share this image and the
+# default package intentionally omits yt-dlp.
+export MAMMAMIRADIO_ALLOW_YTDLP="false"
 
 # ---- Enable provenance ledger (records per-segment production data to cache/ledger/) ----
 export MAMMAMIRADIO_LEDGER_ENABLED="true"

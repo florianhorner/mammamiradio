@@ -6,7 +6,10 @@ import sqlite3
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from mammamiradio.core.sync import init_db, load_cached_tracks
 
@@ -186,6 +189,188 @@ def test_sync_skips_failed_downloads(tmp_path):
         )
 
     assert tracks == []
+
+
+def test_sync_rejects_when_external_media_capability_is_unavailable(tmp_path):
+    from mammamiradio.core.sync import _sync_playlist_blocking
+
+    with (
+        patch("mammamiradio.core.sync.external_media_enabled", return_value=False),
+        patch("mammamiradio.core.sync._load_external_media_module") as load_external_media,
+        pytest.raises(RuntimeError, match="external media is unavailable"),
+    ):
+        _sync_playlist_blocking(
+            playlist_url="https://example.com/playlist",
+            cache_dir=tmp_path / "cache",
+            db_path=tmp_path / "radio.db",
+        )
+
+    load_external_media.assert_not_called()
+
+
+def test_sync_without_browser_cookies_skips_empty_entry_and_missing_output(tmp_path):
+    from mammamiradio.core.sync import _sync_playlist_blocking
+
+    db_path = tmp_path / "radio.db"
+    cache_dir = tmp_path / "cache"
+    init_db(db_path)
+    cookie_attempts: list[str] = []
+    download_urls: list[str] = []
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @property
+        def cookiejar(self):
+            browser = self.options["cookiesfrombrowser"][0]
+            cookie_attempts.append(browser)
+            raise RuntimeError("cookies unavailable")
+
+        def extract_info(self, _url, *, download):
+            assert download is False
+            return {"entries": [None, {"id": "no-output", "title": "No Output", "duration": 30}]}
+
+        def download(self, urls):
+            download_urls.extend(urls)
+
+    with (
+        patch("mammamiradio.core.sync.external_media_enabled", return_value=True),
+        patch(
+            "mammamiradio.core.sync._load_external_media_module",
+            return_value=SimpleNamespace(YoutubeDL=FakeYDL),
+        ),
+    ):
+        tracks = _sync_playlist_blocking(
+            playlist_url="https://example.com/playlist",
+            cache_dir=cache_dir,
+            db_path=db_path,
+        )
+
+    assert tracks == []
+    assert cookie_attempts == ["chrome", "firefox", "safari"]
+    assert download_urls == ["https://www.youtube.com/watch?v=no-output"]
+
+
+def test_sync_adopts_alternate_postprocessor_extension(tmp_path):
+    from mammamiradio.core.sync import _sync_playlist_blocking
+
+    db_path = tmp_path / "radio.db"
+    cache_dir = tmp_path / "cache"
+    init_db(db_path)
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @property
+        def cookiejar(self):
+            return object()
+
+        def extract_info(self, _url, *, download):
+            assert download is False
+            return {"entries": [{"id": "alternate", "title": "Alternate", "duration": 42}]}
+
+        def download(self, _urls):
+            (cache_dir / "alternate.part.webm").write_bytes(b"alternate audio")
+
+    with (
+        patch("mammamiradio.core.sync.external_media_enabled", return_value=True),
+        patch(
+            "mammamiradio.core.sync._load_external_media_module",
+            return_value=SimpleNamespace(YoutubeDL=FakeYDL),
+        ),
+    ):
+        tracks = _sync_playlist_blocking(
+            playlist_url="https://example.com/playlist",
+            cache_dir=cache_dir,
+            db_path=db_path,
+        )
+
+    assert len(tracks) == 1
+    assert tracks[0].local_path == cache_dir / "alternate.mp3"
+    assert tracks[0].local_path.read_bytes() == b"alternate audio"
+
+
+def test_sync_uses_raw_download_when_normalization_fails(tmp_path):
+    from mammamiradio.core.sync import _sync_playlist_blocking
+
+    db_path = tmp_path / "radio.db"
+    cache_dir = tmp_path / "cache"
+    init_db(db_path)
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @property
+        def cookiejar(self):
+            return object()
+
+        def extract_info(self, _url, *, download):
+            assert download is False
+            return {"entries": [{"id": "raw", "title": "Raw", "duration": 12}]}
+
+        def download(self, _urls):
+            (cache_dir / "raw.part.mp3").write_bytes(b"raw audio")
+
+    with (
+        patch("mammamiradio.core.sync.external_media_enabled", return_value=True),
+        patch(
+            "mammamiradio.core.sync._load_external_media_module",
+            return_value=SimpleNamespace(YoutubeDL=FakeYDL),
+        ),
+        patch("mammamiradio.core.sync.normalize", side_effect=RuntimeError("normalizer unavailable")),
+    ):
+        tracks = _sync_playlist_blocking(
+            playlist_url="https://example.com/playlist",
+            cache_dir=cache_dir,
+            db_path=db_path,
+        )
+
+    assert len(tracks) == 1
+    assert tracks[0].local_path == cache_dir / "raw.mp3"
+    assert tracks[0].local_path.read_bytes() == b"raw audio"
+
+
+@pytest.mark.asyncio
+async def test_sync_playlist_runs_blocking_work_in_executor(tmp_path):
+    from mammamiradio.core.sync import sync_playlist
+
+    expected = [MagicMock()]
+    with patch("mammamiradio.core.sync._sync_playlist_blocking", return_value=expected) as blocking:
+        result = await sync_playlist(
+            "https://example.com/playlist",
+            tmp_path / "cache",
+            tmp_path / "radio.db",
+            config=None,
+        )
+
+    assert result == expected
+    blocking.assert_called_once_with(
+        "https://example.com/playlist",
+        tmp_path / "cache",
+        tmp_path / "radio.db",
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------

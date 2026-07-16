@@ -163,6 +163,37 @@ print(sha256(registry.read_bytes()).hexdigest())
     return 1
 }
 
+assert_image_external_media_absent() {
+    local image="$1"
+    if docker run --rm -i "$image" python3 - <<'PY'
+import importlib.metadata
+import importlib.util
+import shutil
+
+failures = []
+if importlib.util.find_spec("yt_dlp") is not None:
+    failures.append("yt_dlp module is importable")
+try:
+    importlib.metadata.version("yt-dlp")
+except importlib.metadata.PackageNotFoundError:
+    pass
+else:
+    failures.append("yt-dlp distribution is installed")
+if shutil.which("yt-dlp") is not None:
+    failures.append("yt-dlp executable is on PATH")
+if failures:
+    raise SystemExit("; ".join(failures))
+print("external-media extractor absent")
+PY
+    then
+        pass "Installed add-on image omits yt-dlp distribution, module, and executable"
+        return 0
+    else
+        fail "Installed add-on image unexpectedly contains yt-dlp"
+        return 1
+    fi
+}
+
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
 
@@ -547,6 +578,59 @@ else
     pass "No unsafe 2>&1 in eval context"
 fi
 
+# Both current channels share one image, so neither may gain extractor
+# authority through package metadata, a build extra, or an inherited env var.
+if $PY - <<'PY'
+from pathlib import Path
+import re
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+raw = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+base = raw.get("project", {}).get("dependencies", [])
+extras = raw.get("project", {}).get("optional-dependencies", {})
+if any(str(dep).split("[", 1)[0].lower().startswith("yt-dlp") for dep in base):
+    raise SystemExit("yt-dlp must not be a base dependency")
+external = extras.get("external-media", [])
+if not any(str(dep).lower().startswith("yt-dlp") for dep in external):
+    raise SystemExit("external-media extra must own yt-dlp")
+
+requirements_path = Path("requirements.txt")
+if not requirements_path.is_file():
+    raise SystemExit("requirements.txt is missing")
+for number, raw_line in enumerate(requirements_path.read_text(encoding="utf-8").splitlines(), start=1):
+    line = raw_line.strip()
+    if not line or line.startswith(("#", "--hash=", "\\")):
+        continue
+    if re.search(r"(?i)(?<![A-Za-z0-9])yt[-_.]+dlp(?![A-Za-z0-9])", line):
+        raise SystemExit(f"requirements.txt:{number} must not install yt-dlp")
+PY
+then
+    pass "yt-dlp is standalone-only in the external-media extra and absent from requirements.txt"
+else
+    fail "yt-dlp dependency boundary is invalid"
+fi
+
+if grep -Fq 'export MAMMAMIRADIO_ALLOW_YTDLP="false"' ha-addon/mammamiradio/rootfs/run.sh \
+   && ! grep -Fq 'export MAMMAMIRADIO_ALLOW_YTDLP="true"' ha-addon/mammamiradio/rootfs/run.sh \
+   && ! grep -Fq '.[external-media]' ha-addon/mammamiradio/Dockerfile; then
+    pass "Shared add-on entrypoint hard-disables external media"
+else
+    fail "Shared add-on image must omit and hard-disable external media"
+fi
+
+DIRECT_EXTRACTOR_IMPORTS=$(grep -R -nE '(^|[[:space:]])(import yt_dlp|from yt_dlp)' \
+    mammamiradio --include='*.py' | grep -v '^mammamiradio/playlist/downloader.py:' || true)
+if [ -z "$DIRECT_EXTRACTOR_IMPORTS" ]; then
+    pass "Optional extractor imports stay behind the lazy gateway"
+else
+    fail "Direct yt_dlp import found outside playlist/downloader.py"
+    echo "$DIRECT_EXTRACTOR_IMPORTS"
+fi
+
 # ---- 12. repository.yaml on main ----
 echo "12. Repository discovery"
 if [ -f repository.yaml ]; then
@@ -710,6 +794,9 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Checking installed model registry..."
         assert_image_model_registry "mammamiradio-addon-test:local" || true
+
+        echo "  Checking external-media containment..."
+        assert_image_external_media_absent "mammamiradio-addon-test:local" || true
 
         echo "  Testing container startup..."
         # Create minimal options.json
