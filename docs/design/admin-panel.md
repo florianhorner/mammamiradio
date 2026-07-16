@@ -77,9 +77,14 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
    played history.
-3. **Rotazione** — searchable/prunable music library. Row checkboxes select songs
-   to ban; the selection is keyed by artist/title and survives the 3s status poll
-   (it used to be wiped on every rebuild).
+3. **Rotazione** — Hunt-first music library. Record Hunt is the sole primary
+   steering control: it takes a plain-language direction, keeps the full rotation
+   visible, highlights its favored picks, and leaves every row's `Next` action
+   available. Exact-record search is secondary. Source imports, shuffle, bans,
+   and Clear pool sit in a collapsed **Library tools** disclosure; an empty pool
+   offers only recovery sources that the current capabilities expose. Row
+   checkboxes select songs to ban; the selection is keyed by artist/title and
+   survives the 3s status poll (it used to be wiped on every rebuild).
 4. **Conduttori** — host personality config. Active preset chips carry a checkmark
    shape cue alongside the gold fill (colorblind safety).
 5. **Archivio** — filterable segment history. Search box + type chips
@@ -109,8 +114,8 @@ Italian headlines and station-feel words).
 - **Italian (flair):** tab / section names (`Diretta`, `Scaletta`, `Rotazione`,
   `Conduttori`, `Motore`, `Archivio`), the `Regia` eyebrow, Diretta subgroup
   eyebrow labels (`Modalità live`, `Azioni rapide`, `Cadenza`), the console
-  `In produzione` and `In onda` / `Fermo` on-air labels, and the `Anni '70/'80/'90`
-  era chips.
+  `In produzione` and `In onda` / `Fermo` on-air labels, and record-era chips
+  on library rows when source metadata provides a year.
 - **English (utility):** every button, tooltip, toast, form subhead, search
   state, empty state, status label, and helper line.
 - Regression guard: `tests/web/test_admin_regia_polish.py::test_no_italian_utility_strings_remain`.
