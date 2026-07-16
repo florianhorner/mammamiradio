@@ -55,13 +55,15 @@ def _stub_provider_verdict():
     ("env_value", "expected_level"),
     [
         (None, logging.WARNING),
-        ("INFO", logging.INFO),
+        ("DEBUG", logging.WARNING),
+        ("INFO", logging.WARNING),
+        ("ERROR", logging.ERROR),
         ("invalid", logging.WARNING),
         ("BASIC_FORMAT", logging.WARNING),
     ],
 )
 def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatch, env_value, expected_level):
-    """Successful httpx/httpcore request logs stay quiet unless explicitly enabled."""
+    """Dependency logs never expose query-string credentials at INFO or DEBUG."""
     original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
     try:
         from mammamiradio.main import _configure_http_logging
@@ -97,8 +99,8 @@ def test_module_import_applies_http_logging_configuration(monkeypatch):
 
         importlib.reload(mammamiradio.main)
 
-        assert logging.getLogger("httpx").level == logging.DEBUG
-        assert logging.getLogger("httpcore").level == logging.DEBUG
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
     finally:
         for logger_name, level in original_levels.items():
             logging.getLogger(logger_name).setLevel(level)
@@ -111,6 +113,32 @@ def test_immediate_audio_index_skips_non_files_and_unknown_durations(tmp_path):
     (tmp_path / "norm_zero_duration.mp3").write_bytes(b"")
 
     assert _build_immediate_audio_index(tmp_path, bitrate_kbps=None) == {}
+
+
+def test_immediate_audio_index_records_positive_eligible_duration(tmp_path):
+    """The scan skips a zero-duration candidate and continues to warm audio."""
+    import mammamiradio.main as main_mod
+
+    zero_path = tmp_path / "norm_a_zero.mp3"
+    ready_path = tmp_path / "norm_b_ready.mp3"
+    zero_path.write_bytes(b"invalid normalized audio")
+    ready_path.write_bytes(b"validated normalized audio")
+
+    with (
+        patch(f"{MODULE}.norm_cache_origin_is_eligible", return_value=True) as eligible,
+        patch(f"{MODULE}.norm_cache_duration_sec", side_effect=(0.0, 42.5)) as duration,
+    ):
+        index = main_mod._build_immediate_audio_index(tmp_path, bitrate_kbps=192)
+
+    assert index == {ready_path: 42.5}
+    assert eligible.call_args_list == [
+        ((zero_path,), {"allow_external_media": False}),
+        ((ready_path,), {"allow_external_media": False}),
+    ]
+    assert duration.call_args_list == [
+        ((zero_path,), {"bitrate_kbps": 192}),
+        ((ready_path,), {"bitrate_kbps": 192}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -187,6 +215,40 @@ async def test_startup_cold_install_stays_narrow_after_database_created_and_rest
     assert load_legacy_home_database_preflight_v1(config.cache_dir / "mammamiradio.db") == preflight
     assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
     assert app.state.station_state.home_entity_ids_observer is None
+
+
+@pytest.mark.asyncio
+async def test_startup_contains_legacy_external_media_reconciliation_failure(tmp_path, caplog):
+    """A legacy cleanup failure retries next boot without blocking startup."""
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.playlist.jamendo_limit = 20
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    persona_store = MagicMock()
+    persona_store.prepare_listener_session_process = AsyncMock(return_value=False)
+    caplog.set_level(logging.WARNING, logger="mammamiradio")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(
+            f"{MODULE}.reconcile_legacy_external_media",
+            side_effect=RuntimeError("malformed legacy receipt"),
+        ) as reconcile,
+        patch(f"{MODULE}.PersonaStore", return_value=persona_store),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    reconcile.assert_called_once_with(config.cache_dir, config.cache_dir / "mammamiradio.db")
+    assert app.state.station_state.playlist == tracks
+    assert "Legacy external-media reconciliation will retry on the next boot" in caplog.text
+    assert "Listener-session receipt preparation will retry at the first station epoch" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1308,7 +1370,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
     warm_norm = mock_config.cache_dir / "norm_warm_restart_192k.mp3"
     warm_norm.write_bytes(b"warm normalized audio")
     (mock_config.cache_dir / "norm_warm_restart_192k.mp3.json").write_text(
-        '{"title":"Warm Restart","artist":"Cache Artist","duration_ms":180000}'
+        '{"title":"Warm Restart","artist":"Cache Artist","duration_ms":180000,"source_kind":"local"}'
     )
 
     ps = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
@@ -1474,6 +1536,8 @@ async def test_shutdown_cancels_tasks():
     # tasks are gathered.
     main_mod.app.state.provider_verdict_task = None
     main_mod.app.state.background_tasks = set()
+    main_mod.app.state.jamendo_start_task = None
+    main_mod.app.state.jamendo_provider = None
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
@@ -1611,8 +1675,42 @@ async def test_shutdown_logs_release_campaign_flush_failure(caplog):
 
 
 @pytest.mark.asyncio
-async def test_startup_demo_fallback_on_fetch_exception(tmp_path: Path):
-    """When fetch_startup_playlist raises, startup falls back to DEMO_TRACKS."""
+async def test_shutdown_contains_jamendo_provider_stop_failure(caplog):
+    """Transient provider cleanup failure must not interrupt app teardown."""
+    import mammamiradio.main as main_mod
+
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod._prewarm_task = None
+    for attr in (
+        "producer_task",
+        "prewarm_task",
+        "playback_task",
+        "stream_hub",
+        "background_tasks",
+        "ledger",
+        "release_campaign",
+        "jamendo_start_task",
+    ):
+        if hasattr(main_mod.app.state, attr):
+            delattr(main_mod.app.state, attr)
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.station_state = None
+    provider = SimpleNamespace(stop=AsyncMock(side_effect=RuntimeError("provider cleanup failed")))
+    main_mod.app.state.jamendo_provider = provider
+    caplog.set_level(logging.WARNING, logger="mammamiradio")
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as gather:
+        await main_mod.shutdown()
+
+    provider.stop.assert_awaited_once()
+    gather.assert_not_called()
+    assert "Failed to stop transient Jamendo provider cleanly" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_fails_closed_on_playlist_fetch_exception(tmp_path: Path):
+    """A startup exception must not revive unverified demo music."""
     from mammamiradio.main import app, startup
     from mammamiradio.playlist.playlist import DEMO_TRACKS
 
@@ -1639,11 +1737,10 @@ async def test_startup_demo_fallback_on_fetch_exception(tmp_path: Path):
     ):
         await startup()
 
-    # State should contain the demo tracks, not an empty list
+    # The compatibility list is deliberately empty while starter approval is pending.
     assert app.state.station_state.playlist == list(DEMO_TRACKS)
     assert app.state.station_state.startup_source_error == "network down"
-    # playlist_source should be demo kind
-    assert app.state.station_state.playlist_source.kind == "demo"
+    assert app.state.station_state.playlist_source.kind == "starter"
 
 
 @pytest.mark.asyncio
@@ -1725,8 +1822,8 @@ async def test_startup_no_ffmpeg_warning_when_found(tmp_path: Path, caplog):
 
 
 @pytest.mark.asyncio
-async def test_startup_warns_when_ytdlp_missing_but_allowed(tmp_path: Path, caplog):
-    """startup() warns when yt-dlp is allowed in config but the binary is not installed."""
+async def test_startup_warns_when_external_media_extra_is_missing(tmp_path: Path, caplog):
+    """startup() explains how to install the missing optional capability."""
     import logging
 
     from mammamiradio.core.models import PlaylistSource, Track
@@ -1754,14 +1851,14 @@ async def test_startup_warns_when_ytdlp_missing_but_allowed(tmp_path: Path, capl
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
-        patch(f"{MODULE}.shutil.which", return_value=None),
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=False),
         caplog.at_level(logging.WARNING, logger="mammamiradio"),
     ):
         from mammamiradio.main import startup
 
         await startup()
 
-    assert any("yt-dlp" in r.message and "not found" in r.message for r in caplog.records)
+    assert any("optional extra is unavailable" in r.message and "external-media" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -2015,6 +2112,8 @@ async def test_shutdown_with_no_tasks_set():
         "playback_task",
         "stream_hub",
         "provider_verdict_task",
+        "jamendo_start_task",
+        "jamendo_provider",
         "background_tasks",
         "ledger",
         "release_campaign",
@@ -2330,6 +2429,37 @@ async def test_startup_retags_duplicate_explicit_heading_track(tmp_path: Path):
     assert state.heading.selection_budget == 3
     assert state.heading.phase == "steering"
     assert state.heading.first_found_at == 55.0
+
+
+@pytest.mark.asyncio
+async def test_startup_blends_distinct_explicit_heading_track(tmp_path: Path):
+    """A restored explicit course adds a distinct fetched track to the base pool."""
+    from mammamiradio.core.models import Heading, Track
+
+    mock_config = _heading_startup_config(tmp_path)
+    heading = Heading("h-classic", "classic://italian/00s", "Anni 2000", 1.0, "operator")
+    base_track = Track(title="Base", artist="Base Artist", duration_ms=1, spotify_id="base")
+    fetched_track = Track(title="Toxic", artist="Britney Spears", duration_ms=1, spotify_id="toxic")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=([base_track], None, "")),
+        patch(f"{MODULE}.read_persisted_heading", return_value=heading),
+        patch(f"{MODULE}.load_explicit_source", return_value=([fetched_track], None)),
+        patch(f"{MODULE}._clear_persisted_heading") as clear_heading,
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    clear_heading.assert_not_called()
+    assert app.state.station_state.playlist == [base_track, fetched_track]
+    assert fetched_track.heading_id == heading.id
+    assert app.state.station_state.heading is heading
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,14 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
     "elevenlabs_api_key": ("ELEVENLABS_API_KEY", "elevenlabs_api_key"),
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
+_JAMENDO_SETTING_ENV_KEYS = frozenset(
+    {
+        "JAMENDO_CLIENT_ID",
+        "MAMMAMIRADIO_JAMENDO_ENABLED",
+        "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED",
+        "MAMMAMIRADIO_JAMENDO_ACK_REVISION",
+    }
+)
 _ADDON_OPTIONS_LOCK = threading.Lock()
 # Serializes the .env read-modify-write. Without it, two admin saves of DIFFERENT
 # settings (each guarded by its own asyncio lock in web/streamer.py, and each run
@@ -118,6 +126,55 @@ def _save_dotenv(updates: dict[str, str]) -> None:
         tmp.replace(env_path)
 
 
+def _save_media_source_settings(
+    updates: dict[str, str],
+    *,
+    addon: bool,
+    dotenv_path: Path = Path(".env"),
+    addon_secrets_path: Path = Path("/config/secrets.env"),
+) -> None:
+    """Atomically persist the complete Jamendo intent before live application.
+
+    Empty values remove a key, which gives the config API real clear semantics
+    without leaving a credential-shaped blank assignment behind. All four facts
+    share one owner-only file and one replace operation.
+    """
+    if set(updates) - _JAMENDO_SETTING_ENV_KEYS:
+        raise ValueError("unsupported media source setting")
+    path = addon_secrets_path if addon else dotenv_path
+    lock = _ADDON_OPTIONS_LOCK if addon else _DOTENV_LOCK
+    safe_updates = {key: _sanitize_credential_value(str(value)) for key, value in updates.items()}
+
+    with lock:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+
+        written: set[str] = set()
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+            if candidate and not candidate.startswith("#") and "=" in candidate:
+                key = candidate.split("=", 1)[0].strip()
+                if key in safe_updates:
+                    value = safe_updates[key]
+                    if value:
+                        new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                    written.add(key)
+                    continue
+            new_lines.append(line)
+
+        for key, value in safe_updates.items():
+            if key not in written and value:
+                new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
+        tmp.replace(path)
+
+
 def _save_addon_option(key: str, value) -> None:
     """Persist a single option into /data/options.json atomically."""
     _save_addon_option_batch({key: value})
@@ -140,13 +197,12 @@ def _save_addon_option_batch(updates: dict) -> None:
     with _ADDON_OPTIONS_LOCK:
         options_path = Path("/data/options.json")
         options: dict = {}
-        if options_path.exists():
-            try:
-                loaded = _json.loads(options_path.read_text())
-                if isinstance(loaded, dict):
-                    options = loaded
-            except (ValueError, OSError):
-                options = {}
+        try:
+            loaded = _json.loads(options_path.read_text())
+            if isinstance(loaded, dict):
+                options = loaded
+        except (FileNotFoundError, ValueError):
+            options = {}
         options.update(updates)
         tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
         tmp_path.write_text(_json.dumps(options, indent=2))
@@ -162,20 +218,17 @@ def _save_addon_options(updates: dict[str, str]) -> None:
         options_path = Path("/data/options.json")
         secrets_path = Path("/config/secrets.env")
         try:
-            lines = secrets_path.read_text().splitlines() if secrets_path.exists() else []
-        except OSError:
-            # An unreadable existing secrets.env (bad perms / fs error) must not
-            # 500 the admin save — rewrite from scratch rather than propagate.
+            lines = secrets_path.read_text().splitlines()
+        except FileNotFoundError:
             lines = []
 
         options: dict = {}
-        if options_path.exists():
-            try:
-                loaded_options = _json.loads(options_path.read_text())
-                if isinstance(loaded_options, dict):
-                    options = loaded_options
-            except (ValueError, OSError):
-                options = {}
+        try:
+            loaded_options = _json.loads(options_path.read_text())
+            if isinstance(loaded_options, dict):
+                options = loaded_options
+        except (FileNotFoundError, ValueError):
+            options = {}
 
         safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items() if k in _CREDENTIAL_ENV_TO_FIELD}
         legacy_updates = {}

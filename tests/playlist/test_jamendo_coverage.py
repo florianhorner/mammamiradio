@@ -1,674 +1,157 @@
-"""Coverage tests for Jamendo downloader and playlist paths.
+"""Containment coverage for retired durable Jamendo and classic sources.
 
-Three-scenario discipline (per CLAUDE.md audio delivery test coverage rule):
-  Scenario 1 — Normal: feature works as designed.
-  Scenario 2 — Empty fallback: no network, no cached file, no assets.
-  Scenario 3 — Post-restart: state from a prior session, must still deliver audio.
+The transient provider has its protocol, streaming, race, and FFmpeg coverage in
+``test_jamendo_transient.py``.  This module guards the inverse boundary: no old
+playlist/direct-download/cache path may regain authority over Jamendo bytes.
 """
 
 from __future__ import annotations
 
-import json
-from io import BytesIO
 from unittest.mock import MagicMock, patch
-from urllib.error import URLError
 
 import pytest
 
+from mammamiradio.core.config import JAMENDO_ACK_REVISION, load_config
 from mammamiradio.core.models import PlaylistSource, Track
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _BytesResponse(BytesIO):
-    """Minimal context-manager shim for urlopen responses."""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
 
 
 @pytest.fixture()
 def config():
-    from mammamiradio.core.config import load_config
-
     return load_config()
 
 
-# ---------------------------------------------------------------------------
-# downloader: _validate_direct_url — SSRF guard (line 329, 332)
-# ---------------------------------------------------------------------------
-
-
-def test_validate_direct_url_accepts_jamendo_cdn():
-    """Normal: https://*.jamendo.com URLs are accepted without raising."""
-    from mammamiradio.playlist.downloader import _validate_direct_url
-
-    _validate_direct_url("https://storage.jamendo.com/tracks/some_track.mp3")
-    _validate_direct_url("https://cdn.jamendo.com/tracks/other.mp3")
-    _validate_direct_url("https://jamendo.com/tracks/root.mp3")
-
-
-def test_validate_direct_url_rejects_non_https():
-    """SSRF guard: http:// scheme must be rejected (line 329)."""
-    from mammamiradio.playlist.downloader import _validate_direct_url
-
-    with pytest.raises(ValueError, match="https"):
-        _validate_direct_url("http://storage.jamendo.com/tracks/track.mp3")
-
-
-def test_validate_direct_url_rejects_non_jamendo_host():
-    """SSRF guard: non-jamendo.com host must be rejected (line 332)."""
-    from mammamiradio.playlist.downloader import _validate_direct_url
-
-    with pytest.raises(ValueError, match="jamendo"):
-        _validate_direct_url("https://evil.example.com/tracks/track.mp3")
-
-
-def test_validate_direct_url_rejects_localhost():
-    """SSRF guard: localhost is not a jamendo.com host."""
-    from mammamiradio.playlist.downloader import _validate_direct_url
-
-    with pytest.raises(ValueError, match="jamendo"):
-        _validate_direct_url("https://localhost/tracks/track.mp3")
+def _legacy_jamendo_track(tmp_path=None) -> Track:
+    local_path = None
+    if tmp_path is not None:
+        local_path = tmp_path / "legacy-jamendo.mp3"
+        local_path.write_bytes(b"legacy bytes")
+    return Track(
+        title="Retired Song",
+        artist="Legacy Artist",
+        duration_ms=180_000,
+        spotify_id="jamendo_legacy_42",
+        source="jamendo",
+        direct_url="https://storage.jamendo.com/tracks/42.mp3",
+        local_path=local_path,
+    )
 
 
 # ---------------------------------------------------------------------------
-# downloader: _BlockRedirectHandler — redirect blocking (line 319)
+# Durable Jamendo authority is removed
 # ---------------------------------------------------------------------------
 
 
-def test_block_redirect_handler_raises_on_redirect():
-    """Normal+Empty: redirect to any URL must raise URLError (line 319)."""
-    from urllib.request import Request
+@pytest.mark.parametrize(
+    "source",
+    [
+        PlaylistSource(kind="jamendo", source_id="pop", label="Old Jamendo"),
+        PlaylistSource(kind="url", source_id="", label="Old Jamendo URL", url="jamendo://playlist?tags=pop"),
+    ],
+)
+def test_legacy_jamendo_explicit_sources_are_retired(config, source):
+    from mammamiradio.playlist.playlist import LegacyJamendoSourceRetiredError, load_explicit_source
 
-    from mammamiradio.playlist.downloader import _BlockRedirectHandler
-
-    handler = _BlockRedirectHandler()
-    req = Request("https://storage.jamendo.com/tracks/original.mp3")
-    with pytest.raises(URLError, match="redirect"):
-        handler.redirect_request(
-            req,
-            fp=None,
-            code=302,
-            msg="Found",
-            headers={},
-            newurl="https://evil.internal.host/tracks/redirected.mp3",
-        )
+    with pytest.raises(LegacyJamendoSourceRetiredError, match="transient Jamendo"):
+        load_explicit_source(config, source)
 
 
-# ---------------------------------------------------------------------------
-# downloader: _download_direct_url — success and failure paths (lines 337-352)
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "module_name,symbol",
+    [
+        ("mammamiradio.playlist.playlist", "_fetch_jamendo_playlist"),
+        ("mammamiradio.playlist.playlist", "_build_jamendo_url"),
+        ("mammamiradio.playlist.playlist", "_jamendo_tags"),
+        ("mammamiradio.playlist.playlist", "_jamendo_source"),
+        ("mammamiradio.playlist.downloader", "_download_direct_url"),
+        ("mammamiradio.playlist.downloader", "_validate_direct_url"),
+        ("mammamiradio.playlist.downloader", "_BlockRedirectHandler"),
+    ],
+)
+def test_legacy_jamendo_playlist_and_direct_download_symbols_are_absent(module_name, symbol):
+    import importlib
+
+    module = importlib.import_module(module_name)
+    assert not hasattr(module, symbol)
 
 
-def test_download_direct_url_success(tmp_path):
-    """Normal: valid Jamendo URL is downloaded, validated, and returned."""
-    from mammamiradio.playlist.downloader import _download_direct_url
+def test_legacy_jamendo_cache_and_local_path_are_ineligible(tmp_path):
+    from mammamiradio.playlist.downloader import _resolve_cached_or_local
 
-    out = tmp_path / "track.mp3"
-    with (
-        patch("mammamiradio.playlist.downloader._NO_REDIRECT_OPENER") as mock_opener,
-        patch("mammamiradio.playlist.downloader.validate_download", return_value=(True, "ok")),
-    ):
-        mock_opener.open.return_value = _BytesResponse(b"fake mp3 bytes")
-        result = _download_direct_url("https://storage.jamendo.com/tracks/t.mp3", out)
+    cache_dir = tmp_path / "cache"
+    music_dir = tmp_path / "music"
+    cache_dir.mkdir()
+    music_dir.mkdir()
+    track = _legacy_jamendo_track(tmp_path)
+    (cache_dir / f"{track.cache_key}.mp3").write_bytes(b"cached legacy bytes")
+    (music_dir / f"{track.artist} - {track.title}.mp3").write_bytes(b"operator collision")
 
-    assert result == out
-    assert out.read_bytes() == b"fake mp3 bytes"
+    assert _resolve_cached_or_local(track, cache_dir, music_dir) is None
 
 
-def test_download_direct_url_network_error_raises(tmp_path):
-    """Empty fallback: network failure raises RuntimeError and cleans up tmp file."""
-    from mammamiradio.playlist.downloader import _download_direct_url
-
-    out = tmp_path / "track.mp3"
-    with (
-        patch("mammamiradio.playlist.downloader._NO_REDIRECT_OPENER") as mock_opener,
-        pytest.raises(RuntimeError, match="direct-url fetch failed"),
-    ):
-        mock_opener.open.side_effect = URLError("connection refused")
-        _download_direct_url("https://storage.jamendo.com/tracks/t.mp3", out)
-
-    tmp_files = list(tmp_path.glob("*.tmp"))
-    assert tmp_files == [], f"tmp file not cleaned up: {tmp_files}"
-
-
-def test_download_direct_url_validation_failure_removes_file(tmp_path):
-    """Empty fallback: downloaded file that fails validation is removed, raises RuntimeError."""
-    from mammamiradio.playlist.downloader import _download_direct_url
-
-    out = tmp_path / "track.mp3"
-    with (
-        patch("mammamiradio.playlist.downloader._NO_REDIRECT_OPENER") as mock_opener,
-        patch("mammamiradio.playlist.downloader.validate_download", return_value=(False, "duration too short")),
-        pytest.raises(RuntimeError, match="direct-url validation failed"),
-    ):
-        mock_opener.open.return_value = _BytesResponse(b"fake mp3 bytes")
-        _download_direct_url("https://storage.jamendo.com/tracks/t.mp3", out)
-
-    assert not out.exists(), "file must be removed after validation failure"
-
-
-def test_download_direct_url_rejects_non_jamendo_before_fetching(tmp_path):
-    """SSRF guard: _validate_direct_url raises before any network call."""
-    from mammamiradio.playlist.downloader import _download_direct_url
-
-    out = tmp_path / "track.mp3"
-    with (
-        patch("mammamiradio.playlist.downloader._NO_REDIRECT_OPENER") as mock_opener,
-        pytest.raises(ValueError, match="jamendo"),
-    ):
-        _download_direct_url("https://evil.example.com/tracks/t.mp3", out)
-
-    mock_opener.open.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# downloader: _download_sync — direct_url fallback paths (lines 392-393)
-# ---------------------------------------------------------------------------
-
-
-def test_download_sync_jamendo_direct_url_failure_returns_skip_marker(tmp_path):
-    """Empty fallback: Jamendo direct_url failure returns a skip marker, never substitute audio."""
+@pytest.mark.parametrize("external_media_enabled", [False, True])
+def test_download_sync_rejects_jamendo_before_cache_or_extractor(tmp_path, external_media_enabled):
     from mammamiradio.playlist.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
     music_dir = tmp_path / "music"
+    cache_dir.mkdir()
     music_dir.mkdir()
-    track = Track(
-        title="Diretta Rotta",
-        artist="Jamendo Fail",
-        duration_ms=180000,
-        spotify_id="jamendo_fail_1",
-        youtube_id="",
-        direct_url="https://storage.jamendo.com/tracks/broken.mp3",
-        source="jamendo",
-    )
+    track = _legacy_jamendo_track(tmp_path)
+    cached = cache_dir / f"{track.cache_key}.mp3"
+    cached.write_bytes(b"cached legacy bytes")
 
     with (
-        patch("mammamiradio.playlist.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
-        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=external_media_enabled),
+        patch("mammamiradio.playlist.downloader._download_ytdlp") as extractor,
+        pytest.raises(RuntimeError, match="persistent Jamendo track acquisition is retired"),
     ):
-        result = _download_sync(track, cache_dir, music_dir)
+        _download_sync(track, cache_dir, music_dir)
 
-    assert result.name == f"_failed_{track.cache_key}.mp3"
+    extractor.assert_not_called()
+    assert cached.read_bytes() == b"cached legacy bytes"
+    assert list(cache_dir.glob("_failed_*.mp3")) == []
 
 
-def test_download_sync_jamendo_direct_url_failure_with_ytdlp_enabled_skips_ytdlp(tmp_path):
-    """Post-restart: persisted Jamendo tracks still block yt-dlp fallback after direct_url failure."""
-    from mammamiradio.playlist.downloader import _download_sync
+@pytest.mark.asyncio
+async def test_async_download_boundary_rejects_legacy_jamendo(tmp_path):
+    from mammamiradio.playlist.downloader import download_track
 
     cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
     music_dir = tmp_path / "music"
-    music_dir.mkdir()
-    track = Track(
-        title="Diretta Rotta Ytdlp",
-        artist="Jamendo Fail Two",
-        duration_ms=180000,
-        spotify_id="jamendo_fail_2",
-        youtube_id="",
-        direct_url="https://storage.jamendo.com/tracks/broken2.mp3",
-        source="jamendo",
-    )
-
-    with (
-        patch("mammamiradio.playlist.downloader._download_direct_url", side_effect=RuntimeError("fetch failed")),
-        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
-        patch("mammamiradio.playlist.downloader._download_ytdlp") as mock_ytdlp,
-    ):
-        result = _download_sync(track, cache_dir, music_dir)
-
-    assert result.name == f"_failed_{track.cache_key}.mp3"
-    mock_ytdlp.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# downloader: _download_external_sync — yt-dlp success path (line 427)
-# ---------------------------------------------------------------------------
-
-
-def test_download_external_sync_calls_ytdlp_when_enabled(tmp_path):
-    """Normal: when cache misses and yt-dlp is enabled, _download_ytdlp is called (line 427)."""
-    import sys
-
-    from mammamiradio.playlist.downloader import _download_external_sync
-
-    cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
-    music_dir = tmp_path / "music"
     music_dir.mkdir()
-    track = Track(title="External Song Ext", artist="Artist Ext", duration_ms=180000, spotify_id="ext_1_unique")
-    expected_out = cache_dir / f"{track.cache_key}.mp3"
 
-    class _FakeYoutubeDL:
-        def __init__(self, _opts):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def download(self, _queries):
-            expected_out.write_text("ytdlp audio")
-
-    mock_yt_dlp = MagicMock()
-    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
-
-    with (
-        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
-        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
-    ):
-        result = _download_external_sync(track, cache_dir, music_dir)
-
-    assert result == expected_out
+    with pytest.raises(RuntimeError, match="persistent Jamendo track acquisition is retired"):
+        await download_track(_legacy_jamendo_track(), cache_dir, music_dir)
 
 
 # ---------------------------------------------------------------------------
-# downloader: evict_cache_lru — protected_paths branch (line 164/166)
-# ---------------------------------------------------------------------------
-
-
-def test_evict_cache_lru_skips_protected_paths(tmp_path):
-    """Normal: files in protected_paths set are never evicted even when over budget."""
-    from mammamiradio.playlist.downloader import evict_cache_lru
-
-    d = tmp_path / "cache"
-    d.mkdir()
-    f = d / "queued_track.mp3"
-    f.write_bytes(b"x" * (700 * 1024))
-
-    evict_cache_lru(d, max_size_mb=0, protected_paths={f})
-    assert f.exists(), "queued file in protected_paths must not be evicted"
-
-
-# ---------------------------------------------------------------------------
-# downloader: validate_download — short duration rejection (line 102)
-# ---------------------------------------------------------------------------
-
-
-def test_validate_download_rejects_short_duration(tmp_path):
-    """Normal: files with duration < 30s are rejected by validate_download (line 102)."""
-    from mammamiradio.playlist.downloader import validate_download
-
-    p = tmp_path / "short.mp3"
-    p.write_bytes(b"x" * (600 * 1024))
-    result = MagicMock()
-    result.returncode = 0
-    result.stdout = '{"format": {"duration": "15.3"}}'
-
-    with patch("mammamiradio.playlist.downloader.subprocess.run", return_value=result):
-        ok, reason = validate_download(p)
-
-    assert ok is False
-    assert "duration too short" in reason
-
-
-# ---------------------------------------------------------------------------
-# downloader: _find_demo_asset — cache dir mismatch forces re-glob (line 218->216)
-# ---------------------------------------------------------------------------
-
-
-def test_find_demo_asset_cache_dir_mismatch_forces_reglob(tmp_path):
-    """Post-restart: stale cache key causes re-glob on new _DEMO_ASSETS_DIR (branch 218->216)."""
-    import mammamiradio.playlist.downloader as _dl
-    from mammamiradio.playlist.downloader import _find_demo_asset
-
-    track = Track(title="Forced Reglob Song", artist="Artist", duration_ms=180000)
-    old_dir = tmp_path / "old_dir"
-    old_dir.mkdir()
-    new_dir = tmp_path / "new_dir"
-    new_dir.mkdir()
-    mp3 = new_dir / f"{track.title.lower()}.mp3"
-    mp3.touch()
-
-    # Prime cache with a stale key (different dir)
-    _dl._demo_files_cache = (str(old_dir), [])
-
-    with patch("mammamiradio.playlist.downloader._DEMO_ASSETS_DIR", new_dir):
-        result = _find_demo_asset(track)
-
-    assert result == mp3
-
-
-# ---------------------------------------------------------------------------
-# playlist: _load_local_music_tracks — over-200 cap (lines 131-136)
-# ---------------------------------------------------------------------------
-
-
-def test_load_local_music_tracks_caps_at_200(tmp_path):
-    """Normal: when more than 200 MP3s are present, only the first 200 are returned."""
-    from mammamiradio.playlist.playlist import _load_local_music_tracks
-
-    for i in range(205):
-        (tmp_path / f"song_{i:03d}.mp3").write_bytes(b"")
-
-    tracks = _load_local_music_tracks(tmp_path)
-    assert len(tracks) == 200
-
-
-# ---------------------------------------------------------------------------
-# playlist: _fetch_current_italy_charts — limit reached (line 246)
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_current_italy_charts_respects_limit():
-    """Normal: result is capped at the given limit (line 246)."""
-    from mammamiradio.playlist.playlist import _fetch_current_italy_charts
-
-    results = [{"name": f"Song {i}", "artistName": f"Artist {i}", "id": str(i)} for i in range(30)]
-    payload = {"feed": {"results": results}}
-
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        tracks = _fetch_current_italy_charts(limit=5)
-
-    assert len(tracks) == 5
-
-
-# ---------------------------------------------------------------------------
-# playlist: _jamendo_tags — URL fallback path (lines 279-283)
-# ---------------------------------------------------------------------------
-
-
-def test_jamendo_tags_reads_from_persisted_url(config):
-    """Normal: when source_id is empty, tags are extracted from the persisted URL (lines 279-283)."""
-    from mammamiradio.playlist.playlist import _jamendo_tags
-
-    source = PlaylistSource(
-        kind="jamendo",
-        source_id="",
-        label="Jamendo",
-        url="jamendo://playlist?tags=jazz+italiano",
-    )
-    tags = _jamendo_tags(config, source)
-    assert tags == "jazz italiano"
-
-
-def test_jamendo_tags_falls_back_to_config_when_url_has_no_tags(config):
-    """Normal: when source URL has no tags param, fall back to config.playlist.jamendo_tags."""
-    from mammamiradio.playlist.playlist import _jamendo_tags
-
-    config.playlist.jamendo_tags = "indie"
-    source = PlaylistSource(kind="jamendo", source_id="", label="Jamendo", url="jamendo://playlist?")
-    tags = _jamendo_tags(config, source)
-    assert tags == "indie"
-
-
-def test_jamendo_tags_uses_source_id_when_present(config):
-    """Normal: non-empty source_id takes priority over URL and config."""
-    from mammamiradio.playlist.playlist import _jamendo_tags
-
-    config.playlist.jamendo_tags = "pop"
-    source = PlaylistSource(kind="jamendo", source_id="rock italiano", label="Jamendo", url="")
-    tags = _jamendo_tags(config, source)
-    assert tags == "rock italiano"
-
-
-# ---------------------------------------------------------------------------
-# playlist: _fetch_jamendo_playlist — edge cases (lines 302, 309-311, 323, 325-330)
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_jamendo_playlist_with_explicit_tags_override(config):
-    """Normal: explicit tags= argument overrides config value (line 302)."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    config.playlist.jamendo_tags = "pop"
-
-    payload = {
-        "results": [
-            {
-                "id": "77",
-                "name": "Jazz Track",
-                "artist_name": "CC Jazz",
-                "duration": 200,
-                "audiodownload": "https://storage.jamendo.com/tracks/77.mp3",
-                "album_name": "",
-                "image": "",
-            }
-        ]
-    }
-
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        tracks = _fetch_jamendo_playlist(config, tags="jazz")
-
-    assert len(tracks) == 1
-    called_url = mock_urlopen.call_args.args[0]
-    assert "tags=jazz" in called_url
-
-
-def test_fetch_jamendo_playlist_network_error_returns_empty(config):
-    """Empty fallback: network failure returns empty list without raising (lines 309-311)."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    with patch("mammamiradio.playlist.playlist.urlopen", side_effect=URLError("timeout")):
-        tracks = _fetch_jamendo_playlist(config)
-    assert tracks == []
-
-
-def test_fetch_jamendo_playlist_skips_non_https_audiodownload(config):
-    """Normal: tracks whose audiodownload URL is not https are silently skipped (line 323)."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    payload = {
-        "results": [
-            {
-                "id": "10",
-                "name": "Bad URL Track",
-                "artist_name": "Artist",
-                "duration": 180,
-                "audiodownload": "http://storage.jamendo.com/tracks/10.mp3",
-                "album_name": "",
-                "image": "",
-            },
-            {
-                "id": "11",
-                "name": "Good Track",
-                "artist_name": "Artist",
-                "duration": 180,
-                "audiodownload": "https://storage.jamendo.com/tracks/11.mp3",
-                "album_name": "",
-                "image": "",
-            },
-        ]
-    }
-
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        tracks = _fetch_jamendo_playlist(config)
-
-    assert len(tracks) == 1
-    assert tracks[0].title == "Good Track"
-
-
-def test_fetch_jamendo_playlist_zero_duration_fallback(config):
-    """Normal: zero duration falls back to 210000ms default (lines 325-330)."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    payload = {
-        "results": [
-            {
-                "id": "20",
-                "name": "No Duration",
-                "artist_name": "Artist",
-                "duration": 0,
-                "audiodownload": "https://storage.jamendo.com/tracks/20.mp3",
-                "album_name": "",
-                "image": "",
-            },
-        ]
-    }
-
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        tracks = _fetch_jamendo_playlist(config)
-
-    assert len(tracks) == 1
-    assert tracks[0].duration_ms == 210000
-
-
-def test_fetch_jamendo_playlist_none_duration_fallback(config):
-    """Normal: None duration falls back to 210000ms default (lines 328-330)."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    payload = {
-        "results": [
-            {
-                "id": "21",
-                "name": "None Duration",
-                "artist_name": "Artist",
-                "duration": None,
-                "audiodownload": "https://storage.jamendo.com/tracks/21.mp3",
-                "album_name": "",
-                "image": "",
-            },
-        ]
-    }
-
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        tracks = _fetch_jamendo_playlist(config)
-
-    assert len(tracks) == 1
-    assert tracks[0].duration_ms == 210000
-
-
-# ---------------------------------------------------------------------------
-# playlist: read_persisted_source — OSError branch (line 356)
-# ---------------------------------------------------------------------------
-
-
-def test_read_persisted_source_oserror_on_read(tmp_path):
-    """Post-restart: when the persisted file raises OSError on read, returns None (line 356)."""
-    from mammamiradio.playlist.playlist import PERSISTED_SOURCE_FILENAME, read_persisted_source
-
-    path = tmp_path / PERSISTED_SOURCE_FILENAME
-    path.write_text('{"kind": "charts"}')
-
-    with patch("pathlib.Path.read_text", side_effect=OSError("disk error")):
-        result = read_persisted_source(tmp_path)
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# playlist: load_explicit_source — jamendo URL kind + empty error (lines 412, 416)
-# ---------------------------------------------------------------------------
-
-
-def test_load_explicit_source_jamendo_url_kind_resolves(config):
-    """Normal: source.kind='url' with jamendo:// scheme is treated as Jamendo (line 412)."""
-    from mammamiradio.playlist.playlist import load_explicit_source
-
-    config.playlist.jamendo_client_id = "cid123"
-    config.playlist.shuffle = False
-    jamendo_tracks = [
-        Track(
-            title="CC Song URL Kind",
-            artist="CC Artist URL",
-            duration_ms=180000,
-            spotify_id="jamendo_url_99",
-            youtube_id="",
-            direct_url="https://storage.jamendo.com/tracks/99.mp3",
-        )
-    ]
-
-    with patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=jamendo_tracks):
-        tracks, source = load_explicit_source(
-            config,
-            PlaylistSource(kind="url", source_id="", label="Jamendo", url="jamendo://playlist?tags=pop"),
-        )
-
-    assert len(tracks) == 1
-    assert tracks[0].title == jamendo_tracks[0].title
-    assert tracks[0].artist == jamendo_tracks[0].artist
-    assert tracks[0].source == "jamendo"
-    assert source.kind == "jamendo"
-
-
-def test_load_explicit_source_jamendo_empty_raises(config):
-    """Empty fallback: Jamendo returning zero tracks raises ExplicitSourceError (line 416)."""
-    from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
-
-    config.playlist.jamendo_client_id = "cid123"
-    with (
-        patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=[]),
-        pytest.raises(ExplicitSourceError, match="temporarily unavailable"),
-    ):
-        load_explicit_source(
-            config,
-            PlaylistSource(kind="jamendo", source_id="pop", label="Jamendo CC Music"),
-        )
-
-
-# ---------------------------------------------------------------------------
-# playlist: classic Italian era source
+# Classic sources remain an optional external-media feature
 # ---------------------------------------------------------------------------
 
 
 def test_parse_classic_artist_title():
-    """Normal: YouTube titles with hyphen/en dash separators yield artist + title."""
     from mammamiradio.playlist.playlist import _parse_classic_artist_title
 
-    assert _parse_classic_artist_title("Vasco Rossi - Vita spericolata") == ("Vasco Rossi", "Vita spericolata")
+    assert _parse_classic_artist_title("Vasco Rossi - Vita spericolata") == (
+        "Vasco Rossi",
+        "Vita spericolata",
+    )
     assert _parse_classic_artist_title("Lucio Battisti – Emozioni") == ("Lucio Battisti", "Emozioni")
     assert _parse_classic_artist_title("Senza separatore") is None
 
 
-def test_copy_tracks_with_source_classic():
-    """Normal: classic is a first-class Track source label."""
+def test_copy_tracks_with_source_supports_classic():
     from mammamiradio.playlist.playlist import _copy_tracks_with_source
 
     tracks = _copy_tracks_with_source(
-        [Track(title="Azzurro", artist="Adriano Celentano", duration_ms=210000)],
+        [Track(title="Azzurro", artist="Adriano Celentano", duration_ms=210_000)],
         "classic",
     )
-
     assert tracks[0].source == "classic"
 
 
-def test_classic_source_year_stamp(config):
-    """Normal: era searches stamp fetched tracks with the configured year hint."""
+def test_classic_metadata_search_stamps_era_year_and_parses_title():
     from mammamiradio.playlist.playlist import _load_classic_italian_tracks
 
     with (
@@ -677,10 +160,10 @@ def test_classic_source_year_stamp(config):
             "mammamiradio.playlist.downloader.search_ytdlp_metadata",
             return_value=[
                 {
-                    "youtube_id": "abc123classic",
+                    "youtube_id": "abc123class",
                     "title": "Vasco Rossi - Vita spericolata",
                     "artist": "VascoRossiVEVO",
-                    "duration_ms": 240000,
+                    "duration_ms": 240_000,
                     "album_art": "https://img.example/vasco.jpg",
                 }
             ],
@@ -693,432 +176,294 @@ def test_classic_source_year_stamp(config):
     assert tracks[0].title == "Vita spericolata"
     assert tracks[0].year == 1985
     assert tracks[0].source == "classic"
-    assert tracks[0].youtube_id == "abc123classic"
-    assert tracks[0].album_art == "https://img.example/vasco.jpg"
+    assert tracks[0].youtube_id == "abc123class"
 
 
-def test_load_explicit_source_classic_url_kind_resolves(config):
-    """Normal: source.kind='url' with classic:// scheme resolves to a classic source."""
+def test_classic_loader_is_empty_when_external_media_is_disabled():
+    from mammamiradio.playlist.playlist import _load_classic_italian_tracks
+
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
+        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata") as search,
+    ):
+        assert _load_classic_italian_tracks("80s") == []
+
+    search.assert_not_called()
+
+
+def test_explicit_classic_url_resolves_when_capability_is_enabled(config):
     from mammamiradio.playlist.playlist import load_explicit_source
 
     config.playlist.shuffle = False
-    classic_tracks = [
-        Track(
-            title="Vita spericolata",
-            artist="Vasco Rossi",
-            duration_ms=240000,
-            youtube_id="abc123classic",
-            year=1985,
-            source="classic",
-        )
-    ]
+    classic_track = Track(
+        title="Vita spericolata",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="abc123class",
+        year=1985,
+        source="classic",
+    )
 
-    with patch("mammamiradio.playlist.playlist._load_classic_italian_tracks", return_value=classic_tracks):
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._load_classic_italian_tracks", return_value=[classic_track]),
+    ):
         tracks, source = load_explicit_source(
             config,
             PlaylistSource(kind="url", source_id="", label="Anni 80", url="classic://italian/80s"),
         )
 
-    assert tracks[0].source == "classic"
-    assert tracks[0].year == 1985
+    assert tracks == [classic_track]
     assert source.kind == "classic"
     assert source.source_id == "80s"
     assert source.url == "classic://italian/80s"
 
 
-def test_load_explicit_source_classic_disabled_raises(config):
-    """Empty fallback: yt-dlp disabled yields an explicit source error, not demo fallback."""
-    from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
+def test_explicit_classic_is_actionably_blocked_without_capability(config):
+    from mammamiradio.playlist.playlist import ExternalMediaUnavailableError, load_explicit_source
 
     with (
-        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
-        pytest.raises(ExplicitSourceError, match="yt-dlp disabled"),
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=False),
+        patch("mammamiradio.playlist.playlist._load_classic_italian_tracks") as loader,
+        pytest.raises(ExternalMediaUnavailableError, match="external-media extra"),
     ):
         load_explicit_source(
             config,
             PlaylistSource(kind="classic", source_id="80s", label="Anni 80", url="classic://italian/80s"),
         )
 
+    loader.assert_not_called()
 
-def test_fetch_startup_playlist_restores_persisted_classic_source(config):
-    """Post-restart: a persisted classic source is restored without falling back to demo."""
+
+def test_explicit_classic_rejects_unsupported_era(config):
+    from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
+
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        pytest.raises(ExplicitSourceError, match="Unsupported classic Italian era"),
+    ):
+        load_explicit_source(
+            config,
+            PlaylistSource(kind="classic", source_id="60s", label="Anni 60", url="classic://italian/60s"),
+        )
+
+
+def test_startup_restores_persisted_classic_source(config):
     from mammamiradio.playlist.playlist import fetch_startup_playlist
 
     config.playlist.shuffle = False
     classic_track = Track(
         title="Vita spericolata",
         artist="Vasco Rossi",
-        duration_ms=240000,
-        youtube_id="abc123classic",
+        duration_ms=240_000,
+        youtube_id="abc123class",
         year=1985,
         source="classic",
     )
 
-    with patch("mammamiradio.playlist.playlist._load_classic_italian_tracks", return_value=[classic_track]):
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._load_classic_italian_tracks", return_value=[classic_track]),
+    ):
         tracks, source, error = fetch_startup_playlist(
             config,
             PlaylistSource(kind="classic", source_id="80s", label="Anni 80", url="classic://italian/80s"),
         )
 
-    assert source.kind == "classic"
-    assert source.source_id == "80s"
     assert tracks == [classic_track]
+    assert source.kind == "classic"
     assert error == ""
 
 
 # ---------------------------------------------------------------------------
-# playlist: fetch_startup_playlist — persisted source failure (lines 439-441)
+# Transient Jamendo configuration remains validated and default-off
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_startup_playlist_persisted_jamendo_fails_falls_back_to_demo(config):
-    """Post-restart: when persisted Jamendo source fails, fall back to demo (lines 439-441)."""
-    from mammamiradio.playlist.playlist import ExplicitSourceError, fetch_startup_playlist
+@pytest.mark.parametrize("country", ["Italian", "DE", "ita", "IT4"])
+def test_validate_config_rejects_bad_jamendo_country(config, country):
+    from mammamiradio.core.config import _validate
 
-    config.allow_ytdlp = False
-
-    with (
-        patch(
-            "mammamiradio.playlist.playlist.load_explicit_source",
-            side_effect=ExplicitSourceError("Jamendo temporarily unavailable"),
-        ),
-        patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
-    ):
-        tracks, source, error = fetch_startup_playlist(
-            config,
-            PlaylistSource(kind="jamendo", source_id="pop", label="Jamendo CC Music"),
-        )
-
-    assert source.kind == "demo"
-    assert tracks
-    assert all(track.source == "demo" for track in tracks)
-    assert "temporarily unavailable" in error
-
-
-# ---------------------------------------------------------------------------
-# playlist: fetch_startup_playlist — Jamendo as startup source (lines 458-459)
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_startup_playlist_jamendo_used_as_startup_source(config):
-    """Normal: when ytdlp disabled and jamendo_client_id is set, Jamendo is used (lines 458-459)."""
-    from mammamiradio.playlist.playlist import fetch_startup_playlist
-
-    config.allow_ytdlp = False
-    config.playlist.jamendo_client_id = "cid_startup"
-    config.playlist.jamendo_tags = "pop"
-    config.playlist.shuffle = False
-    jamendo_tracks = [
-        Track(
-            title="Startup CC Song",
-            artist="CC Band",
-            duration_ms=180000,
-            spotify_id="jamendo_startup_unique_1",
-            youtube_id="",
-            direct_url="https://storage.jamendo.com/tracks/s1.mp3",
-        )
-    ]
-
-    with patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=jamendo_tracks):
-        tracks, source, _error = fetch_startup_playlist(config)
-
-    assert len(tracks) == 1
-    assert tracks[0].title == jamendo_tracks[0].title
-    assert tracks[0].artist == jamendo_tracks[0].artist
-    assert tracks[0].source == "jamendo"
-    assert source.kind == "jamendo"
-    assert _error == ""
-
-
-# ---------------------------------------------------------------------------
-# playlist: fetch_startup_playlist — local music warning (line 463)
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_startup_playlist_uses_local_music_when_ytdlp_disabled_and_no_jamendo(config, tmp_path):
-    """Operator-honesty: when music/ has MP3s, yt-dlp is off, and Jamendo isn't
-    configured, the startup must use the operator's local files — NOT silently
-    fall through to bundled demo assets.
-
-    yt-dlp is only needed for downloading chart tracks; local MP3s already exist
-    on disk and don't need it. The previous behavior warn-and-skipped, which
-    contradicted the operator's stated intent (they put MP3s in music/).
-    """
-    from mammamiradio.core.models import Track
-    from mammamiradio.playlist.playlist import fetch_startup_playlist
-
-    config.allow_ytdlp = False
-    config.playlist.jamendo_client_id = ""
-
-    # source="" so the assertion `t.source == "local"` proves the production
-    # _copy_tracks_with_source(..., "local") wrap actually fired.
-    fake_local_track = Track(
-        title="Emozioni",
-        artist="Lucio Battisti",
-        duration_ms=210000,
-        spotify_id="local_lucio_battisti_-_emozioni",
-        source="",
-    )
-
-    with (
-        patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
-        patch(
-            "mammamiradio.playlist.playlist._load_local_music_tracks",
-            return_value=[fake_local_track],
-        ),
-    ):
-        tracks, source, _error = fetch_startup_playlist(config)
-
-    assert source.kind == "local"
-    assert source.source_id == "local_music_dir"
-    assert source.track_count == 1
-    assert len(tracks) == 1
-    assert tracks[0].artist == "Lucio Battisti"
-    assert tracks[0].source == "local"
-
-
-# ---------------------------------------------------------------------------
-# playlist: jamendo country + order filters (Italian-trending feature)
-# ---------------------------------------------------------------------------
-
-
-def test_build_jamendo_url_includes_country_and_order_when_set(config):
-    """Country and order params land in the API URL when configured."""
-    from mammamiradio.playlist.playlist import _build_jamendo_url
-
-    url = _build_jamendo_url("cid123", tags="pop", country="ITA", order="popularity_week", limit=50)
-    assert "country=ITA" in url
-    assert "order=popularity_week" in url
-    assert "tags=pop" in url
-
-
-def test_build_jamendo_url_defaults_to_deeper_rotation_limit(config):
-    """Default Jamendo URL construction requests the full configured station pool."""
-    from mammamiradio.playlist.playlist import _build_jamendo_url
-
-    url = _build_jamendo_url("cid123", tags="pop")
-
-    assert "limit=200" in url
-
-
-def test_build_jamendo_url_omits_country_and_order_when_empty(config):
-    """When country and order are empty strings, they are omitted from the URL."""
-    from mammamiradio.playlist.playlist import _build_jamendo_url
-
-    url = _build_jamendo_url("cid123", tags="pop", country="", order="", limit=50)
-    assert "country=" not in url
-    assert "order=" not in url
-    assert "tags=pop" in url
-
-
-def test_fetch_jamendo_playlist_uses_config_country_and_order(config):
-    """fetch reads country + order from config when not overridden."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    config.playlist.jamendo_tags = "pop"
-    config.playlist.jamendo_country = "ITA"
-    config.playlist.jamendo_order = "popularity_week"
-
-    payload = {"results": []}
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        _fetch_jamendo_playlist(config)
-
-    called_url = mock_urlopen.call_args.args[0]
-    assert "country=ITA" in called_url
-    assert "order=popularity_week" in called_url
-
-
-def test_fetch_jamendo_playlist_uses_config_limit(config):
-    """fetch reads the result depth from config when not explicitly overridden."""
-    from mammamiradio.playlist.playlist import _fetch_jamendo_playlist
-
-    config.playlist.jamendo_client_id = "cid123"
-    config.playlist.jamendo_limit = 123
-
-    payload = {"results": []}
-    with patch("mammamiradio.playlist.playlist.urlopen") as mock_urlopen:
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        _fetch_jamendo_playlist(config)
-
-    called_url = mock_urlopen.call_args.args[0]
-    assert "limit=123" in called_url
-
-
-def test_jamendo_source_round_trip_preserves_country_and_order(config):
-    """`/api/playlist/load` round-trip: persisted Jamendo URL must encode country and order
-    so reload reproduces the same fetch."""
-    from urllib.parse import parse_qs, urlparse
-
-    from mammamiradio.playlist.playlist import (
-        _jamendo_country,
-        _jamendo_order,
-        _jamendo_request_url,
-        _jamendo_source,
-    )
-
-    src = _jamendo_source(50, tags="pop", country="ITA", order="popularity_week")
-    parsed = urlparse(src.url)
-    qs = parse_qs(parsed.query)
-    assert qs["country"] == ["ITA"]
-    assert qs["order"] == ["popularity_week"]
-    assert qs["tags"] == ["pop"]
-
-    # Round-trip via parsers — caller-side reload picks up persisted values
-    # (config defaults can be empty; URL is the source of truth on read).
-    config.playlist.jamendo_country = ""
-    config.playlist.jamendo_order = ""
-    assert _jamendo_country(config, src) == "ITA"
-    assert _jamendo_order(config, src) == "popularity_week"
-
-    # Empty country/order produce a clean URL
-    src_empty = _jamendo_source(50, tags="pop")
-    parsed_empty = urlparse(src_empty.url)
-    qs_empty = parse_qs(parsed_empty.query)
-    assert "country" not in qs_empty
-    assert "order" not in qs_empty
-    # And the helper returns the empty string (no fallback to a hardcoded default)
-    assert _jamendo_country(config, src_empty) == ""
-    assert _jamendo_order(config, src_empty) == ""
-
-    # request URL helper agrees
-    assert _jamendo_request_url(tags="pop", country="ITA", order="popularity_week") == src.url
-
-
-def test_jamendo_source_url_does_not_encode_limit(config):
-    """`limit` is intentionally NOT round-tripped in the persisted Jamendo source URL.
-
-    Contract documented in docs/architecture.md: result depth is always re-read
-    from the active radio.toml / JAMENDO_LIMIT config at fetch time, never from the
-    saved source URL. Guards against a regression that leaks limit into the URL.
-    """
-    from urllib.parse import parse_qs, urlparse
-
-    from mammamiradio.playlist.playlist import _jamendo_source
-
-    src = _jamendo_source(200, tags="pop", country="ITA", order="popularity_week")
-    qs = parse_qs(urlparse(src.url).query)
-    assert "limit" not in qs
-
-
-def test_validate_config_rejects_bad_jamendo_country(config):
-    """validate_config rejects non-3-letter country codes."""
-    from mammamiradio.core.config import _validate as validate_config
-
-    config.playlist.jamendo_country = "Italian"  # not a 3-letter ISO code
+    config.playlist.jamendo_country = country
     with pytest.raises(ValueError, match="jamendo_country"):
-        validate_config(config)
-
-    config.playlist.jamendo_country = "DE"  # only 2 letters
-    with pytest.raises(ValueError, match="jamendo_country"):
-        validate_config(config)
+        _validate(config)
 
 
-def test_validate_config_accepts_valid_jamendo_country(config):
-    """validate_config accepts 3-letter uppercase ISO codes and empty."""
-    from mammamiradio.core.config import _validate as validate_config
+@pytest.mark.parametrize("country", ["ITA", "DEU", "FRA", ""])
+def test_validate_config_accepts_supported_jamendo_country_shape(config, country):
+    from mammamiradio.core.config import _validate
 
-    config.playlist.jamendo_country = "ITA"
-    validate_config(config)  # no raise
-
-    config.playlist.jamendo_country = ""
-    validate_config(config)  # no raise
+    config.playlist.jamendo_country = country
+    _validate(config)
 
 
-def test_validate_config_rejects_bad_jamendo_order(config):
-    """validate_config rejects unknown order values."""
-    from mammamiradio.core.config import _validate as validate_config
+def test_validate_config_rejects_unknown_jamendo_order(config):
+    from mammamiradio.core.config import _validate
 
-    config.playlist.jamendo_order = "random"  # not in the allowed set
+    config.playlist.jamendo_order = "random"
     with pytest.raises(ValueError, match="jamendo_order"):
-        validate_config(config)
+        _validate(config)
 
 
-def test_validate_config_accepts_valid_jamendo_order(config):
-    """validate_config accepts known order values and empty."""
-    from mammamiradio.core.config import _validate as validate_config
+@pytest.mark.parametrize(
+    "order",
+    ["popularity_total", "popularity_month", "popularity_week", "releasedate_desc", ""],
+)
+def test_validate_config_accepts_supported_jamendo_orders(config, order):
+    from mammamiradio.core.config import _validate
 
-    for order in ("popularity_total", "popularity_month", "popularity_week", "releasedate_desc", ""):
-        config.playlist.jamendo_order = order
-        validate_config(config)  # no raise
-
-
-def test_validate_config_rejects_bad_jamendo_limit(config):
-    """validate_config rejects Jamendo limits outside the API-supported range."""
-    from mammamiradio.core.config import _validate as validate_config
-
-    for limit in (0, 201, "200", True):
-        config.playlist.jamendo_limit = limit
-        with pytest.raises(ValueError, match="jamendo_limit"):
-            validate_config(config)
+    config.playlist.jamendo_order = order
+    _validate(config)
 
 
-def test_load_config_jamendo_env_vars_override_radio_toml(monkeypatch):
-    """JAMENDO_* env vars override the radio.toml values.
+@pytest.mark.parametrize("limit", [0, 201, "200", True])
+def test_validate_config_rejects_bad_jamendo_limit(config, limit):
+    from mammamiradio.core.config import _validate
 
-    Closes the env-override coverage gap surfaced by /plan-eng-review on PR #283.
-    Pattern mirrors the existing JAMENDO_CLIENT_ID env override at the same site.
-    """
-    from mammamiradio.core.config import load_config
+    config.playlist.jamendo_limit = limit
+    with pytest.raises(ValueError, match="jamendo_limit"):
+        _validate(config)
 
+
+@pytest.mark.parametrize("limit", [1, 50, 200])
+def test_validate_config_accepts_bounded_jamendo_limit(config, limit):
+    from mammamiradio.core.config import _validate
+
+    config.playlist.jamendo_limit = limit
+    _validate(config)
+
+
+def test_load_config_jamendo_env_overrides_are_current_and_explicit(monkeypatch):
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "valid-client-id")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ENABLED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", JAMENDO_ACK_REVISION)
     monkeypatch.setenv("JAMENDO_COUNTRY", "DEU")
     monkeypatch.setenv("JAMENDO_ORDER", "popularity_month")
     monkeypatch.setenv("JAMENDO_LIMIT", "123")
+
     config = load_config()
+
+    assert config.playlist.jamendo_client_id == "valid-client-id"
+    assert config.playlist.jamendo_enabled is True
+    assert config.playlist.jamendo_noncommercial_acknowledged is True
+    assert config.playlist.jamendo_ack_revision == JAMENDO_ACK_REVISION
     assert config.playlist.jamendo_country == "DEU"
     assert config.playlist.jamendo_order == "popularity_month"
     assert config.playlist.jamendo_limit == 123
 
 
-def test_load_config_invalid_jamendo_limit_env_var_raises(monkeypatch):
-    """JAMENDO_LIMIT with a non-integer value raises at validation time."""
-    from mammamiradio.core.config import load_config
+@pytest.mark.parametrize(
+    "env",
+    [
+        {
+            "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED": "false",
+            "MAMMAMIRADIO_JAMENDO_ACK_REVISION": JAMENDO_ACK_REVISION,
+        },
+        {
+            "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED": "true",
+            "MAMMAMIRADIO_JAMENDO_ACK_REVISION": "old-terms",
+        },
+    ],
+)
+def test_load_config_incomplete_acknowledgement_keeps_jamendo_disabled(monkeypatch, env):
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "valid-client-id")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ENABLED", "true")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
 
+    config = load_config()
+
+    assert config.playlist.jamendo_enabled is False
+    assert config.playlist.jamendo_noncommercial_acknowledged is False
+
+
+def test_load_config_missing_client_id_keeps_jamendo_disabled(monkeypatch):
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ENABLED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", JAMENDO_ACK_REVISION)
+
+    assert load_config().playlist.jamendo_enabled is False
+
+
+def test_load_config_invalid_jamendo_limit_env_var_raises(monkeypatch):
     monkeypatch.setenv("JAMENDO_LIMIT", "abc")
     with pytest.raises(ValueError, match="jamendo_limit"):
         load_config()
 
 
-def test_jamendo_country_and_order_fall_back_to_config_when_url_silent(config):
-    """Soft-migration: a pre-PR-#283 persisted Jamendo URL has no country / no order
-    query params. When the upgraded code loads it, the helpers must fall through to
-    the current radio.toml defaults — not silently return an empty string and lose
-    the configured filter on next persist.
+# ---------------------------------------------------------------------------
+# Useful non-Jamendo downloader guards retained from the former coverage file
+# ---------------------------------------------------------------------------
 
-    Regression guard against a future refactor that drops the config-fallback path.
-    """
-    from urllib.parse import urlparse
 
-    from mammamiradio.playlist.playlist import _jamendo_country, _jamendo_order
+def test_download_external_sync_calls_extractor_when_enabled(tmp_path):
+    from mammamiradio.playlist.downloader import _download_external_sync
 
-    # Operator's persisted source from before the country/order feature shipped.
-    legacy_source = PlaylistSource(
-        kind="jamendo",
-        source_id="pop",
-        label="Jamendo CC Music (pop)",
-        track_count=50,
-        selected_at=0.0,
-        url="jamendo://playlist?tags=pop",
+    cache_dir = tmp_path / "cache"
+    music_dir = tmp_path / "music"
+    cache_dir.mkdir()
+    music_dir.mkdir()
+    track = Track(
+        title="External Song",
+        artist="Artist",
+        duration_ms=180_000,
+        spotify_id="external_1",
+        source="youtube",
     )
-    parsed = urlparse(legacy_source.url)
-    assert "country=" not in parsed.query
-    assert "order=" not in parsed.query
+    expected = cache_dir / f"{track.cache_key}.mp3"
 
-    # Operator's current radio.toml has the new defaults.
-    config.playlist.jamendo_country = "ITA"
-    config.playlist.jamendo_order = "popularity_week"
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
+        patch("mammamiradio.playlist.downloader._download_ytdlp", return_value=expected) as extractor,
+    ):
+        assert _download_external_sync(track, cache_dir, music_dir) == expected
 
-    # Helpers fall through to config when the URL is silent.
-    assert _jamendo_country(config, legacy_source) == "ITA"
-    assert _jamendo_order(config, legacy_source) == "popularity_week"
+    extractor.assert_called_once_with(track, cache_dir)
+
+
+def test_download_external_sync_rejects_when_extractor_is_disabled(tmp_path):
+    from mammamiradio.playlist.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    music_dir = tmp_path / "music"
+    cache_dir.mkdir()
+    music_dir.mkdir()
+    track = Track(title="External Song", artist="Artist", duration_ms=180_000, source="youtube")
+
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
+        pytest.raises(RuntimeError, match="yt-dlp is disabled"),
+    ):
+        _download_external_sync(track, cache_dir, music_dir)
+
+
+def test_evict_cache_lru_preserves_protected_paths(tmp_path):
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    queued = cache_dir / "queued_track.mp3"
+    evictable = cache_dir / "old_track.mp3"
+    queued.write_bytes(b"x" * (700 * 1024))
+    evictable.write_bytes(b"x" * (1200 * 1024))
+
+    evict_cache_lru(cache_dir, max_size_mb=1, protected_paths={queued})
+
+    assert queued.exists()
+    assert not evictable.exists()
+
+
+def test_validate_download_rejects_short_duration(tmp_path):
+    from mammamiradio.playlist.downloader import validate_download
+
+    path = tmp_path / "short.mp3"
+    path.write_bytes(b"x" * (600 * 1024))
+    result = MagicMock(returncode=0, stdout='{"format": {"duration": "15.3"}}')
+
+    with patch("mammamiradio.playlist.downloader.subprocess.run", return_value=result):
+        ok, reason = validate_download(path)
+
+    assert ok is False
+    assert "duration too short" in reason
