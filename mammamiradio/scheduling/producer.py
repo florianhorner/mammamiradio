@@ -2043,12 +2043,12 @@ async def _enqueue_with_egress(
     egress_started = time.monotonic()
     segment = await _apply_egress(segment, config)
     state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
-    # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
-    # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
-    # would purge the queue before this put. A caller that captured a generation up front
-    # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
-    # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
-    # keep their documented pre-egress-only behavior.
+    # Post-egress staleness re-check (when the caller captured generation state). The
+    # egress encode can be slow (the FM broadcast chain is a full extra FFmpeg pass),
+    # and a source switch landing DURING it would purge the queue before this put.
+    # Prewarm and normal producer paths pass stale_check so a now-stale segment is
+    # dropped at the last moment instead of put into the freshly-purged queue (#665).
+    # Direct recovery paths that have no captured generation may omit it by design.
     rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
     if rejection_reason is not None:
         _discard_rejected_admission(state, segment, rejection_reason, phase="post-egress enqueue gate")

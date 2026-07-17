@@ -1111,6 +1111,66 @@ async def test_playlist_load_does_not_skip_when_no_ready_cutover_runway(tmp_path
     assert not app.state.skip_event.is_set()
 
 
+@pytest.mark.asyncio
+async def test_playlist_load_keeps_ready_runway_when_assets_are_missing(tmp_path):
+    """An assetless source switch keeps queued audio and a valid slot on air."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+
+    queued_path = tmp_path / "queued_head.mp3"
+    queued_path.write_bytes(b"queued-audio")
+    queued_head = Segment(
+        type=SegmentType.MUSIC,
+        path=queued_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "ready-head", "title": "Ready head", "artist": "Artist"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(queued_head)
+    state.queued_segments = [{"id": "ready-head", "type": "music", "label": "Ready head"}]
+
+    slot_path = tmp_path / "continuity-slot.mp3"
+    slot_path.write_bytes(b"continuity-audio")
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.json()["ok"] is True
+    assert app.state.skip_event.is_set()
+    assert list(app.state.queue._queue) == [queued_head]
+    assert state.queued_segments == [{"id": "ready-head", "type": "music", "label": "Ready head"}]
+    assert state.continuity_slot is slot
+
+
 # ---------------------------------------------------------------------------
 # Search tracks
 # ---------------------------------------------------------------------------
