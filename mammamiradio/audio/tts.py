@@ -6,11 +6,12 @@ import asyncio
 import hashlib
 import html
 import logging
+import math
 import os
 import re
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,7 +41,7 @@ from mammamiradio.audio.voice_catalog import (
 from mammamiradio.audio.voice_catalog import (
     is_openai_voice as _catalog_is_openai_voice,
 )
-from mammamiradio.core.models import HostPersonality
+from mammamiradio.core.models import DialogueLine, HostPersonality
 from mammamiradio.hosts.ad_creative import AdScript, AdVoice
 
 if TYPE_CHECKING:
@@ -77,8 +78,8 @@ _XML_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # returns "Invalid voice" or a cloud provider returns a non-retryable auth/voice
 # error. Reset via reset_voice_failures().
 _failed_edge_voices: set[str] = set()
-_failed_cloud_voices: set[tuple[str, str, str]] = set()
-_cloud_voice_attempt_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+_failed_cloud_voices: set[tuple[str, str, str, str]] = set()
+_cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
 _cloud_voice_state_lock = threading.Lock()
 
 # Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
@@ -132,28 +133,38 @@ def _secret_fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12] if value else ""
 
 
-def _cloud_failure_key(engine: str, voice: str) -> tuple[str, str, str]:
+def _cloud_failure_key(
+    engine: str,
+    voice: str,
+    *,
+    elevenlabs_model: str = "eleven_multilingual_v2",
+) -> tuple[str, str, str, str]:
+    """Scope cloud failure memoization to the effective provider model too."""
+
     engine = engine.strip().lower()
     if engine == "azure":
         credential = f"{os.getenv('AZURE_SPEECH_REGION', '')}:{_secret_fingerprint(os.getenv('AZURE_SPEECH_KEY', ''))}"
+        model = ""
     elif engine == "elevenlabs":
         credential = _secret_fingerprint(os.getenv("ELEVENLABS_API_KEY", ""))
+        model = elevenlabs_model.strip() if isinstance(elevenlabs_model, str) else ""
     else:
         credential = ""
-    return (engine, voice.strip(), credential)
+        model = ""
+    return (engine, voice.strip(), credential, model)
 
 
-def _cloud_voice_failed(cloud_key: tuple[str, str, str]) -> bool:
+def _cloud_voice_failed(cloud_key: tuple[str, str, str, str]) -> bool:
     with _cloud_voice_state_lock:
         return cloud_key in _failed_cloud_voices
 
 
-def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str]) -> None:
+def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str]) -> None:
     with _cloud_voice_state_lock:
         _failed_cloud_voices.add(cloud_key)
 
 
-def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str]) -> asyncio.Lock:
+def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.Lock:
     """Return the per-key async lock for cloud attempts.
 
     Locks are created lazily inside the running event loop and cleared by tests
@@ -401,6 +412,25 @@ _ELEVENLABS_DEFAULT_VOICE_SETTINGS: dict = {
     "style": 0.45,
     "use_speaker_boost": True,
 }
+_ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
+_ELEVENLABS_V3_MODEL = "eleven_v3"
+_SUPPORTED_ELEVENLABS_MODELS = frozenset({_ELEVENLABS_V2_MODEL, _ELEVENLABS_V3_MODEL})
+
+# A cue is semantic metadata, never caller-provided provider markup. The map is
+# deliberately small and profile-bound so an LLM cannot smuggle arbitrary audio
+# tags into a request, and Edge fallback always retains the original clean text.
+_ELEVENLABS_V3_DELIVERY_TAGS: dict[str, dict[str, str]] = {
+    "marco": {
+        "energetic": "[excited]",
+        "curious": "[curious]",
+        "playful": "[mischievously]",
+    },
+    "giulia": {
+        "dry": "[sarcastic]",
+        "curious": "[curious]",
+        "playful": "[mischievously]",
+    },
+}
 
 
 def _resolve_elevenlabs_v2_voice_settings(voice_settings: dict | None) -> dict:
@@ -413,6 +443,54 @@ def _resolve_elevenlabs_v2_voice_settings(voice_settings: dict | None) -> dict:
     return {**_ELEVENLABS_DEFAULT_VOICE_SETTINGS, **(voice_settings or {})}
 
 
+def _resolve_elevenlabs_v3_voice_settings(voice_settings: dict | None) -> dict | None:
+    """Return V3's safe settings payload, omitting provider-default stability."""
+
+    if voice_settings is None:
+        return None
+    if not isinstance(voice_settings, dict):
+        raise ValueError("ElevenLabs voice_settings must be a table")
+    if not voice_settings:
+        return None
+    if set(voice_settings) != {"stability"}:
+        raise ValueError("ElevenLabs V3 voice_settings may contain only stability")
+    stability = voice_settings["stability"]
+    if isinstance(stability, bool) or not isinstance(stability, int | float) or not math.isfinite(stability):
+        raise ValueError("ElevenLabs V3 stability must be a finite number between 0 and 1")
+    if not 0 <= stability <= 1:
+        raise ValueError("ElevenLabs V3 stability must be between 0 and 1")
+    return {"stability": float(stability)}
+
+
+def _resolve_elevenlabs_v3_delivery_tag(delivery_cue: str, delivery_profile: str) -> tuple[str, str]:
+    """Return the code-owned V3 tag and normalized semantic cue, if authorized."""
+
+    cue = delivery_cue.strip().lower() if isinstance(delivery_cue, str) else "neutral"
+    profile = delivery_profile.strip().lower() if isinstance(delivery_profile, str) else "none"
+    if cue in {"", "neutral"}:
+        return "", "neutral"
+    tag = _ELEVENLABS_V3_DELIVERY_TAGS.get(profile, {}).get(cue, "")
+    if not tag:
+        logger.debug("Ignoring unsupported ElevenLabs V3 delivery cue profile=%s cue=%s", profile, cue)
+        return "", "neutral"
+    return tag, cue
+
+
+# Model-emitted bracket directives (for example "[sospira]") must never reach a
+# V3 payload as an uncontrolled audio tag — only the code-owned tag above may be
+# markup. scriptwriter strips these from banter before assembly, but regular
+# hosts now render non-banter speech (transitions, news flashes, ad intros)
+# under V3 too, so the provider boundary is the single point that strips them on
+# every V3 path.
+_ELEVENLABS_V3_INLINE_DIRECTIVE_RE = re.compile(r"\[[^\]\r\n]{0,120}\]")
+
+
+def _strip_v3_inline_directives(text: str) -> str:
+    """Remove model-supplied bracket directions from spoken copy before V3 renders it."""
+    without_directives = _ELEVENLABS_V3_INLINE_DIRECTIVE_RE.sub(" ", text)
+    return re.sub(r"[ \t]+", " ", without_directives).strip()
+
+
 async def synthesize_elevenlabs(
     text: str,
     voice: str,
@@ -420,17 +498,25 @@ async def synthesize_elevenlabs(
     *,
     loudnorm: bool = True,
     voice_settings: dict | None = None,
+    elevenlabs_model: str = _ELEVENLABS_V2_MODEL,
+    delivery_cue: str = "neutral",
+    delivery_profile: str = "none",
+    host_name: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
 
     ``voice_settings`` overrides the house defaults per call (used by the voice
-    audition harness to sweep stability/style/similarity); when None, the station
-    defaults apply, so production callers are unchanged.
+    audition harness to sweep stability/style/similarity); when None, the V2
+    house defaults apply. V3 accepts only stability and renders an allowlisted
+    semantic delivery cue at this final provider boundary.
     """
     api_key = os.getenv("ELEVENLABS_API_KEY", "")
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
+
+    if not isinstance(elevenlabs_model, str) or elevenlabs_model not in _SUPPORTED_ELEVENLABS_MODELS:
+        raise ValueError(f"Unsupported ElevenLabs model: {elevenlabs_model!r}")
 
     raw_path = output_path.with_suffix(".raw.mp3")
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{quote(voice, safe='')}"
@@ -439,11 +525,35 @@ async def synthesize_elevenlabs(
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
     }
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": _resolve_elevenlabs_v2_voice_settings(voice_settings),
-    }
+    if elevenlabs_model == _ELEVENLABS_V2_MODEL:
+        # Preserve this construction and key order byte-for-byte for legacy V2
+        # callers; it is also the locked audition baseline.
+        payload = {
+            "text": text,
+            "model_id": _ELEVENLABS_V2_MODEL,
+            "voice_settings": _resolve_elevenlabs_v2_voice_settings(voice_settings),
+        }
+        resolved_cue = "neutral"
+    else:
+        tag, resolved_cue = _resolve_elevenlabs_v3_delivery_tag(delivery_cue, delivery_profile)
+        # Strip any model-emitted bracket directives so only the code-owned tag
+        # can reach V3 as markup — covers non-banter host speech (transitions,
+        # news, ad intros) that scriptwriter does not pre-clean.
+        safe_text = _strip_v3_inline_directives(text)
+        payload = {
+            "text": f"{tag} {safe_text}" if tag else safe_text,
+            "model_id": _ELEVENLABS_V3_MODEL,
+        }
+        v3_voice_settings = _resolve_elevenlabs_v3_voice_settings(voice_settings)
+        if v3_voice_settings is not None:
+            payload["voice_settings"] = v3_voice_settings
+
+    logger.info(
+        "ElevenLabs TTS request host=%s model=%s delivery=%s",
+        host_name or "unspecified",
+        elevenlabs_model,
+        resolved_cue,
+    )
     try:
         client = _get_elevenlabs_client(api_key)
         response = await client.post(url, headers=headers, json=payload)
@@ -458,7 +568,13 @@ async def synthesize_elevenlabs(
         raw_path.unlink(missing_ok=True)
         raise
 
-    logger.info("Synthesized (ElevenLabs): %s (%s)", output_path.name, voice)
+    logger.info(
+        "Synthesized (ElevenLabs): %s (%s, model=%s, delivery=%s)",
+        output_path.name,
+        voice,
+        elevenlabs_model,
+        resolved_cue,
+    )
     return output_path
 
 
@@ -474,6 +590,10 @@ async def synthesize(
     openai_instructions: str = "",
     loudnorm: bool = True,
     voice_settings: dict | None = None,
+    elevenlabs_model: str = _ELEVENLABS_V2_MODEL,
+    delivery_cue: str = "neutral",
+    delivery_profile: str = "none",
+    host_name: str = "",
     state: StationState | None = None,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
@@ -566,10 +686,14 @@ async def synthesize(
         voice = fallback_voice
     elif engine == "elevenlabs":
         if os.getenv("ELEVENLABS_API_KEY", ""):
-            cloud_key = _cloud_failure_key(engine, voice)
+            cloud_key = _cloud_failure_key(engine, voice, elevenlabs_model=elevenlabs_model)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
-                    logger.debug("ElevenLabs TTS voice '%s' previously failed this session; using edge fallback", voice)
+                    logger.debug(
+                        "ElevenLabs TTS voice '%s' model '%s' previously failed this session; using edge fallback",
+                        voice,
+                        elevenlabs_model,
+                    )
                 else:
                     try:
                         async with _HEAVY_SEM:
@@ -579,6 +703,10 @@ async def synthesize(
                                 output_path,
                                 loudnorm=loudnorm,
                                 voice_settings=voice_settings,
+                                elevenlabs_model=elevenlabs_model,
+                                delivery_cue=delivery_cue,
+                                delivery_profile=delivery_profile,
+                                host_name=host_name,
                                 on_paid_provider_success=_bill_tts,
                             )
                         return result
@@ -587,13 +715,18 @@ async def synthesize(
                         if reason:
                             _memoize_failed_cloud_voice(cloud_key)
                             logger.warning(
-                                "ElevenLabs TTS disabled for voice '%s' this session after %s; "
+                                "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
                                 "falling back to edge-tts",
                                 voice,
+                                elevenlabs_model,
                                 reason,
                             )
                         else:
-                            logger.warning("ElevenLabs TTS failed, falling back to edge-tts: %s", e)
+                            logger.warning(
+                                "ElevenLabs TTS model '%s' failed, falling back to edge-tts: %s",
+                                elevenlabs_model,
+                                e,
+                            )
         else:
             logger.debug("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
         voice = fallback_voice
@@ -977,19 +1110,24 @@ def _unlink_many(paths: list[Path]) -> None:
 
 
 async def synthesize_dialogue(
-    lines: list[tuple[HostPersonality, str]],
+    lines: Sequence[DialogueLine | tuple[HostPersonality, str]],
     tmp_dir: Path,
     state: StationState | None = None,
 ) -> Path:
-    """Render all host lines in parallel and stitch the exchange together.
+    """Render clean host lines in parallel and stitch the exchange together.
 
-    state is forwarded to each per-line synthesize() for paid-TTS char accounting.
+    ``DialogueLine`` carries semantic delivery metadata without changing legacy
+    tuple callers. State is forwarded to each per-line synthesize() for paid-TTS
+    character accounting.
     """
     if not lines:
         raise ValueError("synthesize_dialogue: lines list must not be empty")
 
-    paths = [tmp_dir / f"line_{uuid4().hex[:8]}.mp3" for _ in lines]
-    multi_line = len(lines) > 1
+    dialogue_lines = [
+        line if isinstance(line, DialogueLine) else DialogueLine(host=line[0], text=line[1]) for line in lines
+    ]
+    paths = [tmp_dir / f"line_{uuid4().hex[:8]}.mp3" for _ in dialogue_lines]
+    multi_line = len(dialogue_lines) > 1
 
     # For multi-line dialogue: skip per-line loudnorm (just re-encode to station format),
     # concat, then do one final loudnorm on the assembled segment. Reduces N passes → 1.
@@ -998,18 +1136,22 @@ async def synthesize_dialogue(
         await asyncio.gather(
             *(
                 synthesize(
-                    text,
-                    host.voice,
+                    line.text,
+                    line.host.voice,
                     path,
-                    **_prosody_for_host(host),
-                    engine=host.engine,
-                    edge_fallback_voice=host.edge_fallback_voice,
-                    openai_instructions=_openai_instructions_for_host(host),
+                    **_prosody_for_host(line.host),
+                    engine=line.host.engine,
+                    edge_fallback_voice=line.host.edge_fallback_voice,
+                    openai_instructions=_openai_instructions_for_host(line.host),
                     loudnorm=not multi_line,
-                    voice_settings=host.voice_settings,
+                    voice_settings=line.host.voice_settings,
+                    elevenlabs_model=line.host.elevenlabs_model,
+                    delivery_cue=line.delivery,
+                    delivery_profile=line.host.delivery_profile,
+                    host_name=line.host.name,
                     state=state,
                 )
-                for (host, text), path in zip(lines, paths, strict=True)
+                for line, path in zip(dialogue_lines, paths, strict=True)
             )
         )
     )

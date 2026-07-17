@@ -80,14 +80,126 @@ def test_radio_toml_brand_sonic_signatures_use_real_sfx_types():
 
 
 def test_load_config_parses_per_host_voice_settings():
-    """Marco carries an ElevenLabs clarity override (stability); a host without a
-    voice_settings table defaults to {} so its synthesis uses the house tuning."""
+    """Regular hosts opt into V3 without changing the V2 guest/ad baseline."""
     toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
     config = load_config(str(toml_path))
     marco = next(h for h in config.hosts if h.name == "Marco")
     giulia = next(h for h in config.hosts if h.name == "Giulia")
+    hans = next(h for h in config.hosts if h.name == "Hans Günther")
     assert marco.voice_settings == {"stability": 0.6}
+    assert marco.elevenlabs_model == "eleven_v3"
+    assert marco.delivery_profile == "marco"
     assert giulia.voice_settings == {}
+    assert giulia.elevenlabs_model == "eleven_v3"
+    assert giulia.delivery_profile == "giulia"
+    assert hans.elevenlabs_model == "eleven_multilingual_v2"
+    assert hans.delivery_profile == "none"
+
+
+def test_load_config_rejects_v3_host_with_v2_only_settings(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = tmp_path / "radio.toml"
+    custom.write_text(
+        source.read_text().replace(
+            "voice_settings = { stability = 0.6 }",
+            "voice_settings = { stability = 0.6, style = 0.2 }",
+            1,
+        )
+    )
+
+    with pytest.raises(ValueError, match=r"must be one of \['stability'\]"):
+        load_config(str(custom))
+
+
+def test_load_config_rejects_v3_host_on_non_elevenlabs_engine(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = tmp_path / "radio.toml"
+    content = source.read_text()
+    content = content.replace('engine = "elevenlabs"', 'engine = "edge"', 1)
+    content = content.replace("voice_settings = { stability = 0.6 }", "", 1)
+    custom.write_text(content)
+
+    with pytest.raises(ValueError, match="'eleven_v3' requires engine = 'elevenlabs'"):
+        load_config(str(custom))
+
+
+def test_load_config_rejects_delivery_profile_without_v3(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = tmp_path / "radio.toml"
+    custom.write_text(
+        source.read_text().replace(
+            'elevenlabs_model = "eleven_v3"',
+            'elevenlabs_model = "eleven_multilingual_v2"',
+            1,
+        )
+    )
+
+    with pytest.raises(ValueError, match="delivery_profile requires elevenlabs_model = 'eleven_v3'"):
+        load_config(str(custom))
+
+
+def test_load_config_rejects_delivery_profile_on_the_wrong_host(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = tmp_path / "radio.toml"
+    custom.write_text(source.read_text().replace('delivery_profile = "marco"', 'delivery_profile = "giulia"', 1))
+
+    with pytest.raises(ValueError, match="'giulia' is reserved for the host named 'Giulia'"):
+        load_config(str(custom))
+
+
+def test_load_config_rejects_v3_without_an_audited_host_delivery_profile(tmp_path):
+    source = Path(__file__).resolve().parents[2] / "radio.toml"
+    custom = tmp_path / "radio.toml"
+    custom.write_text(source.read_text().replace('delivery_profile = "marco"', 'delivery_profile = "none"', 1))
+
+    with pytest.raises(ValueError, match="'eleven_v3' requires the matching audited host delivery profile"):
+        load_config(str(custom))
+
+
+def test_validate_host_elevenlabs_config_guards_direct_construction():
+    """The _validate layer is the safety net for hosts built without load_config's
+    parsers (e.g. tests, code). Guard its branches so the two validators can't drift."""
+    from mammamiradio.core.config import _validate_host_elevenlabs_config
+    from mammamiradio.core.models import HostPersonality
+
+    def _host(**overrides):
+        base = {
+            "name": "Marco",
+            "voice": "voice_marco",
+            "style": "energetic",
+            "engine": "elevenlabs",
+            "elevenlabs_model": "eleven_v3",
+            "delivery_profile": "marco",
+            "voice_settings": {"stability": 0.6},
+        }
+        base.update(overrides)
+        return HostPersonality(**base)
+
+    # A correctly-built V3 host passes the direct-construction validator.
+    assert _validate_host_elevenlabs_config(_host(), index=0) == []
+
+    # V3 on a non-elevenlabs engine (load_config raises earlier; this layer must too).
+    assert any(
+        "requires engine = 'elevenlabs'" in err
+        for err in _validate_host_elevenlabs_config(_host(engine="edge"), index=0)
+    )
+    # V3 with V2-only tuning keys.
+    assert any(
+        "for eleven_v3 must use only ['stability']" in err
+        for err in _validate_host_elevenlabs_config(_host(voice_settings={"style": 0.3}), index=0)
+    )
+    # V3 with out-of-range stability.
+    assert any(
+        "must be between 0 and 1" in err
+        for err in _validate_host_elevenlabs_config(_host(voice_settings={"stability": 1.5}), index=0)
+    )
+    # A delivery profile on a V2 host.
+    assert any(
+        "requires elevenlabs_model = 'eleven_v3'" in err
+        for err in _validate_host_elevenlabs_config(
+            _host(elevenlabs_model="eleven_multilingual_v2", voice_settings={}), index=0
+        )
+    )
 
 
 def test_load_config_parses_audio_lufs_targets(tmp_path):
@@ -334,7 +446,10 @@ def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
     custom = source.read_text().replace(
         'voice = "o4b57JYAECRMJyCEXyIE"\n'
         'engine = "elevenlabs"\n'
-        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n',
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n'
+        'elevenlabs_model = "eleven_v3"\n'
+        'delivery_profile = "marco"\n'
+        "voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)\n",
         'voice = "cedar"\nengine = "openai"\n',
     )
     custom_path = tmp_path / "radio.toml"
@@ -352,7 +467,10 @@ def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
     custom = source.read_text().replace(
         'voice = "o4b57JYAECRMJyCEXyIE"\n'
         'engine = "elevenlabs"\n'
-        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"',
+        'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n'
+        'elevenlabs_model = "eleven_v3"\n'
+        'delivery_profile = "marco"\n'
+        "voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)",
         'voice = "cedar"\nengine = "edge"\nedge_fallback_voice = ""',
     )
     custom_path = tmp_path / "radio.toml"

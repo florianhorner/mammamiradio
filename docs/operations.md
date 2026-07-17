@@ -352,6 +352,40 @@ For voice casting specifically, run
 and a manifest under `tmp/voice-auditions/`. Missing TTS-provider credentials are shown as skipped instead
 of being hidden by the runtime Edge fallback.
 
+### ElevenLabs V3 host-performance gate
+
+Marco and Giulia are the only configured V3 host profiles. Before an edge
+release, make an on-demand comparison matrix — never infer V3 success from a
+provider-key check or an ordinary live segment:
+
+```bash
+.venv/bin/python scripts/audition_tts_voices.py --v3-host-performance --providers elevenlabs --dry-run
+.venv/bin/python scripts/audition_tts_voices.py --v3-host-performance --providers elevenlabs
+```
+
+The second command writes an ignored local manifest under `tmp/voice-auditions/`.
+It pairs each host's V2-clean baseline with V3-clean plus its approved cues:
+Marco (`energetic`, `curious`, `playful`) and Giulia (`dry`, `curious`,
+`playful`). Review the clips for intelligibility, character fit, clean spoken
+copy, and artifacts. A tiny local decisions JSON may then be joined with the
+manifest using `--host-performance-manifest` and
+`--host-performance-decisions`; the resulting tracked receipt contains only
+model/cue identifiers, clean/rendered-text hashes, audio checksum/duration,
+provider outcome, and controlled human disposition. It never stores raw text,
+audio paths, or credentials.
+
+The edge release gate is:
+
+```bash
+.venv/bin/python scripts/audition_tts_voices.py --verify-host-performance-gate
+```
+
+It fails unless every paired Marco and Giulia row was generated and accepted.
+The receipt is immutable by default; use the explicit overwrite flag only when
+replacing reviewed evidence. This proves the release candidate, not a running
+Home Assistant add-on — update the add-on through its normal image path and
+confirm its one planned restart separately.
+
 ## Recommended production shape
 
 There is no blessed platform in this repo, but the sensible shape is:
