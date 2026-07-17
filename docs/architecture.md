@@ -800,7 +800,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint attempts an immediate cutover: when a playable replacement runway is ready, the segment queue is purged and the current segment is skipped; otherwise the current segment finishes and the last safe runway remains in place. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful replacement supersedes existing reservations and fallback

@@ -919,6 +919,11 @@ def _reserve_continuity_runway(
                 # this conservative rebuild must not refill the freed tail.
                 # Keep the epoch stable only for the true no-mutation path.
                 state.continuity_epoch += 1
+            elif slot_ready:
+                # A capacity-exempt slot is an out-of-band runway, not a queued
+                # tail. With no queued survivor, the previous queue-tail type is
+                # no longer adjacent and must not supply a speech bed.
+                state.last_enqueued_type = None
             return len(failure_dropped)
         return 0
 

@@ -37,7 +37,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
-from mammamiradio.scheduling.producer import _enqueue_with_egress
+from mammamiradio.scheduling.producer import _adjacent_music_source, _enqueue_with_egress
 from mammamiradio.web.streamer import (
     _CONTINUITY_CACHE_SCAN_LIMIT,
     _FALLBACK_REASON_LABELS,
@@ -1838,6 +1838,35 @@ def test_failed_replacement_uses_valid_slot_as_only_runway_and_advances_epoch_on
     assert app.state.station_state.continuity_slot is slot
     assert epoch_after_mutation == 20
     assert app.state.station_state.continuity_epoch == epoch_after_mutation
+
+
+def test_slot_only_assetless_replacement_clears_stale_music_adjacency(tmp_path):
+    """A valid out-of-band slot is a continuity boundary, not a music queue tail."""
+    app = _make_app()
+    stale_song = tmp_path / "stale_song.mp3"
+    stale_song.write_bytes(b"stale")
+    app.state.station_state.last_music_file = stale_song
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+
+    slot = _queue_segment("Existing capacity-exempt slot", duration_sec=4.44)
+    slot.path = tmp_path / "existing_capacity_exempt_slot.mp3"
+    slot.path.write_bytes(b"slot")
+    slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = slot
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 0
+    assert app.state.queue.empty()
+    assert app.state.station_state.continuity_slot is slot
+    assert app.state.station_state.last_enqueued_type is None
+    assert _adjacent_music_source(app.state.station_state) is None
 
 
 def test_replace_continuity_reservation_promotes_first_playable_segment_past_missing_head(tmp_path):
