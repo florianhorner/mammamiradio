@@ -10,7 +10,7 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
@@ -293,6 +293,37 @@ class HostPersonality:
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
     voice_settings: dict = field(default_factory=dict)  # per-host ElevenLabs overrides, e.g. {"stability": 0.6}
+    # ElevenLabs v2 remains the backwards-compatible default for every existing
+    # host. V3 is opt-in per host because its compatible tuning and delivery
+    # controls differ from v2.
+    elevenlabs_model: str = "eleven_multilingual_v2"
+    # A profile authorizes the small, code-owned V3 performance cue vocabulary.
+    # It is deliberately separate from the canonical spoken text.
+    delivery_profile: str = "none"
+
+
+@dataclass(frozen=True)
+class DialogueLine:
+    """One clean host line plus an optional semantic delivery cue.
+
+    Iteration intentionally exposes only the historic ``(host, text)`` pair so
+    existing callers keep their clean-text contract while the audio boundary
+    can consume ``delivery`` as sidecar metadata.
+    """
+
+    host: HostPersonality
+    text: str
+    delivery: str = "neutral"
+
+    def __iter__(self) -> Iterator[HostPersonality | str]:
+        yield self.host
+        yield self.text
+
+    def __getitem__(self, index: int | slice) -> HostPersonality | str | tuple[HostPersonality, str]:
+        return (self.host, self.text)[index]
+
+    def __len__(self) -> int:
+        return 2
 
 
 @dataclass

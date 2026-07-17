@@ -546,7 +546,16 @@ just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. Intended for custom character voices in ads, sweepers, and guest bits.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) remains the default for ads, sweepers, guest bits, and every host that has not explicitly opted in. Marco and Giulia use `eleven_v3` with a code-owned `delivery_profile`; V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+
+For selected normal host banter, the script carries one semantic cue beside —
+never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
+`playful`; Giulia may be `dry`, `curious`, or `playful`. Only the V3 TTS boundary
+maps those values to provider audio tags. Ads, news, IDs, sweepers, transitions,
+time checks, stock/fallback/repair lines, V2, and Edge receive no tag. The clean
+line remains the sole input to transcript metadata, safety/language guards,
+memory, accounting, and any Edge fallback, so a failed V3 request cannot make a
+fallback voice read markup aloud.
 
 Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
 

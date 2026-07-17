@@ -18,6 +18,7 @@ from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
     ChaosSubtype,
+    DialogueLine,
     GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
@@ -626,6 +627,9 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+    assert kwargs["elevenlabs_model"] == host.elevenlabs_model
+    assert kwargs["delivery_profile"] == host.delivery_profile
+    assert "delivery_cue" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -764,6 +768,9 @@ async def test_time_check_uses_host_engine_for_tts():
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+    assert kwargs["elevenlabs_model"] == host.elevenlabs_model
+    assert kwargs["delivery_profile"] == host.delivery_profile
+    assert "delivery_cue" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -3895,8 +3902,34 @@ async def test_listener_truth_guard_repairs_final_assembled_copy(unsafe_text):
     assert changed is True
     assert transition_replaced is False
     assert transition == "And back to the music."
-    assert lines == safe_lines
+    assert [(line.host, line.text) for line in lines] == safe_lines
+    assert all(line.delivery == "neutral" for line in lines)
     repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_clears_delivery_from_repaired_copy():
+    """A safety replacement must reach TTS as clean, neutral dialogue metadata."""
+    config = _make_config()
+    state = _make_state()
+    host = config.hosts[0]
+    unsafe_lines = [DialogueLine(host, "Someone just tuned in, apparently.", "energetic")]
+    repaired_lines = [DialogueLine(host, "The studio keeps moving, amici.", "playful")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=repaired_lines),
+    ):
+        lines, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+        )
+
+    assert changed is True
+    assert lines == [DialogueLine(host, "The studio keeps moving, amici.")]
+    assert lines[0].text == "The studio keeps moving, amici."
+    assert lines[0].delivery == "neutral"
 
 
 @pytest.mark.asyncio
@@ -3921,7 +3954,8 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
             lines,
         )
 
-    assert guarded == lines
+    assert [(line.host, line.text) for line in guarded] == lines
+    assert guarded[0].delivery == "neutral"
     assert transition is None
     assert changed is False
     assert transition_replaced is False
@@ -3951,7 +3985,8 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
             [(config.hosts[0], "Florian is back with Sabrina.")],
         )
 
-    assert guarded == safe_lines
+    assert [(line.host, line.text) for line in guarded] == safe_lines
+    assert all(line.delivery == "neutral" for line in guarded)
     assert changed is True
     assert state.last_banter_return_authority is None
     repair.assert_awaited_once()
@@ -3973,7 +4008,8 @@ async def test_listener_truth_guard_rejects_unbound_named_return():
             [(config.hosts[0], "Bentornato Florian.")],
         )
 
-    assert guarded == safe_lines
+    assert [(line.host, line.text) for line in guarded] == safe_lines
+    assert all(line.delivery == "neutral" for line in guarded)
     assert changed is True
     repair.assert_awaited_once()
 
@@ -4020,7 +4056,8 @@ async def test_listener_truth_guard_replaces_unsafe_transition():
     assert transition_replaced is True
     assert transition is not None
     assert "Welcome back" not in transition
-    assert lines == safe_lines
+    assert [(line.host, line.text) for line in lines] == safe_lines
+    assert all(line.delivery == "neutral" for line in lines)
 
 
 @pytest.mark.asyncio
