@@ -21,7 +21,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -37,6 +37,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.scheduling.producer import _adjacent_music_source, _enqueue_with_egress
 from mammamiradio.web.streamer import (
     _CONTINUITY_CACHE_SCAN_LIMIT,
     _FALLBACK_REASON_LABELS,
@@ -49,6 +50,7 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     _apply_loaded_source,
     _bridge_health_snapshot,
+    _claim_continuity_slot,
     _continuity_reservation_segments,
     _estimate_api_cost,
     _generation_waste_snapshot,
@@ -1711,7 +1713,7 @@ def test_runtime_status_clears_missing_capacity_exempt_continuity(tmp_path):
     assert app.state.station_state.continuity_slot is None
 
 
-def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot():
+def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot(tmp_path):
     """A second destructive control must not retain an earlier safety reservation."""
     app = _make_app()
     old_reservation = _queue_segment("Old protected runway", duration_sec=4.44)
@@ -1719,6 +1721,8 @@ def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot
     old_reservation.metadata["continuity_reservation_id"] = "old-runway"
     app.state.queue.put_nowait(old_reservation)
     stale_slot = _queue_segment("Old capacity-exempt runway", duration_sec=4.44)
+    stale_slot.path = tmp_path / "old_capacity_exempt_runway.mp3"
+    stale_slot.path.write_bytes(b"ready")
     stale_slot.metadata["continuity_reservation"] = True
     app.state.station_state.continuity_slot = stale_slot
     app.state.station_state.last_enqueued_type = SegmentType.MUSIC
@@ -1758,12 +1762,27 @@ def test_continuity_reservation_never_requeues_a_blocklisted_cached_track(tmp_pa
     assert all(segment.path != banned for segment in app.state.queue._queue)
 
 
-def test_replace_continuity_reservation_clears_adjacency_when_no_audio_is_available(tmp_path):
-    """An assetless replacement still invalidates the removed queue tail."""
+def test_replace_continuity_reservation_preserves_ready_head_and_slot_when_no_audio_is_available(tmp_path):
+    """An assetless replacement keeps ready runway and frees only tail capacity."""
     app = _make_app()
     old_song = _queue_segment("Old song", duration_sec=180.0)
+    old_song.path = tmp_path / "old_song.mp3"
+    old_song.path.write_bytes(b"ready")
+    tails = [_queue_segment(f"Tail {index}", duration_sec=180.0) for index in range(2)]
+    for index, segment in enumerate(tails):
+        segment.path = tmp_path / f"tail_{index}.mp3"
+        segment.path.write_bytes(b"tail")
     app.state.queue.put_nowait(old_song)
+    for segment in tails:
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [{"label": segment.metadata["title"]} for segment in [old_song, *tails]]
+    slot = _queue_segment("Existing slot", duration_sec=4.44)
+    slot.path = tmp_path / "existing_slot.mp3"
+    slot.path.write_bytes(b"slot")
+    slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = slot
     app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+    app.state.station_state.continuity_epoch = 7
     missing_demo_root = tmp_path / "missing-demo-assets"
 
     with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", missing_demo_root):
@@ -1774,10 +1793,285 @@ def test_replace_continuity_reservation_clears_adjacency_when_no_audio_is_availa
             replace_queue=True,
         )
 
-    assert dropped == 1
+    assert dropped == 2
+    assert list(app.state.queue._queue) == [old_song]
+    assert app.state.station_state.continuity_slot is slot
+    assert app.state.station_state.last_enqueued_type is SegmentType.MUSIC
+    assert app.state.station_state.continuity_epoch == 8
+    assert len(app.state.station_state.queued_segments) == 1
+
+
+def test_failed_replacement_uses_valid_slot_as_only_runway_and_advances_epoch_only_for_queue_mutation(tmp_path):
+    """A ready capacity-exempt slot survives while an invalid queue is removed once."""
+    app = _make_app()
+    invalid = [_queue_segment(f"Invalid tail {index}", duration_sec=180.0) for index in range(2)]
+    for index, segment in enumerate(invalid):
+        segment.path = tmp_path / f"missing_tail_{index}.mp3"
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [{"label": segment.metadata["title"]} for segment in invalid]
+    slot = _queue_segment("Existing capacity-exempt slot", duration_sec=4.44)
+    slot.path = tmp_path / "existing_capacity_exempt_slot.mp3"
+    slot.path.write_bytes(b"slot")
+    slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = slot
+    app.state.station_state.continuity_epoch = 19
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        first_dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+        epoch_after_mutation = app.state.station_state.continuity_epoch
+        second_dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert first_dropped == 2
+    assert second_dropped == 0
     assert app.state.queue.empty()
+    assert app.state.station_state.queued_segments == []
+    assert app.state.station_state.continuity_slot is slot
+    assert epoch_after_mutation == 20
+    assert app.state.station_state.continuity_epoch == epoch_after_mutation
+
+
+def test_replacement_clears_missing_existing_continuity_slot_before_building_runway(tmp_path):
+    """A disappeared out-of-band slot cannot block a fresh replacement reserve."""
+    app = _make_app()
+    missing_slot = _queue_segment("Missing existing slot", duration_sec=4.44)
+    missing_slot.path = tmp_path / "missing_existing_slot.mp3"
+    missing_slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = missing_slot
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 0
+    assert app.state.queue.empty()
+    assert app.state.station_state.continuity_slot is None
+
+
+def test_slot_only_assetless_replacement_clears_stale_music_adjacency(tmp_path):
+    """A valid out-of-band slot is a continuity boundary, not a music queue tail."""
+    app = _make_app()
+    stale_song = tmp_path / "stale_song.mp3"
+    stale_song.write_bytes(b"stale")
+    app.state.station_state.last_music_file = stale_song
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+
+    slot = _queue_segment("Existing capacity-exempt slot", duration_sec=4.44)
+    slot.path = tmp_path / "existing_capacity_exempt_slot.mp3"
+    slot.path.write_bytes(b"slot")
+    slot.metadata["continuity_reservation"] = True
+    app.state.station_state.continuity_slot = slot
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 0
+    assert app.state.queue.empty()
+    assert app.state.station_state.continuity_slot is slot
     assert app.state.station_state.last_enqueued_type is None
-    assert app.state.station_state.continuity_epoch == 1
+    assert _adjacent_music_source(app.state.station_state) is None
+
+
+def test_replace_continuity_reservation_promotes_first_playable_segment_past_missing_head(tmp_path):
+    """A broken head cannot hide ready audio later in the queue during fallback."""
+    app = _make_app()
+    missing_head = _queue_segment("Missing head", duration_sec=180.0)
+    missing_head.path = tmp_path / "missing_head.mp3"
+    playable = _queue_segment("First playable", duration_sec=180.0)
+    playable.path = tmp_path / "first_playable.mp3"
+    playable.path.write_bytes(b"ready")
+    tail = _queue_segment("Later tail", duration_sec=180.0)
+    tail.path = tmp_path / "later_tail.mp3"
+    tail.path.write_bytes(b"tail")
+    for segment in (missing_head, playable, tail):
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"label": segment.metadata["title"]} for segment in (missing_head, playable, tail)
+    ]
+    app.state.station_state.continuity_epoch = 11
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == [playable]
+    assert app.state.station_state.continuity_epoch == 12
+    assert len(app.state.station_state.queued_segments) == 1
+
+
+@pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
+def test_failed_replacement_rejects_unsafe_head_and_retains_later_safe_segment(tmp_path, rejection):
+    """Exclusion policy and durable bans cannot hide the next safe queued segment."""
+    app = _make_app()
+    unsafe_head = _queue_segment("Unsafe head", duration_sec=180.0)
+    unsafe_head.path = tmp_path / "unsafe_head.mp3"
+    unsafe_head.path.write_bytes(b"unsafe")
+    unsafe_head.metadata.update({"artist": "Unsafe Artist", "title_only": "Unsafe Song"})
+    safe = _queue_segment("Safe segment", duration_sec=180.0)
+    safe.path = tmp_path / "safe_segment.mp3"
+    safe.path.write_bytes(b"safe")
+    tail = _queue_segment("Later tail", duration_sec=180.0)
+    tail.path = tmp_path / "later_safe_tail.mp3"
+    tail.path.write_bytes(b"tail")
+    for segment in (unsafe_head, safe, tail):
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {"label": segment.metadata["title"]} for segment in (unsafe_head, safe, tail)
+    ]
+    excluded_paths = {unsafe_head.path} if rejection == "excluded" else None
+    if rejection == "blocklisted":
+        app.state.station_state.blocklist = {
+            ("unsafe artist", "unsafe song"): {"display": "Unsafe Artist - Unsafe Song"}
+        }
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+            excluded_paths=excluded_paths,
+        )
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == [safe]
+    assert app.state.station_state.queued_segments[0]["label"] == "Safe segment"
+
+
+@pytest.mark.asyncio
+async def test_failed_replacement_invalidates_held_producer_admission(tmp_path):
+    """Freed fallback capacity cannot admit producer work from the prior epoch."""
+    app = _make_app()
+    state = app.state.station_state
+    config = app.state.config
+    state.continuity_epoch = 13
+    state.begin_render_timing(SegmentType.MUSIC.value)
+
+    ready = _queue_segment("Ready head", duration_sec=180.0)
+    ready.path = tmp_path / "ready_head.mp3"
+    ready.path.write_bytes(b"ready")
+    tail = _queue_segment("Discarded tail", duration_sec=180.0)
+    tail.path = tmp_path / "discarded_tail.mp3"
+    tail.path.write_bytes(b"tail")
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "stale_candidate.mp3",
+        duration_sec=180.0,
+        metadata={"title": "Stale candidate", "title_only": "Stale candidate", "artist": "Artist"},
+        ephemeral=True,
+    )
+    candidate.path.write_bytes(b"candidate")
+    put_started = asyncio.Event()
+
+    class ObservedQueue(asyncio.Queue[Segment]):
+        async def put(self, item: Segment) -> None:
+            if item is candidate:
+                put_started.set()
+            await super().put(item)
+
+    queue = ObservedQueue(maxsize=2)
+    queue.put_nowait(ready)
+    queue.put_nowait(tail)
+    app.state.queue = queue
+    state.queued_segments = [
+        {"id": "ready", "type": "music", "label": "Ready head"},
+        {"id": "tail", "type": "music", "label": "Discarded tail"},
+    ]
+    captured_epoch = state.continuity_epoch
+
+    def _stale_reason() -> str | None:
+        if state.continuity_epoch != captured_epoch:
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
+    with (
+        patch(
+            "mammamiradio.scheduling.producer._apply_egress",
+            new_callable=AsyncMock,
+            return_value=candidate,
+        ),
+        patch("mammamiradio.scheduling.producer._schedule_restart_handoff_spool") as schedule_spool,
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        enqueue_task = asyncio.create_task(
+            _enqueue_with_egress(
+                queue,
+                state,
+                config,
+                candidate,
+                shadow_entry={"id": "candidate", "type": "music", "label": "Stale candidate"},
+                stale_check=_stale_reason,
+            )
+        )
+        await asyncio.wait_for(put_started.wait(), timeout=1.0)
+        dropped = _reserve_continuity_runway(
+            app.state,
+            state,
+            config,
+            replace_queue=True,
+        )
+        admitted = await asyncio.wait_for(enqueue_task, timeout=1.0)
+
+    state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CONTINUITY)
+    assert dropped == 1
+    assert state.continuity_epoch == captured_epoch + 1
+    assert admitted is False
+    assert list(queue._queue) == [ready]
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["label"] == "Ready head"
+    assert not candidate.path.exists()
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    schedule_spool.assert_not_called()
+
+    assert queue.get_nowait() is ready
+    queue.task_done()
+    await asyncio.wait_for(queue.join(), timeout=1.0)
+
+
+def test_continuity_slot_claim_rejects_track_blocklisted_after_reservation(tmp_path):
+    """The final playback claim closes the reserve-then-ban race."""
+    state = StationState()
+    path = tmp_path / "norm_late_ban_128k.mp3"
+    path.write_bytes(b"ready")
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    assert _claim_continuity_slot(state) is None
+    assert state.continuity_slot is None
 
 
 def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_target(tmp_path):
