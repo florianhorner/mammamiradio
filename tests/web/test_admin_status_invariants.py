@@ -249,6 +249,17 @@ def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
     assert "rescueRow," in block
 
 
+def test_runtime_status_card_renders_cached_rotation_from_rotation_status() -> None:
+    """The admin card exposes the cached-music rest window, not just raw JSON."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const rr=rs.rescue_rotation" in block
+    assert "statusRow('Cached rotation'" in block
+    assert "No cached music rescue has reached a listener this session" in block
+    assert "Rotating" in block
+    assert "rotationRow," in block
+
+
 def test_runtime_status_card_projects_capacity_exempt_continuity() -> None:
     """The safety slot is visible to admins without joining the real queue shadow."""
     block = _function_block(_read_admin_html(), "updateRuntimeStatus")

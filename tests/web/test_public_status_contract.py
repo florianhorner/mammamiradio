@@ -47,6 +47,24 @@ async def test_render_timings_are_admin_only():
 
 
 @pytest.mark.asyncio
+async def test_rescue_rotation_is_admin_only():
+    """The rescue-rotation diagnostics live inside admin runtime_status only; the
+    listener payload never carries the cooldown bookkeeping."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert "rescue_rotation" not in public
+    rr = admin["runtime_status"]["rescue_rotation"]
+    assert rr["cooldown_seconds"] == 3600.0
+    assert rr["tracked"] == 0
+    assert rr["cooling"] == 0
+    assert rr["most_recent"] == ""
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_brand_block():
     """Public listener payload must include the brand-fiction layer."""
     app = _make_test_app()

@@ -593,6 +593,12 @@ class StationState:
     # playable duration. The control-plane guard uses this index instead of
     # probing or walking the cache during an operator action.
     immediate_audio_index: dict[Path, float] = field(default_factory=dict)
+    # Session-scoped rescue rotation. Maps normalized-cache paths to the monotonic
+    # time they last aired as a norm-cache rescue. Selection groups bitrate-only
+    # path variants by cache key, so the same cached track cannot air three times
+    # in twenty minutes when the producer stalls (the illusion break this closes).
+    # Cleared on restart; no persistence. Pruned on record. See audio/norm_cache.py.
+    rescue_airplay: dict[Path, float] = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Recent generated banter clips that have actually started streaming.

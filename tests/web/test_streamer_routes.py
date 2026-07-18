@@ -34,6 +34,7 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
+    _DEMO_ASSETS_DIR,
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
@@ -43,6 +44,7 @@ from mammamiradio.web.streamer import (
     StreamPacer,
     _ad_cast_status_payload,
     _consume_queue_shadow,
+    _continuity_reservation_segments,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -290,6 +292,90 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])
+
+
+def _write_indexed_cache_track(tmp_path, name: str, *, title: str, artist: str, duration: float, state) -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"audio")
+    (tmp_path / f"{name}.json").write_text(f'{{"title": "{title}", "artist": "{artist}"}}')
+    state.immediate_audio_index[path] = duration
+    return path
+
+
+def test_continuity_reservation_prefers_non_cooling_cache_track(tmp_path):
+    """A live control reserves a fresher cached song over one that just aired as a
+    rescue, so repeated controls don't keep reserving the same track."""
+    state = StationState()
+    cooling = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_cooling_192k.mp3", title="Cooling", artist="A", duration=180.0, state=state
+    )
+    fresh = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_fresh_192k.mp3", title="Fresh", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[cooling] = 10_000.0 - 60.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_finds_fresh_track_beyond_cooling_scan_prefix(tmp_path):
+    """Cooling entries cannot consume the bounded scan before an eligible track."""
+    state = StationState()
+    cooling_paths = []
+    for index in range(24):
+        path = _write_indexed_cache_track(
+            tmp_path,
+            f"norm_cooling_{index:02d}_192k.mp3",
+            title=f"Cooling {index}",
+            artist="A",
+            duration=180.0,
+            state=state,
+        )
+        cooling_paths.append(path)
+    fresh = _write_indexed_cache_track(
+        tmp_path,
+        "norm_fresh_after_prefix_192k.mp3",
+        title="Fresh after prefix",
+        artist="B",
+        duration=180.0,
+        state=state,
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay.update({path: 10_000.0 - 60.0 for path in cooling_paths})
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_falls_back_to_least_recent_when_all_cooling(tmp_path):
+    """When every cached track is cooling, the reservation still books real music —
+    the least-recently-heard one — rather than dropping to the emergency tone."""
+    state = StationState()
+    older = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_older_192k.mp3", title="Older", artist="A", duration=180.0, state=state
+    )
+    newer = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_newer_192k.mp3", title="Newer", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[older] = 10_000.0 - 100.0
+        state.rescue_airplay[newer] = 10_000.0 - 10.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [older]
 
 
 @pytest.mark.asyncio
