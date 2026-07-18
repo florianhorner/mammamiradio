@@ -10,7 +10,9 @@ Turn it on for music-competition watch parties, Sanremo screenings, or any gathe
 
 1. Open `/admin` and scroll to the **Speciali** section.
 2. Click the **★ Festival Mode** toggle.
-3. The station immediately purges its lookahead queue and generates a festival-flavored banter segment as the first thing listeners hear.
+3. When fresh replacement audio is ready, the station replaces the upcoming
+   normal segments and schedules the next festival-flavored banter. Otherwise,
+   current audio and the existing upcoming segments continue without a gap.
 
 No restart required. The toggle persists across server restarts.
 
@@ -88,7 +90,10 @@ Content-Type: application/json
 
 ## What happens when you enable Festival Mode
 
-1. The segment queue is purged (pre-produced segments from normal mode are discarded).
+1. The control reserves protected continuity audio and discards pre-produced
+   normal-mode segments when safe replacement audio is available. If the
+   fallback has no fresh runway, the existing playable head/slot is preserved so
+   current audio is not cut into a gap.
 2. `state.force_next` is set to `BANTER` so the first new segment is festival-flavored commentary.
 3. The LLM prompt for all subsequent banter segments receives the `FESTIVAL_MODE_BLOCK` injection (defined in `mammamiradio/hosts/prompt_world.py`, injected by `write_banter` in `scriptwriter.py`), which instructs hosts to:
    - Announce each song as a fictional Italian-regional delegation
