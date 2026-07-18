@@ -218,14 +218,28 @@ def test_privacy_choice_invalidates_the_client_preview_proof() -> None:
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "_firstListenUi.privacyPreviewValid=false" in choice
     assert "_firstListenUi.privacyPreview='untouched'" in choice
-    assert "code==='privacy_receipt_unavailable'||code==='preview_required'" in choice
-    assert "focusPreview=code==='preview_required'" in choice
-    assert "if(focusPreview)document.getElementById('firstListenPreviewBtn')?.focus({preventScroll:true})" in choice
+    assert "if(code==='privacy_receipt_unavailable')" in choice
+    assert "else if(code==='preview_required')" in choice
+    assert "_firstListenUi.privacyReceiptChoice=typeof resp?.enabled==='boolean'" in choice
+    assert "status:'review_retry'" in choice
+    assert "focusTarget=_firstListenUi.privacyReceiptChoice?'firstListenPreviewBtn':'firstListenKeepOffBtn'" in choice
+    assert "_firstListenUi.privacyReceiptChoice=null" in choice
+    assert "if(focusTarget)document.getElementById(focusTarget)?.focus({preventScroll:true})" in choice
     assert "resp?.persisted===false" not in choice
 
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "!_firstListenUi.privacyPreviewValid" in progress
     assert "keepOffBtn.disabled=!projection.privacyUnlocked" in progress
+    assert "const pendingPrivacyChoice=_firstListenUi.privacyReceiptChoice!==null" in progress
+    assert "projection.privacy.choice_explicit===true" in progress
+    assert "Home context is active, but setup review was not saved." in progress
+    assert "Home context remains off, but setup review was not saved." in progress
+    assert "Show fresh preview to save review" in progress
+    assert "Save private review again" in progress
+
+    preview = _function("renderHomeContextPreview", "findFirstListenPlayers")
+    assert "payload.status==='review_retry'" in preview
+    assert "payload.enabled===true?'Home context is active" in preview
 
 
 def test_no_ai_key_is_needed_for_first_audio() -> None:

@@ -2678,6 +2678,7 @@ const _firstListenUi={
   privacySaving:false,
   receiptSaving:false,
   privacyChoice:null,
+  privacyReceiptChoice:null,
   repairOpen:false,
   busy:false,
   firstUnresolvedRenderedAt:0,
@@ -4403,20 +4404,31 @@ function renderFirstListenProgress(){
   const previewBtn=document.getElementById('firstListenPreviewBtn');
   const keepOffBtn=document.getElementById('firstListenKeepOffBtn');
   const enableBtn=document.getElementById('firstListenEnableContextBtn');
+  const pendingPrivacyChoice=_firstListenUi.privacyReceiptChoice!==null
+    ? Boolean(_firstListenUi.privacyReceiptChoice)
+    : !projection.privacyReviewed&&projection.privacy.choice_explicit===true
+    ? Boolean(projection.privacyEnabled)
+    : null;
   if(previewBtn){
     previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
-    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Making preview…':_firstListenUi.privacyPreviewValid?'Refresh filtered preview':'Show filtered preview';
+    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Making preview…':_firstListenUi.privacyPreviewValid?'Refresh filtered preview':pendingPrivacyChoice===true?'Show fresh preview to save review':'Show filtered preview';
   }
-  if(keepOffBtn)keepOffBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||(!projection.privacyEnabled&&projection.privacyReviewed);
+  if(keepOffBtn){
+    keepOffBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||(!projection.privacyEnabled&&projection.privacyReviewed);
+    keepOffBtn.textContent=pendingPrivacyChoice===false?'Save private review again':'Keep private and continue';
+  }
   if(enableBtn){
-    const receiptRetry=projection.privacyEnabled&&!projection.privacyReviewed;
+    const receiptRetry=pendingPrivacyChoice===true;
     enableBtn.disabled=!projection.privacyUnlocked||!_firstListenUi.privacyPreviewValid||_firstListenUi.privacySaving||(projection.privacyEnabled&&!receiptRetry);
     enableBtn.textContent=receiptRetry?'Save review again':_firstListenUi.privacyPreview==='ambient_only'?'Enable daylight anyway':'Let future hosts use this';
   }
   const privacyStep=document.getElementById('firstListenPrivacyStep');
   if(privacyStep)privacyStep.setAttribute('aria-busy',_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing'?'true':'false');
   const privacySummary=document.getElementById('firstListenPrivacySummary');
-  if(projection.privacyReviewed&&projection.privacyEnabled){
+  if(pendingPrivacyChoice!==null){
+    firstListenSetChip('firstListenPrivacyChip','degraded','Review not saved');
+    if(privacySummary)privacySummary.textContent=pendingPrivacyChoice?'Home context is active, but setup review was not saved. Refresh the filtered preview, then save the review again.':'Home context remains off, but setup review was not saved. Save the private choice again.';
+  }else if(projection.privacyReviewed&&projection.privacyEnabled){
     firstListenSetChip('firstListenPrivacyChip','ready','Enabled locally');
     if(privacySummary)privacySummary.textContent='Home context is eligible for future host scripts. The preview itself was never promoted into a script.';
   }else if(projection.privacyReviewed){
@@ -4482,6 +4494,13 @@ function renderHomeContextPreview(data,targetId='haContextPreview'){
     const empty=document.createElement('div');
     empty.className='empty';
     empty.textContent='Preview expired. Show a fresh filtered preview before enabling Home context.';
+    box.appendChild(empty);
+    return;
+  }
+  if(payload.status==='review_retry'){
+    const empty=document.createElement('div');
+    empty.className='empty';
+    empty.textContent=payload.enabled===true?'Home context is active, but setup review was not saved. Refresh the filtered preview, then save the review again.':'Home context remains off, but setup review was not saved. Save the private choice again.';
     box.appendChild(empty);
     return;
   }
@@ -4827,7 +4846,7 @@ async function loadCachedHomeContextDiagnostics(el){
 async function chooseFirstListenPrivacy(enabled,el){
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.privacySaving||(enabled&&!_firstListenUi.privacyPreviewValid))return;
-  let focusPreview=false;
+  let focusTarget='';
   _firstListenUi.privacySaving=true;
   renderFirstListenProgress();
   if(el)el.setAttribute('aria-busy','true');
@@ -4836,17 +4855,27 @@ async function chooseFirstListenPrivacy(enabled,el){
     const resp=await api('PATCH','/api/setup/home-context-choice',{enabled:Boolean(enabled)});
     if(resp?.ok===false){
       const code=String(resp?.error?.code||'');
-      if(code==='privacy_receipt_unavailable'||code==='preview_required'){
+      if(code==='privacy_receipt_unavailable'){
+        _firstListenUi.privacyReceiptChoice=typeof resp?.enabled==='boolean'?Boolean(resp.enabled):Boolean(enabled);
         _firstListenUi.privacyPreviewValid=false;
         _firstListenUi.privacyPreviewUseful=false;
-        _firstListenUi.privacyPreview='untouched';
-        renderHomeContextPreview({ok:true,status:'expired',entities:[]});
+        _firstListenUi.privacyPreview='review_retry';
+        renderHomeContextPreview({ok:true,status:'review_retry',enabled:_firstListenUi.privacyReceiptChoice,entities:[]});
+        focusTarget=_firstListenUi.privacyReceiptChoice?'firstListenPreviewBtn':'firstListenKeepOffBtn';
+      }else if(code==='preview_required'){
+        if(typeof resp?.enabled==='boolean')_firstListenUi.privacyReceiptChoice=Boolean(resp.enabled);
+        _firstListenUi.privacyPreviewValid=false;
+        _firstListenUi.privacyPreviewUseful=false;
+        const receiptChoice=_firstListenUi.privacyReceiptChoice;
+        _firstListenUi.privacyPreview=receiptChoice===null?'untouched':'review_retry';
+        renderHomeContextPreview(receiptChoice===null?{ok:true,status:'expired',entities:[]}:{ok:true,status:'review_retry',enabled:receiptChoice,entities:[]});
+        focusTarget='firstListenPreviewBtn';
       }
-      focusPreview=code==='preview_required';
-      firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage(resp),'blocked');
+      firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage(resp),code==='privacy_receipt_unavailable'?'degraded':'blocked');
       return;
     }
     _firstListenUi.privacyChoice=Boolean(enabled);
+    _firstListenUi.privacyReceiptChoice=null;
     _firstListenUi.privacyPreviewValid=false;
     _firstListenUi.privacyPreviewUseful=false;
     _firstListenUi.privacyPreview='untouched';
@@ -4861,7 +4890,7 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.privacySaving=false;
     if(el)el.removeAttribute('aria-busy');
     renderFirstListenProgress();
-    if(focusPreview)document.getElementById('firstListenPreviewBtn')?.focus({preventScroll:true});
+    if(focusTarget)document.getElementById(focusTarget)?.focus({preventScroll:true});
   }
 }
 function renderHomeContextPreviewGate(setup){

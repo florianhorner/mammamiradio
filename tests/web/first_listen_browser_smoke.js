@@ -19,6 +19,7 @@ async (page) => {
   const previewRequests = [];
   const privacyRequests = [];
   let rejectNextEnable = true;
+  let failNextPrivacyReceipt = false;
   let ambientOnlyPreview = false;
   let failNextPlayReceipt = false;
   let receiptRetryFailuresRemaining = 0;
@@ -39,6 +40,7 @@ async (page) => {
     audio = false,
     privacy = false,
     privacyEnabled = false,
+    privacyChoiceExplicit = false,
     primary = 'playable',
     recovery = 'cover_only',
     onboardingRequired = true,
@@ -108,6 +110,7 @@ async (page) => {
           status: privacy ? (privacyEnabled ? 'enabled' : 'off') : 'after_first_listen',
           enabled: privacyEnabled,
           reviewed: privacy,
+          choice_explicit: privacyChoiceExplicit,
         },
         ai_hosts: { status: 'missing' },
         home_context: { status: 'not_configured', action: 'none' },
@@ -287,6 +290,16 @@ async (page) => {
   await page.route('**/api/setup/home-context-choice', async (route) => {
     const body = bodyOf(route);
     privacyRequests.push(body);
+    if (failNextPrivacyReceipt) {
+      failNextPrivacyReceipt = false;
+      await fulfillJson(route, {
+        ok: false,
+        enabled: body.enabled === true,
+        persisted: true,
+        error: { code: 'privacy_receipt_unavailable' },
+      });
+      return;
+    }
     if (body.enabled === true && rejectNextEnable) {
       rejectNextEnable = false;
       await fulfillJson(route, { ok: false, error: { code: 'preview_required' } });
@@ -342,6 +355,7 @@ async (page) => {
         privacySaving: false,
         receiptSaving: false,
         privacyChoice: null,
+        privacyReceiptChoice: null,
         repairOpen: false,
         busy: false,
         ...ui,
@@ -554,6 +568,66 @@ async (page) => {
     `preview expiry retry count drifted: ${JSON.stringify(privacyRequests)}`,
   );
   await assertCurrentStep('firstListenAiStep');
+
+  await resetUi(
+    setupProjection({ audio: true }),
+    {
+      selectedEntityId: 'media_player.mac_lab_speaker',
+      selectedName: 'Mac Lab Speaker',
+      attemptId: 'browser-attempt-server',
+      dispatch: 'accepted',
+      verification: 'heard',
+    },
+  );
+  await page.locator('#firstListenPreviewBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+  failNextPrivacyReceipt = true;
+  await page.locator('#firstListenEnableContextBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === true && !_firstListenUi.privacySaving);
+  assert((await page.locator('#haContextPreview').innerText()).includes('Home context is active'), 'enabled receipt repair claimed Home context was still off');
+  assert(!(await page.locator('#haContextPreview').innerText()).includes('before enabling'), 'enabled receipt repair reused pre-choice preview copy');
+  assert((await page.locator('#firstListenPrivacyChip').innerText()) === 'REVIEW NOT SAVED', 'enabled receipt repair hid unsaved setup progress');
+  assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is active'), 'enabled receipt repair summary lost live choice truth');
+  assert((await page.locator('#firstListenPreviewBtn').innerText()) === 'Show fresh preview to save review', 'enabled receipt repair did not request a fresh preview');
+  assert(await page.evaluate(() => document.activeElement?.id) === 'firstListenPreviewBtn', 'enabled receipt repair did not focus fresh preview');
+  assert(await page.locator('#firstListenAiStep').getAttribute('data-state') === 'locked', 'failed privacy receipt unlocked optional AI');
+  await page.locator('#firstListenPreviewBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+  assert((await page.locator('#firstListenEnableContextBtn').innerText()) === 'Save review again', 'enabled receipt retry lost its persistence-only label');
+  await page.locator('#firstListenEnableContextBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyChoice === true && _firstListenUi.privacyReceiptChoice === null && !_firstListenUi.privacySaving);
+  await assertCurrentStep('firstListenAiStep');
+
+  await resetUi(
+    setupProjection({ audio: true }),
+    {
+      selectedEntityId: 'media_player.mac_lab_speaker',
+      selectedName: 'Mac Lab Speaker',
+      attemptId: 'browser-attempt-server',
+      dispatch: 'accepted',
+      verification: 'heard',
+    },
+  );
+  failNextPrivacyReceipt = true;
+  await page.locator('#firstListenKeepOffBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === false && !_firstListenUi.privacySaving);
+  assert((await page.locator('#haContextPreview').innerText()).includes('Home context remains off'), 'private receipt repair lost the safe live state');
+  assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context remains off'), 'private receipt repair summary lost the safe live state');
+  assert((await page.locator('#firstListenKeepOffBtn').innerText()) === 'Save private review again', 'private receipt repair did not name the retry');
+  assert(await page.evaluate(() => document.activeElement?.id) === 'firstListenKeepOffBtn', 'private receipt repair did not focus its only required action');
+  assert(await page.locator('#firstListenAiStep').getAttribute('data-state') === 'locked', 'failed private receipt unlocked optional AI');
+  await page.locator('#firstListenKeepOffBtn').click();
+  await page.waitForFunction(() => _firstListenUi.privacyChoice === false && _firstListenUi.privacyReceiptChoice === null && !_firstListenUi.privacySaving);
+  await assertCurrentStep('firstListenAiStep');
+
+  await resetUi(setupProjection({
+    audio: true,
+    privacyEnabled: true,
+    privacyChoiceExplicit: true,
+  }));
+  assert((await page.locator('#firstListenPrivacyChip').innerText()) === 'REVIEW NOT SAVED', 'reloaded active choice lost receipt recovery');
+  assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is active'), 'reloaded active choice lost live privacy truth');
+  assert((await page.locator('#firstListenPreviewBtn').innerText()) === 'Show fresh preview to save review', 'reloaded active choice lost fresh-preview recovery');
 
   ambientOnlyPreview = true;
   await resetUi(
