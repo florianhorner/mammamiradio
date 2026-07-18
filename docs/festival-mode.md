@@ -10,9 +10,9 @@ Turn it on for music-competition watch parties, Sanremo screenings, or any gathe
 
 1. Open `/admin` and scroll to the **Speciali** section.
 2. Click the **★ Festival Mode** toggle.
-3. The station reserves fresh protected runway when available, replaces the
-   lookahead queue, and schedules the next generated festival-flavored banter.
-   Current audio and any preserved runway continue normally.
+3. When fresh replacement audio is ready, the station replaces the upcoming
+   normal segments and schedules the next festival-flavored banter. Otherwise,
+   current audio and the existing upcoming segments continue without a gap.
 
 No restart required. The toggle persists across server restarts.
 
