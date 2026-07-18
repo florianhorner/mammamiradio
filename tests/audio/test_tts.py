@@ -159,7 +159,7 @@ async def test_synthesize_edge_coerces_openai_voice_to_fallback(_mock_all, tmp_p
 
 @pytest.mark.asyncio
 async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
-    """When primary voice fails, synthesize should retry with DiegoNeural before silence."""
+    """When primary voice fails, synthesize retries with the house voice."""
     from mammamiradio.audio.tts import synthesize
 
     call_count = 0
@@ -185,33 +185,108 @@ async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
-    """When both primary and fallback voices fail, generate silence."""
-    from mammamiradio.audio.tts import synthesize
+async def test_synthesize_error_fails_closed_and_removes_partial_files(_mock_all, tmp_path):
+    """Total voice failure raises and never leaves silent or partial speech."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
 
     output = tmp_path / "out.mp3"
-    result = await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+    raw = output.with_suffix(".raw.mp3")
+    output.write_bytes(b"partial normalized speech")
+    raw.write_bytes(b"partial provider speech")
 
-    assert result == output
-    _mock_all["generate_silence"].assert_called_once()
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes") as exc_info:
+        await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert "all voices down" in str(exc_info.value.__cause__)
+    assert not output.exists()
+    assert not raw.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_then_configured_edge_then_house_total_failure_order(_mock_all, tmp_path, monkeypatch):
+    """A cloud outage exhausts the configured Edge voice before the house voice."""
+    from mammamiradio.audio.tts import TTSUnavailableError, configure_openai_tts_model, synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model("registry-selected-tts")
+    configured_edge = "it-IT-GiuseppeMultilingualNeural"
+    house_edge = "it-IT-DiegoNeural"
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge routes down"))
+
+    output = tmp_path / "cloud_edge_house_failure.mp3"
+    raw = output.with_suffix(".raw.mp3")
+    output.write_bytes(b"partial final")
+    raw.write_bytes(b"partial raw")
+
+    with (
+        patch("mammamiradio.audio.tts._get_openai_client", side_effect=RuntimeError("cloud down")),
+        pytest.raises(TTSUnavailableError, match="all configured TTS routes"),
+    ):
+        await synthesize(
+            "Ciao",
+            "onyx",
+            output,
+            engine="openai",
+            edge_fallback_voice=configured_edge,
+        )
+
+    attempted_edge_voices = [call.args[1] for call in _mock_all["Communicate"].call_args_list]
+    assert attempted_edge_voices == [configured_edge, house_edge]
+    assert not output.exists()
+    assert not raw.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cleanup_unlink_error_preserves_tts_unavailable(
+    _mock_all,
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Best-effort scratch cleanup cannot replace the actionable TTS failure."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
+    output = tmp_path / "busy_output.mp3"
+    output.write_bytes(b"partial final")
+    original_unlink = Path.unlink
+
+    def _busy_final_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path == output:
+            raise OSError("file is busy")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _busy_final_unlink)
+
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes") as exc_info:
+        await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert output.exists(), "the simulated filesystem refusal should leave only the undeletable file"
+    assert "Could not remove TTS scratch file" in caplog.text
+    assert "file is busy" in caplog.text
+    _mock_all["generate_silence"].assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
     """When DiegoNeural itself fails, don't retry with DiegoNeural again."""
-    from mammamiradio.audio.tts import synthesize
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("diego down"))
 
     output = tmp_path / "out.mp3"
-    result = await synthesize("Ciao", "it-IT-DiegoNeural", output)
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize("Ciao", "it-IT-DiegoNeural", output)
 
-    assert result == output
     # Should only be called once (no self-retry)
     assert _mock_all["Communicate"].call_count == 1
-    _mock_all["generate_silence"].assert_called_once()
+    _mock_all["generate_silence"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1045,9 +1120,9 @@ async def test_synthesize_elevenlabs_missing_key_falls_back_to_edge(_mock_all, t
 
 
 @pytest.mark.asyncio
-async def test_synthesize_azure_full_failure_falls_back_to_silence(_mock_all, tmp_path, monkeypatch):
-    """Azure 5xx AND edge-tts down → silence, never a terminal failure (Scenario 2)."""
-    from mammamiradio.audio.tts import synthesize
+async def test_synthesize_azure_full_failure_fails_closed(_mock_all, tmp_path, monkeypatch):
+    """Azure 5xx plus Edge outage propagates after the complete fallback chain."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-silence-key")
     monkeypatch.setenv("AZURE_SPEECH_REGION", "northeurope")
@@ -1055,17 +1130,42 @@ async def test_synthesize_azure_full_failure_falls_back_to_silence(_mock_all, tm
     # Edge save also fails — both the cloud and the edge path are down.
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge down"))
 
-    output = tmp_path / "azure_then_silence.mp3"
-    result = await synthesize(
-        "Ciao",
-        "it-IT-Alessio:DragonHDLatestNeural",
-        output,
-        engine="azure",
-        edge_fallback_voice="it-IT-DiegoNeural",
-    )
+    output = tmp_path / "azure_then_failure.mp3"
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize(
+            "Ciao",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            output,
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
 
-    assert result == output
-    _mock_all["generate_silence"].assert_called_once()
+    assert not output.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_full_failure_fails_closed(_mock_all, tmp_path, monkeypatch):
+    """ElevenLabs 5xx plus Edge outage propagates after the complete fallback chain."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-silence-key")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+    # Edge save also fails — both the cloud and the edge path are down.
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge down"))
+
+    output = tmp_path / "eleven_then_failure.mp3"
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize(
+            "Ciao",
+            "voice_italian_character",
+            output,
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert not output.exists()
+    _mock_all["generate_silence"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1196,6 +1296,336 @@ async def test_synthesize_ad_sfx_failure_falls_back_to_short_silence(_mock_all, 
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_optional_sfx_total_failure_removes_partial(_mock_all, tmp_path):
+    """A decorative SFX outage is omittable but cannot leak its partial file."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    def _fail_optional(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"partial optional audio")
+        raise RuntimeError("optional renderer unavailable")
+
+    script = AdScript(
+        brand="EspressoPlus",
+        parts=[
+            AdPart(type="voice", text="Vuoi un caffè?"),
+            AdPart(type="sfx", sfx="cash_register"),
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.generate_sfx", side_effect=_fail_optional),
+        patch("mammamiradio.audio.tts.generate_silence", side_effect=_fail_optional),
+    ):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_required_voice_failure_waits_for_sibling_and_cleans_scratch(_mock_all, tmp_path):
+    """One failed voice aborts only after successful sibling writes have settled."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        if text == "bad voice":
+            await sibling_started.wait()
+            output_path.with_suffix(".raw.mp3").write_bytes(b"partial")
+            raise TTSUnavailableError("voice unavailable")
+        sibling_started.set()
+        await asyncio.sleep(0.01)
+        _touch(output_path)
+        sibling_finished.set()
+        return output_path
+
+    script = AdScript(
+        brand="Voce Vera",
+        parts=[
+            AdPart(type="voice", text="bad voice"),
+            AdPart(type="voice", text="good voice"),
+            AdPart(type="sfx", sfx="chime"),
+        ],
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize),
+        pytest.raises(TTSUnavailableError, match="voice unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert sibling_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+    assert not list(tmp_path.glob("motif_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_prioritizes_total_tts_outage_over_sibling_error(_mock_all, tmp_path):
+    """A simultaneous generic renderer error cannot hide required voice outage."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    async def _failed_voice(text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"partial voice")
+        if text == "generic failure":
+            raise RuntimeError("local renderer failed")
+        raise TTSUnavailableError("all voice routes unavailable")
+
+    script = AdScript(
+        brand="Priorita Voce",
+        parts=[
+            AdPart(type="voice", text="generic failure"),
+            AdPart(type="voice", text="typed failure"),
+        ],
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_failed_voice),
+        pytest.raises(TTSUnavailableError, match="all voice routes unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cancellation_waits_for_voice_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancelling an ad waits for owned voice work before deleting its outputs."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    voice_started = asyncio.Event()
+    release_voice = asyncio.Event()
+    voice_finished = asyncio.Event()
+
+    async def _late_synthesize(text, voice, output_path, **kwargs):
+        voice_started.set()
+        await release_voice.wait()
+        _touch(output_path)
+        output_path.with_suffix(".raw.mp3").write_bytes(b"late raw")
+        voice_finished.set()
+        return output_path
+
+    script = AdScript(
+        brand="Voce Paziente",
+        parts=[AdPart(type="voice", text="Aspetta la voce.")],
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_late_synthesize):
+        task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+        await asyncio.wait_for(voice_started.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for the owned voice renderer"
+        release_voice.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert voice_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+    assert not list(tmp_path.glob("motif_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_failed_motif_removes_partial_before_voice_only_success(_mock_all, tmp_path):
+    """A decorative motif failure cannot leave its partially-written scratch file."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    def _partial_motif(path: Path, *_args, **_kwargs) -> Path:
+        path.write_bytes(b"partial motif")
+        raise RuntimeError("motif render failed")
+
+    _mock_all["generate_brand_motif"].side_effect = _partial_motif
+    script = AdScript(
+        brand="Motivo Pulito",
+        parts=[AdPart(type="voice", text="La voce resta completa.")],
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert not list(tmp_path.glob("motif_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_bed_failure_waits_for_executor_siblings(_mock_all, tmp_path):
+    """One failed ad bed cannot let a still-running sibling outlive assembly."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sibling_started = threading.Event()
+    release_sibling = threading.Event()
+    sibling_finished = threading.Event()
+
+    def _bed(path: Path, mood: str, duration: float) -> Path:
+        if mood == "showroom":
+            sibling_started.set()
+            assert release_sibling.wait(timeout=2.0)
+            _touch(path)
+            sibling_finished.set()
+            return path
+        assert sibling_started.wait(timeout=1.0)
+        raise RuntimeError("main bed failed")
+
+    _mock_all["generate_music_bed"].side_effect = _bed
+    script = AdScript(
+        brand="Letti Uniti",
+        parts=[AdPart(type="voice", text="Ogni letto finisce.")],
+        mood="lounge",
+        sonic=SonicWorld(environment="showroom"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not sibling_started.is_set():
+            await asyncio.sleep(0.001)
+    await asyncio.sleep(0.02)
+    completed_before_release = task.done()
+    release_sibling.set()
+    result = await task
+
+    assert not completed_before_release, "ad assembly must wait until every executor-backed bed settles"
+    assert sibling_finished.is_set()
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_bed_cancellation_waits_then_cleans_owned_audio(_mock_all, tmp_path):
+    """Cancellation during optional bed fan-out waits, then removes ad scratch."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed_started = threading.Event()
+    release_beds = threading.Event()
+
+    def _slow_bed(path: Path, *_args, **_kwargs) -> Path:
+        bed_started.set()
+        assert release_beds.wait(timeout=2.0)
+        _touch(path)
+        return path
+
+    _mock_all["generate_music_bed"].side_effect = _slow_bed
+    script = AdScript(
+        brand="Letti Cancellati",
+        parts=[AdPart(type="voice", text="La voce non resta indietro.")],
+        mood="lounge",
+        sonic=SonicWorld(environment="showroom"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not bed_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for executor-backed bed renderers"
+    release_beds.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("adpart_*.mp3", "adbed_*.mp3", "envbed_*.mp3", "foley_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_final_mix_cancellation_waits_then_cleans_all_audio(_mock_all, tmp_path):
+    """Cancellation after bed fan-out waits for the sequential mix worker before cleanup."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    mix_started = threading.Event()
+    release_mix = threading.Event()
+
+    def _slow_mix(_voice_path, _bed_path, output_path, _volume_scale=0.12):
+        mix_started.set()
+        assert release_mix.wait(timeout=2.0)
+        _touch(output_path)
+        return output_path
+
+    _mock_all["mix_with_bed"].side_effect = _slow_mix
+    script = AdScript(
+        brand="Mix Cancellato",
+        parts=[AdPart(type="voice", text="Il mix deve aspettare.")],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not mix_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for the sequential mix worker"
+    release_mix.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("ad_*.mp3", "adpart_*.mp3", "adbed_*.mp3", "ad_broadcast_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_only_script_uses_spoken_brand_fallback(_mock_all, tmp_path):
+    """Decorative audio alone cannot count as a completed spoken ad."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    spoken: list[str] = []
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        spoken.append(text)
+        return _touch(output_path)
+
+    script = AdScript(brand="Solo Suono", parts=[AdPart(type="sfx", sfx="chime")])
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert spoken == ["Solo Suono"]
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_only_fallback_voice_failure_propagates(_mock_all, tmp_path):
+    """When an SFX-only ad's spoken-brand fallback voice fails, the error must
+    propagate (fail closed) instead of silently swallowing it."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    async def _fail_fallback(text, voice, output_path, **kwargs):
+        raise TTSUnavailableError("fallback brand voice unavailable")
+
+    script = AdScript(brand="Solo Suono", parts=[AdPart(type="sfx", sfx="chime")])
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fail_fallback),
+        pytest.raises(TTSUnavailableError, match="fallback brand voice unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("ad_fallback_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     from mammamiradio.audio.tts import synthesize_ad
 
@@ -1311,6 +1741,34 @@ async def test_synthesize_ad_multi_voice_dict(_mock_all, tmp_path):
     voice_ids = {c.args[1] for c in calls}
     assert "it-IT-GianniNeural" in voice_ids
     assert "it-IT-FiammaNeural" in voice_ids
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_voice_concat_failure_cleans_all_parts(_mock_all, tmp_path):
+    """A failed multi-voice concat cannot leave undiscoverable ad scratch."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    def _failed_concat(_parts, output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"partial concatenation")
+        raise RuntimeError("voice concat failed")
+
+    _mock_all["concat_files"].side_effect = _failed_concat
+    script = AdScript(
+        brand="Duo Pulito",
+        parts=[
+            AdPart(type="voice", text="Prima voce."),
+            AdPart(type="voice", text="Seconda voce."),
+        ],
+        mood="upbeat",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with pytest.raises(RuntimeError, match="voice concat failed"):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("ad_voice_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1559,6 +2017,175 @@ async def test_synthesize_dialogue_single_host(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_dialogue_failure_waits_for_sibling_and_cleans_scratch(_mock_all, tmp_path):
+    """Failed parallel dialogue settles every line before removing scratch audio."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        if text == "bad line":
+            await sibling_started.wait()
+            output_path.with_suffix(".raw.mp3").write_bytes(b"partial")
+            raise TTSUnavailableError("voice unavailable")
+        sibling_started.set()
+        await asyncio.sleep(0.01)
+        _touch(output_path)
+        sibling_finished.set()
+        return output_path
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize),
+        pytest.raises(TTSUnavailableError, match="voice unavailable"),
+    ):
+        await synthesize_dialogue([(host, "bad line"), (host, "good line")], tmp_path)
+
+    assert sibling_finished.is_set()
+    assert not list(tmp_path.glob("line_*.mp3"))
+    assert not list(tmp_path.glob("line_*.raw.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_prioritizes_total_tts_outage_over_sibling_error(_mock_all, tmp_path):
+    """Required dialogue preserves typed outage semantics across line failures."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+
+    async def _failed_line(text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"partial line")
+        if text == "generic failure":
+            raise RuntimeError("local renderer failed")
+        raise TTSUnavailableError("all voice routes unavailable")
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_failed_line),
+        pytest.raises(TTSUnavailableError, match="all voice routes unavailable"),
+    ):
+        await synthesize_dialogue(
+            [(host, "generic failure"), (host, "typed failure")],
+            tmp_path,
+        )
+
+    assert not list(tmp_path.glob("line_*.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_cancellation_waits_for_lines_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancelling dialogue settles every line before removing final and raw files."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    lines_started = asyncio.Event()
+    release_lines = asyncio.Event()
+    finished_lines: list[str] = []
+
+    async def _late_synthesize(text, voice, output_path, **kwargs):
+        lines_started.set()
+        await release_lines.wait()
+        _touch(output_path)
+        output_path.with_suffix(".raw.mp3").write_bytes(b"late raw")
+        finished_lines.append(text)
+        return output_path
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_late_synthesize):
+        task = asyncio.create_task(
+            synthesize_dialogue(
+                [(host, "prima linea"), (host, "seconda linea")],
+                tmp_path,
+            )
+        )
+        await asyncio.wait_for(lines_started.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for every owned dialogue line"
+        release_lines.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert sorted(finished_lines) == ["prima linea", "seconda linea"]
+    assert not list(tmp_path.glob("line_*.mp3"))
+    assert not list(tmp_path.glob("line_*.raw.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_concat_cancellation_waits_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancellation during dialogue concat waits for FFmpeg before deleting inputs."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    concat_started = threading.Event()
+    release_concat = threading.Event()
+
+    def _slow_concat(_parts, output_path, *_args, **_kwargs):
+        concat_started.set()
+        assert release_concat.wait(timeout=2.0)
+        _touch(output_path)
+        return output_path
+
+    _mock_all["concat_files"].side_effect = _slow_concat
+    task = asyncio.create_task(
+        synthesize_dialogue(
+            [(host, "prima linea"), (host, "seconda linea")],
+            tmp_path,
+        )
+    )
+    async with asyncio.timeout(1.0):
+        while not concat_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for dialogue concat"
+    release_concat.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("line_*.mp3", "line_*.raw.mp3", "dialogue_raw_*.mp3", "dialogue_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_normalize_cancellation_waits_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancellation during final dialogue normalization waits before cleanup."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    normalize_started = threading.Event()
+    release_normalize = threading.Event()
+
+    def _slow_final_normalize(input_path, output_path, config=None, *, loudnorm=True):
+        if input_path.name.startswith("dialogue_raw_"):
+            normalize_started.set()
+            assert release_normalize.wait(timeout=2.0)
+        return _normalize_side_effect(input_path, output_path, config, loudnorm=loudnorm)
+
+    _mock_all["normalize"].side_effect = _slow_final_normalize
+    task = asyncio.create_task(
+        synthesize_dialogue(
+            [(host, "prima linea"), (host, "seconda linea")],
+            tmp_path,
+        )
+    )
+    async with asyncio.timeout(1.0):
+        while not normalize_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for final dialogue normalization"
+    release_normalize.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("line_*.mp3", "line_*.raw.mp3", "dialogue_raw_*.mp3", "dialogue_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
 async def test_synthesize_dialogue_rejects_zero_byte_intermediate_before_concat(_mock_all, tmp_path):
     from mammamiradio.audio.audio_quality import AudioQualityError
     from mammamiradio.audio.tts import synthesize_dialogue
@@ -1713,11 +2340,13 @@ async def test_synthesize_dialogue_normalize_failure_cleans_temporary_parts(_moc
 
     host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
 
-    def _normalize_fails(raw_path, output_path, **kwargs):
-        raise RuntimeError("normalize failed")
+    def _normalize_fails_final(raw_path, output_path, **kwargs):
+        if raw_path.name.startswith("dialogue_raw_"):
+            raise RuntimeError("normalize failed")
+        return _normalize_side_effect(raw_path, output_path, **kwargs)
 
     with (
-        patch("mammamiradio.audio.tts.normalize", side_effect=_normalize_fails),
+        patch("mammamiradio.audio.tts.normalize", side_effect=_normalize_fails_final),
         pytest.raises(RuntimeError, match="normalize failed"),
     ):
         await synthesize_dialogue([(host, "prima linea"), (host, "seconda linea")], tmp_path)
