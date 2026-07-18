@@ -675,6 +675,163 @@ async def test_synthesize_threads_voice_settings_to_elevenlabs(_mock_all, tmp_pa
     assert seen["json"]["voice_settings"]["similarity_boost"] == 0.78  # other house defaults preserved
 
 
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_uses_only_stability_and_code_owned_tag(
+    _mock_all, tmp_path, monkeypatch, caplog
+):
+    """V3 receives only compatible tuning and semantic—not raw—delivery markup."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        await synthesize(
+            "Ciao Giulia",
+            "voice_marco",
+            tmp_path / "v3.mp3",
+            engine="elevenlabs",
+            elevenlabs_model="eleven_v3",
+            delivery_profile="marco",
+            delivery_cue="energetic",
+            voice_settings={"stability": 0.6},
+            host_name="Marco",
+        )
+
+    assert seen["json"] == {
+        "text": "[excited] Ciao Giulia",
+        "model_id": "eleven_v3",
+        "voice_settings": {"stability": 0.6},
+    }
+    assert "host=Marco model=eleven_v3 delivery=energetic" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_keeps_provider_default_and_rejects_raw_tag_input(
+    _mock_all, tmp_path, monkeypatch
+):
+    """A raw bracket tag is not an instruction; Giulia's omitted stability stays provider-default."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-default-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    await synthesize(
+        "Non mi impressiona.",
+        "voice_giulia",
+        tmp_path / "v3-default.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="giulia",
+        delivery_cue="[laughs]",
+    )
+
+    assert seen["json"] == {
+        "text": "Non mi impressiona.",
+        "model_id": "eleven_v3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_fallback_receives_clean_text(_mock_all, tmp_path, monkeypatch):
+    """A V3 failure cannot make Edge pronounce its internal performance tag."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-fallback-key")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+
+    await synthesize(
+        "Questo resta pulito.",
+        "voice_marco",
+        tmp_path / "v3-fallback.mp3",
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+
+    assert _mock_all["Communicate"].call_args.args[0] == "Questo resta pulito."
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_strips_model_bracket_directives_from_payload(_mock_all, tmp_path, monkeypatch):
+    """Non-banter host speech (transitions/news) is not pre-cleaned, so the V3 boundary
+    must strip model-emitted bracket directives — only the code-owned tag may be markup."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-strip-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    # Neutral delivery (e.g. a news flash): raw directive stripped, no code tag added.
+    await synthesize(
+        "[sospira] Ultim'ora dalla redazione.",
+        "voice_marco",
+        tmp_path / "v3-news.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+    )
+    assert seen["json"]["text"] == "Ultim'ora dalla redazione."
+
+    # Authorized cue: the code-owned tag survives, the smuggled directive does not.
+    await synthesize(
+        "Musica [laughs] adesso.",
+        "voice_marco",
+        tmp_path / "v3-banter.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+    assert seen["json"]["text"] == "[excited] Musica adesso."
+
+
+def test_elevenlabs_failure_memoization_key_is_model_specific(monkeypatch):
+    from mammamiradio.audio.tts import _cloud_failure_key
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "same-account")
+    v2_key = _cloud_failure_key("elevenlabs", "same-voice", elevenlabs_model="eleven_multilingual_v2")
+    v3_key = _cloud_failure_key("elevenlabs", "same-voice", elevenlabs_model="eleven_v3")
+
+    assert v2_key != v3_key
+    assert v2_key[-1] == "eleven_multilingual_v2"
+    assert v3_key[-1] == "eleven_v3"
+
+
 class _HttpErrorClient:
     """httpx.AsyncClient stub whose POST returns a non-2xx response.
 
@@ -1935,6 +2092,41 @@ async def test_synthesize_dialogue_single_line_skips_per_line_validation(_mock_a
         patch("mammamiradio.audio.tts.probe_duration_sec", return_value=0.2),
     ):
         result = await synthesize_dialogue([(host, "Sì!")], tmp_path)
+
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_forwards_v3_delivery_sidecar(_mock_all, tmp_path):
+    """The dialogue boundary carries semantic cue metadata without changing clean text."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+    from mammamiradio.core.models import DialogueLine
+
+    host = HostPersonality(
+        name="Marco",
+        voice="voice_marco",
+        style="energetic",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        voice_settings={"stability": 0.6},
+    )
+
+    async def _synthesize_line(text, voice, output_path, **kwargs):
+        _touch(output_path)
+        assert text == "Il testo resta pulito."
+        assert voice == "voice_marco"
+        assert kwargs["elevenlabs_model"] == "eleven_v3"
+        assert kwargs["delivery_profile"] == "marco"
+        assert kwargs["delivery_cue"] == "energetic"
+        assert kwargs["host_name"] == "Marco"
+        return output_path
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_synthesize_line):
+        result = await synthesize_dialogue(
+            [DialogueLine(host=host, text="Il testo resta pulito.", delivery="energetic")],
+            tmp_path,
+        )
 
     assert result.exists()
 

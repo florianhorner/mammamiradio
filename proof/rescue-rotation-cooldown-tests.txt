@@ -1,0 +1,51 @@
+Proof — fix(streaming): rotate cached-music rescues to stop repeats on a stall
+Branch: florianhorner/fix/illusion-broken-logs
+Date: 2026-07-18 (local)
+
+Change: session-scoped rescue-rotation cooldown so a cached (norm-cache) song
+cannot re-air 3x in ~20 min when the producer stalls; admin-only rescue_rotation
+readout; listener payload unchanged.
+
+=== ruff check mammamiradio/ tests/ ===
+All checks passed!
+
+=== ruff format --check (touched modules) ===
+4 files already formatted
+
+=== mypy mammamiradio/audio/norm_cache.py mammamiradio/core/models.py mammamiradio/web/streamer.py ===
+Success: no issues found in 3 source files
+
+=== Touched test suites ===
+python -m pytest tests/audio/test_norm_cache.py tests/web/test_stream_result.py \
+  tests/web/test_streamer_routes.py tests/web/test_admin_status_invariants.py \
+  tests/web/test_public_status_contract.py -q
+311 passed in 10.96s
+
+=== Full test suite ===
+python -m pytest tests/ -q
+5264 passed, 3 skipped, 21 deselected, 1 warning in 170.47s
+
+=== Coverage (aggregate + per-module ratchet) ===
+Required test coverage of 92.0% reached. Total coverage: 92.40%
+python scripts/coverage-ratchet.py check  -> exit 0 (no module below floor)
+
+=== Release invariants (with venv active) ===
+bash scripts/check-release-invariants.sh
+Passed: 11  Failed: 0
+All invariants passed.
+
+=== Audio-delivery three-scenario coverage ===
+Scenario 1 (normal): test_select_rescue_skips_song_still_inside_cooldown,
+  test_continuity_reservation_prefers_non_cooling_cache_track,
+  test_emit_stream_result_records_rescue_airplay_when_heard
+Scenario 2 (all-exhausted / never dead air): test_select_rescue_when_all_cooling_picks_least_recently_heard,
+  test_continuity_reservation_falls_back_to_least_recent_when_all_cooling
+Scenario 3 (post-restart): test_select_rescue_with_empty_airplay_behaves_like_no_rotation
+  (session_stopped set; empty airplay map behaves like pre-rotation, zero sidecar reads)
+
+=== Admin-only projection ===
+test_rescue_rotation_is_admin_only — rescue_rotation present in /status.runtime_status,
+  absent from /public-status.
+
+=== Version ===
+pyproject.toml 2.18.0 / ha-addon config.yaml 2.18.0 — no bump (fix only).

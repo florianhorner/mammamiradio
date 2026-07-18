@@ -34,6 +34,7 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
+    _DEMO_ASSETS_DIR,
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
@@ -43,6 +44,7 @@ from mammamiradio.web.streamer import (
     StreamPacer,
     _ad_cast_status_payload,
     _consume_queue_shadow,
+    _continuity_reservation_segments,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -290,6 +292,90 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])
+
+
+def _write_indexed_cache_track(tmp_path, name: str, *, title: str, artist: str, duration: float, state) -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"audio")
+    (tmp_path / f"{name}.json").write_text(f'{{"title": "{title}", "artist": "{artist}"}}')
+    state.immediate_audio_index[path] = duration
+    return path
+
+
+def test_continuity_reservation_prefers_non_cooling_cache_track(tmp_path):
+    """A live control reserves a fresher cached song over one that just aired as a
+    rescue, so repeated controls don't keep reserving the same track."""
+    state = StationState()
+    cooling = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_cooling_192k.mp3", title="Cooling", artist="A", duration=180.0, state=state
+    )
+    fresh = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_fresh_192k.mp3", title="Fresh", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[cooling] = 10_000.0 - 60.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_finds_fresh_track_beyond_cooling_scan_prefix(tmp_path):
+    """Cooling entries cannot consume the bounded scan before an eligible track."""
+    state = StationState()
+    cooling_paths = []
+    for index in range(24):
+        path = _write_indexed_cache_track(
+            tmp_path,
+            f"norm_cooling_{index:02d}_192k.mp3",
+            title=f"Cooling {index}",
+            artist="A",
+            duration=180.0,
+            state=state,
+        )
+        cooling_paths.append(path)
+    fresh = _write_indexed_cache_track(
+        tmp_path,
+        "norm_fresh_after_prefix_192k.mp3",
+        title="Fresh after prefix",
+        artist="B",
+        duration=180.0,
+        state=state,
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay.update({path: 10_000.0 - 60.0 for path in cooling_paths})
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_falls_back_to_least_recent_when_all_cooling(tmp_path):
+    """When every cached track is cooling, the reservation still books real music —
+    the least-recently-heard one — rather than dropping to the emergency tone."""
+    state = StationState()
+    older = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_older_192k.mp3", title="Older", artist="A", duration=180.0, state=state
+    )
+    newer = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_newer_192k.mp3", title="Newer", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[older] = 10_000.0 - 100.0
+        state.rescue_airplay[newer] = 10_000.0 - 10.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [older]
 
 
 @pytest.mark.asyncio
@@ -1366,6 +1452,65 @@ async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(tmp_path):
+    """A song banned after reservation never reaches air; recovery takes over."""
+    app = _make_test_app()
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    blocked_path = tmp_path / "norm_late_ban_128k.mp3"
+    blocked_path.write_bytes(b"blocked-audio" * 1024)
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+            "continuity_reservation_id": "late-blocked-slot",
+        },
+        ephemeral=False,
+    )
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 101.2])),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while not state.stream_log:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not fall through to recovery")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.continuity_slot is None
+    assert state.stream_log[0].metadata.get("canned") is True
+    assert state.stream_log[0].metadata.get("rescue") is True
+    assert all(entry.metadata.get("continuity_reservation_id") != "late-blocked-slot" for entry in state.stream_log)
+    assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
 
 
 @pytest.mark.asyncio
@@ -3423,7 +3568,7 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
 
 @pytest.mark.asyncio
 async def test_panic_cut_while_streaming():
-    """Panic while a segment is playing: purges queue, fires skip_event, forces next=music, leaves stream live."""
+    """Panic with fresh runway skips safely and forces the next segment to music."""
     from mammamiradio.core.models import SegmentType
 
     app = _make_test_app()
@@ -3438,6 +3583,7 @@ async def test_panic_cut_while_streaming():
     data = resp.json()
     assert data["ok"] is True
     assert "purged" in data
+    assert data["skipped"] is True
     # skip_event must have been set (skip fires for the current segment)
     assert app.state.skip_event.is_set()
     # force_next must be MUSIC
@@ -3447,6 +3593,137 @@ async def test_panic_cut_while_streaming():
     # Stale rows are replaced by an audible protected reservation.
     assert len(state.queued_segments) == app.state.queue.qsize() == 1
     assert state.queued_segments[0]["reason"] == "Protected continuity audio."
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
+    """Panic still steers recovery, but never cuts current audio into an empty queue."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+    assert app.state.queue.empty()
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 6
+
+    # A render that captured the old epoch before Panic must now fail the same
+    # admission gate used by the producer, even though the queue was untouched.
+    captured_epoch = 5
+    assert captured_epoch != state.continuity_epoch
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_invalidates_in_flight_admission_when_queue_is_unchanged(tmp_path):
+    """Panic fences a render waiting on queue admission even without a purge."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    class BlockingQueue(asyncio.Queue[Segment]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.put_started = asyncio.Event()
+            self.allow_put = asyncio.Event()
+
+        async def put(self, item: Segment) -> None:
+            self.put_started.set()
+            await self.allow_put.wait()
+            await super().put(item)
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    queue = BlockingQueue()
+    app.state.queue = queue
+    candidate_path = tmp_path / "stale_panic_candidate.mp3"
+    candidate_path.write_bytes(b"candidate")
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=candidate_path,
+        duration_sec=180.0,
+        metadata={"title": "Stale candidate", "title_only": "Stale candidate", "artist": "Artist"},
+        ephemeral=True,
+    )
+    captured_epoch = state.continuity_epoch
+
+    def stale_reason() -> str | None:
+        if state.continuity_epoch != captured_epoch:
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
+    with (
+        patch("mammamiradio.scheduling.producer._apply_egress", new_callable=AsyncMock, return_value=candidate),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        enqueue_task = asyncio.create_task(
+            _enqueue_with_egress(
+                queue,
+                state,
+                app.state.config,
+                candidate,
+                shadow_entry={"id": "candidate", "type": "music", "label": "Stale candidate"},
+                stale_check=stale_reason,
+            )
+        )
+        try:
+            await asyncio.wait_for(queue.put_started.wait(), timeout=1.0)
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post("/api/panic")
+
+            assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+            assert state.continuity_epoch == captured_epoch + 1
+
+            queue.allow_put.set()
+            assert await asyncio.wait_for(enqueue_task, timeout=1.0) is False
+        finally:
+            queue.allow_put.set()
+            if not enqueue_task.done():
+                enqueue_task.cancel()
+            await asyncio.gather(enqueue_task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert not candidate_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_uses_capacity_exempt_slot_as_playable_runway(tmp_path):
+    """Panic may cut when the protected slot, rather than the queue head, is ready."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    slot_path = tmp_path / "capacity_exempt_slot.mp3"
+    slot_path.write_bytes(b"slot")
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": True}
+    assert app.state.queue.empty()
+    assert app.state.skip_event.is_set()
+    assert state.continuity_slot is slot
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 6
 
 
 @pytest.mark.asyncio
@@ -3462,6 +3739,7 @@ async def test_panic_cut_when_idle():
         resp = await client.post("/api/panic")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is False
     # No segment to skip — skip_event should not be fired
     assert not app.state.skip_event.is_set()
     assert state.force_next == SegmentType.MUSIC

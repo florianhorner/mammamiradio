@@ -644,3 +644,340 @@ def test_cli_rejects_bad_manual_voice_spec(tmp_path, capsys) -> None:
     captured = capsys.readouterr()
     assert rc == 2
     assert "provider:voice_id" in captured.err
+
+
+def _host_performance_entry(
+    *,
+    host: str = "Marco",
+    voice_id: str = "o4b57JYAECRMJyCEXyIE",
+    model: str = audition.ELEVENLABS_V3_MODEL,
+    delivery_profile: str = "marco",
+    delivery_cue: str = "neutral",
+    human_disposition: str = "accepted",
+    rationale: str = "accepted_v3_tonal_fit",
+) -> dict[str, object]:
+    clean_text_sha256 = "a" * 64
+    rendered_text_sha256 = (
+        clean_text_sha256
+        if delivery_cue == audition.NEUTRAL_DELIVERY_CUE
+        else hashlib.sha256(f"{delivery_profile}:{delivery_cue}".encode()).hexdigest()
+    )
+    return {
+        "performance_id": audition._host_performance_id(
+            "elevenlabs",
+            voice_id,
+            model,
+            delivery_profile,
+            delivery_cue,
+            clean_text_sha256,
+            rendered_text_sha256,
+        ),
+        "host": host,
+        "voice_id": voice_id,
+        "model": model,
+        "delivery_profile": delivery_profile,
+        "delivery_cue": delivery_cue,
+        "clean_text_sha256": clean_text_sha256,
+        "rendered_text_sha256": rendered_text_sha256,
+        "provider_result": audition.STATUS_GENERATED,
+        "audio_sha256": "b" * 64,
+        "audio_duration_seconds": 7.25,
+        "human_disposition": human_disposition,
+        "rationale": rationale,
+    }
+
+
+def _approved_host_performance_matrix() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for host, profile, voice_id in (
+        ("Marco", "marco", "o4b57JYAECRMJyCEXyIE"),
+        ("Giulia", "giulia", "fNmw8sukfGuvWVOp33Ge"),
+    ):
+        rows.append(
+            _host_performance_entry(
+                host=host,
+                voice_id=voice_id,
+                model=audition.ELEVENLABS_V2_MODEL,
+                delivery_profile=profile,
+            )
+        )
+        rows.append(
+            _host_performance_entry(
+                host=host,
+                voice_id=voice_id,
+                model=audition.ELEVENLABS_V3_MODEL,
+                delivery_profile=profile,
+            )
+        )
+        for cue in audition.V3_DELIVERY_CUES_BY_PROFILE[profile]:
+            rows.append(
+                _host_performance_entry(
+                    host=host,
+                    voice_id=voice_id,
+                    model=audition.ELEVENLABS_V3_MODEL,
+                    delivery_profile=profile,
+                    delivery_cue=cue,
+                )
+            )
+    return rows
+
+
+def _v3_host_config() -> StationConfig:
+    config = _station_config()
+    marco, giulia = config.hosts
+    marco.engine = "elevenlabs"
+    marco.voice = "o4b57JYAECRMJyCEXyIE"
+    marco.voice_settings = {"stability": 0.6}
+    marco.elevenlabs_model = audition.ELEVENLABS_V3_MODEL
+    marco.delivery_profile = "marco"
+    giulia.engine = "elevenlabs"
+    giulia.voice = "fNmw8sukfGuvWVOp33Ge"
+    giulia.elevenlabs_model = audition.ELEVENLABS_V3_MODEL
+    giulia.delivery_profile = "giulia"
+    return config
+
+
+def test_build_v3_host_performance_targets_pairs_v2_v3_and_profile_cues() -> None:
+    targets = audition.build_v3_host_performance_targets(_v3_host_config())
+
+    by_label = {target.label: target for target in targets}
+    assert set(by_label) == {
+        "host-Marco-v2-clean",
+        "host-Marco-v3-clean",
+        "host-Marco-v3-energetic",
+        "host-Marco-v3-curious",
+        "host-Marco-v3-playful",
+        "host-Giulia-v2-clean",
+        "host-Giulia-v3-clean",
+        "host-Giulia-v3-dry",
+        "host-Giulia-v3-curious",
+        "host-Giulia-v3-playful",
+    }
+    assert by_label["host-Marco-v2-clean"].elevenlabs_model == audition.ELEVENLABS_V2_MODEL
+    assert by_label["host-Marco-v2-clean"].delivery_cue == audition.NEUTRAL_DELIVERY_CUE
+    assert by_label["host-Marco-v3-energetic"].elevenlabs_model == audition.ELEVENLABS_V3_MODEL
+    assert by_label["host-Marco-v3-energetic"].voice_settings == {"stability": 0.6}
+    assert by_label["host-Giulia-v3-dry"].delivery_profile == "giulia"
+    assert len({target.text for target in targets if "host:Marco" in target.used_by}) == 1
+    assert len({target.text for target in targets if "host:Giulia" in target.used_by}) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_v3_target_threads_model_profile_and_semantic_cue(tmp_path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_elevenlabs(text, voice, output_path, **kwargs):
+        calls.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"v3 mp3")
+        return output_path
+
+    monkeypatch.setattr(audition.tts_module, "synthesize_elevenlabs", fake_elevenlabs)
+    target = audition.VoiceAuditionTarget(
+        provider="elevenlabs",
+        voice="o4b57JYAECRMJyCEXyIE",
+        label="host-Marco-v3-energetic",
+        source="v3-host-performance",
+        text="Una prova pulita.",
+        voice_settings={"stability": 0.6},
+        elevenlabs_model=audition.ELEVENLABS_V3_MODEL,
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+
+    await audition._synthesize_target(target, tmp_path / "marco.mp3")
+
+    assert calls == [
+        {
+            "text": "Una prova pulita.",
+            "voice": "o4b57JYAECRMJyCEXyIE",
+            "voice_settings": {"stability": 0.6},
+            "elevenlabs_model": "eleven_v3",
+            "delivery_cue": "energetic",
+            "delivery_profile": "marco",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v3_audition_manifest_hashes_clean_and_provider_rendered_text_separately(tmp_path, monkeypatch) -> None:
+    async def fake_synthesize(target: audition.VoiceAuditionTarget, output_path: Path) -> Path:
+        output_path.write_bytes(b"v3-rendered")
+        return output_path
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+    monkeypatch.setattr(audition, "probe_duration_sec", lambda _path: 6.5)
+    target = audition.VoiceAuditionTarget(
+        provider="elevenlabs",
+        voice="o4b57JYAECRMJyCEXyIE",
+        label="host-Marco-v3-energetic",
+        source="v3-host-performance",
+        text="Una prova pulita.",
+        elevenlabs_model=audition.ELEVENLABS_V3_MODEL,
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+
+    [result] = await audition.run_auditions([target], tmp_path, env={"ELEVENLABS_API_KEY": "test"})
+
+    assert result.text_sha256 == hashlib.sha256(target.text.encode()).hexdigest()
+    assert result.clean_text_sha256 == result.text_sha256
+    assert result.rendered_text_sha256 == hashlib.sha256(b"[excited] Una prova pulita.").hexdigest()
+    assert result.clean_text_sha256 != result.rendered_text_sha256
+    assert result.audio_sha256 == hashlib.sha256(b"v3-rendered").hexdigest()
+
+
+def test_host_performance_receipt_keeps_only_complete_safe_evidence_and_gate_matrix(tmp_path) -> None:
+    receipt_path = tmp_path / "proof" / "v3-host-performance.json"
+
+    written = audition.write_host_performance_receipt(_approved_host_performance_matrix(), path=receipt_path)
+
+    assert written == receipt_path
+    payload = audition.load_host_performance_receipt(receipt_path, require_approved_matrix=True)
+    assert set(payload) == {"schema_version", "performances"}
+    assert "La prossima canzone" not in receipt_path.read_text()
+    assert "audio_path" not in receipt_path.read_text()
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        audition.write_host_performance_receipt(_approved_host_performance_matrix(), path=receipt_path)
+
+
+@pytest.mark.parametrize(
+    ("extra_field", "value"),
+    [
+        ("text", "Questa copia non appartiene al receipt"),
+        ("rendered_text", "[excited] Questa copia non appartiene al receipt"),
+        ("audio_path", "/tmp/voice-auditions/marco.mp3"),
+        ("credentials", "elevenlabs-secret"),
+    ],
+)
+def test_host_performance_receipt_rejects_raw_copy_paths_and_credentials(extra_field: str, value: str) -> None:
+    entry = _host_performance_entry()
+    entry[extra_field] = value
+
+    with pytest.raises(ValueError, match="prohibited fields"):
+        audition.host_performance_receipt([entry])
+
+
+def test_host_performance_gate_blocks_rejected_or_incomplete_v3_matrix() -> None:
+    rows = _approved_host_performance_matrix()
+    rejected = rows[-1]
+    rejected["human_disposition"] = "rejected"
+    rejected["rationale"] = "rejected_audio_artifacts"
+
+    receipt = audition.host_performance_receipt(rows)
+
+    with pytest.raises(ValueError, match="is not approved"):
+        audition.assert_host_performance_gate(receipt)
+
+
+def test_host_performance_gate_blocks_incomplete_v3_matrix() -> None:
+    """A missing required (model, cue) row must fail the gate even when every present
+    row is generated and accepted — an incomplete comparison is not a passing gate."""
+    rows = _approved_host_performance_matrix()
+    # Drop Marco's eleven_v3/energetic row; the rest of the matrix is fully approved.
+    incomplete = [
+        row
+        for row in rows
+        if not (
+            row["delivery_profile"] == "marco"
+            and row["model"] == audition.ELEVENLABS_V3_MODEL
+            and row["delivery_cue"] == "energetic"
+        )
+    ]
+    assert len(incomplete) == len(rows) - 1
+
+    receipt = audition.host_performance_receipt(incomplete)
+
+    with pytest.raises(ValueError, match="is missing marco rows"):
+        audition.assert_host_performance_gate(receipt)
+
+
+def test_host_performance_receipt_from_manifest_redacts_local_paths_and_requires_match(tmp_path) -> None:
+    target = audition.VoiceAuditionTarget(
+        provider="elevenlabs",
+        voice="o4b57JYAECRMJyCEXyIE",
+        label="host-Marco-v3-clean",
+        source="v3-host-performance",
+        used_by=("host:Marco", "v3_performance:marco"),
+        text="Una prova pulita.",
+        elevenlabs_model=audition.ELEVENLABS_V3_MODEL,
+        delivery_profile="marco",
+        delivery_cue="neutral",
+    )
+    result = audition._result_for_target(
+        target,
+        status=audition.STATUS_GENERATED,
+        output_path="/tmp/voice-auditions/marco.mp3",
+        audio_sha256="b" * 64,
+        audio_duration_seconds=7.25,
+    )
+    manifest_path = audition.write_manifest(
+        [result], tmp_path, config_path=tmp_path / "radio.toml", timestamp="20260716T120000Z"
+    )
+    manifest = json.loads(manifest_path.read_text())
+    performance_id = manifest["results"][0]["performance_id"]
+    receipt = audition.host_performance_receipt_from_manifest(
+        manifest,
+        [
+            {
+                "performance_id": performance_id,
+                "host": "Marco",
+                "human_disposition": "accepted",
+                "rationale": "accepted_v3_tonal_fit",
+            }
+        ],
+    )
+
+    performances = receipt["performances"]
+    assert isinstance(performances, list)
+    first_performance = performances[0]
+    assert isinstance(first_performance, dict)
+    assert first_performance["performance_id"] == performance_id
+    assert "/tmp/voice-auditions" not in json.dumps(receipt)
+
+
+def test_cli_dry_run_lists_v3_host_performance_matrix_without_writing_files(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(audition, "load_config", lambda _path: _v3_host_config())
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+
+    rc = audition.main(
+        [
+            "--providers",
+            "elevenlabs",
+            "--v3-host-performance",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--timestamp",
+            "20260716T120000Z",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "planned\televenlabs\to4b57JYAECRMJyCEXyIE" in captured.out
+    assert "model=eleven_v3 profile=marco cue=energetic" in captured.out
+    assert "model=eleven_v3 profile=giulia cue=dry" in captured.out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_verifies_complete_host_performance_gate(tmp_path, capsys) -> None:
+    receipt_path = tmp_path / "proof" / "v3-host-performance.json"
+    audition.write_host_performance_receipt(_approved_host_performance_matrix(), path=receipt_path)
+
+    rc = audition.main(
+        [
+            "--host-performance-receipt-path",
+            str(receipt_path),
+            "--verify-host-performance-gate",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "Host-performance gate: approved" in captured.out
+
+
+def test_committed_host_performance_receipt_is_valid_when_human_approval_adds_it() -> None:
+    """When committed after a real audition, the receipt must prove the full gate."""
+    if audition.HOST_PERFORMANCE_RECEIPT_PATH.exists():
+        audition.load_host_performance_receipt(require_approved_matrix=True)

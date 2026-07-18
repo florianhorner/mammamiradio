@@ -25,7 +25,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
+from mammamiradio.audio.norm_cache import (
+    record_rescue_airplay as _record_rescue_airplay,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_last_heard_at as _rescue_last_heard_at,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_on_cooldown as _rescue_on_cooldown,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_rotation_status as _rescue_rotation_status,
+)
+from mammamiradio.audio.norm_cache import (
+    select_norm_cache_rescue as _select_norm_cache_rescue,
+)
 from mammamiradio.audio.normalizer import (
     configure_broadcast_chain,
     humanize_norm_filename,
@@ -532,12 +546,50 @@ _CONTINUITY_RESERVATION_FLAG = "continuity_reservation"
 _CONTINUITY_CACHE_SCAN_LIMIT = 24
 
 
+@dataclass(slots=True)
+class ContinuityRunwayOutcome:
+    """Describe which runway a destructive control left behind."""
+
+    fresh_reservation: bool = False
+    preserved_existing: bool = False
+
+
 def _indexed_audio_path_is_file(path: Path) -> bool:
     """Best-effort cache-index liveness check for the bounded control hot path."""
+    if not path:
+        return False
     try:
         return path.is_file()
     except OSError:
         return False
+
+
+def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
+    """Return the durable blocklist identity carried by a ready segment."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return (
+        str(metadata.get("artist") or "").strip().lower(),
+        str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+    )
+
+
+def _segment_is_immediately_playable(
+    state: StationState,
+    segment: Segment,
+    *,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+) -> bool:
+    """Return whether a queued/slot segment is safe to use as live runway now."""
+    excluded_paths = excluded_paths or set()
+    excluded_track_keys = excluded_track_keys or set()
+    if segment.path in excluded_paths:
+        return False
+    if segment.type is SegmentType.MUSIC:
+        key = _segment_blocklist_key(segment)
+        if key in state.blocklist or key in excluded_track_keys:
+            return False
+    return _indexed_audio_path_is_file(segment.path)
 
 
 def _continuity_reservation_segments(
@@ -574,6 +626,27 @@ def _continuity_reservation_segments(
         selected.append(segment)
         covered += segment.duration_sec
 
+    def _add_cached_segment(cached: Path, duration: float, sidecar: dict) -> None:
+        _add(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=cached,
+                duration_sec=duration,
+                metadata={
+                    "title": str(sidecar.get("title") or "Cached music"),
+                    "title_only": str(sidecar.get("title") or "Cached music"),
+                    "artist": str(sidecar.get("artist") or ""),
+                    "duration_ms": round(duration * 1000),
+                    "audio_source": "norm_cache",
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
+
     if (
         _can_add()
         and recovery not in excluded_paths
@@ -602,7 +675,17 @@ def _continuity_reservation_segments(
     # choose the first one or two immediately playable tracks.
     scanned = 0
     prune_paths: list[Path] = []
-    for cached, duration in state.immediate_audio_index.items():
+    deferred_cooling: list[tuple[Path, float, dict]] = []
+    indexed_items = list(state.immediate_audio_index.items())
+    cooling_by_path: dict[Path, bool] = {}
+    if state.rescue_airplay:
+        rotation_now = time.monotonic()
+        # Cooling entries remain in the index by design. Put eligible entries
+        # first so the bounded scan does not spend all 24 slots on a cooling
+        # prefix while a fresh cache track waits just beyond it.
+        cooling_by_path = {cached: _rescue_on_cooldown(state, cached, now=rotation_now) for cached, _ in indexed_items}
+        indexed_items.sort(key=lambda item: cooling_by_path[item[0]])
+    for cached, duration in indexed_items:
         if not _can_add() or _target_met():
             break
         if scanned >= _CONTINUITY_CACHE_SCAN_LIMIT:
@@ -632,25 +715,23 @@ def _continuity_reservation_segments(
                 # be re-indexed by a later render or the next startup after unban.
                 prune_paths.append(cached)
             continue
-        _add(
-            Segment(
-                type=SegmentType.MUSIC,
-                path=cached,
-                duration_sec=duration,
-                metadata={
-                    "title": str(metadata.get("title") or "Cached music"),
-                    "title_only": str(metadata.get("title") or "Cached music"),
-                    "artist": str(metadata.get("artist") or ""),
-                    "duration_ms": round(duration * 1000),
-                    "audio_source": "norm_cache",
-                    "rescue": True,
-                    _CONTINUITY_RESERVATION_FLAG: True,
-                    "continuity_reservation_id": reservation_id,
-                    "queue_reason": "Protected continuity audio.",
-                },
-                ephemeral=False,
-            )
-        )
+        if cooling_by_path.get(cached, False):
+            # This song aired as a rescue within the hour. Prefer a fresher track
+            # so repeated controls don't reserve the same song; keep it as a
+            # least-recent fallback only if nothing else is available.
+            deferred_cooling.append((cached, duration, metadata))
+            continue
+        _add_cached_segment(cached, duration, metadata)
+
+    # Every fresh cache candidate is still cooling down: reserve the
+    # least-recently-heard one anyway so a control keeps real music, not dead air.
+    if deferred_cooling and _can_add() and not _target_met():
+        for cached, duration, metadata in sorted(
+            deferred_cooling, key=lambda item: _rescue_last_heard_at(state, item[0]) or 0.0
+        ):
+            if not _can_add() or _target_met():
+                break
+            _add_cached_segment(cached, duration, metadata)
 
     for path in prune_paths:
         state.immediate_audio_index.pop(path, None)
@@ -699,6 +780,41 @@ def _continuity_slot_seconds(state: StationState) -> float:
         state.continuity_slot = None
         return 0.0
     return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
+
+
+def _claim_continuity_slot(state: StationState) -> Segment | None:
+    """Claim the capacity-exempt slot only if it is still safe to broadcast.
+
+    A durable ban can land after reservation but before the queue drains. This
+    last-mile gate keeps that newly banned cached song off air without letting
+    stale slot state block the normal empty-queue recovery ladder.
+    """
+    slot = state.continuity_slot
+    if slot is None or _continuity_slot_seconds(state) <= 0:
+        return None
+    if slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist:
+        logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
+        state.continuity_slot = None
+        return None
+    state.continuity_slot = None
+    return slot
+
+
+def _playable_runway_available(q, state: StationState) -> bool:
+    """Return whether cutting the current segment has ready audio behind it."""
+    # Mirror ``run_playback_loop``: the capacity-exempt slot is only consumed
+    # once the real queue is empty. A non-empty queue means the next audio the
+    # loop pulls is ``queued[0]`` — never the slot — so gate strictly on the
+    # head there instead of letting a ready slot mask an unplayable head.
+    queued = list(getattr(q, "_queue", ()))
+    if queued:
+        return _segment_is_immediately_playable(state, queued[0])
+    slot = state.continuity_slot
+    return bool(
+        slot is not None
+        and _continuity_slot_seconds(state) > 0
+        and not (slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist)
+    )
 
 
 def _continuity_slot_status(state: StationState) -> dict | None:
@@ -752,6 +868,7 @@ def _reserve_continuity_runway(
     discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
+    outcome: ContinuityRunwayOutcome | None = None,
 ) -> int:
     """Reserve immediately playable runway before a live control mutates audio.
 
@@ -765,28 +882,18 @@ def _reserve_continuity_runway(
     q = app_state.queue
     excluded_paths = excluded_paths or set()
     excluded_track_keys = excluded_track_keys or set()
-    # A replace action supersedes every prior safety promise too. A stale
-    # capacity-exempt slot is intentionally invisible to the real queue, so it
-    # must be cleared before the old queue can be replaced.
-    if replace_queue:
-        state.continuity_slot = None
-
     existing = list(getattr(q, "_queue", ()))
     current_queue = list(existing)
     protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
     ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
 
     slot = state.continuity_slot
-    slot_metadata = slot.metadata if slot is not None and isinstance(slot.metadata, dict) else {}
-    slot_key = (
-        str(slot_metadata.get("artist") or "").strip().lower(),
-        str(slot_metadata.get("title_only") or slot_metadata.get("title") or "").strip().lower(),
-    )
-    slot_is_excluded = bool(
-        slot is not None
-        and (slot.path in excluded_paths or slot_key in state.blocklist or slot_key in excluded_track_keys)
-    )
-    if slot_is_excluded:
+    if slot is not None and not _segment_is_immediately_playable(
+        state,
+        slot,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+    ):
         state.continuity_slot = None
         slot = None
 
@@ -824,11 +931,64 @@ def _reserve_continuity_runway(
     if not reservation:
         logger.warning("No packaged or cache continuity audio available for live control")
         if replace_queue:
-            purged = _purge_queue_and_shadow(q, state, reason=discard_reason)
-            state.last_enqueued_type = None
-            state.continuity_epoch += 1
-            return purged
+            # Replacement is transactional with respect to ready audio. Keep
+            # the first playable queued segment (plus any valid out-of-band
+            # slot), but discard every other queued item so the producer has
+            # capacity to recover. If neither is ready, mutate nothing: the
+            # caller must not cut the current audio.
+            playable_index = next(
+                (
+                    index
+                    for index, segment in enumerate(current_queue)
+                    if _segment_is_immediately_playable(
+                        state,
+                        segment,
+                        excluded_paths=excluded_paths,
+                        excluded_track_keys=excluded_track_keys,
+                    )
+                ),
+                None,
+            )
+            playable_head = current_queue[playable_index] if playable_index is not None else None
+            slot_ready = bool(
+                state.continuity_slot is not None
+                and _segment_is_immediately_playable(
+                    state,
+                    state.continuity_slot,
+                    excluded_paths=excluded_paths,
+                    excluded_track_keys=excluded_track_keys,
+                )
+            )
+            if playable_head is None and not slot_ready:
+                return 0
+            if outcome is not None:
+                outcome.preserved_existing = True
+            survivors = [playable_head] if playable_head is not None else []
+            failure_dropped = (
+                current_queue[:playable_index] + current_queue[playable_index + 1 :]
+                if playable_index is not None
+                else current_queue
+            )
+            for segment in failure_dropped:
+                state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
+                _drop_segment_moment_receipts(state, segment, discard_reason)
+                _unlink_ephemeral_best_effort(segment)
+            if failure_dropped:
+                _rebuild_queue_shadow(q, state, survivors)
+                # Queue capacity has changed, so producer work captured before
+                # this conservative rebuild must not refill the freed tail.
+                # Keep the epoch stable only for the true no-mutation path.
+                state.continuity_epoch += 1
+            elif slot_ready:
+                # A capacity-exempt slot is an out-of-band runway, not a queued
+                # tail. With no queued survivor, the previous queue-tail type is
+                # no longer adjacent and must not supply a speech bed.
+                state.last_enqueued_type = None
+            return len(failure_dropped)
         return 0
+
+    if outcome is not None and replace_queue:
+        outcome.fresh_reservation = True
 
     if not replace_queue and protected_ready > 0:
         if q.maxsize > 0:
@@ -851,6 +1011,8 @@ def _reserve_continuity_runway(
     if replace_queue:
         dropped = existing
         existing = []
+        # The replacement is fully built before the prior slot is superseded.
+        state.continuity_slot = None
     else:
         existing = ordinary
     combined = existing + reservation
@@ -1623,6 +1785,10 @@ def _runtime_status_snapshot(
         "no_failover_message": "No failover in current session." if not failover_events else "",
         "bridge_health": bridge_health,
         "generation_waste": generation_waste,
+        # How the norm-cache rescue rotation is spending its cooldown. Authenticated
+        # only, and derived purely from in-memory airplay state — no cache walk, no
+        # filesystem paths — so an operator can see the illusion guard working.
+        "rescue_rotation": _rescue_rotation_status(state),
         # Capacity-exempt continuity is intentionally not part of the real queue
         # shadow. Expose it separately to authenticated operators only.
         "continuity_slot": _continuity_slot_status(state),
@@ -2098,7 +2264,7 @@ def _apply_loaded_source(
     tracks: list,
     resolved_source,
 ) -> dict:
-    """Atomically swap the station source and trigger immediate cutover."""
+    """Atomically swap the station source and cut over only to fresh runway audio."""
     state = request.app.state.station_state
 
     # Doorway: a banned song must not return when the operator switches sources.
@@ -2107,22 +2273,31 @@ def _apply_loaded_source(
     # The queue replacement and its reservation happen before the source
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
+    runway = ContinuityRunwayOutcome()
     purged = _reserve_continuity_runway(
         request.app.state,
         state,
         request.app.state.config,
         replace_queue=True,
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
+        outcome=runway,
     )
     state.switch_playlist(tracks, resolved_source)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
-    # Immediate cutover: the protected queue is now in its final state; cut the
-    # current playback only after it exists.
+    # Immediate cutover is safe only when this action admitted fresh protected
+    # audio. An assetless fallback may preserve an old-source queue head or slot;
+    # that runway prevents dead air but must not make the source switch cut over
+    # into audio from the prior source.
     skipped = False
-    if state.now_streaming:
+    if state.now_streaming and runway.fresh_reservation and _playable_runway_available(request.app.state.queue, state):
         request.app.state.skip_event.set()
         skipped = True
+    elif state.now_streaming:
+        logger.warning(
+            "Source changed without fresh cutover audio; current audio will finish (preserved=%s)",
+            runway.preserved_existing,
+        )
 
     logger.info(
         "Loaded source %s: %s (%d tracks), purged %d queued segments%s",
@@ -2137,6 +2312,7 @@ def _apply_loaded_source(
         "ok": True,
         "source": _serialize_source(resolved_source),
         "preview": _preview_tracks(tracks),
+        "skipped": skipped,
     }
 
 
@@ -2478,13 +2654,11 @@ async def run_playback_loop(app) -> None:
         segment: Segment
         if _bridge_segment is not None:
             segment = _bridge_segment
-        elif segment_queue.empty() and _continuity_slot_seconds(state) > 0:
+        elif segment_queue.empty() and (continuity_slot := _claim_continuity_slot(state)) is not None:
             # The guard could not reserve capacity without displacing a ready
             # air-next item. It is intentionally consumed only after the normal
             # queue (and any interrupt bridge) has no audio left.
-            segment = state.continuity_slot
-            assert segment is not None  # narrowed by the ready-slot check above
-            state.continuity_slot = None
+            segment = continuity_slot
             state.queue_empty_since = None
             gap_clips_served = 0
         else:
@@ -3005,6 +3179,11 @@ def _emit_stream_result(
         )
     except Exception as exc:  # pragma: no cover - diagnostics must never break audio
         logger.debug("Anonymous stream outcome recording failed: %s", exc)
+    # Feed the rescue rotation cooldown only from a rescue that was truly heard:
+    # bytes reached at least one listener. A rescue selected then skipped, or
+    # aired to an empty room, must not consume rotation.
+    if bytes_sent > 0 and listeners > 0 and not was_skipped:
+        _record_rescue_airplay(state, segment)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -3947,7 +4126,7 @@ async def purge_queue(request: Request, _: None = Depends(require_admin_access))
 
 @router.post("/api/panic")
 async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
-    """Emergency cut: purge queue, skip current segment, force next segment to music.
+    """Emergency cut when safe runway exists; otherwise defer and force next music.
 
     While the station is running, this does NOT set session_stopped — the stream
     stays live and listeners do not disconnect. A stopped session rejects the
@@ -3959,6 +4138,7 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
             "ok": False,
             "error": "The station is paused. Press Start before using Panic Cut.",
         }
+    epoch_before = state.continuity_epoch
     purged = _reserve_continuity_runway(
         request.app.state,
         state,
@@ -3966,13 +4146,26 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
         replace_queue=True,
         discard_reason=GenerationWasteReason.OPERATOR_PANIC,
     )
-    if state.now_streaming:
+    # An assetless panic may leave the queue untouched. It still supersedes any
+    # render already in flight: force_next only affects the next producer loop
+    # iteration and cannot invalidate a segment that captured the old epoch.
+    if state.continuity_epoch == epoch_before:
+        state.continuity_epoch += 1
+    skipped = False
+    if state.now_streaming and _playable_runway_available(request.app.state.queue, state):
         request.app.state.skip_event.set()
+        skipped = True
+    elif state.now_streaming:
+        logger.warning("Panic cut withheld because no playable runway is ready; current audio will finish")
     # force_next is set AFTER skip_event to avoid the producer consuming it
     # before the current segment has been cut.
     state.force_next = SegmentType.MUSIC
-    logger.warning("Panic cut triggered by admin — purged %d segments, forcing next=music", purged)
-    return {"ok": True, "purged": purged}
+    logger.warning(
+        "Panic action completed by admin — purged %d segments, skipped=%s, forcing next=music",
+        purged,
+        skipped,
+    )
+    return {"ok": True, "purged": purged, "skipped": skipped}
 
 
 @router.post("/api/queue/remove")
@@ -4869,10 +5062,10 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         if config.party_mode == target_mode:
             return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
         val = "true" if target_mode == "festival" else "false"
-        # Persist FIRST. The enable path purges the live lookahead queue and forces a
-        # banter, so a persist failure AFTER that would leave the station re-buffering
-        # from empty (dead-air risk, leadership #2) on a toggle the UI reported as
-        # failed. Persisting first means a failed write changes nothing.
+        # Persist FIRST. The enable path may replace the live lookahead queue and
+        # forces a banter, so a persist failure AFTER that would leave the station
+        # re-buffering from empty and risking dead air on a toggle the UI
+        # reported as failed. Persisting first means a failed write changes nothing.
         try:
             if config.is_addon:
                 await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
@@ -6358,8 +6551,14 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
             logger.error("Playlist load failed: %s", exc)
             return {"ok": False, "error": "Failed to load playlist"}
 
-        _apply_loaded_source(request, tracks, resolved_source)
-        result: dict[str, object] = {"ok": True, "tracks": len(tracks), "url": url, "persisted": True}
+        source_result = _apply_loaded_source(request, tracks, resolved_source)
+        result: dict[str, object] = {
+            "ok": True,
+            "tracks": len(tracks),
+            "url": url,
+            "persisted": True,
+            "skipped": bool(source_result.get("skipped")),
+        }
         try:
             await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
         except Exception:

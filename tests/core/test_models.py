@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,8 +13,10 @@ from mammamiradio.core.models import (
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
     ChaosSubtype,
+    DialogueLine,
     GenerationWasteReason,
     Heading,
+    HostPersonality,
     ListenerProfile,
     Segment,
     SegmentType,
@@ -26,6 +29,19 @@ from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
 def _track(n: int = 1) -> Track:
     return Track(title=f"Song {n}", artist=f"Artist {n}", duration_ms=200000, spotify_id=f"id{n}")
+
+
+def test_dialogue_line_keeps_delivery_sidecar_out_of_legacy_tuple_contract():
+    host = HostPersonality(name="Marco", voice="voice", style="energetic")
+    line = DialogueLine(host=host, text="Ciao Windor", delivery="energetic")
+
+    assert tuple(line) == (host, "Ciao Windor")
+    assert line[0] is host
+    assert line[1] == "Ciao Windor"
+    assert len(line) == 2
+    assert line.delivery == "energetic"
+    with pytest.raises(FrozenInstanceError):
+        line.delivery = "neutral"  # type: ignore[misc]
 
 
 def test_after_music_updates_counters():
