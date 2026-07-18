@@ -2001,6 +2001,14 @@ def test_companionship_cue_is_playable_runway_only_while_current_and_queued(tmp_
 
     assert _segment_is_immediately_playable(app.state.station_state, cue) is True
 
+    cue.metadata["listener_session_epoch"] = True
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+    cue.metadata["listener_session_epoch"] = claim.epoch
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is True
+
+    assert session.mark_companionship_consumed(claim.epoch) is True
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+
     session.observe_active_count(0, now=1_800.0)
     now[0] = 2_400.0
     session.observe_active_count(1, now=2_400.0)

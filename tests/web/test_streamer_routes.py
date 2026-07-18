@@ -3676,6 +3676,29 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_panic_cut_does_not_skip_for_stale_companionship_only_runway(tmp_path):
+    """A cue rejected by playback cannot justify cutting the current segment."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+    assert list(app.state.queue._queue) == [stale_cue]
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
 async def test_panic_cut_promotes_safe_audio_past_stale_companionship_cue(tmp_path):
     """Panic may cut only into a head the playback cue fence will accept."""
     app = _make_test_app()
