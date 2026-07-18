@@ -11,9 +11,8 @@ Turn it on for music-competition watch parties, Sanremo screenings, or any gathe
 1. Open `/admin` and scroll to the **Speciali** section.
 2. Click the **★ Festival Mode** toggle.
 3. The station reserves fresh protected runway when available, replaces the
-   lookahead queue, and generates a festival-flavored banter segment as the first
-   thing listeners hear. If no fresh runway exists, a playable existing head or
-   slot is preserved so current audio is not cut into a gap.
+   lookahead queue, and schedules the next generated festival-flavored banter.
+   Current audio and any preserved runway continue normally.
 
 No restart required. The toggle persists across server restarts.
 

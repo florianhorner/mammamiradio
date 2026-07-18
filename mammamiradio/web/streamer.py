@@ -5064,7 +5064,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         val = "true" if target_mode == "festival" else "false"
         # Persist FIRST. The enable path may replace the live lookahead queue and
         # forces a banter, so a persist failure AFTER that would leave the station
-        # re-buffering from empty (dead-air risk, leadership #2) on a toggle the UI
+        # re-buffering from empty and risking dead air on a toggle the UI
         # reported as failed. Persisting first means a failed write changes nothing.
         try:
             if config.is_addon:
