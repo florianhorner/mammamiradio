@@ -211,14 +211,26 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         assert expected in block
 
 
-def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
+def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> None:
     block = _function_block(_read_admin_html(), "renderSetup")
 
-    assert "Provider keys configured" in _read_admin_html()
+    html = _read_admin_html()
+    assert "Voice providers configured" in html
+    assert "AI host key configured" in html
+    assert "Provider keys configured" not in html
     assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
     assert "providerKeysConfigured=configuredKeys.length>0" in block
     assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
+    assert "setupProviderLabels(configuredKeys).join(' · ')" in block
+    labels = _function_block(html, "setupProviderLabels")
+    for capability in (
+        "Anthropic AI hosts",
+        "OpenAI AI hosts + voices",
+        "Azure Speech voices",
+        "ElevenLabs voices",
+    ):
+        assert capability in labels
 
 
 def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:

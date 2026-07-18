@@ -44,6 +44,8 @@ async (page) => {
     fresh = true,
     bootstrapReady = true,
     sources = true,
+    llmKeys = [],
+    ttsKeys = [],
     receiptRecoveryEntity = '',
     durableAttemptId = '',
     durableEntityId = '',
@@ -66,7 +68,10 @@ async (page) => {
       },
       onboarding_required: onboardingRequired,
       onboarding_steps: [{ id: 'llm', title: 'Add AI Key (Optional)', status: 'todo', detail: 'Optional only.' }],
-      essentials: [{ key: 'llm_keys', label: 'AI hosts', status: 'missing', configured_keys: [] }],
+      essentials: [
+        { key: 'llm_keys', label: 'AI hosts', status: llmKeys.length ? 'configured' : 'missing', configured_keys: llmKeys },
+        { key: 'tts_keys', label: 'Voice providers', status: ttsKeys.length ? 'configured' : 'missing', configured_keys: ttsKeys },
+      ],
       preflight_checks: [],
       launch: { headline: 'Hear the station first.' },
       recommended_next_action: 'Hear it on one speaker.',
@@ -582,6 +587,30 @@ async (page) => {
   await resetUi(completed);
   assert(await page.locator('#engineAlertDot').evaluate((element) => getComputedStyle(element).display) === 'none', 'optional AI kept setup alert active');
   assert(await page.locator('#firstListenTabAlert').evaluate((element) => getComputedStyle(element).display) === 'none', 'optional AI kept tab alert active');
+
+  await resetUi(setupProjection({
+    audio: true,
+    privacy: true,
+    onboardingRequired: false,
+    ttsKeys: ['AZURE_SPEECH_KEY', 'AZURE_SPEECH_REGION', 'ELEVENLABS_API_KEY'],
+  }));
+  assert((await page.locator('#setupKeysLabel').innerText()) === '✓ Voice providers configured', 'voice-only setup was described as AI-host ready');
+  assert((await page.locator('#setupKeysDetail').innerText()) === 'Azure Speech voices · ElevenLabs voices', 'voice provider banner exposed raw environment keys');
+  assert(await page.locator('#setupKeysForm').isVisible(), 'voice-only setup hid the optional AI key form');
+  assert(!(await page.locator('#setupKeysEditBtn').isVisible()), 'voice-only setup duplicated an already-open edit action');
+  assert((await page.locator('#firstListenAiChip').innerText()) === 'OPTIONAL', 'voice-only setup marked AI hosts configured');
+
+  await resetUi(setupProjection({
+    audio: true,
+    privacy: true,
+    onboardingRequired: false,
+    llmKeys: ['ANTHROPIC_API_KEY'],
+  }));
+  assert((await page.locator('#setupKeysLabel').innerText()) === '✓ AI host key configured', 'AI-host key lost its capability label');
+  assert((await page.locator('#setupKeysDetail').innerText()) === 'Anthropic AI hosts', 'AI-host banner exposed a raw environment key');
+  assert(!(await page.locator('#setupKeysForm').isVisible()), 'configured AI-host key left the replacement form open');
+  assert(await page.locator('#setupKeysEditBtn').isVisible(), 'configured AI-host key has no edit action');
+  assert((await page.locator('#firstListenAiChip').innerText()) === 'CONFIGURED', 'AI-host key was not reflected in the First Listen step');
 
   const assertNoAutomaticLanding = async (projection, label) => {
     await page.evaluate((nextProjection) => {
