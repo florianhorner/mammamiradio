@@ -1974,6 +1974,41 @@ def test_replace_continuity_reservation_promotes_first_playable_segment_past_mis
     assert len(app.state.station_state.queued_segments) == 1
 
 
+def test_companionship_cue_is_playable_runway_only_while_current_and_queued(tmp_path):
+    """The cutover predicate must match the playback loop's cue fence."""
+    app = _make_app()
+    now = [0.0]
+    session = ListenerSession(monotonic=lambda: now[0])
+    session.observe_active_count(1, now=0.0)
+    now[0] = 1_800.0
+    claim = session.claim_companionship()
+    assert claim is not None
+    assert session.mark_companionship_queued(claim.epoch) is True
+    app.state.station_state.listener_session = session
+
+    cue_path = tmp_path / "companionship_runway.mp3"
+    cue_path.write_bytes(b"cue")
+    cue = Segment(
+        type=SegmentType.BANTER,
+        path=cue_path,
+        duration_sec=5.0,
+        metadata={
+            "listener_session_cue": "companionship",
+            "listener_session_epoch": claim.epoch,
+        },
+        ephemeral=False,
+    )
+
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is True
+
+    session.observe_active_count(0, now=1_800.0)
+    now[0] = 2_400.0
+    session.observe_active_count(1, now=2_400.0)
+
+    assert session.epoch == claim.epoch + 1
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+
+
 @pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
 def test_failed_replacement_rejects_unsafe_head_and_retains_later_safe_segment(tmp_path, rejection):
     """Exclusion policy and durable bans cannot hide the next safe queued segment."""

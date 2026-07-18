@@ -338,7 +338,10 @@ shadow projection therefore describe exactly the same final order. If no fresh
 reservation can be built, the control fails closed instead: it keeps the first
 immediately playable queued segment and any valid capacity-exempt slot, drops
 only the remaining queued work to reopen producer capacity, and never cuts the
-current segment into an empty runway. Every rebuild that drops queued work
+current segment into an empty runway. A companionship cue counts as immediately
+playable only while its listener-session epoch is current and its lifecycle state
+is `QUEUED`, matching the playback fence that runs before any bytes reach air.
+Every rebuild that drops queued work
 advances `continuity_epoch`, including this conservative fallback, so an
 in-flight render cannot refill the freed tail. An assetless control that cannot
 mutate the queue leaves the epoch unchanged. Producer work and startup prewarm

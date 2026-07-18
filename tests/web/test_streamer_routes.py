@@ -20,6 +20,7 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -149,6 +150,32 @@ def _make_test_app(
     # the StreamPacer unit tests, not through these wall-clock loop tests.
     app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(bytes_per_second, target_lead_seconds=0.0)
     return app
+
+
+def _install_late_blocklisted_continuity_slot(
+    state: StationState,
+    tmp_path: Path,
+    *,
+    reservation_id: str,
+) -> bytes:
+    """Install ready slot bytes that became banned after reservation."""
+    blocked_audio = b"blocked-slot-audio" * 1024
+    blocked_path = tmp_path / f"{reservation_id}.mp3"
+    blocked_path.write_bytes(blocked_audio)
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+            "continuity_reservation_id": reservation_id,
+        },
+        ephemeral=False,
+    )
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+    return blocked_audio
 
 
 # ---------------------------------------------------------------------------
@@ -1458,27 +1485,17 @@ async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp
 async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(tmp_path):
     """A song banned after reservation never reaches air; recovery takes over."""
     app = _make_test_app()
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     state = app.state.station_state
-
-    blocked_path = tmp_path / "norm_late_ban_128k.mp3"
-    blocked_path.write_bytes(b"blocked-audio" * 1024)
-    state.continuity_slot = Segment(
-        type=SegmentType.MUSIC,
-        path=blocked_path,
-        duration_sec=180.0,
-        metadata={
-            "artist": "Late Artist",
-            "title_only": "Late Song",
-            "continuity_reservation": True,
-            "continuity_reservation_id": "late-blocked-slot",
-        },
-        ephemeral=False,
+    blocked_audio = _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="late-blocked-slot",
     )
-    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
 
     recovery_path = tmp_path / "continuity_1.mp3"
-    recovery_path.write_bytes(b"recovery-audio" * 512)
+    recovery_audio = b"recovery-audio" * 512
+    recovery_path.write_bytes(recovery_audio)
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -1502,11 +1519,18 @@ async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not fall through to recovery")
                 await asyncio.sleep(0.01)
+            while listener_queue.empty():
+                if time.monotonic() > deadline:
+                    raise AssertionError("recovery started but no bytes reached the listener")
+                await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
     assert state.continuity_slot is None
+    assert recovery_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
     assert state.stream_log[0].metadata.get("canned") is True
     assert state.stream_log[0].metadata.get("rescue") is True
     assert all(entry.metadata.get("continuity_reservation_id") != "late-blocked-slot" for entry in state.stream_log)
@@ -2257,22 +2281,35 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_path, caplog):
+async def test_run_playback_loop_post_restart_rejects_blocked_slot_and_serves_rescue_at_grace(tmp_path, caplog):
     """Scenario 3 (post-restart): session_stopped was set (HA watchdog restart),
-    then resume fires. A listener connecting after resume must get rescue audio
-    at the first-byte grace — not silence, not a 5s wait. Exercises the real
-    stopped -> resume_event -> rescue-ladder path through run_playback_loop with
-    a warm norm cache as the only rescue rung (the realistic restart shape)."""
+    then resume fires with a reserved song banned in the meantime. The banned
+    bytes must be rejected and a listener must get warm-cache rescue audio at
+    the first-byte grace — not silence, not a 5s wait."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     caplog.set_level(logging.WARNING)
     state = app.state.station_state
+    blocked_audio = _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="post-restart-blocked-slot",
+    )
     state.session_stopped = True
+    entered_stopped_wait = asyncio.Event()
+
+    class ObservedResumeEvent(asyncio.Event):
+        async def wait(self) -> Literal[True]:
+            entered_stopped_wait.set()
+            return await super().wait()
+
+    state.resume_event = ObservedResumeEvent()
 
     rescue_path = tmp_path / "norm_rescue.mp3"
-    rescue_path.write_bytes(b"x" * 4096)
+    rescue_audio = b"restart-rescue-audio" * 256
+    rescue_path.write_bytes(rescue_audio)
 
     # Tiny real grace keeps the test fast while exercising the real wait_for /
     # resume_event timing (no wait_for mock, so the resume path is genuine).
@@ -2282,7 +2319,7 @@ async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            await asyncio.sleep(0.05)  # loop parks on the stopped/resume wait
+            await asyncio.wait_for(entered_stopped_wait.wait(), timeout=1.0)
             state.session_stopped = False  # the "restart" clears
             state.resume_event.set()  # and resume wakes the loop
             deadline = time.monotonic() + 3.0
@@ -2290,11 +2327,19 @@ async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_
                 if time.monotonic() > deadline:
                     raise AssertionError("post-restart resume did not serve rescue audio at the grace")
                 await asyncio.sleep(0.01)
+            heard = await asyncio.wait_for(listener_queue.get(), timeout=1.0)
+            assert not task.done()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
     assert state.session_stopped is False
+    assert state.continuity_slot is None
+    assert rescue_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
+    assert all(
+        entry.metadata.get("continuity_reservation_id") != "post-restart-blocked-slot" for entry in state.stream_log
+    )
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
 
 
@@ -2348,18 +2393,23 @@ async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_ste
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp_path, caplog):
-    """Scenario 2 (fully empty): no canned, no norm cache, no demo assets.
+async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_and_forces_banter(tmp_path, caplog):
+    """Scenario 2 (fully empty): a banned slot and no usable rescue assets.
 
-    Guards the only remaining escape hatch — forced banter — when the operator
-    has stripped every bundled audio rescue from the container. Silence must
-    never be terminal.
+    The banned bytes never reach the listener, and the playback task remains
+    alive long enough to request forced banter as the only remaining escape.
     """
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     caplog.set_level(logging.ERROR)
+    state = app.state.station_state
+    _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="fully-empty-blocked-slot",
+    )
 
     empty_pkg = tmp_path / "empty_pkg"
     empty_pkg.mkdir()
@@ -2372,9 +2422,10 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[200.0, 260.5, 260.6, 260.7, 260.8, 260.9],
+            side_effect=_scripted_clock([200.0, 260.5, 260.6, 260.7, 260.8, 260.9]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", empty_pkg),
     ):
@@ -2385,12 +2436,16 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
                 if time.monotonic() > deadline:
                     raise AssertionError("empty-container run did not reach forced banter fallback")
                 await asyncio.sleep(0.01)
+            assert not task.done()
+            assert state.continuity_slot is None
+            assert listener_queue.empty()
+            assert not state.stream_log
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert app.state.station_state.force_next == SegmentType.BANTER
-    assert app.state.station_state.queue_empty_since is not None, (
+    assert state.force_next == SegmentType.BANTER
+    assert state.queue_empty_since is not None, (
         "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
     )
     assert not any("rescuing with demo asset" in record.message for record in caplog.records), (
@@ -3618,6 +3673,62 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
     # admission gate used by the producer, even though the queue was untouched.
     captured_epoch = 5
     assert captured_epoch != state.continuity_epoch
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_promotes_safe_audio_past_stale_companionship_cue(tmp_path):
+    """Panic may cut only into a head the playback cue fence will accept."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    assert state.listener_session.epoch == claim.epoch + 1
+
+    safe_path = tmp_path / "safe_after_stale_cue.mp3"
+    safe_path.write_bytes(b"safe-audio")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-after-stale-cue",
+            "title": "Safe after stale cue",
+            "title_only": "Safe after stale cue",
+            "artist": "Safe Artist",
+        },
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(safe)
+    state.queued_segments.append(
+        {
+            "id": "safe-after-stale-cue",
+            "type": "music",
+            "label": "Safe after stale cue",
+            "duration_sec": 180.0,
+        }
+    )
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 1, "skipped": True}
+    assert list(app.state.queue._queue) == [safe]
+    assert stale_cue not in app.state.queue._queue
+    assert state.queued_segments == [
+        {
+            "id": "safe-after-stale-cue",
+            "type": "music",
+            "label": "Safe after stale cue",
+            "duration_sec": 180.0,
+        }
+    ]
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PANIC] == 1
+    assert app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio

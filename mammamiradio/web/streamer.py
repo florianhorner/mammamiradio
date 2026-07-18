@@ -573,6 +573,26 @@ def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
     )
 
 
+def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
+    """Return whether a segment carries the cue marker and its valid epoch."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("listener_session_cue") != "companionship":
+        return False, None
+    epoch = metadata.get("listener_session_epoch")
+    if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > 0:
+        return True, epoch
+    return True, None
+
+
+def _companionship_cue_is_current(state: StationState, epoch: int | None) -> bool:
+    """Return whether a companionship cue remains eligible to reach air."""
+    return bool(
+        epoch is not None
+        and epoch == state.listener_session.epoch
+        and state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
+    )
+
+
 def _segment_is_immediately_playable(
     state: StationState,
     segment: Segment,
@@ -584,6 +604,9 @@ def _segment_is_immediately_playable(
     excluded_paths = excluded_paths or set()
     excluded_track_keys = excluded_track_keys or set()
     if segment.path in excluded_paths:
+        return False
+    is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
+    if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
         return False
     if segment.type is SegmentType.MUSIC:
         key = _segment_blocklist_key(segment)
@@ -811,9 +834,7 @@ def _playable_runway_available(q, state: StationState) -> bool:
         return _segment_is_immediately_playable(state, queued[0])
     slot = state.continuity_slot
     return bool(
-        slot is not None
-        and _continuity_slot_seconds(state) > 0
-        and not (slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist)
+        slot is not None and _continuity_slot_seconds(state) > 0 and _segment_is_immediately_playable(state, slot)
     )
 
 
@@ -2460,18 +2481,6 @@ class LiveStreamHub:
 _packaged_clip_duration_cache: dict[Path, float] = {}
 
 
-def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
-    """Return whether a segment carries the cue marker and its valid epoch."""
-
-    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-    if metadata.get("listener_session_cue") != "companionship":
-        return False, None
-    epoch = metadata.get("listener_session_epoch")
-    if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > 0:
-        return True, epoch
-    return True, None
-
-
 def _consume_queue_shadow(segment_queue: asyncio.Queue[Segment], state: StationState, segment: Segment) -> None:
     """Remove a pulled segment from the admin shadow by identity, reconciling drift.
 
@@ -2839,11 +2848,7 @@ async def run_playback_loop(app) -> None:
             _consume_queue_shadow(segment_queue, state, segment)
 
         is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
-        if is_companionship_cue and (
-            companionship_epoch is None
-            or companionship_epoch != state.listener_session.epoch
-            or state.listener_session.companionship_cue_state is not ListenerSessionCueState.QUEUED
-        ):
+        if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.LISTENER_SESSION_STALE,
