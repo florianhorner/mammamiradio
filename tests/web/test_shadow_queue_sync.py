@@ -15,6 +15,7 @@ the two produces misleading up-next displays.  These tests cover:
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -54,10 +55,12 @@ from mammamiradio.web.streamer import (
     _continuity_reservation_segments,
     _estimate_api_cost,
     _generation_waste_snapshot,
+    _playable_runway_available,
     _purge_queue_and_shadow,
     _reserve_continuity_runway,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
+    _segment_is_immediately_playable,
     _sync_runtime_state,
     router,
 )
@@ -1801,6 +1804,55 @@ def test_replace_continuity_reservation_preserves_ready_head_and_slot_when_no_au
     assert len(app.state.station_state.queued_segments) == 1
 
 
+def test_failed_replacement_with_no_playable_queue_is_a_noop(tmp_path):
+    """An assetless replacement must not mutate an entirely unusable queue."""
+    app = _make_app()
+    invalid = [_queue_segment(f"Invalid {index}", duration_sec=180.0) for index in range(2)]
+    for index, segment in enumerate(invalid):
+        segment.path = tmp_path / f"invalid_{index}.mp3"
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [{"label": segment.metadata["title"]} for segment in invalid]
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+    app.state.station_state.continuity_epoch = 23
+    before_shadow = copy.deepcopy(app.state.station_state.queued_segments)
+    before_tail_type = app.state.station_state.last_enqueued_type
+    before_discard_bookkeeping = (
+        app.state.station_state.discarded_segments_total,
+        app.state.station_state.discarded_duration_total_sec,
+        app.state.station_state.discarded_unproduced_segments_total,
+        dict(app.state.station_state.discard_by_reason),
+        dict(app.state.station_state.discard_by_type),
+        list(app.state.station_state.discard_events),
+        app.state.station_state.shadow_queue_corrections,
+        app.state.queue._unfinished_tasks,
+    )
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 0
+    assert list(app.state.queue._queue) == invalid
+    assert app.state.station_state.queued_segments == before_shadow
+    assert app.state.station_state.continuity_slot is None
+    assert app.state.station_state.continuity_epoch == 23
+    assert app.state.station_state.last_enqueued_type is before_tail_type
+    assert (
+        app.state.station_state.discarded_segments_total,
+        app.state.station_state.discarded_duration_total_sec,
+        app.state.station_state.discarded_unproduced_segments_total,
+        dict(app.state.station_state.discard_by_reason),
+        dict(app.state.station_state.discard_by_type),
+        list(app.state.station_state.discard_events),
+        app.state.station_state.shadow_queue_corrections,
+        app.state.queue._unfinished_tasks,
+    ) == before_discard_bookkeeping
+
+
 def test_failed_replacement_uses_valid_slot_as_only_runway_and_advances_epoch_only_for_queue_mutation(tmp_path):
     """A ready capacity-exempt slot survives while an invalid queue is removed once."""
     app = _make_app()
@@ -2072,6 +2124,61 @@ def test_continuity_slot_claim_rejects_track_blocklisted_after_reservation(tmp_p
 
     assert _claim_continuity_slot(state) is None
     assert state.continuity_slot is None
+
+
+def test_playable_runway_available_ignores_slot_when_queue_head_is_unplayable(tmp_path):
+    """A ready slot must not greenlight a cut the playback loop won't honor.
+
+    ``run_playback_loop`` consumes the capacity-exempt slot only when the real
+    queue is empty. With a present-but-unplayable head, the loop pulls that head
+    (not the slot), so cutting the current segment would break the illusion. The
+    gate must return False even though the slot itself is ready.
+    """
+    state = StationState()
+    ready_slot_path = tmp_path / "ready_slot.mp3"
+    ready_slot_path.write_bytes(b"slot")
+    state.continuity_slot = Segment(
+        type=SegmentType.BANTER,
+        path=ready_slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+
+    queue = asyncio.Queue()
+    unplayable_head = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "missing_head.mp3",  # never written to disk
+        duration_sec=180.0,
+        metadata={"title": "Missing head", "title_only": "Missing head", "artist": "Artist"},
+        ephemeral=False,
+    )
+    queue.put_nowait(unplayable_head)
+
+    assert _playable_runway_available(queue, state) is False
+
+    # Draining the unplayable head lets the ready slot bridge the cut.
+    queue.get_nowait()
+    assert _playable_runway_available(queue, state) is True
+
+
+def test_segment_is_immediately_playable_handles_pathless_segment():
+    """A segment with no path is not playable — it must never crash the gate.
+
+    ``_segment_is_immediately_playable`` runs on the no-await live-control hot
+    path; a raised AttributeError there would surface as a 500 on panic-cut or
+    source-switch instead of degrading to the recovery ladder.
+    """
+    state = StationState()
+    pathless = Segment(
+        type=SegmentType.MUSIC,
+        path=None,  # type: ignore[arg-type]
+        duration_sec=180.0,
+        metadata={"title": "No path", "title_only": "No path", "artist": "Artist"},
+        ephemeral=False,
+    )
+
+    assert _segment_is_immediately_playable(state, pathless) is False
 
 
 def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_target(tmp_path):

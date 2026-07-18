@@ -1071,6 +1071,7 @@ async def test_playlist_load_purges_queue_and_skips():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is True
     assert app.state.queue.qsize() == 1
     assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert app.state.skip_event.is_set()
@@ -1107,6 +1108,7 @@ async def test_playlist_load_does_not_skip_when_no_ready_cutover_runway(tmp_path
             response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
 
     assert response.json()["ok"] is True
+    assert response.json()["skipped"] is False
     assert app.state.queue.empty()
     assert not app.state.skip_event.is_set()
 
@@ -1165,10 +1167,60 @@ async def test_playlist_load_keeps_ready_runway_when_assets_are_missing(tmp_path
             response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
 
     assert response.json()["ok"] is True
-    assert app.state.skip_event.is_set()
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
     assert list(app.state.queue._queue) == [queued_head]
     assert state.queued_segments == [{"id": "ready-head", "type": "music", "label": "Ready head"}]
     assert state.continuity_slot is slot
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_path):
+    """A preserved old-source head prevents a source switch from cutting early."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    old_head_path = tmp_path / "old_source_head.mp3"
+    old_head_path.write_bytes(b"old-source-audio")
+    old_head = Segment(
+        type=SegmentType.MUSIC,
+        path=old_head_path,
+        duration_sec=180.0,
+        metadata={"title": "Old source head", "title_only": "Old source head", "artist": "Old Artist"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(old_head)
+    state.queued_segments = [{"label": "Old source head"}]
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert list(app.state.queue._queue) == [old_head]
+    assert state.queued_segments[0]["label"] == "Old source head"
+    assert state.playlist[0].title == "URL Track"
 
 
 # ---------------------------------------------------------------------------

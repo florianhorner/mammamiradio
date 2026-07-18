@@ -817,13 +817,14 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint attempts an immediate cutover: when a playable replacement runway is ready, the segment queue is purged and the current segment is skipped; otherwise the current segment finishes and the last safe runway remains in place. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint requests immediate cutover only after fresh protected replacement audio is admitted: the current segment is skipped and playback begins from the new source. If the continuity fallback preserves an older queue head or slot, or no ready runway exists, the current segment finishes and the response reports `skipped: false`. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
-above. A successful replacement supersedes existing reservations and fallback
-slots. If no replacement audio is ready, the current segment is not cut and the
-last safe runway remains in place; the source revision still prevents a render
-begun for the prior source from being admitted after the switch.
+above. A successful fresh replacement supersedes existing reservations and
+fallback slots. If no fresh replacement audio is ready, the current segment is
+not cut and the last safe prior-source runway remains in place; the source
+revision still prevents a render begun for the prior source from being admitted
+after the switch.
 
 ## Failure model
 

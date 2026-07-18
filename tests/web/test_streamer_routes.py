@@ -3568,7 +3568,7 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
 
 @pytest.mark.asyncio
 async def test_panic_cut_while_streaming():
-    """Panic while a segment is playing: purges queue, fires skip_event, forces next=music, leaves stream live."""
+    """Panic with fresh runway skips safely and forces the next segment to music."""
     from mammamiradio.core.models import SegmentType
 
     app = _make_test_app()
@@ -3583,6 +3583,7 @@ async def test_panic_cut_while_streaming():
     data = resp.json()
     assert data["ok"] is True
     assert "purged" in data
+    assert data["skipped"] is True
     # skip_event must have been set (skip fires for the current segment)
     assert app.state.skip_event.is_set()
     # force_next must be MUSIC
@@ -3607,11 +3608,91 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/panic")
 
-    assert response.json()["ok"] is True
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
     assert app.state.queue.empty()
     assert not app.state.skip_event.is_set()
     assert state.force_next is SegmentType.MUSIC
-    assert state.continuity_epoch == 5
+    assert state.continuity_epoch == 6
+
+    # A render that captured the old epoch before Panic must now fail the same
+    # admission gate used by the producer, even though the queue was untouched.
+    captured_epoch = 5
+    assert captured_epoch != state.continuity_epoch
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_invalidates_in_flight_admission_when_queue_is_unchanged(tmp_path):
+    """Panic fences a render waiting on queue admission even without a purge."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    class BlockingQueue(asyncio.Queue[Segment]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.put_started = asyncio.Event()
+            self.allow_put = asyncio.Event()
+
+        async def put(self, item: Segment) -> None:
+            self.put_started.set()
+            await self.allow_put.wait()
+            await super().put(item)
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    queue = BlockingQueue()
+    app.state.queue = queue
+    candidate_path = tmp_path / "stale_panic_candidate.mp3"
+    candidate_path.write_bytes(b"candidate")
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=candidate_path,
+        duration_sec=180.0,
+        metadata={"title": "Stale candidate", "title_only": "Stale candidate", "artist": "Artist"},
+        ephemeral=True,
+    )
+    captured_epoch = state.continuity_epoch
+
+    def stale_reason() -> str | None:
+        if state.continuity_epoch != captured_epoch:
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
+    with (
+        patch("mammamiradio.scheduling.producer._apply_egress", new_callable=AsyncMock, return_value=candidate),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        enqueue_task = asyncio.create_task(
+            _enqueue_with_egress(
+                queue,
+                state,
+                app.state.config,
+                candidate,
+                shadow_entry={"id": "candidate", "type": "music", "label": "Stale candidate"},
+                stale_check=stale_reason,
+            )
+        )
+        try:
+            await asyncio.wait_for(queue.put_started.wait(), timeout=1.0)
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post("/api/panic")
+
+            assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+            assert state.continuity_epoch == captured_epoch + 1
+
+            queue.allow_put.set()
+            assert await asyncio.wait_for(enqueue_task, timeout=1.0) is False
+        finally:
+            queue.allow_put.set()
+            if not enqueue_task.done():
+                enqueue_task.cancel()
+            await asyncio.gather(enqueue_task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert not candidate_path.exists()
 
 
 @pytest.mark.asyncio
@@ -3637,12 +3718,12 @@ async def test_panic_cut_uses_capacity_exempt_slot_as_playable_runway(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/panic")
 
-    assert response.json() == {"ok": True, "purged": 0}
+    assert response.json() == {"ok": True, "purged": 0, "skipped": True}
     assert app.state.queue.empty()
     assert app.state.skip_event.is_set()
     assert state.continuity_slot is slot
     assert state.force_next is SegmentType.MUSIC
-    assert state.continuity_epoch == 5
+    assert state.continuity_epoch == 6
 
 
 @pytest.mark.asyncio
@@ -3658,6 +3739,7 @@ async def test_panic_cut_when_idle():
         resp = await client.post("/api/panic")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is False
     # No segment to skip — skip_event should not be fired
     assert not app.state.skip_event.is_set()
     assert state.force_next == SegmentType.MUSIC
