@@ -365,6 +365,10 @@ async (page) => {
     await page.locator('#setupGroup').evaluate((element) => element.parentElement?.id) === 'firstListenPanelMount',
     'First Listen path remained buried in Motore',
   );
+  assert(await page.locator('#firstListenQuickAction').isVisible(), 'fresh install hid its first speaker action');
+  assert(await page.locator('#firstListenQuickFindPlayersBtn').isEnabled(), 'first speaker action is unavailable');
+  assert(await page.locator('#firstListenQuickFindPlayersBtn').evaluate((element) => element.classList.contains('btn-trigger')), 'speaker discovery is not the current primary action');
+  assert(await page.locator('#firstListenPlayBtn').evaluate((element) => element.classList.contains('btn-util')), 'unavailable Start action still looks primary');
   assert(await page.locator('#firstListenFindPlayersBtn').isEnabled(), 'no-key fresh install cannot start speaker discovery');
   assert(
     await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true),
@@ -376,15 +380,16 @@ async (page) => {
   assert((await page.locator('#firstListenShowNext').innerText()) === 'Primary rotation', 'healthy opening rundown promised the wrong continuation');
   assert(await page.locator('#firstListenSourceDetails').isVisible(), 'resolved source readiness became unreachable');
   await page.locator('#firstListenSourceDetails > summary').click();
+  const sourceReadinessText = await page.locator('#firstListenSources').innerText();
   assert(
-    await page.locator('#firstListenSources').innerText() === [
-      'Live charts\nLive chart evidence\nReady',
-      'Jamendo\nOptional rights-safe source\nNot configured',
-      'Local music\nPrivate local folder\nNot configured',
-      'Bundled demo music\nNo bundled library\nNot bundled',
-      'Recovery cover\nTransport cover only\nSpeaker-test cover',
+    sourceReadinessText === [
+      'Live charts\nLive chart evidence\nREADY',
+      'Jamendo\nOptional rights-safe source\nNOT CONFIGURED',
+      'Local music\nPrivate local folder\nNOT CONFIGURED',
+      'Bundled demo music\nNo bundled library\nNOT BUNDLED',
+      'Recovery cover\nTransport cover only\nSPEAKER-TEST COVER',
     ].join('\n'),
-    'human source readiness labels drifted',
+    `human source readiness labels drifted: ${JSON.stringify(sourceReadinessText)}`,
   );
   await page.locator('#firstListenSourceDetails > summary').click();
 
@@ -410,10 +415,14 @@ async (page) => {
     'exact media source URI drifted',
   );
 
-  await page.locator('#firstListenFindPlayersBtn').focus();
+  await page.locator('#firstListenQuickFindPlayersBtn').focus();
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelectorAll('#firstListenPlayerSelect option').length === 2);
   assert(playerRequests.length === 1, `speaker discovery count drifted: ${playerRequests.length}`);
+  assert(!(await page.locator('#firstListenQuickAction').isVisible()), 'discovery shortcut stayed visible after speakers were found');
+  assert(await page.locator('#firstListenFindPlayersBtn').evaluate((element) => element.classList.contains('btn-util')), 'repeat discovery did not become secondary');
+  assert(await page.locator('#firstListenPlayBtn').evaluate((element) => element.classList.contains('btn-trigger')), 'Start did not become the primary action after discovery');
+  assert(await page.evaluate(() => document.activeElement?.id) === 'firstListenPlayerSelect', 'speaker discovery did not focus the room picker');
   await page.locator('#firstListenPlayerSelect').selectOption('media_player.mac_lab_speaker');
   assert(await page.locator('#firstListenPath img').count() === 0, 'hostile speaker label became markup');
   await page.locator('#firstListenPlayBtn').click();
@@ -482,7 +491,7 @@ async (page) => {
     (await page.locator('#haContextPreview').innerText()).includes('<script>not markup</script>'),
     'hostile preview label was not rendered as harmless text',
   );
-  assert((await page.locator('#firstListenPrivacyChip').innerText()) === 'Preview ready', 'useful preview kept stale review status');
+  assert((await page.locator('#firstListenPrivacyChip').innerText()) === 'PREVIEW READY', 'useful preview kept stale review status');
   assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('A useful filtered preview is ready'), 'useful preview kept stale guidance');
   assert((await page.locator('#firstListenPreviewBtn').innerText()) === 'Refresh filtered preview', 'useful preview did not offer an honest refresh action');
   await page.locator('#firstListenEnableContextBtn').click();
@@ -534,7 +543,7 @@ async (page) => {
   const recoveryReadyCopy = await page.locator('#firstListenVerifySummary').innerText();
   assert(recoveryReadyCopy.includes('Recovery cover is available'), 'available recovery was not described as standby');
   assert(!recoveryReadyCopy.includes('Recovery audio follows the opening'), 'standby recovery was falsely described as on air');
-  assert((await page.locator('#firstListenSourceChip').innerText()) === 'Backup ready', 'standby recovery kept an ambiguous degraded label');
+  assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP READY', 'standby recovery kept an ambiguous degraded label');
   assert((await page.locator('#firstListenShowNext').innerText()) === 'Recovery cover', 'recovery-only rundown promised a first record');
   assert((await page.locator('#firstListenShowThen').innerText()) === 'Primary music later', 'recovery-only rundown promised an immediate live rotation');
   await resetUi(setupProjection({ audio: true, privacy: true, primary: 'unavailable', recovery: 'on_air' }));
@@ -542,7 +551,7 @@ async (page) => {
     (await page.locator('#firstListenVerifySummary').innerText()).includes('Recovery audio follows the opening'),
     'on-air recovery was not described truthfully',
   );
-  assert((await page.locator('#firstListenSourceChip').innerText()) === 'Recovery on air', 'on-air recovery kept an ambiguous degraded label');
+  assert((await page.locator('#firstListenSourceChip').innerText()) === 'RECOVERY ON AIR', 'on-air recovery kept an ambiguous degraded label');
 
   const completed = setupProjection({ audio: true, privacy: true, onboardingRequired: false });
   await resetUi(completed);
@@ -714,6 +723,18 @@ async (page) => {
   assert(playRequests.length === lostResponsePlayBaseline + 1, 'discarded-response recovery sent a second playback request');
   assert(await page.locator('#firstListenHeardBtn').isEnabled(), 'page-reload recovery did not unlock verification');
   playerCandidatesAvailable = true;
+
+  await resetUi(setupProjection());
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const firstActionGeometry = await page.locator('#firstListenQuickAction').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, viewportHeight: window.innerHeight };
+  });
+  assert(
+    firstActionGeometry.top >= 0 && firstActionGeometry.bottom <= firstActionGeometry.viewportHeight,
+    `first speaker action missed the 320x844 viewport: ${JSON.stringify(firstActionGeometry)}`,
+  );
 
   const longSpeakerName = `<img src=x onerror=alert(1)>${'SpeakerWithoutBreak'.repeat(20)}`;
   await resetUi(setupProjection(), {

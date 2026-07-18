@@ -80,6 +80,8 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     assert 'aria-controls="first-listen-panel"' in html
     assert 'id="first-listen-panel" data-panel="setup"' in html
     assert 'id="firstListenPanelMount"' in html
+    assert 'id="firstListenQuickAction" hidden' in html
+    assert 'id="firstListenQuickFindPlayersBtn"' in html
     assert html.index('data-tab="setup"') < html.index('data-tab="scaletta"')
 
     mount = _function("initFirstListenPanelMount", "initTabs")
@@ -317,6 +319,7 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
 def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() -> None:
     html = _html()
     for control_id in (
+        "firstListenQuickFindPlayersBtn",
         "firstListenPlayerSelect",
         "firstListenPlayBtn",
         "firstListenHeardBtn",
@@ -330,6 +333,8 @@ def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() 
         assert html.count(f'id="{control_id}"') == 1
 
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
+    assert "quickAction.hidden=!quickDiscovery" in progress
+    assert "firstListenSetActionTone(playBtn,_firstListenUi.players.length>0&&!listenAccepted)" in progress
     assert "select.replaceChildren" not in progress
     assert "playerSelect').innerHTML" not in progress
     assert "document.activeElement" not in progress

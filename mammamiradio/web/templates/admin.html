@@ -425,6 +425,10 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-home-preview-section{display:none}
 .setup-home-preview-section.show{display:block}
 .first-listen{width:100%;max-width:680px;min-width:0;display:flex;flex-direction:column;margin-top:12px}
+.first-listen-quick-action{display:flex;align-items:center;gap:10px;margin:12px 0 2px;padding:10px 12px;border:1px solid rgba(244,208,72,0.28);border-radius:10px;background:rgba(244,208,72,0.045)}
+.first-listen-quick-action[hidden]{display:none}
+.first-listen-quick-action .btn{flex:0 0 auto;min-height:44px}
+.first-listen-quick-copy{font-size:12px;line-height:1.45;color:rgba(245,237,216,0.68)}
 .first-listen-show-card{position:relative;overflow:hidden;margin:14px 0 18px;padding:20px;border:1px solid rgba(244,208,72,0.34);border-radius:14px;background:radial-gradient(circle at 92% 4%,rgba(184,44,32,0.22),transparent 38%),linear-gradient(135deg,rgba(46,38,31,0.98),rgba(20,17,15,0.94));box-shadow:inset 0 1px 0 rgba(245,237,216,0.08),0 18px 46px -32px rgba(0,0,0,0.9)}
 .first-listen-show-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,var(--flag-green) 0 33%,var(--flag-white) 33% 66%,var(--flag-red) 66%)}
 .first-listen-show-kicker{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--sun)}
@@ -498,7 +502,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .ha-preview-meta{min-width:0;font-size:11px;color:rgba(245,237,216,0.65);line-height:1.45;overflow-wrap:anywhere}
 .ha-preview-id{min-width:0;font-family:var(--font-mono);font-size:10px;color:rgba(245,237,216,0.45);overflow-wrap:anywhere}
 .ha-preview-action,.setup-home-preview-action,.setup-recheck-action{min-width:44px;min-height:44px}
-@media(max-width:720px){.setup-strip{align-items:flex-start;flex-direction:column}.setup-strip-actions{width:100%;flex-direction:column;align-items:stretch}.setup-strip-action{width:100%}.ha-preview-row{grid-template-columns:1fr}.ha-preview-action{width:100%}.first-listen-show-card{padding:17px 15px 15px}.first-listen-show-title{font-size:24px}.first-listen-show-beats{grid-template-columns:repeat(2,minmax(0,1fr))}.first-listen-show-beats li:nth-child(odd){border-left:0}.first-listen-show-beats li:nth-child(n+3){border-top:1px solid rgba(245,237,216,.10)}.first-listen-step{padding-left:8px;padding-right:8px}.first-listen-head{grid-template-columns:74px minmax(0,1fr)}.first-listen-head>.status-chip{grid-column:2;justify-self:start}.first-listen-body{margin-left:0}.first-listen-fields{grid-template-columns:1fr}.first-listen-actions{flex-direction:column;align-items:stretch}.first-listen-actions .btn,.first-listen-action{width:100%}.first-listen-source-row{grid-template-columns:1fr}.first-listen-source-row>.status-chip{justify-self:start}.first-listen-uri code,.ha-preview-id{overflow-wrap:anywhere}}
+@media(max-width:720px){.setup-strip{align-items:flex-start;flex-direction:column}.setup-strip-actions{width:100%;flex-direction:column;align-items:stretch}.setup-strip-action{width:100%}.ha-preview-row{grid-template-columns:1fr}.ha-preview-action{width:100%}.first-listen-quick-action{align-items:stretch;flex-direction:column}.first-listen-quick-action .btn{width:100%;justify-content:center}.first-listen-quick-copy{font-size:14px}.first-listen-show-card{padding:17px 15px 15px}.first-listen-show-title{font-size:24px}.first-listen-show-beats{grid-template-columns:repeat(2,minmax(0,1fr))}.first-listen-show-beats li:nth-child(odd){border-left:0}.first-listen-show-beats li:nth-child(n+3){border-top:1px solid rgba(245,237,216,.10)}.first-listen-step{padding-left:8px;padding-right:8px}.first-listen-head{grid-template-columns:74px minmax(0,1fr)}.first-listen-head>.status-chip{grid-column:2;justify-self:start}.first-listen-body{margin-left:0}.first-listen-fields{grid-template-columns:1fr}.first-listen-actions{flex-direction:column;align-items:stretch}.first-listen-actions .btn,.first-listen-action{width:100%}.first-listen-source-row{grid-template-columns:1fr}.first-listen-source-row>.status-chip{justify-self:start}.first-listen-uri code,.ha-preview-id{overflow-wrap:anywhere}}
 /* First Listen setup group — mounted into its top-level panel at runtime. */
 .setup-group > summary.setup-summary {
   display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none;
@@ -2380,6 +2384,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <div class="setup-headline" id="setupHeadline">Checking configuration...</div>
             <div class="setup-meta" id="setupMeta"></div>
             <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
+            <div class="first-listen-quick-action" id="firstListenQuickAction" hidden>
+              <button type="button" class="btn btn-trigger first-listen-action" id="firstListenQuickFindPlayersBtn" data-stopped-exempt onclick="findFirstListenPlayers(this)">Find my speakers</button>
+              <span class="first-listen-quick-copy">Nothing plays until you choose a room.</span>
+            </div>
             <section class="first-listen-show-card" id="firstListenShowCard" aria-labelledby="firstListenShowTitle">
               <div class="first-listen-show-kicker" id="firstListenShowKicker">Opening show · ready on every fresh station</div>
               <h3 class="first-listen-show-title" id="firstListenShowTitle">Marco and Giulia are ready to go on air.</h3>
@@ -4016,6 +4024,11 @@ function firstListenSetStatus(id,message,tone=''){
   if(el.textContent!==message)el.textContent=message;
   if(tone)el.dataset.tone=tone;else delete el.dataset.tone;
 }
+function firstListenSetActionTone(el,primary){
+  if(!el)return;
+  el.classList.toggle('btn-trigger',Boolean(primary));
+  el.classList.toggle('btn-util',!primary);
+}
 function firstListenErrorCopy(response){
   const code=String(response?.error?.code||response?.code||'');
   return FIRST_LISTEN_ERRORS[code]||{title:'That did not go through',message:'The station kept its previous safe state.',action:'Give it a moment, check the connection, and try again.'};
@@ -4281,6 +4294,8 @@ function renderFirstListenProgress(){
     if(sourceRepair)sourceRepair.textContent='Start the opening if you want, then repair a configured source or add Jamendo under App → Configuration → Advanced options.';
   }
 
+  const quickAction=document.getElementById('firstListenQuickAction');
+  const quickFindBtn=document.getElementById('firstListenQuickFindPlayersBtn');
   const findBtn=document.getElementById('firstListenFindPlayersBtn');
   const select=document.getElementById('firstListenPlayerSelect');
   const playBtn=document.getElementById('firstListenPlayBtn');
@@ -4289,11 +4304,16 @@ function renderFirstListenProgress(){
   const speakerSummary=document.getElementById('firstListenSpeakerSummary');
   const speakerBusy=_firstListenUi.discovery==='finding'||_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving;
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!projection.heard;
-  if(findBtn){findBtn.disabled=!sourceKnown||speakerBusy;findBtn.textContent=_firstListenUi.discovery==='finding'?'Finding speakers…':'Find my speakers';}
+  const quickDiscovery=!priorInstall&&sourceKnown&&!listenAccepted&&!_firstListenUi.players.length;
+  const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':'Find my speakers';
+  if(quickAction)quickAction.hidden=!quickDiscovery;
+  if(quickFindBtn){quickFindBtn.disabled=!sourceKnown||speakerBusy;quickFindBtn.textContent=discoveryLabel;}
+  if(findBtn){findBtn.hidden=quickDiscovery;findBtn.disabled=!sourceKnown||speakerBusy;findBtn.textContent=discoveryLabel;firstListenSetActionTone(findBtn,false);}
   if(select)select.disabled=!sourceKnown||!_firstListenUi.players.length||speakerBusy;
   if(playBtn){
     playBtn.disabled=!sourceKnown||!_firstListenUi.selectedEntityId||speakerBusy||(projection.accepted&&!deliberateRetry);
     playBtn.textContent=_firstListenUi.dispatch==='starting'?'Going on air…':deliberateRetry?'Restart on the same speaker':'Start Mamma Mi Radio';
+    firstListenSetActionTone(playBtn,_firstListenUi.players.length>0&&!listenAccepted);
   }
   if(retryBtn)retryBtn.disabled=!deliberateRetry||!_firstListenUi.selectedEntityId||speakerBusy;
   if(saveAttemptBtn){
@@ -4520,6 +4540,7 @@ function renderHomeContextPreview(data,targetId='haContextPreview'){
 }
 async function findFirstListenPlayers(el){
   if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  let focusSelect=false;
   _firstListenUi.busy=true;
   _firstListenUi.discovery='finding';
   renderFirstListenProgress();
@@ -4547,6 +4568,7 @@ async function findFirstListenPlayers(el){
     const saved=String(resp?.selected_entity_id||resp?.saved_selection?.entity_id||resp?.saved_selection||'');
     const savedStale=renderFirstListenPlayers(players,saved,pendingRecovery);
     if(savedStale)_firstListenUi.discovery='saved_target_stale';
+    focusSelect=players.length>0;
     firstListenSetStatus(
       'firstListenSpeakerStatus',
       savedStale?'Your saved speaker is unavailable now. Choose another ready target.':players.length?'Speakers found. Choose the room where you want to listen.':'No ready speaker was found. Bring one online in Home Assistant, then try again.',
@@ -4560,6 +4582,11 @@ async function findFirstListenPlayers(el){
     _firstListenUi.busy=false;
     if(el)el.removeAttribute('aria-busy');
     renderFirstListenProgress();
+    if(focusSelect){
+      const select=document.getElementById('firstListenPlayerSelect');
+      select?.focus({preventScroll:true});
+      select?.scrollIntoView({block:'center'});
+    }
   }
 }
 function firstListenPlayerChanged(select){

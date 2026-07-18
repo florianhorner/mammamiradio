@@ -20,6 +20,7 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "page.setDefaultTimeout(5000)",
         "media-source://mammamiradio/live",
         "firstListenFindPlayersBtn",
+        "firstListenQuickFindPlayersBtn",
         "firstListenRetryBtn",
         "firstListenSaveAttemptBtn",
         "/api/setup/first-listen/receipt/retry",
