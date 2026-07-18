@@ -43,6 +43,7 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "private receipt repair lost the safe live state",
         "reloaded active choice lost receipt recovery",
         "standby recovery was falsely described as on air",
+        "partial Azure setup was presented as ready",
         "optional AI kept setup alert active",
         "320px/200% first-listen geometry overflowed",
         "page.on('pageerror'",

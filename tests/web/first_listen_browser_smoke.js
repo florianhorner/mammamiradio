@@ -710,6 +710,18 @@ async (page) => {
     audio: true,
     privacy: true,
     onboardingRequired: false,
+    ttsKeys: ['AZURE_SPEECH_KEY'],
+  }));
+  assert((await page.locator('#setupKeysLabel').innerText()) === '△ Provider setup needs attention', 'partial Azure setup was presented as ready');
+  assert(await page.locator('#setupKeysConfigured').getAttribute('data-state') === 'incomplete', 'partial Azure setup kept success styling');
+  assert((await page.locator('#setupKeysDetail').innerText()) === 'Azure Speech setup incomplete', 'partial Azure setup hid the missing counterpart');
+  assert(await page.locator('#setupKeysForm').isVisible(), 'partial Azure setup hid its repair form');
+  assert((await page.locator('#firstListenAiChip').innerText()) === 'OPTIONAL', 'partial Azure setup marked AI hosts configured');
+
+  await resetUi(setupProjection({
+    audio: true,
+    privacy: true,
+    onboardingRequired: false,
     llmKeys: ['ANTHROPIC_API_KEY'],
   }));
   assert((await page.locator('#setupKeysLabel').innerText()) === '✓ AI host key configured', 'AI-host key lost its capability label');

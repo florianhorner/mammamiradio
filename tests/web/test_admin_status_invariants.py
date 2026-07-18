@@ -222,6 +222,10 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
     assert "providerKeysConfigured=configuredKeys.length>0" in block
     assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
+    assert "providerReadiness=setupProviderReadiness(configuredKeys)" in block
+    assert "providerSetupIncomplete=providerKeysConfigured&&" in block
+    assert "providerSetupIncomplete?'△ Provider setup needs attention'" in block
+    assert "keysBanner.dataset.state=providerSetupIncomplete?'incomplete':'ready'" in block
     assert "setupProviderLabels(configuredKeys).join(' · ')" in block
     labels = _function_block(html, "setupProviderLabels")
     for capability in (
@@ -231,6 +235,9 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
         "ElevenLabs voices",
     ):
         assert capability in labels
+    readiness = _function_block(html, "setupProviderReadiness")
+    assert "voiceReady:keys.has('OPENAI_API_KEY')" in readiness
+    assert "azureIncomplete:hasAzureKey!==hasAzureRegion" in readiness
 
 
 def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
