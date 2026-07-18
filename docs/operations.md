@@ -188,6 +188,18 @@ every fire so log aggregators can alert on sustained starvation. Counts are
 session-local by design and reset on restart. This is observability only — it
 does not change scheduling, prefetch depth, or rescue selection.
 
+`runtime_status.rescue_rotation` (authenticated only, no filesystem paths) shows
+how the cached-music rescue is spreading itself across the warm cache so the same
+song cannot air three times in twenty minutes when the producer stalls. A cached
+song that airs as a rescue will not be picked again for a full hour of real time
+(`cooldown_seconds`, 3600); rescue selection rotates through the tracks that are
+outside that window, and when every candidate is still cooling it airs the one
+heard longest ago rather than repeating the current song. Fields: `cooldown_seconds`
+(the rest window, 3600), `tracked` (how many cached songs have aired as a rescue
+this session), `cooling` (how many are still inside the cooldown), and `most_recent`
+(the humanized label of the last rescue heard). The rotation is session-local and
+resets on restart.
+
 ### Reading generated segment waste
 
 `runtime_status.generation_waste` reports rendered audio that was discarded
