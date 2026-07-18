@@ -4,6 +4,14 @@
 
 One background task stays ahead and produces segments. Another reads the next ready segment and streams it to every connected listener at real playback speed.
 
+A fresh install awaiting audible First Listen proof has one client-local step
+in front of that shared timeline: `/stream` emits a reviewed, packaged mini-show
+and only then subscribes that client to `LiveStreamHub`. The asset starts with
+ready MP3 bytes, so it adds no startup render or network dependency. Because it
+never enters `asyncio.Queue[Segment]`, existing listeners, now-playing state,
+and the producer remain untouched. Completed and pre-feature installs go
+straight to the live hub.
+
 ## Runtime overview
 
 ```text
@@ -814,6 +822,13 @@ In standalone mode, a non-loopback bind without a credential is rejected during 
 ### CSRF protection
 
 Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
+
+First Listen, setup credential actions, and Home entity privacy controls use an
+additional DNS-rebinding boundary. Their setup-status read and active routes
+accept the browser CSRF token only with a literal local/private IP Host or
+genuine HA ingress; custom hostnames must use `X-Radio-Admin-Token`. This
+stricter rule is implemented by `_require_active_setup_access` and does not
+change the legacy admin matrix for unrelated endpoints.
 
 ### Source switch concurrency
 

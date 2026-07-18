@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from itertools import islice
 from pathlib import Path
 from typing import Literal
 from urllib.error import URLError
@@ -15,11 +17,14 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
-from mammamiradio.core.models import Heading, PlaylistSource, Track
+from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvidence, Track
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
+_DEMO_ASSETS_RECOVERY_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "recovery"
+_MAX_LOCAL_TRACKS = 200
+_MAX_LOCAL_DIRECTORY_ENTRIES = 4096
 _JAMENDO_API_BASE_URL = "https://api.jamendo.com/v3.0/tracks/"
 _JAMENDO_REQUIRED_PARAMS = {
     "cc_commercial": "1",
@@ -62,6 +67,31 @@ def _copy_tracks_with_source(
 ) -> list[Track]:
     """Return copies with a consistent source label for playlist-loaded tracks."""
     return [replace(track, source=source) for track in tracks]
+
+
+def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidence:
+    """Create bounded configuration evidence before source attempts begin."""
+    evidence = SourceReadinessEvidence()
+    evidence.configure("charts", config.allow_ytdlp)
+    evidence.configure("jamendo", bool((config.playlist.jamendo_client_id or "").strip()))
+    evidence.configure("local", config.music_dir.exists())
+    evidence.configure("demo", True)
+    recovery_bundled = _DEMO_ASSETS_RECOVERY_DIR.exists() and any(islice(_DEMO_ASSETS_RECOVERY_DIR.glob("*.mp3"), 1))
+    evidence.configure("recovery", recovery_bundled, bundled=recovery_bundled)
+    return evidence
+
+
+def _attach_source_evidence(
+    source: PlaylistSource,
+    tracks: Sequence[Track],
+    evidence: SourceReadinessEvidence,
+) -> PlaylistSource:
+    evidence.set_current_rotation(source.kind, source.label)
+    evidence.observe_tracks(tracks)
+    if evidence.advanced is not None:
+        evidence.mark_advanced_candidates(len(tracks))
+    source.readiness_evidence = evidence
+    return source
 
 
 def _load_demo_asset_tracks() -> list[Track]:
@@ -234,18 +264,49 @@ def _load_local_music_tracks(music_dir: Path) -> list[Track]:
     otherwise the stem is used as the title with artist "Unknown".  Silently
     returns an empty list if the directory does not exist or contains no MP3s.
     """
-    _max_local_tracks = 200
     if not music_dir.exists():
         return []
     tracks: list[Track] = []
-    all_mp3s = sorted(music_dir.glob("*.mp3"))
-    if len(all_mp3s) > _max_local_tracks:
+    # Bound raw enumeration before checking extensions. ``Path.glob("*.mp3")``
+    # can still walk every entry when a mounted directory is huge but contains
+    # few songs, turning first startup into an unbounded wait.
+    sampled_mp3s: list[Path] = []
+    directory_over_limit = False
+    track_over_limit = False
+    try:
+        with os.scandir(music_dir) as directory_entries:
+            for raw_index, entry in enumerate(islice(directory_entries, _MAX_LOCAL_DIRECTORY_ENTRIES + 1)):
+                if raw_index == _MAX_LOCAL_DIRECTORY_ENTRIES:
+                    directory_over_limit = True
+                    break
+                if not entry.name.endswith(".mp3"):
+                    continue
+                try:
+                    if not entry.is_file():
+                        continue
+                except OSError:
+                    continue
+                sampled_mp3s.append(Path(entry.path))
+                if len(sampled_mp3s) > _MAX_LOCAL_TRACKS:
+                    track_over_limit = True
+                    break
+    except OSError as exc:
+        logger.warning("Could not inspect local music directory %s: %s", music_dir, exc)
+        return []
+
+    all_mp3s = sorted(sampled_mp3s[:_MAX_LOCAL_TRACKS])
+    if directory_over_limit:
         logger.warning(
-            "music/ contains %d MP3s; capping at %d to avoid blocking the event loop",
-            len(all_mp3s),
-            _max_local_tracks,
+            "%s contains more than %d entries; inspected only a bounded subset for MP3s",
+            music_dir,
+            _MAX_LOCAL_DIRECTORY_ENTRIES,
         )
-        all_mp3s = all_mp3s[:_max_local_tracks]
+    if track_over_limit:
+        logger.warning(
+            "%s contains more than %d MP3s; using a bounded subset",
+            music_dir,
+            _MAX_LOCAL_TRACKS,
+        )
     for mp3 in all_mp3s:
         stem = mp3.stem.strip()
         if " - " in stem:
@@ -317,7 +378,7 @@ def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
     chart_tracks = list(_fetch_current_italy_charts())
     if not chart_tracks:
         return []
-    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
         logger.info(
@@ -679,24 +740,37 @@ def write_persisted_heading(cache_dir: Path, heading: Heading) -> None:
     tmp.replace(path)
 
 
-def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple[list[Track], PlaylistSource]:
+def load_explicit_source(
+    config: StationConfig,
+    source: PlaylistSource,
+    *,
+    readiness: SourceReadinessEvidence | None = None,
+) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
+    evidence = readiness or _source_evidence_for_config(config)
     if source.kind == "demo":
+        evidence.mark_attempted("demo")
         demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
+        evidence.configure("demo", True, bundled=bool(demo_asset_tracks))
         if demo_asset_tracks:
             tracks = _shuffle_if_needed(config, demo_asset_tracks)
         else:
             tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
+        evidence.mark_candidates("demo", len(tracks))
+        if not demo_asset_tracks:
+            evidence.mark_failure("demo", "No bundled song library is present; demo entries still need a download")
         resolved = _demo_source()
         resolved.track_count = len(tracks)
-        return tracks, resolved
+        return tracks, _attach_source_evidence(resolved, tracks, evidence)
 
     is_jamendo_request = source.kind == "jamendo" or (
         source.kind == "url" and urlparse(source.url or "").scheme == "jamendo"
     )
     if is_jamendo_request:
+        evidence.mark_attempted("jamendo")
         client_id = (config.playlist.jamendo_client_id or "").strip()
         if not client_id:
+            evidence.mark_failure("jamendo", "Jamendo is not configured")
             raise ExplicitSourceError("Jamendo source is not configured")
         tags = _jamendo_tags(config, source)
         country = _jamendo_country(config, source)
@@ -709,43 +783,54 @@ def load_explicit_source(config: StationConfig, source: PlaylistSource) -> tuple
             ),
         )
         if not tracks:
+            evidence.mark_failure("jamendo", "Jamendo returned no playable candidates")
             raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
+        evidence.mark_candidates("jamendo", len(tracks))
         resolved = _jamendo_source(len(tracks), tags=tags, country=country, order=order)
-        return tracks, resolved
+        return tracks, _attach_source_evidence(resolved, tracks, evidence)
 
     is_classic_request = source.kind == "classic" or (
         source.kind == "url" and urlparse(source.url or "").scheme == "classic"
     )
     if is_classic_request:
+        evidence.set_current_rotation("classic", source.label or "Classic Italian")
+        evidence.mark_attempted("classic")
         era = _classic_era_from_source(source)
         tracks = _shuffle_if_needed(
             config,
             _copy_tracks_with_source(_load_classic_italian_tracks(era), "classic"),
         )
         if not tracks:
+            evidence.mark_failure("classic", "Classic Italian returned no playable candidates")
             raise ExplicitSourceError("Classic Italian playlist temporarily unavailable (yt-dlp disabled?)")
         resolved = _classic_italian_source(era, len(tracks))
-        return tracks, resolved
+        return tracks, _attach_source_evidence(resolved, tracks, evidence)
 
     if source.kind in ("charts", "url"):
         # "url" kind comes from /api/playlist/load — treat as charts reload
+        evidence.mark_attempted("charts")
         tracks = _load_chart_source_tracks(config)
         if not tracks:
+            evidence.mark_failure("charts", "Live charts returned no candidates")
             raise ExplicitSourceError("Current Italian charts are temporarily unavailable")
+        evidence.observe_tracks(tracks)
         resolved = _charts_source(len(tracks))
-        return tracks, resolved
+        return tracks, _attach_source_evidence(resolved, tracks, evidence)
 
     if source.kind == "local":
         # Symmetry: matches the auto-degrade `local` source kind in
         # fetch_startup_playlist. Currently no write path persists a local
         # source, so this branch is defensive — it ensures a future cache
-        # file or admin-API change can restore the user's `music/` selection
+        # file or admin-API change can restore the user's local selection
         # explicitly without falling through to ExplicitSourceError.
-        local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+        evidence.mark_attempted("local")
+        local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
         if not local_tracks:
-            raise ExplicitSourceError("No MP3 files found in the music/ directory")
+            evidence.mark_failure("local", "No MP3 files were found in the configured music directory")
+            raise ExplicitSourceError("No MP3 files found in the configured music directory")
         tracks = _shuffle_if_needed(config, local_tracks)
-        return tracks, _local_source(len(tracks))
+        evidence.mark_candidates("local", len(tracks))
+        return tracks, _attach_source_evidence(_local_source(len(tracks)), tracks, evidence)
 
     raise ExplicitSourceError(f"Unsupported source kind: {source.kind}")
 
@@ -754,12 +839,15 @@ def fetch_startup_playlist(
     config: StationConfig, persisted_source: PlaylistSource | None = None
 ) -> tuple[list[Track], PlaylistSource, str]:
     """Load the startup playlist, degrading to demo when necessary."""
+    evidence = _source_evidence_for_config(config)
     if persisted_source:
         try:
-            tracks, source = load_explicit_source(config, persisted_source)
+            tracks, source = load_explicit_source(config, persisted_source, readiness=evidence)
             return tracks, source, ""
         except ExplicitSourceError as exc:
             logger.warning("Persisted source restore failed: %s", exc)
+            failure_kind = "charts" if persisted_source.kind == "url" else persisted_source.kind
+            evidence.mark_failure(failure_kind, "The saved source could not be restored")
             error = str(exc)
     else:
         error = ""
@@ -767,10 +855,13 @@ def fetch_startup_playlist(
     charts_allowed = config.allow_ytdlp
 
     if charts_allowed:
+        evidence.mark_attempted("charts")
         chart_tracks = _load_chart_source_tracks(config)
         if chart_tracks:
+            evidence.observe_tracks(chart_tracks)
             jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
             if jamendo_client_id:
+                evidence.mark_attempted("jamendo")
                 tags = _jamendo_tags(config)
                 country = _jamendo_country(config)
                 order = _jamendo_order(config)
@@ -781,6 +872,10 @@ def fetch_startup_playlist(
                         "jamendo",
                     ),
                 )
+                if jamendo_tracks:
+                    evidence.mark_candidates("jamendo", len(jamendo_tracks))
+                else:
+                    evidence.mark_failure("jamendo", "Jamendo returned no candidates")
                 existing_keys = {_normalized_track_key(track) for track in chart_tracks}
                 blended = []
                 for track in jamendo_tracks:
@@ -798,12 +893,18 @@ def fetch_startup_playlist(
                     )
                     base_source = _charts_source(len(chart_tracks))
                     source = replace(base_source, label=f"{base_source.label} + Jamendo")
-                    return chart_tracks, source, error
+                    return chart_tracks, _attach_source_evidence(source, chart_tracks, evidence), error
             logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
-            return chart_tracks, _charts_source(len(chart_tracks)), error
+            return (
+                chart_tracks,
+                _attach_source_evidence(_charts_source(len(chart_tracks)), chart_tracks, evidence),
+                error,
+            )
+        evidence.mark_failure("charts", "Live charts returned no candidates")
 
     jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
     if jamendo_client_id:
+        evidence.mark_attempted("jamendo")
         tags = _jamendo_tags(config)
         country = _jamendo_country(config)
         order = _jamendo_order(config)
@@ -815,6 +916,7 @@ def fetch_startup_playlist(
             ),
         )
         if jamendo_tracks:
+            evidence.mark_candidates("jamendo", len(jamendo_tracks))
             logger.info(
                 "Using Jamendo CC playlist (%d tracks, tags=%s, country=%s, order=%s)",
                 len(jamendo_tracks),
@@ -824,9 +926,14 @@ def fetch_startup_playlist(
             )
             return (
                 jamendo_tracks,
-                _jamendo_source(len(jamendo_tracks), tags=tags, country=country, order=order),
+                _attach_source_evidence(
+                    _jamendo_source(len(jamendo_tracks), tags=tags, country=country, order=order),
+                    jamendo_tracks,
+                    evidence,
+                ),
                 error,
             )
+        evidence.mark_failure("jamendo", "Jamendo returned no candidates")
 
     # Local music/ files are a real source on their own — they don't need yt-dlp
     # (yt-dlp only matters for downloading chart tracks). When the operator has
@@ -834,26 +941,34 @@ def fetch_startup_playlist(
     # is off and Jamendo isn't configured. This used to be a warn-and-skip,
     # which silently fell through to bundled demo assets and ignored the
     # operator's actual files.
-    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(Path("music")), "local")
+    evidence.mark_attempted("local")
+    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
     if local_tracks:
-        logger.info("Using local music/ files (%d tracks)", len(local_tracks))
+        logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
         shuffled = _shuffle_if_needed(config, local_tracks)
-        return shuffled, _local_source(len(shuffled)), error
+        evidence.mark_candidates("local", len(shuffled))
+        return shuffled, _attach_source_evidence(_local_source(len(shuffled)), shuffled, evidence), error
+    evidence.mark_failure("local", "No MP3 files were found in the configured music directory")
 
     # Prefer real bundled MP3s over metadata-only demo placeholders.
     # When demo_assets/music/ contains actual files, the queue fills with
     # real audio instead of generated silence.
     demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
+    evidence.mark_attempted("demo")
+    evidence.configure("demo", True, bundled=bool(demo_asset_tracks))
     if demo_asset_tracks:
         logger.info("Using bundled demo assets (%d tracks)", len(demo_asset_tracks))
         tracks = _shuffle_if_needed(config, demo_asset_tracks)
         src = _demo_source()
         src.track_count = len(tracks)
-        return tracks, src, error
+        evidence.mark_candidates("demo", len(tracks))
+        return tracks, _attach_source_evidence(src, tracks, evidence), error
 
     logger.info("Using built-in modern Italian demo mix")
     tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
-    return tracks, _demo_source(), error
+    evidence.mark_candidates("demo", len(tracks))
+    evidence.mark_failure("demo", "No bundled song library is present; demo entries still need a download")
+    return tracks, _attach_source_evidence(_demo_source(), tracks, evidence), error
 
 
 def fetch_chart_refresh(existing_ids: set[str]) -> list[Track]:

@@ -7,14 +7,17 @@ import atexit
 import concurrent.futures
 import copy
 import functools
+import hashlib
 import importlib
+import ipaddress
 import logging
 import math
 import os
 import random as _random
 import re as _re
+import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +53,17 @@ from mammamiradio.audio.normalizer import (
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
+from mammamiradio.core.first_listen import (
+    FirstListenAttemptMismatchError,
+    FirstListenInstallOriginStatus,
+    FirstListenReceiptStore,
+    FirstListenReceiptUnavailableError,
+)
+from mammamiradio.core.first_listen_show import (
+    approved_first_listen_show_path,
+    first_listen_show_required,
+    iter_first_listen_show_chunks,
+)
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     ChaosSubtype,
@@ -73,21 +87,44 @@ from mammamiradio.core.setup_status import (
 )
 from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
 from mammamiradio.home.authorization import HomeAuthorization
-from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
+from mammamiradio.home.catalog import (
+    drain_invalidated_label_generation,
+    generation_in_progress,
+    invalidate_label_generation,
+    schedule_label_generation,
+)
+from mammamiradio.home.context_director import HomeContextDirector
+from mammamiradio.home.context_value import (
+    LOW_VALUE_AMBIENT_ENTITY_IDS,
+    classify_home_context_entity_ids,
+)
 from mammamiradio.home.entity_policy import (
     load_entity_policy,
     personal_moment_opt_in_entity_ids,
+    policy_revision,
     set_entity_muted,
     set_personal_moment_enabled,
     valid_entity_id,
 )
 from mammamiradio.home.ha_context import (
     PRESENCE_SENSOR_DEVICE_CLASSES,
+    fetch_home_context_preview,
     get_cached_home_context,
+    invalidate_all_home_context,
     invalidate_home_context_entity_baselines,
     push_state_to_ha,
 )
 from mammamiradio.home.ha_enrichment import EVENT_RETENTION_SECONDS
+from mammamiradio.home.ha_playback import (
+    HAPlaybackError,
+    HAPlaybackReason,
+    HAPlaybackService,
+)
+from mammamiradio.home.scene_namer import reset_scene_namer_cache
+from mammamiradio.hosts.memory_extractor import (
+    drain_revoked_home_memory_extractions,
+    revoke_home_memory_extractions,
+)
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.blocklist import block_meta, save_blocklist
 from mammamiradio.playlist.direction import (
@@ -198,6 +235,153 @@ atexit.register(_direction_search_executor.shutdown, wait=False, cancel_futures=
 
 router = APIRouter()
 
+_FIRST_LISTEN_HELP_URL = (
+    "https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#first-listen-repair"
+)
+_HOME_PREVIEW_PROOF_TTL_SECONDS = 5 * 60.0
+_HOME_PREVIEW_TOTAL_TIMEOUT_SECONDS = 16.0
+
+
+@dataclass(frozen=True)
+class _HomeContextPreviewProof:
+    """Short-lived in-memory evidence for one explicit preview action."""
+
+    expires_at: float
+    config_fingerprint: str
+    authorization_mode: str
+    policy_revision: int
+    context_generation: int
+
+
+_SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
+    "ha_access_missing": (
+        "Home Assistant access is missing",
+        "Check the add-on's Home Assistant access, then try again.",
+        True,
+        "Check access",
+        409,
+    ),
+    "ha_auth_failed": (
+        "Home Assistant did not accept access",
+        "Reload the add-on so it receives a fresh Supervisor token, then retry.",
+        True,
+        "Retry connection",
+        502,
+    ),
+    "ha_unreachable": (
+        "Home Assistant is not reachable yet",
+        "Give Home Assistant a moment, then try finding speakers again.",
+        True,
+        "Try again",
+        503,
+    ),
+    "media_source_missing": (
+        "Mamma Mi Radio is not in HA's media browser",
+        "Install or reload the Mamma Mi Radio HACS integration, then retry.",
+        True,
+        "Check HACS integration",
+        409,
+    ),
+    "ambiguous_station": (
+        "Home Assistant found more than one station",
+        "Keep one Mamma Mi Radio integration entry, then find speakers again.",
+        False,
+        "Review HA entries",
+        409,
+    ),
+    "no_players": (
+        "No compatible-looking speaker is available",
+        "Turn on a Home Assistant media player, wait a moment, then search again.",
+        True,
+        "Find speakers again",
+        404,
+    ),
+    "player_unavailable": (
+        "That speaker is not available now",
+        "Choose another speaker or bring this one online, then retry.",
+        True,
+        "Choose a speaker",
+        409,
+    ),
+    "service_rejected": (
+        "Home Assistant could not start playback",
+        "Check the speaker's mute and volume in Home Assistant, then try once more.",
+        True,
+        "Try playback again",
+        502,
+    ),
+    "request_in_flight": (
+        "A playback request is already on its way",
+        "Wait a few seconds for Home Assistant to answer before trying again.",
+        True,
+        "Wait a moment",
+        409,
+    ),
+    "receipt_unavailable": (
+        "Playback was accepted, but setup progress was not saved",
+        "Check that the station data directory is writable, then save this listening check without replaying it.",
+        True,
+        "Save listening check",
+        503,
+    ),
+    "receipt_recovery_missing": (
+        "That unsaved listening check is no longer available",
+        "Nothing was replayed. Refresh Setup, then explicitly start the selected speaker once more.",
+        True,
+        "Start once more",
+        409,
+    ),
+    "attempt_mismatch": (
+        "This confirmation belongs to an older playback attempt",
+        "Start playback on the selected speaker again, then answer the listening check.",
+        True,
+        "Start playback again",
+        409,
+    ),
+    "preview_unavailable": (
+        "The privacy preview is not ready",
+        "No Home context was enabled. Try the preview again, or keep it off.",
+        True,
+        "Preview again",
+        503,
+    ),
+    "preview_required": (
+        "Review a fresh preview before enabling",
+        "Open the filtered preview first. It stays local and is not promoted into host context.",
+        True,
+        "Show filtered preview",
+        409,
+    ),
+    "first_listen_required": (
+        "Finish the speaker check first",
+        "Confirm that you heard Mamma Mi Radio on a Home Assistant speaker before reviewing Home context.",
+        True,
+        "Return to listening check",
+        409,
+    ),
+    "privacy_persist_failed": (
+        "The privacy choice was not saved for restart",
+        "Home context remains off in this running station. Check data-directory permissions, then save again.",
+        True,
+        "Save again",
+        503,
+    ),
+    "privacy_receipt_unavailable": (
+        "The privacy choice is active, but setup progress was not saved",
+        "Your choice still controls the running station. Check the data directory, then save it once more.",
+        True,
+        "Save review again",
+        503,
+    ),
+    "invalid_request": (
+        "That setup request is not valid",
+        "Refresh Setup and try the action again.",
+        False,
+        "Refresh setup",
+        422,
+    ),
+}
+
 # TODO: split — this god module is a postal address, not a destination.
 # See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
@@ -222,6 +406,111 @@ def _as_int_index(value, default: int = -1) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _setup_error(
+    code: str,
+    *,
+    accepted: bool | None = None,
+    receipt_persisted: bool | None = None,
+    station_resumed: bool | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> JSONResponse:
+    """Return one allowlisted, secret-free first-listen failure envelope."""
+    title, message, retryable, action_label, status_code = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": {
+            "code": code if code in _SETUP_ERRORS else "invalid_request",
+            "title": title,
+            "message": message,
+            "retryable": retryable,
+            "action_label": action_label,
+            "help_url": _FIRST_LISTEN_HELP_URL,
+        },
+    }
+    if accepted is not None:
+        payload["accepted"] = accepted
+    if receipt_persisted is not None:
+        payload["receipt_persisted"] = receipt_persisted
+    if station_resumed is not None:
+        payload["station_resumed"] = station_resumed
+    if extra:
+        payload.update(extra)
+    return JSONResponse(payload, status_code=status_code)
+
+
+async def _strict_setup_json(
+    request: Request,
+    fields: Mapping[str, type],
+) -> tuple[dict[str, Any], JSONResponse | None]:
+    """Parse an exact JSON object contract for active setup actions."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        return {}, _setup_error("invalid_request")
+    body, error = await read_json_object(request)
+    if error is not None or set(body) != set(fields):
+        return {}, _setup_error("invalid_request")
+    for name, expected_type in fields.items():
+        value = body.get(name)
+        valid = type(value) is bool if expected_type is bool else isinstance(value, expected_type)
+        if not valid:
+            return {}, _setup_error("invalid_request")
+    return body, None
+
+
+def _home_access_fingerprint(config) -> str:
+    """Hash the active HA endpoint/credential without retaining either in proof state."""
+    material = f"{config.homeassistant.url}\0{config.ha_token}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(material).hexdigest()
+
+
+def _require_active_setup_access(request: Request, credentials=Depends(security)) -> None:
+    """Authorize active setup writes and require an unguessable browser token.
+
+    Same-Origin is deliberately insufficient here: the request host is supplied
+    by the client, so DNS rebinding can make an attacker's Origin appear to
+    match a loopback URL.  The dashboard receives the per-process CSRF token in
+    its HTML; non-browser automation can use the explicit admin token instead.
+    """
+    require_admin_access(request, credentials)
+    config = request.app.state.config
+    supplied_token = request.headers.get("X-Radio-Admin-Token", "")
+    if config.admin_token and supplied_token and secrets.compare_digest(supplied_token, config.admin_token):
+        return
+    # A per-process CSRF secret is not a DNS-rebinding defense when an attacker
+    # can first fetch a page from the rebound host and read the embedded token.
+    # Active setup therefore accepts browser-token auth only on a literal local
+    # or private address (or genuine Supervisor ingress). Custom/public hostnames
+    # can still use the explicit admin-token escape hatch above.
+    peer_host = request.client.host if request.client else ""
+    try:
+        peer_address = ipaddress.ip_address(peer_host)
+    except ValueError:
+        peer_address = None
+    ingress = request.headers.get("X-Ingress-Path", "")
+    trusted_ingress = bool(config.is_addon and ingress and peer_address is not None and peer_address in _HASSIO_NETWORK)
+    try:
+        request_host = request.url.hostname or ""
+        host_address = ipaddress.ip_address(request_host)
+    except ValueError:
+        host_address = None
+    trusted_literal_host = request_host == "localhost" or bool(
+        host_address is not None
+        and (host_address.is_loopback or any(host_address in network for network in _TRUSTED_NETWORKS))
+    )
+    if not (trusted_ingress or trusted_literal_host):
+        raise HTTPException(
+            status_code=403,
+            detail="Active setup host is not trusted. Use a local address, Home Assistant ingress, or an admin token.",
+        )
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Active setup request blocked. Reload the dashboard and retry.",
+    )
 
 
 def _safe_external_album_art(value: Any) -> str:
@@ -274,6 +563,8 @@ QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 # silence while hoping the producer catches up. Must stay <=
 # QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
 FIRST_BYTE_GRACE_SECONDS = 1.0
+FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS = 0.5
+assert FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS <= FIRST_BYTE_GRACE_SECONDS
 STARTUP_GRACE_SECONDS = 30.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
@@ -1149,8 +1440,10 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
 
     banned_keys = set(keys)
     before = len(state.playlist)
+    removed_tracks = [t for t in state.playlist if normalized_track_key(t) in banned_keys]
     state.playlist = [t for t in state.playlist if normalized_track_key(t) not in banned_keys]
     removed = before - len(state.playlist)
+    state.source_readiness.reconcile_active_tracks(state.playlist, removed_tracks=removed_tracks)
     pin_cleared = False
     if state.pinned_track is not None and normalized_track_key(state.pinned_track) in banned_keys:
         state.pinned_track = None
@@ -1404,12 +1697,109 @@ def _persist_session_stopped(config, stopped: bool) -> None:
 
 def _clear_session_stopped(state: StationState, config) -> None:
     """Resume playback state and clear the persisted stop marker."""
+    _persist_session_stopped(config, False)
+    _apply_session_resumed(state)
+
+
+def _apply_session_resumed(state: StationState) -> None:
+    """Apply the in-memory half of an already-durable resume."""
     state.session_stopped = False
     if isinstance(state.now_streaming, dict) and state.now_streaming.get("type") == "stopped":
         state.now_streaming = {}
     state.last_state_change_at = time.time()
     state.resume_event.set()
-    _persist_session_stopped(config, False)
+
+
+async def _resume_station(state: StationState, config) -> None:
+    """Persist resume off-loop before allowing live playback to continue."""
+    await asyncio.to_thread(_persist_session_stopped, config, False)
+    _apply_session_resumed(state)
+
+
+def _first_listen_store(app_state) -> FirstListenReceiptStore:
+    store = getattr(app_state, "first_listen_store", None)
+    if store is None:
+        store = FirstListenReceiptStore(app_state.config.cache_dir)
+        app_state.first_listen_store = store
+    return store
+
+
+async def _first_listen_audio_gate_open(app_state) -> bool:
+    """Require audible proof before widening a fresh or unknown install.
+
+    Proven pre-feature installs retain their compatibility path. Missing,
+    delayed, or corrupt origin evidence is treated as unknown and therefore
+    fails closed until an accepted playback has been audibly confirmed.
+    """
+    origin = getattr(app_state, "first_listen_install_origin", None)
+    if getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
+        return True
+    receipt = getattr(app_state, "first_listen_receipt", None)
+    if receipt is None:
+        try:
+            receipt = await _first_listen_store(app_state).load()
+        except Exception:
+            receipt = None
+        app_state.first_listen_receipt = receipt
+    return bool(getattr(receipt, "audio_complete", False))
+
+
+def _ha_playback_access_snapshot(config) -> tuple[str, str, str]:
+    """Return the exact HA access values and fingerprint used by playback."""
+    access_url = config.homeassistant.url if config.homeassistant.enabled else ""
+    access_token = config.ha_token if config.homeassistant.enabled else ""
+    fingerprint = hashlib.sha256(f"{access_url}\0{access_token}".encode()).hexdigest()
+    return access_url, access_token, fingerprint
+
+
+def _ha_playback_service(app_state) -> HAPlaybackService:
+    """Create the on-demand HA adapter without adding startup network work."""
+    service = getattr(app_state, "ha_playback_service", None)
+    config = app_state.config
+    access_url, access_token, fingerprint = _ha_playback_access_snapshot(config)
+    if service is not None:
+        if getattr(app_state, "ha_playback_fingerprint", "") != fingerprint:
+            service.configure(access_url, access_token)
+            app_state.ha_playback_fingerprint = fingerprint
+        return service
+
+    async def _resume() -> None:
+        await _resume_station(app_state.station_state, app_state.config)
+
+    async def _persist_attempt(entity_id: str) -> str:
+        receipt = await _first_listen_store(app_state).record_accepted(entity_id)
+        app_state.first_listen_receipt = receipt
+        if not receipt.accepted_attempt_id:  # defensive; the store contract supplies one
+            raise FirstListenReceiptUnavailableError("accepted attempt id missing")
+        return receipt.accepted_attempt_id
+
+    service = HAPlaybackService(
+        access_url,
+        access_token,
+        resume_station=_resume,
+        persist_accepted_attempt=_persist_attempt,
+    )
+    app_state.ha_playback_service = service
+    app_state.ha_playback_fingerprint = fingerprint
+    return service
+
+
+def _pending_receipt_recovery(app_state, *, service: object | None = None) -> dict[str, object]:
+    """Return a sanitized, read-only projection of recoverable acceptance."""
+    if service is None:
+        service = getattr(app_state, "ha_playback_service", None)
+    _access_url, _access_token, current_fingerprint = _ha_playback_access_snapshot(app_state.config)
+    if getattr(app_state, "ha_playback_fingerprint", "") != current_fingerprint:
+        return {"available": False, "entity_id": ""}
+    projection = getattr(service, "pending_receipt_entity_id", None)
+    if not callable(projection):
+        return {"available": False, "entity_id": ""}
+    try:
+        entity_id = str(projection() or "")
+    except Exception:
+        logger.warning("Could not project pending First Listen receipt recovery", exc_info=True)
+        entity_id = ""
+    return {"available": bool(entity_id), "entity_id": entity_id}
 
 
 def _sync_runtime_state(request: Request) -> None:
@@ -2021,6 +2411,306 @@ def _safe_home_entity_preview(state: StationState, config) -> dict:
     }
 
 
+def _safe_detached_home_context_preview(context, config) -> dict:
+    """Project a fresh preview without implying that any row reached a host."""
+    policy = load_entity_policy(config.cache_dir)
+    muted_map = policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {}
+    personal_moment_ids = personal_moment_opt_in_entity_ids(config.cache_dir)
+    rows: list[dict[str, Any]] = []
+    for entity in list(getattr(context, "scored", []) or [])[:24]:
+        status = entity.to_status_dict()
+        entity_id = str(status.get("entity_id") or "")
+        if not entity_id:
+            continue
+        personal_moment_eligible = _status_is_presence_eligible(status)
+        personal_moment_enabled = personal_moment_eligible and entity_id in personal_moment_ids
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "label": status.get("label") or entity_id,
+                "area": status.get("area") or "",
+                "domain": status.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": status.get("summary") or str(status.get("state") or ""),
+                "reason": "Preview only — eligible for future host scripts if you enable it",
+                "muted": False,
+                "sent_to_prompt": False,
+                "row_state": "preview_only",
+                "personal_moment_eligible": personal_moment_eligible,
+                "personal_moment_enabled": personal_moment_enabled,
+                "personal_moment_effective": personal_moment_enabled,
+                "last_updated": getattr(context, "timestamp", 0.0) or None,
+                "stale": False,
+            }
+        )
+    visible_ids = {str(row["entity_id"]) for row in rows}
+    for entity_id, entry in list(muted_map.items())[:24]:
+        if entity_id in visible_ids or not isinstance(entity_id, str) or not isinstance(entry, dict):
+            continue
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "label": entry.get("label") or entity_id,
+                "area": entry.get("area") or "",
+                "domain": entry.get("domain") or entity_id.split(".", 1)[0],
+                "state_summary": "Muted locally",
+                "reason": "Muted by operator",
+                "muted": True,
+                "sent_to_prompt": False,
+                "row_state": "muted",
+                "personal_moment_eligible": False,
+                "personal_moment_enabled": False,
+                "personal_moment_effective": False,
+                "last_updated": entry.get("muted_at"),
+                "stale": False,
+            }
+        )
+    preview_rows = [row for row in rows if not row["muted"]]
+    muted_rows = [row for row in rows if row["muted"]]
+    context_value = classify_home_context_entity_ids(row["entity_id"] for row in preview_rows)
+    useful_context = context_value == "useful"
+    ambient_count = sum(row["entity_id"] in LOW_VALUE_AMBIENT_ENTITY_IDS for row in preview_rows)
+    useful_count = len(preview_rows) - ambient_count
+    return {
+        "ok": True,
+        "fresh": True,
+        "status": context_value if context_value != "useful" else "ready",
+        "context_value": context_value,
+        "useful_context": useful_context,
+        "authorization_mode": str(getattr(context, "authorization_mode", "narrow") or "narrow"),
+        "entities": rows[:32],
+        "sent_now": [],
+        "candidates": preview_rows[:24],
+        "muted": muted_rows[:24],
+        "counts": {
+            "sent_now": 0,
+            "used_by_hosts": 0,
+            "candidates": len(preview_rows),
+            "not_sent": len(preview_rows),
+            "muted": len(muted_rows),
+            "useful": useful_count,
+            "ambient_basic": ambient_count,
+            "filtered": sum((getattr(context, "denylist_hits", {}) or {}).values()),
+        },
+    }
+
+
+async def _persist_home_context_choice(config, enabled: bool) -> None:
+    if config.is_addon:
+        await asyncio.to_thread(_save_addon_option_batch, {"ha_context_enabled": enabled})
+    else:
+        await asyncio.to_thread(
+            _save_dotenv,
+            {"MAMMAMIRADIO_HA_CONTEXT_ENABLED": "true" if enabled else "false"},
+        )
+
+
+def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
+    if not isinstance(proof, _HomeContextPreviewProof):
+        return False
+    state = app_state.station_state
+    authorization = state.home_authorization or HomeAuthorization.narrow()
+    return bool(
+        proof.expires_at > time.monotonic()
+        and proof.config_fingerprint == _home_access_fingerprint(app_state.config)
+        and proof.authorization_mode == authorization.mode.value
+        and proof.policy_revision == policy_revision(app_state.config.cache_dir)
+        and proof.context_generation == getattr(state, "home_context_policy_generation", 0)
+    )
+
+
+async def _fetch_home_context_preview_singleflight(app_state, authorization: HomeAuthorization):
+    """Share one bounded detached preview for an unchanged privacy policy."""
+    lock = getattr(app_state, "_home_context_preview_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app_state._home_context_preview_lock = lock
+    config = app_state.config
+    state = app_state.station_state
+    key = (
+        _home_access_fingerprint(config),
+        authorization.mode.value,
+        policy_revision(config.cache_dir),
+        getattr(state, "home_context_policy_generation", 0),
+    )
+    async with lock:
+        task = getattr(app_state, "_home_context_preview_task", None)
+        task_key = getattr(app_state, "_home_context_preview_task_key", None)
+        if task is None or task.done() or task_key != key:
+            if task is not None and not task.done():
+                task.cancel()
+            task = asyncio.create_task(
+                fetch_home_context_preview(
+                    config.homeassistant.url,
+                    config.ha_token,
+                    cache_dir=config.cache_dir,
+                    authorization=authorization,
+                ),
+                name="home-context-privacy-preview",
+            )
+            app_state._home_context_preview_task = task
+            app_state._home_context_preview_task_key = key
+            app_state._home_context_preview_task_deadline = time.monotonic() + _HOME_PREVIEW_TOTAL_TIMEOUT_SECONDS
+            _register_background_task(app_state, task)
+        deadline = float(
+            getattr(
+                app_state,
+                "_home_context_preview_task_deadline",
+                time.monotonic() + _HOME_PREVIEW_TOTAL_TIMEOUT_SECONDS,
+            )
+        )
+    remaining = max(0.001, deadline - time.monotonic())
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+    except TimeoutError:
+        # Do not start another worker behind a still-running projection. A later
+        # operator action joins this same bounded task until it completes.
+        return None
+    finally:
+        if task.done():
+            async with lock:
+                if getattr(app_state, "_home_context_preview_task", None) is task:
+                    app_state._home_context_preview_task = None
+                    app_state._home_context_preview_task_key = None
+                    app_state._home_context_preview_task_deadline = 0.0
+
+
+def _purge_global_home_segments(queue, state: StationState) -> int:
+    """Drop every unstarted generated break carrying Home-context provenance."""
+
+    def _uses_home_context(segment: Segment) -> bool:
+        if segment.type not in {SegmentType.BANTER, SegmentType.AD, SegmentType.NEWS_FLASH}:
+            return False
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        return any(
+            key in metadata
+            for key in (
+                "home_context_generation",
+                "home_fact_id",
+                "home_fact_entity_id",
+                "ritual_moment_id",
+                "gag_moment_id",
+            )
+        )
+
+    return drop_matching_segments(
+        queue,
+        state,
+        should_drop=_uses_home_context,
+        reason=GenerationWasteReason.OPERATOR_PURGE,
+    )
+
+
+def _retire_pending_home_interrupt(state: StationState) -> bool:
+    """Remove an unstarted HA/timer interrupt without touching operator work."""
+    source = str(state.interrupt_slot_source or "")
+    if not (source == "timer" or source == "ha" or source.startswith("ha:")):
+        return False
+    bridge_path = state.interrupt_slot
+    if bridge_path is not None and state.interrupt_slot_ephemeral:
+        _unlink_ephemeral_best_effort(
+            Segment(
+                type=SegmentType.BANTER,
+                path=bridge_path,
+                metadata={"interrupt": True},
+                ephemeral=True,
+            )
+        )
+    state.interrupt_slot = None
+    state.interrupt_slot_ephemeral = False
+    state.interrupt_slot_source = ""
+    state.interrupt_slot_home_context_generation = None
+    if state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT:
+        state.chaos_pending = None
+    if state.force_next is SegmentType.BANTER and state.operator_force_pending is None:
+        state.force_next = None
+    return True
+
+
+async def _disable_home_context_runtime(app_state) -> int:
+    """Apply immediate, global privacy revocation before reporting persistence."""
+    config = app_state.config
+    state = app_state.station_state
+    config.homeassistant.context_enabled = False
+    state.home_context_policy_generation = getattr(state, "home_context_policy_generation", 0) + 1
+    # Invalidate/cancel post-air Home-derived memory tasks synchronously.  The
+    # bounded drain happens below, but the epoch must advance before this
+    # privacy cutover yields control for the first time.
+    revoked_memory_tasks = revoke_home_memory_extractions()
+    # Detached label generation needs the same synchronous cutover. Its epoch
+    # advances here; the bounded drain can safely happen after state is blank.
+    revoked_label_tasks = invalidate_label_generation()
+    coordinator = getattr(state, "ha_context_refresh_mailbox", None)
+    suspend = getattr(coordinator, "suspend", None)
+    if callable(suspend):
+        try:
+            suspend()
+        except Exception:
+            logger.warning("Home-context refresh suspension failed during revocation")
+    app_state.home_context_preview_proof = None
+    _retire_pending_home_interrupt(state)
+    # Scene naming is a detached Home-derived Anthropic call. Its existing
+    # reset seam cancels the task and clears task identity synchronously, so a
+    # cancellation-resistant completion cannot repopulate the cache.
+    reset_scene_namer_cache()
+    # Prompt-facing state and Home-owned handoffs must disappear before the
+    # first await. A new producer iteration can run while the bounded cleanup
+    # drains, and it must see an empty Home surface immediately.
+    ledger = _clear_global_home_context_runtime_state(state)
+    # Purge synchronously before the first await.  Once the runtime flag and
+    # generation change, no older queued Home-derived segment gets a scheduling
+    # turn while coordinator cancellation or disk cleanup is in progress.
+    purged = _purge_global_home_segments(app_state.queue, state)
+
+    # Drain the coordinator before the slower detached-work drains. Production
+    # coordinators were already suspended synchronously above; the await only
+    # retires their cancelled request. Legacy/mocked coordinators without a
+    # suspend seam still execute revoke here before any other cleanup await.
+    revoke = getattr(coordinator, "revoke", None)
+    if callable(revoke):
+        try:
+            outcome = revoke()
+            if asyncio.iscoroutine(outcome):
+                await outcome
+        except Exception:
+            logger.warning("Home-context refresh cancellation failed during revocation")
+
+    try:
+        await drain_revoked_home_memory_extractions(revoked_memory_tasks)
+    except Exception:
+        # The synchronous epoch advance above is the durable write fence even
+        # if best-effort task draining itself fails.
+        logger.warning("Home memory-extraction cancellation failed during revocation")
+
+    try:
+        await drain_invalidated_label_generation(revoked_label_tasks)
+    except Exception:
+        # The catalog epoch advances before its bounded task wait, so even an
+        # unexpected cancellation-cleanup failure cannot publish an old result.
+        logger.warning("Home label-generation cancellation failed during revocation")
+
+    try:
+        await asyncio.to_thread(invalidate_all_home_context, config.cache_dir)
+    except Exception:
+        logger.warning("Home-context cache cleanup failed during revocation")
+    if ledger is not None:
+        try:
+            await asyncio.to_thread(ledger.save_if_dirty, config.cache_dir)
+        except Exception:
+            logger.warning("Home-context running-gag cleanup could not be saved")
+    return purged
+
+
+def _enable_home_context_runtime(app_state) -> None:
+    config = app_state.config
+    state = app_state.station_state
+    config.homeassistant.context_enabled = True
+    state.ha_context_refresh_stage = "idle"
+    coordinator = getattr(state, "ha_context_refresh_mailbox", None)
+    enable = getattr(coordinator, "enable", None)
+    if callable(enable):
+        enable()
+
+
 def _home_entity_metadata(state: StationState, config, entity_id: str) -> dict[str, str]:
     """Resolve best-effort display metadata without depending on preview shape."""
     ctx = get_cached_home_context(config.cache_dir, authorization=state.home_authorization)
@@ -2105,6 +2795,53 @@ def _blank_home_context_state(state: StationState) -> None:
     state.ha_context_char_count = 0
 
 
+def _clear_global_home_context_runtime_state(state: StationState):
+    """Synchronously remove every prompt/public Home owner at global off."""
+    moment_store = getattr(state, "moment_store", None)
+    if moment_store is not None:
+        try:
+            for moment_id in (
+                state.ha_pending_directive_moment_id,
+                state.ha_running_gag_moment_id,
+                state.last_banter_ritual_moment_id,
+            ):
+                if moment_id:
+                    moment_store.mark_dropped(moment_id, "context_disabled")
+        except Exception:  # pragma: no cover - receipts cannot weaken revocation
+            logger.debug("Moment receipt global-off drop failed", exc_info=True)
+
+    directive_source = str(state.ha_pending_directive_source or "")
+    if not directive_source or directive_source in {"ha", "timer"} or directive_source.startswith("ha:"):
+        state.ha_pending_directive = ""
+        state.ha_pending_directive_moment_id = ""
+        state.ha_pending_directive_source = ""
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
+    state.ha_running_gag_moment_id = ""
+    state.last_banter_ritual_moment_id = ""
+    state.last_banter_home_fact = None
+    state.last_banter_return_authority = None
+    _blank_home_context_state(state)
+    state.ha_context_last_updated = 0.0
+    state.ha_ritual_context = ""
+    state.ha_ritual_public_families = []
+    state.ha_ritual_matches = []
+    state.ha_ritual_recipe_audit = []
+    state.ha_first_home_context_moment_fired = False
+    state.home_context_director = HomeContextDirector()
+    state.ha_context_refresh_in_flight = False
+    state.ha_context_refresh_active_foreground_timed_out = False
+    state.ha_context_refresh_configured = False
+    state.ha_context_refresh_stale = False
+    state.ha_context_refresh_stage = "disabled"
+
+    ledger = state.evening_ledger
+    if ledger is not None:
+        ledger.buckets.clear()
+        ledger._dirty = True
+    return ledger
+
+
 def _set_live_gag_entity_denied(state: StationState, config, entity_id: str, muted: bool) -> bool:
     ledger = state.evening_ledger
     if ledger is None:
@@ -2174,7 +2911,19 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
     state = request.app.state.station_state
     golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
     provider_health = _provider_health_snapshot(config, state)
-    setup = build_setup_status(config, state, golden_path=golden_path, provider_health=provider_health)
+    origin = getattr(request.app.state, "first_listen_install_origin", None)
+    origin_status = getattr(getattr(origin, "status", None), "value", None) or "unknown"
+    setup = build_setup_status(
+        config,
+        state,
+        golden_path=golden_path,
+        provider_health=provider_health,
+        first_listen_receipt=getattr(request.app.state, "first_listen_receipt", None),
+        install_origin=str(origin_status),
+        context_choice_explicit=bool(getattr(request.app.state, "home_context_choice_explicit", True)),
+    )
+    setup["guided_setup"]["first_listen"]["bootstrap_ready"] = _first_listen_bootstrap_ready(request.app.state)
+    setup["guided_setup"]["first_listen"]["receipt_recovery"] = _pending_receipt_recovery(request.app.state)
     return {
         "config": config,
         "state": state,
@@ -2182,6 +2931,59 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
         "provider_health": provider_health,
         "setup": setup,
     }
+
+
+_FIRST_LISTEN_BOOTSTRAP_WAIT_SECONDS = 0.25
+
+
+def _first_listen_bootstrap_tasks(app_state) -> tuple[asyncio.Future, ...]:
+    """Return the non-blocking install-origin and receipt bootstrap tasks."""
+    tasks = (
+        getattr(app_state, "first_listen_origin_task", None),
+        getattr(app_state, "first_listen_receipt_task", None),
+    )
+    return tuple(task for task in tasks if isinstance(task, asyncio.Future))
+
+
+def _first_listen_bootstrap_ready(app_state) -> bool:
+    """Report whether First Listen origin and receipt state is authoritative."""
+    if not bool(getattr(app_state, "first_listen_bootstrap_wired", False)):
+        return False
+    origin_task = getattr(app_state, "first_listen_origin_task", None)
+    receipt_task = getattr(app_state, "first_listen_receipt_task", None)
+    origin_future = origin_task if isinstance(origin_task, asyncio.Future) else None
+    receipt_future = receipt_task if isinstance(receipt_task, asyncio.Future) else None
+    if origin_future is None and receipt_future is None:
+        return True
+    if origin_future is None or receipt_future is None:
+        return False
+    return origin_future.done() and receipt_future.done()
+
+
+async def _wait_for_first_listen_bootstrap(app_state) -> bool:
+    """Briefly join already-running setup reads without delaying audio startup."""
+    pending = [task for task in _first_listen_bootstrap_tasks(app_state) if not task.done()]
+    if pending:
+        await asyncio.wait(pending, timeout=_FIRST_LISTEN_BOOTSTRAP_WAIT_SECONDS)
+    return _first_listen_bootstrap_ready(app_state)
+
+
+def _first_listen_entry_state(app_state) -> str:
+    """Choose the first admin surface from authoritative in-memory facts only."""
+    if not _first_listen_bootstrap_ready(app_state):
+        return "pending"
+    origin = getattr(app_state, "first_listen_install_origin", None)
+    origin_status = getattr(getattr(origin, "status", None), "value", None) or "unknown"
+    if origin_status == FirstListenInstallOriginStatus.EXISTING.value:
+        return "complete"
+    if origin_status not in {
+        FirstListenInstallOriginStatus.FRESH.value,
+        FirstListenInstallOriginStatus.UNKNOWN.value,
+    }:
+        return "complete"
+    receipt = getattr(app_state, "first_listen_receipt", None)
+    complete = bool(getattr(receipt, "audio_complete", False)) and bool(getattr(receipt, "privacy_complete", False))
+    return "complete" if complete else "required"
 
 
 def _queue_empty_elapsed(state: StationState) -> float:
@@ -2550,6 +3352,11 @@ async def _packaged_recovery_segment(fallback: Path) -> Segment:
 
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
+    # Producer admission and playback egress share the same privacy-generation
+    # predicate.  Import locally to keep this transport module's import surface
+    # light while still making the last pre-air check use the canonical rule.
+    from mammamiradio.scheduling.producer import _home_context_generation_is_current
+
     segment_queue = app.state.queue
     skip_event = app.state.skip_event
     state = app.state.station_state
@@ -2607,12 +3414,23 @@ async def run_playback_loop(app) -> None:
         _bridge_segment: Segment | None = None
         if state.interrupt_slot is not None:
             bridge_path = state.interrupt_slot
+            bridge_source = state.interrupt_slot_source
+            bridge_home_generation = state.interrupt_slot_home_context_generation
             state.interrupt_slot = None
+            state.interrupt_slot_source = ""
+            state.interrupt_slot_home_context_generation = None
             if bridge_path.exists():
+                bridge_metadata: dict[str, object] = {
+                    "type": "banter",
+                    "interrupt": True,
+                    "interrupt_source": bridge_source,
+                }
+                if bridge_home_generation is not None:
+                    bridge_metadata["home_context_generation"] = bridge_home_generation
                 _bridge_segment = Segment(
                     type=SegmentType.BANTER,
                     path=bridge_path,
-                    metadata={"type": "banter", "interrupt": True},
+                    metadata=bridge_metadata,
                     ephemeral=state.interrupt_slot_ephemeral,
                 )
                 state.interrupt_slot_ephemeral = False
@@ -2853,6 +3671,22 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
+        if not _home_context_generation_is_current(state, config, segment):
+            # A privacy cutover may land after queue admission but before this
+            # segment becomes now-playing.  Reject it at the final unstarted
+            # boundary so an older Home-derived render can never start later.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.OPERATOR_PURGE,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("Discarding stale Home-context segment before playback")
+            continue
+
         stream_started = False
         if not is_companionship_cue:
             _start_stream_segment(app, state, config, segment, _ha_push_tasks)
@@ -3074,6 +3908,13 @@ def _schedule_banter_memory_extraction_after_send(
     if not metadata.get("memory_extraction"):
         return
     try:
+        from mammamiradio.scheduling.producer import _home_context_generation_is_current
+
+        # A Home-derived segment may have begun airing before the operator
+        # revoked access.  It can finish cleanly (no dead air), but its private
+        # prompt payload must not leave the box afterward.
+        if not _home_context_generation_is_current(state, config, segment):
+            return
         from mammamiradio.hosts.memory_extractor import schedule_banter_memory_extraction
 
         task = schedule_banter_memory_extraction(config=config, state=state, metadata=metadata)
@@ -3379,9 +4220,53 @@ async def _persist_skipped_music(state: StationState, config, metadata: dict, *,
         )
 
 
+def _next_first_listen_chunk(chunk_iter: Iterator[bytes]) -> bytes | None:
+    try:
+        return next(chunk_iter)
+    except StopIteration:
+        return None
+
+
 async def _audio_generator(request: Request):
-    """Stream the live station feed from the playback loop."""
+    """Stream an eligible first-listen prelude, then the shared live station.
+
+    The packaged show is emitted before subscribing to ``LiveStreamHub``.  It
+    therefore cannot alter the shared queue or now-playing state, and its bytes
+    give the speaker a runway while the ordinary station wakes for this client.
+    """
     hub = request.app.state.stream_hub
+    show_path = None
+    if first_listen_show_required(request.app.state):
+        try:
+            show_path = await asyncio.wait_for(
+                asyncio.to_thread(approved_first_listen_show_path),
+                timeout=FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("First Listen package approval exceeded the first-audio budget; joining live station")
+        except Exception:
+            # Package approval is local best-effort validation. A corrupt or
+            # unreadable install must never delay or terminate the live stream.
+            logger.warning("First Listen package approval failed; joining live station", exc_info=True)
+    if show_path is not None:
+        if await request.is_disconnected():
+            return
+        logger.info("First Listen client prelude: %s", show_path.name)
+        try:
+            chunk_iter = iter(iter_first_listen_show_chunks(show_path))
+            while True:
+                chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
+                if chunk is None:
+                    break
+                yield chunk
+        except OSError:
+            # The reviewed package asset is optional at runtime: corruption or
+            # an unreadable installation falls through to the normal instant-
+            # audio ladder instead of terminating the speaker request.
+            logger.warning("First Listen client prelude became unreadable; joining live station", exc_info=True)
+        if await request.is_disconnected():
+            return
+
     listener_id, listener_queue = hub.subscribe()
 
     try:
@@ -3404,18 +4289,20 @@ async def _audio_generator(request: Request):
         hub.unsubscribe(listener_id)
 
 
-def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
+async def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
     # CSP: 'unsafe-inline' is required because admin.html has inline event handlers
     # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
     # esc() on all HA fields in admin.html is the load-bearing XSS defense.
+    await _wait_for_first_listen_bootstrap(request.app.state)
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
     state = getattr(request.app.state, "station_state", None)
     stopped = "true" if bool(getattr(state, "session_stopped", False)) else "false"
+    first_listen_entry = _first_listen_entry_state(request.app.state)
     # Keep the stopped-state first paint resilient to harmless body-tag
     # formatting or attributes added by future admin-page work.
     html = _re.sub(
         r"(</head>\s*<body)(?![^>]*\bdata-stopped\b)",
-        lambda match: f'{match.group(1)} data-stopped="{stopped}"',
+        lambda match: f'{match.group(1)} data-stopped="{stopped}" data-first-listen-entry="{first_listen_entry}"',
         html,
         count=1,
     )
@@ -3457,7 +4344,7 @@ async def listener_home(request: Request):
     prefix = request.headers.get("X-Ingress-Path", "")
     config = request.app.state.config
     if config.is_addon and prefix and _is_hassio_or_loopback(request):
-        return _render_admin_response(request, prefix)
+        return await _render_admin_response(request, prefix)
     return _TEMPLATES.TemplateResponse(
         request,
         "listener.html",
@@ -3476,7 +4363,7 @@ async def dashboard(request: Request):
 async def admin_panel(request: Request):
     """Serve the admin control room panel."""
     prefix = request.headers.get("X-Ingress-Path", "")
-    return _render_admin_response(request, prefix)
+    return await _render_admin_response(request, prefix)
 
 
 @router.get("/listen", response_class=HTMLResponse)
@@ -3606,24 +4493,338 @@ async def logs(request: Request, lines: int = 50, _: None = Depends(require_admi
 
 
 @router.get("/api/setup/status")
-async def setup_status(request: Request, _: None = Depends(require_admin_access)):
+async def setup_status(request: Request, _: None = Depends(_require_active_setup_access)):
     """Return the current first-run setup snapshot for onboarding."""
+    await _wait_for_first_listen_bootstrap(request.app.state)
     return _setup_projection(request)["setup"]
 
 
 @router.post("/api/setup/recheck")
-async def setup_recheck(request: Request, _: None = Depends(require_admin_access)):
+async def setup_recheck(request: Request, _: None = Depends(_require_active_setup_access)):
     """Force a fresh setup snapshot."""
+    _body, error = await _strict_setup_json(request, {})
+    if error is not None:
+        return error
+    await _wait_for_first_listen_bootstrap(request.app.state)
     return _setup_projection(request, force_refresh=True)["setup"]
 
 
+@router.post("/api/setup/first-listen/players")
+async def setup_first_listen_players(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Run explicit HA/HACS preflight and return sanitized speaker choices."""
+    _body, error = await _strict_setup_json(request, {})
+    if error is not None:
+        return error
+    service = _ha_playback_service(request.app.state)
+    try:
+        discovery = await service.discover(force=True)
+    except HAPlaybackError as exc:
+        return _setup_error(exc.reason.value)
+
+    receipt = getattr(request.app.state, "first_listen_receipt", None)
+    if receipt is None:
+        try:
+            receipt = await _first_listen_store(request.app.state).load()
+        except Exception:
+            receipt = None
+        request.app.state.first_listen_receipt = receipt
+    candidates = [
+        {
+            "entity_id": candidate.entity_id,
+            "friendly_name": candidate.friendly_name,
+            "state": candidate.state,
+            "device_class": candidate.device_class,
+            "area": candidate.area,
+            "supports_play_media": candidate.supports_play_media,
+            "available": candidate.available,
+        }
+        for candidate in discovery.candidates
+    ]
+    selected_entity_id = str(getattr(receipt, "selected_entity_id", "") or "")
+    return {
+        "ok": True,
+        "media_source_ready": discovery.media_source_ready,
+        "media_source_uri": "media-source://mammamiradio/live",
+        "candidates": candidates,
+        "players": candidates,
+        "selected_entity_id": selected_entity_id,
+        "receipt_recovery": _pending_receipt_recovery(request.app.state, service=service),
+    }
+
+
+@router.post("/api/setup/first-listen/play")
+async def setup_first_listen_play(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Resume the station and ask HA to play the exact stable media source."""
+    body, error = await _strict_setup_json(request, {"entity_id": str})
+    if error is not None:
+        return error
+    entity_id = str(body["entity_id"])
+    try:
+        result = await _ha_playback_service(request.app.state).play(entity_id)
+    except HAPlaybackError as exc:
+        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+    if result.receipt_persisted is not True or not result.attempt_id:
+        return _setup_error(
+            HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
+            accepted=True,
+            receipt_persisted=False,
+            station_resumed=result.station_resumed,
+            extra={"entity_id": result.entity_id},
+        )
+    return {
+        "ok": True,
+        "accepted": True,
+        "receipt_persisted": True,
+        "station_resumed": result.station_resumed,
+        "entity_id": result.entity_id,
+        "attempt_id": result.attempt_id,
+        "media_source_uri": "media-source://mammamiradio/live",
+        "message": "Home Assistant accepted the request. Audible confirmation is still yours.",
+    }
+
+
+@router.post("/api/setup/first-listen/receipt/retry")
+async def setup_first_listen_receipt_retry(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Persist the server-owned accepted attempt without sending playback again."""
+    body, error = await _strict_setup_json(request, {"entity_id": str})
+    if error is not None:
+        return error
+    try:
+        result = await _ha_playback_service(request.app.state).persist_pending_receipt(str(body["entity_id"]))
+    except HAPlaybackError as exc:
+        if exc.reason is HAPlaybackReason.RECEIPT_UNAVAILABLE:
+            return _setup_error(
+                exc.reason.value,
+                accepted=True,
+                receipt_persisted=False,
+                station_resumed=exc.station_resumed,
+                extra={"entity_id": str(body["entity_id"])},
+            )
+        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+    if result.receipt_persisted is not True or not result.attempt_id:
+        return _setup_error(
+            HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
+            accepted=True,
+            receipt_persisted=False,
+            station_resumed=result.station_resumed,
+            extra={"entity_id": result.entity_id},
+        )
+    return {
+        "ok": True,
+        "accepted": True,
+        "receipt_persisted": True,
+        "station_resumed": result.station_resumed,
+        "entity_id": result.entity_id,
+        "attempt_id": result.attempt_id,
+        "message": "The accepted listening check is saved. No playback request was sent again.",
+    }
+
+
+@router.post("/api/setup/first-listen/verify")
+async def setup_first_listen_verify(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Record the operator's Yes/Not-yet answer for the current attempt."""
+    body, error = await _strict_setup_json(request, {"attempt_id": str, "heard": bool})
+    if error is not None:
+        return error
+    try:
+        receipt = await _first_listen_store(request.app.state).verify(
+            str(body["attempt_id"]),
+            heard=bool(body["heard"]),
+        )
+    except FirstListenAttemptMismatchError:
+        return _setup_error("attempt_mismatch")
+    except (FirstListenReceiptUnavailableError, OSError):
+        return _setup_error("receipt_unavailable", accepted=True, receipt_persisted=False)
+    request.app.state.first_listen_receipt = receipt
+    heard = bool(body["heard"])
+    return {
+        "ok": True,
+        "heard": heard,
+        "first_listen_achieved": bool(receipt.audio_complete),
+        "attempt_id": receipt.accepted_attempt_id,
+        "repair": None
+        if heard
+        else {
+            "title": "Let's get the sound to the right room",
+            "steps": [
+                "Wait a few seconds, then check the speaker's mute and volume in Home Assistant.",
+                "Confirm the selected speaker is the one you expected.",
+                "Open HA's media browser and test media-source://mammamiradio/live.",
+                "If it is missing, reload the HACS integration and recheck add-on connectivity.",
+            ],
+        },
+    }
+
+
+@router.post("/api/setup/home-context-preview")
+async def setup_home_context_preview(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Fetch a fresh, detached privacy preview on explicit operator action."""
+    _body, error = await _strict_setup_json(request, {})
+    if error is not None:
+        return error
+    app_state = request.app.state
+    if not await _first_listen_audio_gate_open(app_state):
+        return _setup_error("first_listen_required")
+    config = app_state.config
+    state = app_state.station_state
+    if not config.homeassistant.enabled or not config.ha_token:
+        return _setup_error("ha_access_missing")
+
+    authorization = state.home_authorization or HomeAuthorization.narrow()
+    revision_before = policy_revision(config.cache_dir)
+    generation_before = getattr(state, "home_context_policy_generation", 0)
+    result = await _fetch_home_context_preview_singleflight(app_state, authorization)
+    if result is None or not result.is_fresh:
+        if result is None:
+            return _setup_error("preview_unavailable")
+        return _setup_error(result.error_code or "preview_unavailable")
+    if revision_before != policy_revision(config.cache_dir) or generation_before != getattr(
+        state, "home_context_policy_generation", 0
+    ):
+        return _setup_error("preview_unavailable")
+
+    proof = _HomeContextPreviewProof(
+        expires_at=time.monotonic() + _HOME_PREVIEW_PROOF_TTL_SECONDS,
+        config_fingerprint=_home_access_fingerprint(config),
+        authorization_mode=authorization.mode.value,
+        policy_revision=revision_before,
+        context_generation=generation_before,
+    )
+    app_state.home_context_preview_proof = proof
+    preview = _safe_detached_home_context_preview(result.context, config)
+    preview["proof_expires_in_seconds"] = int(_HOME_PREVIEW_PROOF_TTL_SECONDS)
+    if preview["context_value"] == "ambient_only":
+        preview["message"] = (
+            "Only generic daylight is available. It is disclosed below, but it would not make the station "
+            "meaningfully more personal. Nothing was promoted into host context or sent to an AI provider."
+        )
+    elif preview["context_value"] == "empty":
+        preview["message"] = (
+            "No useful Home context is available. Nothing was promoted into host context or sent to an AI provider."
+        )
+    else:
+        preview["message"] = "Preview only — nothing here was promoted into host context or sent to an AI provider."
+    return preview
+
+
+@router.patch("/api/setup/home-context-choice")
+async def setup_home_context_choice(request: Request, _: None = Depends(_require_active_setup_access)):
+    """Persist and apply explicit Keep off / Enable Home context choices."""
+    body, error = await _strict_setup_json(request, {"enabled": bool})
+    if error is not None:
+        return error
+    app_state = request.app.state
+    enabled = bool(body["enabled"])
+    lock = getattr(app_state, "home_context_choice_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app_state.home_context_choice_lock = lock
+
+    async with lock:
+        if enabled and not await _first_listen_audio_gate_open(app_state):
+            return _setup_error("first_listen_required")
+        preview_proof = getattr(app_state, "home_context_preview_proof", None)
+        if enabled and not _home_context_preview_proof_valid(app_state, preview_proof):
+            return _setup_error("preview_required")
+
+        persisted = True
+        purged = 0
+        if enabled:
+            try:
+                await _persist_home_context_choice(app_state.config, True)
+            except OSError:
+                return _setup_error(
+                    "privacy_persist_failed",
+                    extra={"enabled": False, "persisted": False},
+                )
+            # Supported entity-policy writes share this route's lock, but an
+            # out-of-band policy/config change can still land while the add-on
+            # option is being persisted. Re-check the exact preview proof after
+            # that await. If it drifted, compensate the already-written choice
+            # and latch explicit-off so a delayed install-origin task cannot
+            # widen the runtime behind this failed enable attempt.
+            if not _home_context_preview_proof_valid(app_state, preview_proof):
+                app_state.home_context_choice_explicit = True
+                app_state.home_context_preview_proof = None
+                try:
+                    await _persist_home_context_choice(app_state.config, False)
+                except OSError:
+                    persisted = False
+                purged = await _disable_home_context_runtime(app_state)
+                if not persisted:
+                    return _setup_error(
+                        "privacy_persist_failed",
+                        extra={
+                            "enabled": False,
+                            "persisted": False,
+                            "live_off": True,
+                            "purged_pending_segments": purged,
+                        },
+                    )
+                return _setup_error(
+                    "preview_required",
+                    extra={
+                        "enabled": False,
+                        "persisted": True,
+                        "purged_pending_segments": purged,
+                    },
+                )
+            _enable_home_context_runtime(app_state)
+        else:
+            # This in-process latch is authoritative even when the durable
+            # write later fails: a delayed install-origin migration must never
+            # reinterpret an explicit Keep off action and turn context back on.
+            app_state.home_context_choice_explicit = True
+            purged = await _disable_home_context_runtime(app_state)
+            try:
+                await _persist_home_context_choice(app_state.config, False)
+            except OSError:
+                persisted = False
+        if not persisted:
+            return _setup_error(
+                "privacy_persist_failed",
+                extra={
+                    "enabled": False,
+                    "persisted": False,
+                    "live_off": True,
+                    "purged_pending_segments": purged,
+                },
+            )
+
+        app_state.home_context_choice_explicit = True
+        app_state.home_context_preview_proof = None
+        try:
+            receipt = await _first_listen_store(app_state).record_privacy_reviewed()
+        except (FirstListenReceiptUnavailableError, OSError):
+            return _setup_error(
+                "privacy_receipt_unavailable",
+                extra={"enabled": enabled, "persisted": True},
+            )
+        app_state.first_listen_receipt = receipt
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "persisted": True,
+            "privacy_reviewed": True,
+            "purged_pending_segments": purged,
+            "message": (
+                "Home context is enabled locally. Without an AI provider, it is not sent to one."
+                if enabled
+                else "Home context is off and retained prompt context was cleared."
+            ),
+        }
+
+
 @router.post("/api/setup/provider-check")
-async def setup_provider_check(request: Request, _: None = Depends(require_admin_access)):
+async def setup_provider_check(request: Request, _: None = Depends(_require_active_setup_access)):
     """Run active, secret-safe Anthropic/OpenAI connectivity checks.
 
     Multiple rapid clicks should share one in-flight probe set instead of
     launching overlapping 12-second outbound checks against every provider.
     """
+    _body, error = await _strict_setup_json(request, {})
+    if error is not None:
+        return error
     config = request.app.state.config
 
     def _record_if_task_keys_match(probe_result: dict) -> None:
@@ -3697,8 +4898,8 @@ async def setup_provider_check(request: Request, _: None = Depends(require_admin
     return result
 
 
-@router.post("/api/setup/save-keys", dependencies=[Depends(require_admin_access)])
-async def save_keys(request: Request):
+@router.post("/api/setup/save-keys")
+async def save_keys(request: Request, _: None = Depends(_require_active_setup_access)):
     """Save API credentials to .env or add-on secrets.env and update the live config."""
     body, error = await read_json_object(request)
     if error is not None:
@@ -3824,6 +5025,8 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
 async def regenerate_homeassistant_labels(request: Request, _: None = Depends(require_admin_access)):
     """Force a background refresh of generated HA labels."""
     config = request.app.state.config
+    if not config.homeassistant.context_enabled:
+        return {"scheduled": False, "reason": "home_context_disabled"}
     if generation_in_progress():
         raise HTTPException(status_code=409, detail="HA label generation already in progress")
     if not config.anthropic_api_key:
@@ -3859,7 +5062,7 @@ async def homeassistant_context_candidates(request: Request, _: None = Depends(r
 
 
 @router.patch("/api/homeassistant/entity-policy")
-async def homeassistant_entity_policy(request: Request, _: None = Depends(require_admin_access)):
+async def homeassistant_entity_policy(request: Request, _: None = Depends(_require_active_setup_access)):
     """Apply one idempotent Home Context privacy property mutation."""
     body, error = await read_json_object(request)
     if error is not None:
@@ -3896,25 +5099,35 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             ),
         )
     loop = asyncio.get_running_loop()
-    try:
-        mutation = set_entity_muted if action == "muted" else set_personal_moment_enabled
-        policy = await loop.run_in_executor(
-            None,
-            functools.partial(
-                mutation,
-                config.cache_dir,
-                entity_id,
-                value,
-                label=row.get("label") or entity_id,
-                domain=row.get("domain") or entity_id.split(".", 1)[0],
-                area=row.get("area") or "",
-            ),
-        )
-    except OSError as exc:
-        logger.warning("Failed to save HA entity policy", exc_info=True)
-        raise HTTPException(status_code=500, detail="could not save entity policy") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    choice_lock = getattr(request.app.state, "home_context_choice_lock", None)
+    if choice_lock is None:
+        choice_lock = asyncio.Lock()
+        request.app.state.home_context_choice_lock = choice_lock
+    # The filtered-preview proof is bound to this policy's revision. Serialize
+    # the durable mutation with Home-context enable so its proof cannot be
+    # validated, followed by a concurrent unmute committing while the enabled
+    # choice is being written. Runtime cleanup below may proceed independently;
+    # the revision is the complete preview-invalidating boundary.
+    async with choice_lock:
+        try:
+            mutation = set_entity_muted if action == "muted" else set_personal_moment_enabled
+            policy = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    mutation,
+                    config.cache_dir,
+                    entity_id,
+                    value,
+                    label=row.get("label") or entity_id,
+                    domain=row.get("domain") or entity_id.split(".", 1)[0],
+                    area=row.get("area") or "",
+                ),
+            )
+        except OSError as exc:
+            logger.warning("Failed to save HA entity policy", exc_info=True)
+            raise HTTPException(status_code=500, detail="could not save entity policy") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     purged_pending_banter_count = 0
     # Both a mute and revoking a personal-moment opt-in tighten privacy for this
@@ -3922,7 +5135,16 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
     # already-airing segment finishes untouched), and the director must advance
     # so an in-flight render for the entity is rejected. Consent revocation
     # previously did neither, so a queued presence break could still air.
-    privacy_tightened = (action == "muted" and value) or (action == "personal_moment_enabled" and not value)
+    hard_mute = action == "muted" and value
+    privacy_tightened = hard_mute or (action == "personal_moment_enabled" and not value)
+    revoked_label_tasks: tuple[asyncio.Task, ...] = ()
+    if hard_mute:
+        # A mute is also an LLM-data cutover. Advance the catalog epoch and
+        # clear scene task identity before this handler yields again, otherwise
+        # work admitted under the old policy could publish Home-derived text
+        # after the mute was durably accepted.
+        revoked_label_tasks = invalidate_label_generation()
+        reset_scene_namer_cache()
     # In narrow mode a queued/in-flight break is tagged with the synthetic ambient
     # id (sun.ambient / weather.ambient); an operator may instead mute the real
     # underlying HA source. Expand the tightened id to its synthetic projection so
@@ -3937,7 +5159,8 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         tightened_ids |= {
             synthetic for synthetic, source in getattr(_ctx, "ambient_sources", {}).items() if source == entity_id
         }
-    if action == "muted" and value:
+    ledger_dirty = False
+    if hard_mute:
         # A hard mute is a temporal boundary as well as a visibility filter:
         # discard the retained source/baseline now so an eventual unmute cannot
         # turn a private transition into a delayed radio event.
@@ -3947,8 +5170,6 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
         if callable(invalidate_muted_entities):
             invalidate_muted_entities(tightened_ids)
         ledger_dirty = _clear_home_context_usage(state, config, entity_id)
-        if ledger_dirty and state.evening_ledger is not None:
-            await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
     elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
     if privacy_tightened:
@@ -3969,6 +5190,15 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(requir
             for tightened_id in tightened_ids:
                 for pending_queue_id in invalidate(tightened_id, policy_revision=current_policy_revision):
                     director.release(pending_queue_id, fact_id=None)
+    # All prompt-facing and queue state above is fenced synchronously. Slower
+    # disk/task cleanup can now yield without letting old-policy work publish.
+    if ledger_dirty and state.evening_ledger is not None:
+        await loop.run_in_executor(None, state.evening_ledger.save_if_dirty, config.cache_dir)
+    if revoked_label_tasks:
+        try:
+            await drain_invalidated_label_generation(revoked_label_tasks)
+        except Exception:
+            logger.warning("Home label-generation cancellation failed during entity mute")
     muted = entity_id in (policy.get("muted", {}) if isinstance(policy.get("muted"), dict) else {})
     personal_moment = entity_id in (
         policy.get("personal_moment_opt_ins", {}) if isinstance(policy.get("personal_moment_opt_ins"), dict) else {}
@@ -4270,7 +5500,7 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
     """Resume a stopped session."""
     state = request.app.state.station_state
     config = request.app.state.config
-    _clear_session_stopped(state, config)
+    await _resume_station(state, config)
     logger.info("Session resumed by admin")
     return {"ok": True}
 
@@ -5574,7 +6804,7 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=Path("music"))
+    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=config.music_dir)
     actual_duration_sec: float | None = None
     try:
         downloaded_path = Path(downloaded_path)
@@ -5616,6 +6846,7 @@ async def _commit_external_download(
             accept_recovered_download(config.cache_dir, track.cache_key)
             _reserve_continuity_runway(app_state, state, config)
             state.playlist.append(track)
+            state.source_readiness.observe_tracks([track])
             state.playlist_revision += 1
             # Don't clobber a pin that's still pending — claim the play-next slot only
             # when the caller's guard says it's free. Otherwise the track is in
@@ -5909,6 +7140,7 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
         state.playlist.insert(0, track)
     else:
         state.playlist.append(track)
+    state.source_readiness.observe_tracks([track])
     state.playlist_revision += 1
     return {"ok": True, "added": track.display, "position": position}
 
@@ -6370,6 +7602,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
             track.heading_id = heading.id
         _reserve_continuity_runway(request.app.state, state, config)
         state.playlist.extend(new_tracks)
+        state.source_readiness.observe_tracks(new_tracks)
         state.playlist_revision += 1
         _set_active_heading(state, heading)
 
@@ -6472,6 +7705,7 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
         else:
             state.playlist.extend(new_tracks)
         if new_tracks:
+            state.source_readiness.observe_tracks(new_tracks)
             state.playlist_revision += 1
         logger.info(
             "Playlist enriched from %s: added %d, skipped %d existing",
@@ -6652,7 +7886,7 @@ def _public_status_payload(request: Request) -> dict:
     # unauthenticated endpoint. An "airing" row shows only while it belongs to
     # the segment now_streaming is playing (send-start is provisional).
     recent_moments: list[dict] = []
-    ha_capable = bool(config.ha_token and config.homeassistant.enabled)
+    ha_capable = bool(config.ha_token and config.homeassistant.enabled and config.homeassistant.context_enabled)
     moment_store = getattr(state, "moment_store", None)
     authorization = state.home_authorization or HomeAuthorization.narrow()
     if ha_capable and moment_store is not None and authorization.allows_household_moments:
@@ -6663,7 +7897,7 @@ def _public_status_payload(request: Request) -> dict:
         except Exception:  # pragma: no cover - receipts must never break status
             logger.debug("Moment receipt public rows failed", exc_info=True)
             recent_moments = []
-    if state.ha_context or state.ha_ritual_public_families or recent_moments:
+    if config.homeassistant.context_enabled and (state.ha_context or state.ha_ritual_public_families or recent_moments):
         ha_moments = {
             "connected": True,
             "mood": state.ha_home_mood or None,

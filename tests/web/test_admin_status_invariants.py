@@ -217,6 +217,8 @@ def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
     assert "Provider keys configured" in _read_admin_html()
     assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
+    assert "providerKeysConfigured=configuredKeys.length>0" in block
+    assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
 
 
 def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:

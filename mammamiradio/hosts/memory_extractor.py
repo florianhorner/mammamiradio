@@ -24,9 +24,12 @@ logger = logging.getLogger(__name__)
 MEMORY_EXTRACT_MAX_TOKENS = 500
 MEMORY_EXTRACT_CALLER = "memory_extract"
 _MAX_IN_FLIGHT_EXTRACTIONS = 5
+_HOME_MEMORY_REVOCATION_DRAIN_SECONDS = 1.0
 
 _active_tasks: set[asyncio.Task] = set()
+_active_home_tasks: set[asyncio.Task] = set()
 _apply_lock: asyncio.Lock | None = None
+_home_memory_policy_epoch = 0
 # This module is deliberately excluded from `web/streamer.py`'s hot-reload set
 # (see `hot_reload_modules`) so a reload never orphans the task registry or
 # apply lock mid-extraction. Adding this module to that set would require
@@ -38,6 +41,57 @@ def _get_apply_lock() -> asyncio.Lock:
     if _apply_lock is None:
         _apply_lock = asyncio.Lock()
     return _apply_lock
+
+
+def _home_memory_policy_is_current(
+    *,
+    config: StationConfig,
+    state: StationState,
+    expected_policy_epoch: int | None,
+    expected_context_generation: int | None,
+) -> bool:
+    """Return whether a Home-derived extraction still belongs to the live policy era."""
+    if expected_policy_epoch is None:
+        return True
+    return bool(
+        expected_policy_epoch == _home_memory_policy_epoch
+        and isinstance(expected_context_generation, int)
+        and not isinstance(expected_context_generation, bool)
+        and config.homeassistant.context_enabled
+        and expected_context_generation == state.home_context_policy_generation
+    )
+
+
+def revoke_home_memory_extractions() -> tuple[asyncio.Task, ...]:
+    """Synchronously invalidate and cancel active Home-derived extractions.
+
+    The caller must pass the returned snapshot to
+    :func:`drain_revoked_home_memory_extractions`.  Splitting invalidation from
+    the bounded wait lets a privacy cutover advance the epoch before its first
+    await; cancellation-resistant provider calls remain fenced from durable
+    writes by the same epoch.
+    """
+    global _home_memory_policy_epoch
+    _home_memory_policy_epoch += 1
+    tasks = tuple(_active_home_tasks)
+    for task in tasks:
+        task.cancel()
+    return tasks
+
+
+async def drain_revoked_home_memory_extractions(tasks: tuple[asyncio.Task, ...]) -> None:
+    """Wait briefly for revoked tasks without making privacy shutdown blocking."""
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks, timeout=_HOME_MEMORY_REVOCATION_DRAIN_SECONDS)
+    if done:
+        await asyncio.gather(*done, return_exceptions=True)
+    if pending:
+        logger.warning(
+            "memory_extract: %d revoked Home task(s) still exiting after %.1fs",
+            len(pending),
+            _HOME_MEMORY_REVOCATION_DRAIN_SECONDS,
+        )
 
 
 def _clean_text(value: object, *, max_len: int = 1200) -> str:
@@ -211,6 +265,8 @@ async def extract_banter_memory(
     *,
     config: StationConfig,
     state: StationState,
+    _expected_home_policy_epoch: int | None = None,
+    _expected_home_context_generation: int | None = None,
 ) -> None:
     """Run best-effort memory extraction and apply durable writes.
 
@@ -220,6 +276,20 @@ async def extract_banter_memory(
     persona_store = getattr(state, "persona_store", None)
     if persona_store is None:
         logger.debug("memory_extract: skipped, no persona store")
+        return
+
+    def _policy_is_current() -> bool:
+        return _home_memory_policy_is_current(
+            config=config,
+            state=state,
+            expected_policy_epoch=_expected_home_policy_epoch,
+            expected_context_generation=_expected_home_context_generation,
+        )
+
+    # A tagged task can wait behind other post-air work.  Re-check at the last
+    # boundary before handing its Home-derived prompt to a provider.
+    if not _policy_is_current():
+        logger.debug("memory_extract: skipped after Home policy revocation")
         return
 
     try:
@@ -232,6 +302,7 @@ async def extract_banter_memory(
             model=resolve_model(config.models, MEMORY_EXTRACT_CALLER, "anthropic"),
             max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
             caller=MEMORY_EXTRACT_CALLER,
+            submission_guard=_policy_is_current if _expected_home_policy_epoch is not None else None,
         )
     except Exception as exc:
         logger.warning("memory_extract: generation failed: %s", exc, exc_info=True)
@@ -250,8 +321,16 @@ async def extract_banter_memory(
         return
 
     async with _get_apply_lock():
+        # Cancellation-resistant provider clients may still return after a
+        # privacy cutover.  The epoch is the durable fence before any persona
+        # or song-cue write begins.
+        if not _policy_is_current():
+            logger.debug("memory_extract: discarded result after Home policy revocation")
+            return
         try:
             if _has_persona_updates(persona_updates):
+                if not _policy_is_current():
+                    return
                 await persona_store.update_persona(persona_updates)
 
             if commit.youtube_id and song_cues:
@@ -262,6 +341,8 @@ async def extract_banter_memory(
                     cue_text = cue.get("cue_text")
                     if not cue_text:
                         continue
+                    if not _policy_is_current():
+                        return
                     await add_cue(
                         db_path,
                         commit.youtube_id,
@@ -294,14 +375,40 @@ def schedule_banter_memory_extraction(
     commit = MemoryExtractionCommit.from_metadata(metadata.get("memory_extraction"))
     if commit is None:
         return None
+    expected_home_policy_epoch: int | None = None
+    expected_home_context_generation: int | None = None
+    if "home_context_generation" in metadata:
+        expected_home_policy_epoch = _home_memory_policy_epoch
+        captured_generation = metadata.get("home_context_generation")
+        if isinstance(captured_generation, int) and not isinstance(captured_generation, bool):
+            expected_home_context_generation = captured_generation
+        if not _home_memory_policy_is_current(
+            config=config,
+            state=state,
+            expected_policy_epoch=expected_home_policy_epoch,
+            expected_context_generation=expected_home_context_generation,
+        ):
+            logger.debug("memory_extract: skipped stale Home-derived segment")
+            return None
     if len(_active_tasks) >= _MAX_IN_FLIGHT_EXTRACTIONS:
         logger.warning("memory_extract: skipped because %d tasks are already active", len(_active_tasks))
         return None
 
+    extract_kwargs: dict[str, Any] = {"config": config, "state": state}
+    if expected_home_policy_epoch is not None:
+        extract_kwargs.update(
+            {
+                "_expected_home_policy_epoch": expected_home_policy_epoch,
+                "_expected_home_context_generation": expected_home_context_generation,
+            }
+        )
     task = asyncio.create_task(
-        extract_banter_memory(commit, config=config, state=state),
+        extract_banter_memory(commit, **extract_kwargs),
         name=f"memory_extract:{int(time.time())}",
     )
     _active_tasks.add(task)
     task.add_done_callback(_active_tasks.discard)
+    if expected_home_policy_epoch is not None:
+        _active_home_tasks.add(task)
+        task.add_done_callback(_active_home_tasks.discard)
     return task

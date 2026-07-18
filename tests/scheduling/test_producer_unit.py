@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +46,8 @@ from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
     _apply_ritual_recipe_matches,
+    _enqueue_with_egress,
+    _home_context_generation_is_current,
     _listener_truth_guard,
     _pick_canned_clip,
     run_producer,
@@ -133,6 +136,47 @@ def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str 
 def _fake_path(*_args, **_kwargs) -> Path:
     """Return a dummy Path that satisfies type checks."""
     return Path("/tmp/mammamiradio_test/fake.mp3")
+
+
+@pytest.mark.asyncio
+async def test_home_context_generation_gate_rechecks_after_egress_await(tmp_path):
+    """A privacy cutover during egress retracts the stale host segment."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.homeassistant.context_enabled = True
+    segment = Segment(
+        type=SegmentType.NEWS_FLASH,
+        path=tmp_path / "pre-cutover.mp3",
+        metadata={"home_context_generation": state.home_context_policy_generation},
+        ephemeral=False,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
+
+    async def _egress_with_privacy_cutover(rendered: Segment, _config) -> Segment:
+        await asyncio.sleep(0)
+        _config.homeassistant.context_enabled = False
+        state.home_context_policy_generation += 1
+        return rendered
+
+    def _stale_reason() -> str | None:
+        if _home_context_generation_is_current(state, config, segment):
+            return None
+        return GenerationWasteReason.OPERATOR_PURGE
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", side_effect=_egress_with_privacy_cutover):
+        accepted = await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            stale_check=_stale_reason,
+        )
+
+    assert not accepted
+    assert queue.empty()
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
 
 
 async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0):
@@ -967,6 +1011,8 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
             await asyncio.wait_for(second_download_started.wait(), timeout=1.0)
             assert queue.empty()
             assert len(state.played_tracks) == 0
+            assert state.source_readiness.entries["charts"].playable == 0
+            assert state.source_readiness.entries["charts"].failure == ""
         finally:
             task.cancel()
             try:
@@ -1096,6 +1142,70 @@ async def test_chart_refresh_waits_full_interval_after_startup():
                 pass
 
     mock_refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chart_refresh_discards_results_after_source_switch():
+    """A slow charts refresh cannot repopulate a newly selected source."""
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    await queue.put(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/mammamiradio_test/seed.mp3"),
+            duration_sec=300.0,
+            metadata={"type": "music"},
+        )
+    )
+    refresh_started = threading.Event()
+    allow_refresh = threading.Event()
+    stale_chart_track = Track(
+        title="Late Chart Song",
+        artist="Late Artist",
+        duration_ms=200_000,
+        spotify_id="late-chart",
+    )
+
+    def slow_refresh(_existing_ids):
+        refresh_started.set()
+        assert allow_refresh.wait(timeout=1.0)
+        return [stale_chart_track]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.PLAYLIST_REFRESH_INTERVAL_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}.fetch_chart_refresh", side_effect=slow_refresh),
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            assert await asyncio.to_thread(refresh_started.wait, 1.0)
+            replacement = Track(
+                title="Local Song",
+                artist="Local Artist",
+                duration_ms=200_000,
+                spotify_id="local-song",
+                source="local",
+            )
+            state.switch_playlist(
+                [replacement],
+                PlaylistSource(kind="local", source_id="local", label="Local music"),
+            )
+            allow_refresh.set()
+            await asyncio.sleep(0.05)
+
+            assert state.playlist == [replacement]
+            assert state.source_readiness.entries["charts"].candidates == 0
+            assert state.source_readiness.entries["local"].candidates == 1
+        finally:
+            allow_refresh.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
@@ -1611,6 +1721,7 @@ async def test_prewarm_skips_denylisted_track_for_playable_alternative(tmp_path)
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "operator-music"
     queue: asyncio.Queue = asyncio.Queue()
     source = tmp_path / "source.mp3"
     source.write_bytes(b"downloaded audio")
@@ -1630,8 +1741,57 @@ async def test_prewarm_skips_denylisted_track_for_playable_alternative(tmp_path)
 
         assert result is True
         assert mock_download.await_args.args[0] is playable
+        assert mock_download.await_args.kwargs["music_dir"] == config.music_dir
         segment = queue.get_nowait()
         assert segment.metadata["title"] == playable.display
+        assert segment.metadata["source_kind"] == "youtube"
+        assert state.source_readiness.entries["charts"].playable == 1
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_source_exhaustion_requires_every_candidate_in_that_source(tmp_path):
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    state = _make_state()
+    rejected, eligible = state.playlist
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "candidate unavailable")
+
+        selected = _select_accepted_music_track(state, config)
+
+        assert selected is eligible
+        assert state.source_readiness.entries["charts"].exhausted is False
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_source_exhaustion_is_isolated_across_mixed_sources(tmp_path):
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    chart = Track(title="Chart", artist="Artist", duration_ms=180_000, spotify_id="chart", source="youtube")
+    jamendo = Track(title="CC", artist="Artist", duration_ms=180_000, spotify_id="cc", source="jamendo")
+    state = StationState(playlist=[chart, jamendo])
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, chart.cache_key, "candidate unavailable")
+
+        selected = _select_accepted_music_track(state, config)
+
+        assert selected is jamendo
+        assert state.source_readiness.entries["charts"].exhausted is True
+        assert state.source_readiness.entries["jamendo"].exhausted is False
     finally:
         clear_rejected_cache_keys()
 
@@ -1655,6 +1815,8 @@ async def test_valid_local_recovery_reopens_a_session_denied_track(tmp_path):
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+    state.source_readiness.mark_candidates("local", 1)
     marker = tmp_path / f"_failed_{track.cache_key}.mp3"
     marker.write_text("yt-dlp unavailable")
 
@@ -1664,8 +1826,12 @@ async def test_valid_local_recovery_reopens_a_session_denied_track(tmp_path):
     clear_rejected_cache_keys()
     try:
         reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        assert _select_accepted_music_track(state, config) is None
+        assert state.source_readiness.entries["local"].exhausted is True
+
         local_file.write_bytes(b"recovered audio")
         assert _select_accepted_music_track(state, config) is track
+        assert state.source_readiness.entries["local"].exhausted is False
         assert is_rejected_cache_key(track.cache_key)
 
         with (
@@ -1686,11 +1852,13 @@ async def test_prewarm_returns_false_when_every_track_is_denylisted(tmp_path):
     """No eligible prewarm track must not trigger another acquisition attempt."""
     from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
     from mammamiradio.scheduling.producer import prewarm_first_segment
+    from mammamiradio.web.status_payload import _source_readiness_status
 
     state = _make_state()
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
     queue: asyncio.Queue = asyncio.Queue()
 
     clear_rejected_cache_keys()
@@ -1705,6 +1873,10 @@ async def test_prewarm_returns_false_when_every_track_is_denylisted(tmp_path):
 
         assert result is False
         assert queue.empty()
+        assert state.source_readiness.entries["charts"].exhausted is True
+        charts = _source_readiness_status(config, state)["sources"]["charts"]
+        assert charts["status"] == "unavailable"
+        assert charts["detail"] == "No found track could be prepared as playable audio."
         mock_download.assert_not_awaited()
         mock_normalize.assert_not_called()
     finally:

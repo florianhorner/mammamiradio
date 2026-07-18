@@ -51,12 +51,15 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
+    RenderedMusicTrack,
     _adjacent_music_source,
     _enqueue_with_egress,
     _normalized_cache_path,
     prewarm_first_segment,
     run_producer,
 )
+from mammamiradio.web.status_payload import _source_readiness_status
+from mammamiradio.web.streamer import _apply_ban
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -229,6 +232,62 @@ async def test_unavailable_music_render_closes_its_timing(tmp_path):
     timing = next(timing for timing in state.render_timings if timing.get("reason") == "render_unavailable")
     assert timing["outcome"] == "failed"
     assert not any(timing.get("reason") == "abandoned" for timing in state.render_timings)
+
+
+@pytest.mark.asyncio
+async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_path):
+    """A stale render cannot undo the terminal source truth written by a ban."""
+    track = Track(
+        title="Canzone Uno",
+        artist="Artista",
+        duration_ms=200_000,
+        spotify_id="local1",
+        source="local",
+        local_path=tmp_path / "source.mp3",
+    )
+    track.local_path.write_bytes(b"audio")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = _make_config(tmp_path)
+    config.music_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rendered_path = tmp_path / "rendered.mp3"
+    rendered_path.write_bytes(b"audio")
+    render_started = asyncio.Event()
+    finish_render = asyncio.Event()
+
+    async def _render_then_finish(*_args, **_kwargs):
+        render_started.set()
+        await finish_render.wait()
+        return RenderedMusicTrack(
+            track=track,
+            path=rendered_path,
+            cache_path=rendered_path,
+            cache_hit=True,
+        )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_then_finish),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(render_started.wait(), timeout=1.0)
+            result = _apply_ban(state, config, [track], queue=queue)
+            assert result["removed"] == 1
+            assert _source_readiness_status(config, state)["sources"]["local"]["status"] == "unavailable"
+
+            finish_render.set()
+            await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.STALE_PLAYLIST, 0) >= 1)
+        finally:
+            await _cancel(task)
+
+    readiness = _source_readiness_status(config, state)
+    assert queue.empty()
+    assert state.playlist == []
+    assert readiness["sources"]["local"]["status"] == "unavailable"
+    assert readiness["sources"]["local"]["playable"] == 0
+    assert readiness["programming_ready"] is False
 
 
 @pytest.mark.asyncio

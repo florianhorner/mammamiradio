@@ -161,7 +161,7 @@ def test_archivio_filters_restored_after_deferred_helpers_load() -> None:
     assert "DOMContentLoaded" in html[init_at - 400 : init_at + 400]
 
 
-# ── Motore three-group split + Setup auto-collapse (T5) ─────────────
+# ── Motore diagnostics + reusable First Listen setup group ──────────
 
 
 def test_motore_three_groups_present() -> None:
@@ -187,7 +187,17 @@ def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
     assert 'id="on-air"' in html and 'id="adminTabs"' in html
     assert html.index('id="on-air"') < html.index('id="setupStrip"') < html.index('id="adminTabs"')
     assert 'data-tab="motore">Motore' in html
-    assert 'data-tab="setup"' not in html
+    assert 'data-tab="setup">First Listen' in html
+    assert 'id="first-listen-panel" data-panel="setup"' in html
+    assert 'aria-controls="first-listen-panel"' in html
+
+
+def test_seven_admin_tabs_keep_a_bounded_mobile_grid() -> None:
+    html = _html()
+    assert "grid-template-columns:repeat(4,minmax(0,1fr))" in html
+    assert ".mmr-tab:last-child:nth-child(4n+3){grid-column:span 2" in html
+    assert "grid-template-columns:repeat(2,minmax(0,1fr))" in html
+    assert ".mmr-tab:last-child:nth-child(2n+1){grid-column:span 2" in html
 
 
 def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> None:
@@ -262,7 +272,7 @@ def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None
 
 def test_setup_auto_collapse_wired_into_render() -> None:
     html = _html()
-    assert "motoreSetupAutoCollapse(!needsAction)" in html
+    assert "motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup')" in html
     js = _js()
     assert "details.dataset.userPinned" in js, "manual pin must override auto-collapse"
 
@@ -497,7 +507,7 @@ def test_structural_italian_flair_preserved() -> None:
         assert flair in html
 
 
-def test_motore_runtime_groups_precede_setup() -> None:
+def test_motore_runtime_groups_precede_first_listen_source_markup() -> None:
     html = _html()
     header = html[html.index("<h2>Motore</h2>") : html.index('id="pipelineStatus"')]
     assert "pipeline · runtime · costi" in header
@@ -507,7 +517,7 @@ def test_motore_runtime_groups_precede_setup() -> None:
     costs = html.index('id="eg-costs-h"')
     setup = html.index('id="setupGroup"')
     assert pipeline < status < costs < setup, (
-        "Motore must show Pipeline, Status, and Costi before the collapsible Setup group."
+        "The reusable setup markup must follow Pipeline, Status, and Costi in source order."
     )
     config = html.index('id="eg-config-h"')
     quality = html.index('id="qualityProfile"')

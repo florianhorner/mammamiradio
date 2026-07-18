@@ -25,6 +25,30 @@ Code change
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
 
+## First-listen operator check
+
+After installing the HACS integration and restarting Home Assistant once, open
+the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+authored 27-second mini-show on deck: station music and a privacy-aware
+Marco/Giulia opening, then the live stream. It needs no AI key or Home context.
+Source readiness is supporting detail under that opening; verify that charts,
+Jamendo, local music, and recovery cover are described honestly.
+
+Select **Find my speakers**, choose one physical `media_player`, then select
+**Start Mamma Mi Radio**. The dispatch contract is always
+`media-source://mammamiradio/live`. An accepted Home Assistant service call is
+not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening
+reaches the room, or use the [first-listen repair
+steps](../integrations/ha-integration.md#first-listen-repair).
+
+First audio does not require an AI key. On a fresh add-on install,
+`ha_context_enabled` is omitted and effective Home context stays off. After
+audible verification, First Listen shows a fresh filtered preview before offering
+**Keep private and continue** or **Let future hosts use this**. If only generic
+daylight is available, verify that it is disclosed as ambient-only and not
+meaningful personalization, with the private path recommended. AI-host setup
+comes later.
+
 **Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
 ## Version: three files, must match
@@ -123,7 +147,7 @@ Current config options:
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
-| `ha_context_enabled` | `bool?` | `MAMMAMIRADIO_HA_CONTEXT_ENABLED` (on by default; turn off to keep HA entity publishing but stop full `/api/states` prompt-context polling) |
+| `ha_context_enabled` | `bool?` | `MAMMAMIRADIO_HA_CONTEXT_ENABLED` (no declared fresh-install default; missing stays omitted/off until the First Listen privacy choice) |
 | `ha_context_poll_interval` | `int(1,3600)?` | `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL` (default 300s) |
 | `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
 | `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
@@ -138,7 +162,7 @@ Current config options:
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
 
-Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`). Add-on local MP3s live at `/data/music`; `run.sh` exports that path as `MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only when `/data` is not writable.
 
 **Provider secrets.** The five AI/TTS provider credentials live in `/config/secrets.env` in add-on
 mode: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
@@ -177,7 +201,7 @@ add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.
 
-The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
+The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, an explicitly present `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Missing `ha_context_enabled` is deliberately not exported, preserving the fresh-install privacy gate. Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
 
 1. Add to `schema:` in `config.yaml`; also add to `options:` in the same relative order only if it should be visible by default
 2. Add a translation entry in `translations/en.yaml`

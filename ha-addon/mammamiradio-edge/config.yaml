@@ -27,7 +27,6 @@ map:
 options:
   station_name: "Mamma Mi Radio"
   enable_home_assistant: true
-  ha_context_enabled: true
   ha_context_poll_interval: 300
   ha_media_player_push: true
   quality_profile: "balanced"

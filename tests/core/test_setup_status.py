@@ -6,7 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import StationState, Track
+from mammamiradio.core.first_listen import FirstListenReceiptV1
+from mammamiradio.core.models import ScoredEntityStatus, StationState, Track
 from mammamiradio.core.setup_status import (
     _home_context_copy,
     _playlist_is_demo,
@@ -15,6 +16,10 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
     detect_run_mode,
+    first_listen_onboarding_active,
+    has_safe_home_context,
+    home_context_availability,
+    home_context_value,
 )
 
 
@@ -28,6 +33,20 @@ def _real_state() -> StationState:
     return StationState(
         playlist=[Track(title="Real Song", artist="Artist", duration_ms=180_000, spotify_id="spotify123")],
     )
+
+
+def _scored_entity(entity_id: str) -> ScoredEntityStatus:
+    return {
+        "entity_id": entity_id,
+        "area": None,
+        "domain": entity_id.partition(".")[0],
+        "score": 0.0,
+        "state": None,
+        "label": entity_id,
+        "label_tier": "fallback",
+        "summary": entity_id,
+        "device_class": None,
+    }
 
 
 def test_classify_station_mode_demo():
@@ -243,6 +262,61 @@ def test_guided_setup_connected_home_requires_safe_context():
         "label": "Review home context",
         "target": "setup",
     }
+
+
+def test_sun_only_context_is_ambient_only_not_connected_home() -> None:
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.ha_token = "ha-token"
+    state = _real_state()
+    state.ha_context = "- Daylight: above horizon"
+    state.ha_context_last_updated = 123.0
+    state.ha_context_entity_count = 1
+    state.ha_scored_entities = [_scored_entity("sun.ambient")]
+
+    availability = home_context_availability(config, state)
+
+    assert home_context_value(state) == "ambient_only"
+    assert availability.readiness == "empty"
+    assert availability.home_context_ready is False
+    assert classify_station_mode(config, state)["id"] == "full_ai"
+
+
+@pytest.mark.parametrize("daylight_id", ["sun.ambient", "sun.sun"])
+def test_weather_plus_daylight_is_meaningful_context(daylight_id: str) -> None:
+    config = load_config()
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.ha_token = "ha-token"
+    state = _real_state()
+    state.ha_context = "- Weather: cloudy, 20°C\n- Daylight: above horizon"
+    state.ha_context_last_updated = 123.0
+    state.ha_context_entity_count = 2
+    state.ha_scored_entities = [
+        _scored_entity(daylight_id),
+        _scored_entity("weather.ambient"),
+    ]
+
+    availability = home_context_availability(config, state)
+
+    assert home_context_value(state) == "useful"
+    assert availability.readiness == "prompt_ready"
+    assert availability.home_context_ready is True
+
+
+def test_has_safe_home_context_requires_useful_radio_value() -> None:
+    useful = _real_state()
+    useful.ha_scored_entities = [_scored_entity("weather.ambient")]
+
+    assert has_safe_home_context(useful) is True
+    assert has_safe_home_context(_real_state()) is False
+
+
+def test_unrecognized_install_origin_fails_closed_until_onboarding_is_complete() -> None:
+    assert first_listen_onboarding_active("malformed", audio_complete=False, privacy_complete=False) is True
+    assert first_listen_onboarding_active("malformed", audio_complete=True, privacy_complete=True) is False
 
 
 def test_build_setup_status_homeassistant_essential_requires_prompt_safe_context():
@@ -555,3 +629,271 @@ def test_playlist_is_demo_empty():
 def test_playlist_is_demo_none():
     state = StationState(playlist=None)
     assert _playlist_is_demo(state) is True
+
+
+def _first_listen_source_projection(*, jamendo_status: str = "not_configured") -> dict:
+    sources = {}
+    for kind, status in (
+        ("charts", "unavailable"),
+        ("jamendo", jamendo_status),
+        ("local", "not_configured"),
+        ("demo", "not_bundled"),
+        ("recovery", "cover_only"),
+    ):
+        sources[kind] = {
+            "kind": kind,
+            "label": kind.title(),
+            "status": status,
+            "detail": f"{kind} detail",
+            "configured": status != "not_configured",
+            "attempted": status not in {"not_configured", "not_bundled", "cover_only"},
+            "candidates": 2 if status == "candidates_only" else 0,
+            "playable": 1 if status in {"playable", "on_air"} else 0,
+            "on_air": status == "on_air",
+            "failure": "source unavailable" if status == "unavailable" else "",
+        }
+    return {
+        "source_revision": 0,
+        "sources": sources,
+        "current_rotation": {},
+        "advanced": None,
+        "programming_ready": jamendo_status in {"playable", "on_air"},
+        "recovery_cover_available": True,
+        "recovery_on_air": False,
+        "transport_only": False,
+    }
+
+
+def test_fresh_no_key_setup_orders_speaker_and_privacy_before_optional_ai():
+    config = load_config()
+    config.is_addon = True
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "supervisor-token"
+    golden_path = {
+        "blocking": True,
+        "source_readiness": _first_listen_source_projection(),
+    }
+
+    setup = build_setup_status(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+
+    guided = setup["guided_setup"]
+    assert [item["id"] for item in guided["strip"]["items"]] == [
+        "source_readiness",
+        "speaker",
+        "verification",
+        "privacy",
+    ]
+    assert guided["strip"]["primary_action"] == {
+        "kind": "find_speaker",
+        "label": "Find speaker",
+        "target": "setup",
+    }
+    assert guided["first_listen"]["show_ai"] is False
+    assert guided["ai_hosts"]["status"] == "missing"
+    assert guided["privacy"]["enabled"] is False
+    assert setup["recommended_next_action"].startswith("Find a Home Assistant speaker")
+    assert setup["onboarding_required"] is True
+
+
+def test_unknown_install_origin_keeps_compatibility_layout_after_onboarding_complete():
+    config = load_config()
+    config.is_addon = False
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "ha-token"
+    receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="abcdefghijklmnop",
+        accepted_at=100.0,
+        heard_at=101.0,
+        privacy_reviewed_at=102.0,
+    )
+
+    guided = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path={"blocking": True, "source_readiness": _first_listen_source_projection()},
+        install_origin="unknown",
+        first_listen_receipt=receipt,
+        context_choice_explicit=False,
+    )
+
+    assert guided["first_listen"]["fresh_install"] is False
+    assert guided["first_listen"]["show_ai"] is True
+    assert [item["id"] for item in guided["strip"]["items"]] == [
+        "stream",
+        "ai_hosts",
+        "home_context",
+    ]
+
+
+def test_unknown_install_origin_routes_unproven_installs_through_first_listen():
+    config = load_config()
+    config.is_addon = False
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "ha-token"
+
+    guided = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path={"blocking": True, "source_readiness": _first_listen_source_projection()},
+        install_origin="unknown",
+        context_choice_explicit=False,
+    )
+
+    assert guided["first_listen"]["fresh_install"] is False
+    assert guided["first_listen"]["show_ai"] is False
+    assert guided["privacy"]["enabled"] is False
+    assert guided["privacy"]["choice_explicit"] is False
+    assert [item["id"] for item in guided["strip"]["items"]] == [
+        "source_readiness",
+        "speaker",
+        "verification",
+        "privacy",
+    ]
+    assert guided["strip"]["primary_action"]["kind"] == "find_speaker"
+
+
+def test_fresh_jamendo_readiness_is_human_visible_but_ai_stays_later():
+    config = load_config()
+    config.is_addon = True
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "supervisor-token"
+    golden_path = {
+        "blocking": False,
+        "source_readiness": _first_listen_source_projection(jamendo_status="playable"),
+    }
+    receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="accepted-attempt-1234",
+        accepted_at=100.0,
+        heard_at=101.0,
+    )
+
+    guided = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        first_listen_receipt=receipt,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+
+    jamendo = next(row for row in guided["source_readiness"]["rows"] if row["kind"] == "jamendo")
+    assert jamendo["status"] == "playable"
+    assert guided["source_readiness"]["healthy"] is True
+    assert guided["verification"]["milestone"] == "First listen achieved"
+    assert guided["first_listen"]["show_ai"] is False
+    assert guided["strip"]["primary_action"] == {
+        "kind": "review_home_context",
+        "label": "Review home context",
+        "target": "setup",
+    }
+
+    reviewed = FirstListenReceiptV1(
+        selected_entity_id=receipt.selected_entity_id,
+        accepted_attempt_id=receipt.accepted_attempt_id,
+        accepted_at=receipt.accepted_at,
+        heard_at=receipt.heard_at,
+        privacy_reviewed_at=102.0,
+    )
+    after_review = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        first_listen_receipt=reviewed,
+        install_origin="fresh",
+        context_choice_explicit=True,
+    )
+    assert after_review["first_listen"]["show_ai"] is True
+    assert after_review["strip"]["primary_action"] == {
+        "kind": "add_ai_key",
+        "label": "Add AI key",
+        "target": "setup",
+    }
+
+
+def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair():
+    config = load_config()
+    config.is_addon = True
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "supervisor-token"
+    golden_path = {
+        "blocking": True,
+        "source_readiness": _first_listen_source_projection(),
+    }
+    accepted = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="accepted-attempt-1234",
+        accepted_at=100.0,
+    )
+
+    waiting_for_confirmation = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        first_listen_receipt=accepted,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+    assert waiting_for_confirmation["strip"]["primary_action"] == {
+        "kind": "verify_audio",
+        "label": "Did you hear it?",
+        "target": "setup",
+    }
+
+    heard = FirstListenReceiptV1(
+        selected_entity_id=accepted.selected_entity_id,
+        accepted_attempt_id=accepted.accepted_attempt_id,
+        accepted_at=accepted.accepted_at,
+        heard_at=101.0,
+    )
+    waiting_for_privacy = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        first_listen_receipt=heard,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+    assert waiting_for_privacy["strip"]["primary_action"]["kind"] == "review_home_context"
+    assert waiting_for_privacy["source_readiness"]["transport_audible"] is False
+
+    reviewed = FirstListenReceiptV1(
+        selected_entity_id=heard.selected_entity_id,
+        accepted_attempt_id=heard.accepted_attempt_id,
+        accepted_at=heard.accepted_at,
+        heard_at=heard.heard_at,
+        privacy_reviewed_at=102.0,
+    )
+    repair = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path=golden_path,
+        first_listen_receipt=reviewed,
+        install_origin="fresh",
+        context_choice_explicit=True,
+    )
+    assert repair["strip"]["primary_action"] == {
+        "kind": "add_ai_key",
+        "label": "Add AI key",
+        "target": "setup",
+    }

@@ -1155,6 +1155,7 @@ def test_addon_mode_overrides_paths(monkeypatch):
     assert config.is_addon is True
     assert config.cache_dir == Path("/data/cache")
     assert config.tmp_dir == Path("/data/tmp")
+    assert config.music_dir == Path("/data/music")
 
 
 def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
@@ -1168,6 +1169,7 @@ def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
     assert config.is_addon is False
     assert config.cache_dir == Path("cache")
     assert config.tmp_dir == Path("tmp")
+    assert config.music_dir == Path("music")
 
 
 def test_addon_mode_respects_env_path_overrides(monkeypatch):
@@ -1175,12 +1177,14 @@ def test_addon_mode_respects_env_path_overrides(monkeypatch):
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
     monkeypatch.setenv("MAMMAMIRADIO_CACHE_DIR", "/tmp/mammamiradio-data/cache")
     monkeypatch.setenv("MAMMAMIRADIO_TMP_DIR", "/tmp/mammamiradio-data/tmp")
+    monkeypatch.setenv("MAMMAMIRADIO_MUSIC_DIR", "/tmp/mammamiradio-data/music")
 
     config = load_config(str(toml_path))
 
     assert config.is_addon is True
     assert config.cache_dir == Path("/tmp/mammamiradio-data/cache")
     assert config.tmp_dir == Path("/tmp/mammamiradio-data/tmp")
+    assert config.music_dir == Path("/tmp/mammamiradio-data/music")
 
 
 def test_addon_mode_auto_enables_ha(monkeypatch):

@@ -168,6 +168,14 @@ def test_parser_exits_zero_on_valid_options():
     assert rc == 0
 
 
+def test_addon_runtime_exports_one_music_directory_for_persistent_and_fallback_data():
+    body = RUN_SH.read_text(encoding="utf-8")
+
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in body
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in body
+    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in body
+
+
 def test_parser_exports_anthropic_api_key():
     rc, stdout, _ = _run_parser({"anthropic_api_key": "sk-ant-abc123"})
     assert rc == 0
@@ -401,11 +409,11 @@ def test_parser_media_player_push_missing_key_preserves_legacy_default():
     assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == "true"
 
 
-def test_parser_ha_context_defaults_for_green_class_hardware():
+def test_parser_ha_context_omission_stays_observable():
     rc, stdout, _ = _run_parser({})
     assert rc == 0
     exports = _parse_exports(stdout)
-    assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "true"
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED" not in exports
     assert exports["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "300"
 
 
@@ -462,11 +470,13 @@ def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
         )
 
 
-def test_addon_manifest_ha_context_defaults_for_new_installs():
+def test_addon_manifest_keeps_ha_context_optional_without_a_declared_default():
     for config in (STABLE_CONFIG, EDGE_CONFIG):
         body = config.read_text()
-        assert re.search(r"(?m)^  ha_context_enabled: true$", body), (
-            f"{config} must keep HA prompt context enabled unless the operator opts out"
+        options_block = re.search(r"(?ms)^options:\n(.*?)(?=^schema:)", body)
+        assert options_block
+        assert not re.search(r"(?m)^  ha_context_enabled:", options_block.group(1)), (
+            f"{config} must leave omission visible for first-listen privacy classification"
         )
         assert re.search(r"(?m)^  ha_context_poll_interval: 300$", body), (
             f"{config} must default full-state polling to a Green-safe 300s interval"
@@ -564,7 +574,7 @@ class _SupervisorStub(http.server.BaseHTTPRequestHandler):
     stored_options: ClassVar[dict] = {}
     seen_auth: ClassVar[list[str]] = []
 
-    def do_GET(self):
+    def _handle_get(self):
         type(self).seen_auth.append(self.headers.get("Authorization", ""))
         body = json.dumps({"result": "ok", "data": {"options": type(self).stored_options}}).encode()
         self.send_response(200)
@@ -575,6 +585,11 @@ class _SupervisorStub(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # silence request logging
         pass
+
+
+# ``BaseHTTPRequestHandler`` dispatches to this exact uppercase method name.
+# Install the alias dynamically so Python-style linting can remain strict.
+_SupervisorStub.do_GET = _SupervisorStub._handle_get  # type: ignore[attr-defined]
 
 
 def _with_supervisor_stub(stored_options: dict):

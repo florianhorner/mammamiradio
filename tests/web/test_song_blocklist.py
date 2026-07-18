@@ -26,7 +26,7 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
-from mammamiradio.web import streamer
+from mammamiradio.web import status_payload, streamer
 from mammamiradio.web.streamer import LiveStreamHub, _apply_ban, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -139,6 +139,26 @@ async def test_ban_clears_matching_pin(tmp_path):
     state.pinned_track = pinned
     _apply_ban(state, app.state.config, [pinned], queue=app.state.queue)
     assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_banning_last_playable_track_marks_source_unavailable(tmp_path):
+    only_track = Track(
+        title="Volare",
+        artist="Modugno",
+        duration_ms=180_000,
+        source="local",
+    )
+    app = _make_app(tmp_path, [only_track])
+    state = app.state.station_state
+    state.source_readiness.mark_playable("local")
+
+    _apply_ban(state, app.state.config, [only_track], queue=app.state.queue)
+    readiness = status_payload._source_readiness_status(app.state.config, state)
+
+    assert state.playlist == []
+    assert readiness["sources"]["local"]["status"] == "unavailable"
+    assert readiness["programming_ready"] is False
 
 
 @pytest.mark.asyncio

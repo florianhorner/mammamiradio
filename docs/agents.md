@@ -14,6 +14,12 @@ This file supplements the global instructions for the `mammamiradio` repository.
   `build`, `perf`, and `revert`.
 - Dependency commits use `chore(deps): ...`; `deps:` is not a commit type.
 - Never modify `.context/` runtime state
+- First Listen and other Home Assistant-facing development or QA use the
+  disposable local HA lab by default. Treat live Home Assistant as production:
+  never connect branch code to it, reuse its token or backup, reconfigure it,
+  or attach its household/cloud/MQTT devices without explicit authorization in
+  the current message. Keep lab state and credentials under gitignored
+  `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take

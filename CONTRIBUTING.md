@@ -233,6 +233,11 @@ After starting the app:
 
 If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
 
+For First Listen or any Home Assistant-facing manual QA, use the
+[disposable local Home Assistant lab](docs/runbooks/first-listen-local-ha.md).
+It exercises a real HA Media Source and Mac VLC `media_player` without exposing
+branch code, test credentials, or synthetic state to the live home.
+
 ## Documentation expectations
 
 When behavior changes, update the matching docs in the same change:

@@ -28,6 +28,11 @@ from fastapi import FastAPI
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
+from mammamiradio.core.first_listen import (
+    FirstListenInstallOriginStatus,
+    FirstListenInstallOriginV1,
+    FirstListenReceiptV1,
+)
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
@@ -46,6 +51,7 @@ from mammamiradio.web.streamer import (
     _consume_queue_shadow,
     _continuity_reservation_segments,
     _copy_home_context_to_state,
+    _ha_playback_access_snapshot,
     _packaged_recovery_segment,
     _persist_completed_music,
     _record_provider_verdict,
@@ -56,6 +62,13 @@ from mammamiradio.web.streamer import (
 )
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+SAME_ORIGIN = {"Origin": "http://testserver"}
+TEST_CSRF_TOKEN = "test-active-setup-csrf-token"
+ACTIVE_SETUP_HEADERS = {
+    **SAME_ORIGIN,
+    "Host": "127.0.0.1",
+    "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+}
 
 
 def _scripted_clock(values):
@@ -143,6 +156,13 @@ def _make_test_app(
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+    app.state.csrf_token = TEST_CSRF_TOKEN
+    # Most route tests model a proven pre-feature install. Individual First
+    # Listen tests opt into fresh/unknown explicitly to exercise the gate.
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.EXISTING)
+    # This minimal app injects authoritative setup state directly rather than
+    # scheduling the two production bootstrap tasks.
+    app.state.first_listen_bootstrap_wired = True
     # Drive run_playback_loop integration tests with a real-time pacer (no
     # send-ahead lead) so their queue/rescue timing assertions stay
     # deterministic. The 500 ms delivery cushion itself is covered directly by
@@ -2561,6 +2581,100 @@ async def test_audio_generator_preserves_persisted_session_stopped_on_connect(tm
 
 
 @pytest.mark.asyncio
+async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path):
+    """The mini-show is client-local and hands off to the ordinary live hub."""
+    import threading
+
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+    event_loop_thread = threading.get_ident()
+    approval_threads: list[int] = []
+    read_threads: list[int] = []
+
+    def approve_show():
+        approval_threads.append(threading.get_ident())
+        return show
+
+    def chunks(_path):
+        read_threads.append(threading.get_ident())
+        yield b"authored-mini-show"
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=approve_show),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=chunks),
+    ):
+        generator = _audio_generator(mock_request)
+        assert await anext(generator) == b"authored-mini-show"
+        assert app.state.station_state.listeners_active == 0
+
+        live_chunk = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("mini-show did not hand off to the live hub")
+            await asyncio.sleep(0)
+
+        await app.state.stream_hub.broadcast(b"live-station")
+        assert await live_chunk == b"live-station"
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+    assert approval_threads and approval_threads[0] != event_loop_thread
+    assert read_threads and read_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_first_listen_package_approval_timeout_falls_through_to_live_audio():
+    """Slow package I/O never consumes the instant-audio startup guarantee."""
+    import threading
+
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    release_approval = threading.Event()
+
+    def stalled_approval():
+        release_approval.wait(timeout=1)
+        return None
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    try:
+        with (
+            patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+            patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=stalled_approval),
+            patch("mammamiradio.web.streamer.FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS", 0.01),
+        ):
+            generator = _audio_generator(mock_request)
+            live_chunk = asyncio.create_task(anext(generator))
+            deadline = time.monotonic() + 0.5
+            while app.state.station_state.listeners_active == 0:
+                if time.monotonic() > deadline:
+                    raise AssertionError("slow package approval did not fall through to the live hub")
+                await asyncio.sleep(0)
+
+            await app.state.stream_hub.broadcast(b"live-after-approval-timeout")
+            assert await asyncio.wait_for(live_chunk, timeout=0.5) == b"live-after-approval-timeout"
+            await generator.aclose()
+    finally:
+        release_approval.set()
+
+    assert app.state.station_state.listeners_active == 0
+
+
+@pytest.mark.asyncio
 async def test_skip_route_persists_music_skips_with_youtube_id():
     app = _make_test_app()
     persona_store = MagicMock()
@@ -2881,7 +2995,7 @@ async def test_public_status_needs_music_source_and_building_queue_together(monk
     monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
 
     app = _make_test_app()
-    app.state.station_state.playlist = []
+    app.state.station_state.switch_playlist([], None)
     transport = httpx.ASGITransport(app=app)
     with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -2906,7 +3020,7 @@ async def test_public_status_session_stopped_alongside_needs_music_source(monkey
 
     app = _make_test_app()
     app.state.station_state.session_stopped = True
-    app.state.station_state.playlist = []
+    app.state.station_state.switch_playlist([], None)
     transport = httpx.ASGITransport(app=app)
     with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -2936,7 +3050,7 @@ async def test_setup_status_returns_onboarding_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/api/setup/status")
+        resp = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
     assert "detected_mode" in body
@@ -2947,16 +3061,141 @@ async def test_setup_status_returns_onboarding_payload():
 
 
 @pytest.mark.asyncio
+async def test_setup_status_joins_background_first_listen_state_before_projecting():
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
+    app.state.first_listen_receipt = None
+    release = asyncio.Event()
+
+    async def resolve_origin() -> None:
+        await release.wait()
+        app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+
+    async def resolve_receipt() -> None:
+        await release.wait()
+        app.state.first_listen_receipt = None
+
+    app.state.first_listen_origin_task = asyncio.create_task(resolve_origin())
+    app.state.first_listen_receipt_task = asyncio.create_task(resolve_receipt())
+    release.set()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
+
+    assert response.status_code == 200
+    first_listen = response.json()["guided_setup"]["first_listen"]
+    assert first_listen["bootstrap_ready"] is True
+    assert first_listen["fresh_install"] is True
+    assert first_listen["audio_complete"] is False
+    assert response.json()["onboarding_required"] is True
+
+
+@pytest.mark.asyncio
 async def test_setup_status_and_recheck_share_projection():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        status = (await client.get("/api/setup/status")).json()
-        recheck = (await client.post("/api/setup/recheck")).json()
+        status = (await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)).json()
+        recheck = (await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})).json()
 
     assert recheck["signature"] == status["signature"]
     assert recheck["guided_setup"] == status["guided_setup"]
     assert recheck["recommended_next_action"] == status["recommended_next_action"]
+
+
+@pytest.mark.asyncio
+async def test_active_setup_recheck_requires_csrf_and_exact_empty_json_on_loopback():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        without_csrf = await client.post("/api/setup/recheck", json={})
+        same_origin_only = await client.post("/api/setup/recheck", headers=SAME_ORIGIN, json={})
+        missing_json = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS)
+        valid = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+
+    assert without_csrf.status_code == 403
+    assert same_origin_only.status_code == 403
+    assert missing_json.status_code == 422
+    assert missing_json.json()["error"]["code"] == "invalid_request"
+    assert valid.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("POST", "/api/setup/recheck", {}),
+        ("POST", "/api/setup/provider-check", {}),
+        ("POST", "/api/setup/save-keys", {"ANTHROPIC_API_KEY": "attacker-key"}),
+        (
+            "PATCH",
+            "/api/homeassistant/entity-policy",
+            {"entity_id": "switch.coffee_machine", "muted": False},
+        ),
+    ],
+)
+async def test_active_setup_rejects_dns_rebinding_host_even_with_page_csrf_token(method, path, payload):
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    rebound_headers = {
+        "Host": "attacker.example",
+        "Origin": "http://attacker.example",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://attacker.example") as client:
+        response = await client.request(method, path, headers=rebound_headers, json=payload)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_entity_policy_requires_and_accepts_dashboard_csrf_token(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    payload = {"entity_id": "switch.coffee_machine", "muted": True}
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        blocked = await client.patch("/api/homeassistant/entity-policy", json=payload)
+        accepted = await client.patch(
+            "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
+            json=payload,
+        )
+
+    assert blocked.status_code == 403
+    assert accepted.status_code == 200
+    assert accepted.json()["muted"] is True
+
+
+@pytest.mark.asyncio
+async def test_setup_status_rejects_dns_rebinding_host_even_with_page_csrf_token():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    rebound_headers = {
+        "Host": "attacker.example",
+        "Origin": "http://attacker.example",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://attacker.example") as client:
+        response = await client.get("/api/setup/status", headers=rebound_headers)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_active_setup_admin_token_allows_intentional_custom_hostname_automation():
+    app = _make_test_app(admin_token="operator-token")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="https://radio.example") as client:
+        response = await client.post(
+            "/api/setup/recheck",
+            headers={"X-Radio-Admin-Token": "operator-token"},
+            json={},
+        )
+
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -2967,10 +3206,18 @@ async def test_setup_recovery_endpoints_remain_available_while_session_stopped()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
     with patch("mammamiradio.web.streamer._persist_and_apply_credentials", new=AsyncMock()) as persist:
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            recheck = await client.post("/api/setup/recheck")
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            recheck = await client.post("/api/setup/recheck", json={})
             preview = await client.get("/api/homeassistant/context-candidates")
-            save_keys = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-test"})
+            save_keys = await client.post(
+                "/api/setup/save-keys",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"ANTHROPIC_API_KEY": "sk-test"},
+            )
 
     assert recheck.status_code == 200
     assert preview.status_code == 200
@@ -2991,12 +3238,13 @@ async def test_setup_recheck_bypasses_golden_path_ttl_cache(monkeypatch):
 
     app = _make_test_app()
     app.state.config.allow_ytdlp = False
-    app.state.station_state.playlist = []
+    app.state.station_state.switch_playlist([], None)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=[False, False, False, True]):
+    with patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=AssertionError("status must not scan")):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            status = (await client.get("/api/setup/status")).json()
-            recheck = (await client.post("/api/setup/recheck")).json()
+            status = (await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)).json()
+            app.state.station_state.source_readiness.mark_playable("local")
+            recheck = (await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})).json()
 
     assert recheck["guided_setup"]["stream"]["status"] == "ready"
     assert status["guided_setup"]["stream"]["status"] == "blocked"
@@ -3183,7 +3431,7 @@ async def test_setup_recheck_returns_onboarding_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/setup/recheck")
+        resp = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
     assert resp.status_code == 200
     body = resp.json()
     assert "detected_mode" in body
@@ -3228,7 +3476,7 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/setup/provider-check")
+            resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -3236,6 +3484,26 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
     assert "anthropic-secret" not in resp.text
     assert "openai-secret" not in resp.text
     probe.assert_awaited_once_with(app.state.config)
+
+
+@pytest.mark.asyncio
+async def test_setup_provider_check_requires_exact_empty_json():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock()) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            missing = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS)
+            extra = await client.post(
+                "/api/setup/provider-check",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"unexpected": True},
+            )
+
+    assert missing.status_code == 422
+    assert missing.json()["error"]["code"] == "invalid_request"
+    assert extra.status_code == 422
+    assert extra.json()["error"]["code"] == "invalid_request"
+    probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3254,9 +3522,11 @@ async def test_setup_provider_check_shares_in_flight_probe():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            first = asyncio.create_task(client.post("/api/setup/provider-check"))
+            first = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()
-            second = asyncio.create_task(client.post("/api/setup/provider-check"))
+            second = asyncio.create_task(
+                client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+            )
             await asyncio.sleep(0)
             release.set()
             first_resp, second_resp = await asyncio.gather(first, second)
@@ -3276,8 +3546,8 @@ async def test_setup_provider_check_returns_cached_result_within_debounce_window
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            first = await client.post("/api/setup/provider-check")
-            second = await client.post("/api/setup/provider-check")
+            first = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+            second = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -3298,7 +3568,7 @@ async def test_setup_provider_check_clears_task_on_exception():
         new=AsyncMock(side_effect=RuntimeError("probe failed")),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/setup/provider-check")
+            resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert resp.status_code == 500
     assert app.state._provider_check_task is None
@@ -3318,7 +3588,7 @@ async def test_setup_provider_check_clears_task_on_cancel():
     with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            check_coro = client.post("/api/setup/provider-check")
+            check_coro = client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             check_task = asyncio.create_task(check_coro)
             await barrier.wait()
             # Cancel the in-flight probe at the app-state level, then let the
@@ -3359,6 +3629,7 @@ async def test_setup_save_keys_updates_live_config_without_disk_write():
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post(
                     "/api/setup/save-keys",
+                    headers=ACTIVE_SETUP_HEADERS,
                     json={"ANTHROPIC_API_KEY": "ant-test\nEVIL=1", "OPENAI_API_KEY": "openai-test\rEVIL=1"},
                 )
 
@@ -3402,7 +3673,11 @@ async def test_setup_save_keys_in_addon_mode_uses_addon_secret_file():
             ),
         ):
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-                resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-addon"})
+                resp = await client.post(
+                    "/api/setup/save-keys",
+                    headers=ACTIVE_SETUP_HEADERS,
+                    json={"ANTHROPIC_API_KEY": "sk-addon"},
+                )
 
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
@@ -3420,7 +3695,7 @@ async def test_setup_save_keys_rejects_empty_payload():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/setup/save-keys", json={})
+        resp = await client.post("/api/setup/save-keys", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -3889,7 +4164,8 @@ async def test_admin_first_paint_seeds_stopped_state_for_direct_and_ingress_rout
 
     for response in (direct, ingress):
         assert response.status_code == 200
-        assert re.search(r'</head>\s*<body data-stopped="true">', response.text)
+        assert re.search(r'</head>\s*<body\b[^>]*data-stopped="true"[^>]*>', response.text)
+        assert 'data-first-listen-entry="complete"' in response.text
 
 
 @pytest.mark.asyncio
@@ -3899,7 +4175,55 @@ async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_rout
 
     for response in (direct, ingress):
         assert response.status_code == 200
-        assert re.search(r'</head>\s*<body data-stopped="false">', response.text)
+        assert re.search(r'</head>\s*<body\b[^>]*data-stopped="false"[^>]*>', response.text)
+        assert 'data-first-listen-entry="complete"' in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "receipt", "expected"),
+    [
+        (FirstListenInstallOriginStatus.FRESH, None, "required"),
+        (
+            FirstListenInstallOriginStatus.FRESH,
+            FirstListenReceiptV1(
+                selected_entity_id="media_player.kitchen",
+                accepted_attempt_id="abcdefghijklmnop",
+                accepted_at=100.0,
+                heard_at=101.0,
+                privacy_reviewed_at=102.0,
+            ),
+            "complete",
+        ),
+        (FirstListenInstallOriginStatus.EXISTING, None, "complete"),
+        (FirstListenInstallOriginStatus.UNKNOWN, None, "required"),
+    ],
+)
+async def test_admin_first_paint_selects_first_listen_only_for_fresh_unfinished_install(origin, receipt, expected):
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(origin)
+    app.state.first_listen_receipt = receipt
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert f'data-first-listen-entry="{expected}"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_first_paint_stays_pending_before_bootstrap_tasks_are_wired():
+    """An empty task tuple during partial construction is not authoritative."""
+    app = _make_test_app()
+    app.state.first_listen_bootstrap_wired = False
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'data-first-listen-entry="pending"' in response.text
 
 
 @pytest.mark.asyncio
@@ -4154,12 +4478,13 @@ async def test_setup_status_and_capabilities_share_guided_setup_projection():
     app.state.config.openai_api_key = "openai-key"
     _record_provider_verdict(app.state.station_state, _probe_payload(openai_chat="ok"))
     app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.context_enabled = True
     app.state.config.ha_token = "ha-token"
     app.state.station_state.ha_context = "- Coffee machine: on"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         capabilities_resp = await client.get("/api/capabilities")
-        setup_resp = await client.get("/api/setup/status")
+        setup_resp = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
 
     assert capabilities_resp.status_code == 200
     assert setup_resp.status_code == 200
@@ -4341,9 +4666,10 @@ async def test_homeassistant_labels_regenerate_has_no_candidates_in_narrow_mode(
 
 
 @pytest.mark.asyncio
-async def test_homeassistant_labels_regenerate_no_home_context_returns_unscheduled():
+async def test_homeassistant_labels_regenerate_disabled_context_returns_unscheduled():
     app = _make_test_app()
     app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.config.homeassistant.context_enabled = False
     app.state.config.anthropic_api_key = "sk-ant-test"
 
     with (
@@ -4356,7 +4682,7 @@ async def test_homeassistant_labels_regenerate_no_home_context_returns_unschedul
             resp = await client.post("/api/homeassistant/labels/regenerate")
 
     assert resp.status_code == 200
-    assert resp.json() == {"scheduled": False, "reason": "home_context_unavailable"}
+    assert resp.json() == {"scheduled": False, "reason": "home_context_disabled"}
     schedule.assert_not_called()
 
 
@@ -4569,10 +4895,11 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": "switch.coffee_machine", "muted": True},
             )
             preview = await client.get("/api/homeassistant/context-candidates")
-            setup_status = await client.get("/api/setup/status")
+            setup_status = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
             capabilities = await client.get("/api/capabilities")
 
     assert resp.status_code == 200
@@ -4630,11 +4957,13 @@ async def test_homeassistant_entity_policy_mute_discards_baselines_before_later_
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             muted = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": entity_id, "muted": True},
             )
             # The physical state flips while the hard mute is active.
             unmuted = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": entity_id, "muted": False},
             )
 
@@ -4668,6 +4997,7 @@ async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.coffee_machine", "muted": True},
         )
 
@@ -4707,10 +5037,12 @@ async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         opt_in = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": True},
         )
         opt_out = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": False},
         )
 
@@ -4755,6 +5087,7 @@ async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_pa
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.coffee_machine", "muted": True},
         )
 
@@ -4763,6 +5096,100 @@ async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_pa
     ledger_file = tmp_path / "evening_ledger.json"
     assert ledger_file.exists()
     assert "switch.coffee_machine" not in ledger_file.read_text()
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_hard_mute_fences_detached_llm_work_before_cleanup_await(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    order: list[str] = []
+    ledger = SimpleNamespace(save_if_dirty=lambda _cache_dir: order.append("ledger_save"))
+    app.state.station_state.evening_ledger = ledger
+
+    def write_policy(*_args, **_kwargs):
+        order.append("policy_write")
+        return {
+            "schema_version": 1,
+            "policy_revision": 1,
+            "muted": {"switch.coffee_machine": {}},
+            "personal_moment_opt_ins": {},
+        }
+
+    def invalidate_labels():
+        order.append("labels_invalidated")
+        return ()
+
+    def reset_scene():
+        order.append("scene_reset")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.set_entity_muted", side_effect=write_policy),
+        patch("mammamiradio.web.streamer.invalidate_label_generation", side_effect=invalidate_labels),
+        patch("mammamiradio.web.streamer.reset_scene_namer_cache", side_effect=reset_scene),
+        patch("mammamiradio.web.streamer._clear_home_context_usage", return_value=True),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.patch(
+                "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"entity_id": "switch.coffee_machine", "muted": True},
+            )
+
+    assert response.status_code == 200
+    assert order == ["policy_write", "labels_invalidated", "scene_reset", "ledger_save"]
+
+
+@pytest.mark.asyncio
+async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_publish(tmp_path):
+    import mammamiradio.home.catalog as catalog
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.anthropic_api_key = "test-key"
+    entity_id = "switch.coffee_machine"
+    states = {
+        entity_id: {
+            "entity_id": entity_id,
+            "state": "on",
+            "attributes": {"friendly_name": "Coffee machine"},
+        }
+    }
+    provider_entered = asyncio.Event()
+
+    async def cancellation_resistant_provider(candidates, _config, *, role):
+        assert role == "fast"
+        provider_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return [
+                {
+                    "entity_id": candidates[0].entity_id,
+                    "label_it": "Macchina privata",
+                    "label_en": "Private machine",
+                }
+            ]
+        raise AssertionError("provider gate unexpectedly completed")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.home.catalog._call_anthropic_labels", side_effect=cancellation_resistant_provider),
+        patch("mammamiradio.home.catalog.save_catalog") as save,
+    ):
+        assert catalog.schedule_label_generation(states, cache_dir=tmp_path, config=app.state.config, force=True)
+        await asyncio.wait_for(provider_entered.wait(), timeout=1)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.patch(
+                "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"entity_id": entity_id, "muted": True},
+            )
+        await asyncio.sleep(0)
+
+    assert response.status_code == 200
+    save.assert_not_called()
+    assert catalog.load_catalog(tmp_path)["entries"] == {}
 
 
 @pytest.mark.asyncio
@@ -4776,10 +5203,12 @@ async def test_homeassistant_entity_policy_unmute_is_idempotent_for_existing_mut
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         first = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.coffee_machine", "muted": False},
         )
         second = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.coffee_machine", "muted": False},
         )
 
@@ -4805,6 +5234,7 @@ async def test_homeassistant_entity_policy_unmute_removes_live_muted_ledger_deny
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": entity_id, "muted": False},
         )
 
@@ -4843,6 +5273,7 @@ async def test_homeassistant_entity_policy_unmute_preserves_config_ledger_deny(t
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": entity_id, "muted": False},
         )
 
@@ -4890,6 +5321,7 @@ async def test_homeassistant_entity_policy_rejects_malformed_entity_id():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "not-a-valid-entity-id", "muted": True},
         )
     assert resp.status_code == 422
@@ -4902,6 +5334,7 @@ async def test_homeassistant_entity_policy_rejects_non_boolean_muted():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.coffee_machine", "muted": "yes"},
         )
     assert resp.status_code == 422
@@ -4920,6 +5353,7 @@ async def test_homeassistant_entity_policy_can_mute_entity_absent_from_preview(t
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.never_seen", "muted": True},
         )
     assert resp.status_code == 200
@@ -4947,6 +5381,7 @@ async def test_homeassistant_entity_policy_write_failure_returns_500(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": "switch.coffee_machine", "muted": True},
             )
     assert resp.status_code == 500
@@ -5304,7 +5739,7 @@ async def test_provider_check_route_persists_rejected_verdict():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post("/api/setup/provider-check")
+            resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
     assert resp.status_code == 200
     assert resp.json() == payload  # response body unchanged (existing contract)
     assert app.state.station_state.anthropic_key_status == "rejected"
@@ -5330,7 +5765,11 @@ async def test_save_keys_resets_status_and_revalidates():
             patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=_delayed_probe)),
         ):
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-                resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-ant-new"})
+                resp = await client.post(
+                    "/api/setup/save-keys",
+                    headers=ACTIVE_SETUP_HEADERS,
+                    json={"ANTHROPIC_API_KEY": "sk-ant-new"},
+                )
             assert resp.status_code == 200
             # _apply_live_credentials wiped the stale verdict synchronously; the gated
             # probe is still parked, so this is deterministic.
@@ -5428,10 +5867,10 @@ async def test_provider_check_cached_result_does_not_clear_verdict():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            await client.post("/api/setup/provider-check")
+            await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             assert app.state.station_state.anthropic_key_status == "rejected"
             # Second call inside the 2s debounce window returns the cached result.
-            await client.post("/api/setup/provider-check")
+            await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
     assert app.state.station_state.anthropic_key_status == "rejected"
 
 
@@ -5474,7 +5913,7 @@ async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            req = asyncio.create_task(client.post("/api/setup/provider-check"))
+            req = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()  # task created with the "sk-ant-old" snapshot
             app.state.config.anthropic_api_key = "sk-ant-new"  # operator saves a new key
             gate.set()
@@ -5522,10 +5961,12 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             enabled = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": "binary_sensor.office_presence", "personal_moment_enabled": True},
             )
             muted = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": "binary_sensor.office_presence", "muted": True},
             )
 
@@ -5568,6 +6009,7 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         muted = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "weather.forecast_home", "muted": True},
         )
 
@@ -5607,6 +6049,7 @@ async def test_personal_moment_enable_rejects_non_presence_entity(tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
+                headers=ACTIVE_SETUP_HEADERS,
                 json={"entity_id": "switch.kitchen_light", "personal_moment_enabled": True},
             )
 
@@ -5626,12 +6069,1625 @@ async def test_entity_policy_requires_exactly_one_action(tmp_path):
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         both = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.kitchen_light", "muted": True, "personal_moment_enabled": True},
         )
         neither = await client.patch(
             "/api/homeassistant/entity-policy",
+            headers=ACTIVE_SETUP_HEADERS,
             json={"entity_id": "switch.kitchen_light"},
         )
 
     assert both.status_code == 422
     assert neither.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_first_listen_players_requires_exact_empty_json_and_returns_saved_selection(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_playback import HADiscoveryResult, HAPlayerCandidate
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    store = FirstListenReceiptStore(tmp_path)
+    receipt = await store.record_accepted("media_player.kitchen")
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = receipt
+    discovery = HADiscoveryResult(
+        candidates=(
+            HAPlayerCandidate(
+                entity_id="media_player.kitchen",
+                friendly_name="Kitchen",
+                state="idle",
+                device_class="speaker",
+                area="Kitchen",
+                supports_play_media=True,
+                available=True,
+            ),
+        )
+    )
+    service = SimpleNamespace(
+        discover=AsyncMock(return_value=discovery),
+        pending_receipt_entity_id=MagicMock(return_value="media_player.kitchen"),
+    )
+    app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            invalid = await client.post("/api/setup/first-listen/players")
+            valid = await client.post("/api/setup/first-listen/players", json={})
+
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_request"
+    assert valid.status_code == 200
+    assert valid.json()["selected_entity_id"] == "media_player.kitchen"
+    assert valid.json()["candidates"] == valid.json()["players"]
+    assert valid.json()["media_source_uri"] == "media-source://mammamiradio/live"
+    assert valid.json()["receipt_recovery"] == {
+        "available": True,
+        "entity_id": "media_player.kitchen",
+    }
+
+
+@pytest.mark.asyncio
+async def test_setup_status_projects_server_owned_receipt_recovery_without_ha_io():
+    app = _make_test_app()
+    app.state.ha_playback_service = SimpleNamespace(
+        pending_receipt_entity_id=MagicMock(return_value="media_player.kitchen")
+    )
+    app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.get("/api/setup/status")
+
+    recovery = response.json()["guided_setup"]["first_listen"]["receipt_recovery"]
+    assert response.status_code == 200
+    assert recovery == {"available": True, "entity_id": "media_player.kitchen"}
+    app.state.ha_playback_service.pending_receipt_entity_id.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_setup_status_hides_cached_receipt_recovery_after_ha_access_changes():
+    app = _make_test_app()
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.ha_token = "first-supervisor-token"
+    projection = MagicMock(return_value="media_player.kitchen")
+    app.state.ha_playback_service = SimpleNamespace(pending_receipt_entity_id=projection)
+    app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        before_rotation = await client.get("/api/setup/status")
+        app.state.config.ha_token = "rotated-supervisor-token"
+        after_rotation = await client.get("/api/setup/status")
+
+    assert before_rotation.status_code == 200
+    assert before_rotation.json()["guided_setup"]["first_listen"]["receipt_recovery"] == {
+        "available": True,
+        "entity_id": "media_player.kitchen",
+    }
+    assert after_rotation.status_code == 200
+    assert after_rotation.json()["guided_setup"]["first_listen"]["receipt_recovery"] == {
+        "available": False,
+        "entity_id": "",
+    }
+    projection.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_play_and_matching_heard_confirmation_persist(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_playback import HAPlayResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    store = FirstListenReceiptStore(tmp_path)
+    accepted = await store.record_accepted("media_player.living_room")
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = accepted
+    service = SimpleNamespace(
+        play=AsyncMock(
+            return_value=HAPlayResult(
+                entity_id="media_player.living_room",
+                accepted=True,
+                station_resumed=True,
+                receipt_persisted=True,
+                attempt_id=accepted.accepted_attempt_id,
+            )
+        )
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            play = await client.post(
+                "/api/setup/first-listen/play",
+                json={"entity_id": "media_player.living_room"},
+            )
+            heard = await client.post(
+                "/api/setup/first-listen/verify",
+                json={"attempt_id": accepted.accepted_attempt_id, "heard": True},
+            )
+
+    assert play.status_code == 200
+    assert play.json()["accepted"] is True
+    assert heard.status_code == 200
+    assert heard.json()["first_listen_achieved"] is True
+    assert (await store.load()).audio_complete is True
+
+
+@pytest.mark.asyncio
+async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failures(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptUnavailableError
+    from mammamiradio.home.ha_playback import (
+        HADiscoveryResult,
+        HAPlaybackError,
+        HAPlaybackReason,
+        HAPlayResult,
+    )
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_store = SimpleNamespace(load=AsyncMock(side_effect=OSError("receipt read failed")))
+    service = SimpleNamespace(
+        discover=AsyncMock(
+            side_effect=[
+                HAPlaybackError(HAPlaybackReason.HA_UNREACHABLE),
+                HADiscoveryResult(candidates=()),
+            ]
+        ),
+        play=AsyncMock(
+            side_effect=[
+                HAPlaybackError(HAPlaybackReason.SERVICE_REJECTED, station_resumed=True),
+                HAPlayResult(
+                    entity_id="media_player.kitchen",
+                    accepted=True,
+                    station_resumed=True,
+                    receipt_persisted=False,
+                ),
+            ]
+        ),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            discovery_failed = await client.post("/api/setup/first-listen/players", json={})
+            receipt_read_failed = await client.post("/api/setup/first-listen/players", json={})
+            playback_failed = await client.post(
+                "/api/setup/first-listen/play",
+                json={"entity_id": "media_player.kitchen"},
+            )
+            receipt_write_failed = await client.post(
+                "/api/setup/first-listen/play",
+                json={"entity_id": "media_player.kitchen"},
+            )
+            app.state.first_listen_store = SimpleNamespace(
+                verify=AsyncMock(side_effect=FirstListenReceiptUnavailableError("receipt write failed"))
+            )
+            verify_failed = await client.post(
+                "/api/setup/first-listen/verify",
+                json={"attempt_id": "current-attempt", "heard": True},
+            )
+
+    assert discovery_failed.status_code == 503
+    assert discovery_failed.json()["error"]["code"] == "ha_unreachable"
+    assert receipt_read_failed.status_code == 200
+    assert receipt_read_failed.json()["selected_entity_id"] == ""
+    assert playback_failed.status_code == 502
+    assert playback_failed.json()["error"]["code"] == "service_rejected"
+    assert playback_failed.json()["station_resumed"] is True
+    assert receipt_write_failed.status_code == 503
+    assert receipt_write_failed.json()["error"]["code"] == "receipt_unavailable"
+    assert receipt_write_failed.json()["accepted"] is True
+    assert receipt_write_failed.json()["receipt_persisted"] is False
+    assert receipt_write_failed.json()["entity_id"] == "media_player.kitchen"
+    assert verify_failed.status_code == 503
+    assert verify_failed.json()["error"]["code"] == "receipt_unavailable"
+    assert verify_failed.json()["accepted"] is True
+    assert verify_failed.json()["receipt_persisted"] is False
+
+
+@pytest.mark.asyncio
+async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
+    """A proven HA acceptance can be saved later without another cast."""
+    from mammamiradio.home.ha_playback import (
+        HAPlaybackError,
+        HAPlaybackReason,
+        HAPlayResult,
+    )
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    service = SimpleNamespace(
+        play=AsyncMock(
+            return_value=HAPlayResult(
+                entity_id="media_player.kitchen",
+                accepted=True,
+                station_resumed=True,
+                receipt_persisted=False,
+            )
+        ),
+        persist_pending_receipt=AsyncMock(
+            side_effect=[
+                HAPlaybackError(HAPlaybackReason.RECEIPT_UNAVAILABLE, station_resumed=True),
+                HAPlayResult(
+                    entity_id="media_player.kitchen",
+                    accepted=True,
+                    station_resumed=True,
+                    receipt_persisted=True,
+                    attempt_id="saved-listening-check",
+                ),
+            ]
+        ),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            play = await client.post(
+                "/api/setup/first-listen/play",
+                json={"entity_id": "media_player.kitchen"},
+            )
+            invalid = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen", "unexpected": True},
+            )
+            still_unavailable = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen"},
+            )
+            recovered = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen"},
+            )
+
+    assert play.status_code == 503
+    assert play.json()["accepted"] is True
+    assert play.json()["receipt_persisted"] is False
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_request"
+    assert still_unavailable.status_code == 503
+    assert still_unavailable.json()["accepted"] is True
+    assert still_unavailable.json()["receipt_persisted"] is False
+    assert recovered.status_code == 200
+    assert recovered.json()["attempt_id"] == "saved-listening-check"
+    assert "No playback request was sent again" in recovered.json()["message"]
+    service.play.assert_awaited_once_with("media_player.kitchen")
+    assert service.persist_pending_receipt.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_first_listen_receipt_retry_requires_server_owned_pending_acceptance(tmp_path):
+    """A restart, config change, or invented entity cannot mint audible proof."""
+    from mammamiradio.home.ha_playback import HAPlaybackError, HAPlaybackReason
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    service = SimpleNamespace(
+        persist_pending_receipt=AsyncMock(side_effect=HAPlaybackError(HAPlaybackReason.RECEIPT_RECOVERY_MISSING))
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            missing_body = await client.post("/api/setup/first-listen/receipt/retry")
+            missing_proof = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen"},
+            )
+
+    assert missing_body.status_code == 422
+    assert missing_body.json()["error"]["code"] == "invalid_request"
+    assert missing_proof.status_code == 409
+    assert missing_proof.json()["error"]["code"] == "receipt_recovery_missing"
+    assert "Nothing was replayed" in missing_proof.json()["error"]["message"]
+    service.persist_pending_receipt.assert_awaited_once_with("media_player.kitchen")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b'{"entity_id":"media_player.kitchen"}', "text/plain"),
+        (b"{bad", "application/json"),
+        (b'["media_player.kitchen"]', "application/json"),
+        (b'{"entity_id":42}', "application/json"),
+    ],
+)
+async def test_first_listen_receipt_retry_rejects_non_exact_json_without_persisting(
+    tmp_path,
+    content,
+    content_type,
+):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    service = SimpleNamespace(persist_pending_receipt=AsyncMock())
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    headers = {**ACTIVE_SETUP_HEADERS, "Content-Type": content_type}
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=headers,
+        ) as client:
+            response = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                content=content,
+            )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+    service.persist_pending_receipt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "expected_status"),
+    [
+        ("request_in_flight", 409),
+        ("ha_access_missing", 409),
+    ],
+)
+async def test_first_listen_receipt_retry_does_not_invent_acceptance_for_other_errors(
+    tmp_path,
+    reason,
+    expected_status,
+):
+    from mammamiradio.home.ha_playback import HAPlaybackError, HAPlaybackReason
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    service = SimpleNamespace(persist_pending_receipt=AsyncMock(side_effect=HAPlaybackError(HAPlaybackReason(reason))))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen"},
+            )
+
+    payload = response.json()
+    assert response.status_code == expected_status
+    assert payload["error"]["code"] == reason
+    assert "accepted" not in payload
+    assert "receipt_persisted" not in payload
+    service.persist_pending_receipt.assert_awaited_once_with("media_player.kitchen")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("receipt_persisted", "attempt_id"),
+    [(None, None), (True, None)],
+)
+async def test_first_listen_play_requires_explicit_durable_attempt_truth(
+    tmp_path,
+    receipt_persisted,
+    attempt_id,
+):
+    """Unknown persistence truth and missing IDs never unlock verification."""
+    from mammamiradio.home.ha_playback import HAPlayResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    service = SimpleNamespace(
+        play=AsyncMock(
+            return_value=HAPlayResult(
+                entity_id="media_player.kitchen",
+                accepted=True,
+                station_resumed=True,
+                receipt_persisted=receipt_persisted,
+                attempt_id=attempt_id,
+            )
+        )
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post(
+                "/api/setup/first-listen/play",
+                json={"entity_id": "media_player.kitchen"},
+            )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "receipt_unavailable"
+    assert response.json()["accepted"] is True
+    assert response.json()["receipt_persisted"] is False
+    service.play.assert_awaited_once_with("media_player.kitchen")
+
+
+@pytest.mark.asyncio
+async def test_first_listen_verify_rejects_stale_attempt_and_unknown_fields(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        stale = await client.post(
+            "/api/setup/first-listen/verify",
+            json={"attempt_id": "stale-attempt-id-1234", "heard": True},
+        )
+        extra = await client.post(
+            "/api/setup/first-listen/verify",
+            json={"attempt_id": "stale-attempt-id-1234", "heard": True, "extra": 1},
+        )
+
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "attempt_mismatch"
+    assert extra.status_code == 422
+    assert extra.json()["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_home_context_setup_routes_reject_invalid_json_and_missing_ha_access(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = False
+    app.state.config.ha_token = ""
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        invalid_preview = await client.post("/api/setup/home-context-preview")
+        missing_access = await client.post("/api/setup/home-context-preview", json={})
+        invalid_choice = await client.patch("/api/setup/home-context-choice")
+
+    assert invalid_preview.status_code == 422
+    assert invalid_preview.json()["error"]["code"] == "invalid_request"
+    assert missing_access.status_code == 409
+    assert missing_access.json()["error"]["code"] == "ha_access_missing"
+    assert invalid_choice.status_code == 422
+    assert invalid_choice.json()["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin_status",
+    [FirstListenInstallOriginStatus.FRESH, FirstListenInstallOriginStatus.UNKNOWN],
+)
+async def test_home_context_widening_requires_audible_first_listen_for_unproven_installs(
+    tmp_path,
+    origin_status,
+    monkeypatch,
+):
+    """Preview and Enable fail closed; Keep off remains an immediate narrowing action."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(origin_status)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer.fetch_home_context_preview",
+            new=AsyncMock(return_value=preview_result),
+        ) as fetch,
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+            kept_off = await client.patch("/api/setup/home-context-choice", json={"enabled": False})
+
+    assert preview.status_code == 409
+    assert preview.json()["error"]["code"] == "first_listen_required"
+    assert enabled.status_code == 409
+    assert enabled.json()["error"]["code"] == "first_listen_required"
+    assert kept_off.status_code == 200
+    assert kept_off.json()["enabled"] is False
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED" not in os.environ
+    fetch.assert_not_awaited()
+    persist.assert_awaited_once_with(app.state.config, False)
+
+
+@pytest.mark.asyncio
+async def test_fresh_empty_home_preview_unlocks_enable_without_publishing_context(tmp_path, monkeypatch):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    store = FirstListenReceiptStore(tmp_path)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=time.time() - 2)
+    heard = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=time.time() - 1)
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = heard
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=preview_result)),
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+
+    assert preview.status_code == 200
+    assert preview.json()["fresh"] is True
+    assert preview.json()["status"] == "empty"
+    assert app.state.station_state.ha_context == ""
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED" not in os.environ
+    assert app.state.config.homeassistant.context_enabled is True
+    assert (await app.state.first_listen_store.load()).privacy_complete is True
+    persist.assert_awaited_once_with(app.state.config, True)
+
+
+@pytest.mark.asyncio
+async def test_home_context_preview_shares_one_bounded_in_flight_fetch(tmp_path):
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    started = asyncio.Event()
+    both_requests_passed_audio_gate = asyncio.Event()
+    audio_gate_calls = 0
+
+    async def open_audio_gate(_app_state):
+        nonlocal audio_gate_calls
+        audio_gate_calls += 1
+        if audio_gate_calls == 2:
+            both_requests_passed_audio_gate.set()
+        return True
+
+    async def slow_preview(*_args, **_kwargs):
+        started.set()
+        await both_requests_passed_audio_gate.wait()
+        return HomeContextPreviewResult(
+            kind="fresh",
+            context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+            duration_seconds=0.01,
+        )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer.fetch_home_context_preview",
+            new=AsyncMock(side_effect=slow_preview),
+        ) as fetch,
+        patch(
+            "mammamiradio.web.streamer._first_listen_audio_gate_open",
+            new=AsyncMock(side_effect=open_audio_gate),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            first = asyncio.create_task(client.post("/api/setup/home-context-preview", json={}))
+            await started.wait()
+            second = asyncio.create_task(client.post("/api/setup/home-context-preview", json={}))
+            first_response, second_response = await asyncio.gather(first, second)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_home_context_preview_total_deadline_returns_fixed_failure_without_spawning_again(
+    tmp_path,
+    monkeypatch,
+):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    release = asyncio.Event()
+
+    async def stuck_preview(*_args, **_kwargs):
+        await release.wait()
+
+    monkeypatch.setattr("mammamiradio.web.streamer._HOME_PREVIEW_TOTAL_TIMEOUT_SECONDS", 0.01)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.fetch_home_context_preview",
+        new=AsyncMock(side_effect=stuck_preview),
+    ) as fetch:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            first = await client.post("/api/setup/home-context-preview", json={})
+            second = await client.post("/api/setup/home-context-preview", json={})
+        task = app.state._home_context_preview_task
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert first.status_code == 503
+    assert first.json()["error"]["code"] == "preview_unavailable"
+    assert second.status_code == 503
+    assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_enabled_home_context_can_retry_privacy_receipt_after_a_fresh_preview(tmp_path):
+    from dataclasses import replace
+
+    from mammamiradio.core.first_listen import (
+        FirstListenReceiptStore,
+        FirstListenReceiptUnavailableError,
+    )
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    store = FirstListenReceiptStore(tmp_path)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=time.time() - 2)
+    heard = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=time.time() - 1)
+    reviewed = replace(heard, privacy_reviewed_at=time.time())
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = heard
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=preview_result)),
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+        patch.object(
+            store,
+            "record_privacy_reviewed",
+            new=AsyncMock(
+                side_effect=[
+                    FirstListenReceiptUnavailableError("disk unavailable"),
+                    reviewed,
+                ]
+            ),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            assert (await client.post("/api/setup/home-context-preview", json={})).status_code == 200
+            first = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+            assert (await client.post("/api/setup/home-context-preview", json={})).status_code == 200
+            second = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+
+    assert first.status_code == 503
+    assert first.json()["error"]["code"] == "privacy_receipt_unavailable"
+    assert app.state.config.homeassistant.context_enabled is True
+    assert second.status_code == 200
+    assert second.json()["privacy_reviewed"] is True
+    assert app.state.first_listen_receipt.privacy_complete is True
+    assert persist.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_detached_home_preview_projects_existing_personal_moment_opt_in_as_effective(tmp_path):
+    """Detached preview preserves an eligible consent control without publishing the row."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.entity_policy import set_personal_moment_enabled
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult, ScoredEntity
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    entity_id = "binary_sensor.office_presence"
+    set_personal_moment_enabled(
+        tmp_path,
+        entity_id,
+        True,
+        label="Office presence",
+        domain="binary_sensor",
+        area="Office",
+        now=100.0,
+    )
+    presence = ScoredEntity(
+        entity_id=entity_id,
+        area="Office",
+        domain="binary_sensor",
+        score=1.0,
+        raw_state={"state": "on", "attributes": {"device_class": "presence"}},
+        label_it="Presenza ufficio",
+        label_en="Office presence",
+        summary_line="Office presence: active",
+    )
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(
+            scored=[presence],
+            authorization_mode=HomeAuthorizationMode.NARROW.value,
+            timestamp=time.time(),
+        ),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.fetch_home_context_preview",
+        new=AsyncMock(return_value=preview_result),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/home-context-preview", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    row = next(item for item in body["entities"] if item["entity_id"] == entity_id)
+    assert row["row_state"] == "preview_only"
+    assert row["personal_moment_eligible"] is True
+    assert row["personal_moment_enabled"] is True
+    assert row["personal_moment_effective"] is True
+    assert row["sent_to_prompt"] is False
+    assert body["sent_now"] == []
+    assert app.state.station_state.ha_context == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_ids", "expected_status", "expected_value", "expected_useful"),
+    [
+        (["sun.ambient"], "ambient_only", "ambient_only", False),
+        (["sun.ambient", "weather.ambient"], "ready", "useful", True),
+    ],
+)
+async def test_detached_home_preview_separates_privacy_safe_from_product_useful(
+    tmp_path,
+    entity_ids,
+    expected_status,
+    expected_value,
+    expected_useful,
+):
+    """Generic daylight stays disclosed without being sold as personalization."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult, ScoredEntity
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    scored = [
+        ScoredEntity(
+            entity_id=entity_id,
+            area="",
+            domain=entity_id.split(".", 1)[0],
+            score=1.0,
+            raw_state={"state": "sunny" if entity_id.startswith("weather.") else "above_horizon"},
+            label_it="Meteo" if entity_id.startswith("weather.") else "Luce del giorno",
+            label_en="Weather" if entity_id.startswith("weather.") else "Daylight",
+            summary_line="Sunny" if entity_id.startswith("weather.") else "Daylight: above horizon",
+        )
+        for entity_id in entity_ids
+    ]
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(
+            scored=scored,
+            authorization_mode=HomeAuthorizationMode.NARROW.value,
+            timestamp=time.time(),
+        ),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.fetch_home_context_preview",
+        new=AsyncMock(return_value=preview_result),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/home-context-preview", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == expected_status
+    assert body["context_value"] == expected_value
+    assert body["useful_context"] is expected_useful
+    assert [row["entity_id"] for row in body["entities"]] == entity_ids
+    assert body["sent_now"] == []
+    assert app.state.station_state.ha_context == ""
+
+
+@pytest.mark.asyncio
+async def test_keep_home_context_off_needs_no_preview_and_stays_live_off_when_save_fails(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.context_enabled = True
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    state = app.state.station_state
+    state.ha_context = "Private retained context"
+    state.ha_context_last_updated = 123.0
+    state.ha_scored_entities = [{"entity_id": "switch.private"}]
+    state.home_context_policy_generation = 4
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "private.mp3",
+        metadata={"queue_id": "private-queued", "home_context_generation": 4},
+    )
+    app.state.queue.put_nowait(segment)
+    state.queued_segments = [{"id": "private-queued", "type": "banter"}]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer._persist_home_context_choice",
+            new=AsyncMock(side_effect=OSError("read only")),
+        ),
+        patch(
+            "mammamiradio.web.streamer.invalidate_all_home_context",
+            side_effect=OSError("cache read only"),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.patch("/api/setup/home-context-choice", json={"enabled": False})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "privacy_persist_failed"
+    assert response.json()["live_off"] is True
+    assert app.state.config.homeassistant.context_enabled is False
+    assert state.home_context_policy_generation == 5
+    assert state.ha_context == ""
+    assert state.ha_context_last_updated == 0.0
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+
+
+@pytest.mark.asyncio
+async def test_home_context_disable_invalidates_memory_before_async_cleanup(tmp_path):
+    from mammamiradio.web.streamer import _disable_home_context_runtime
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.context_enabled = True
+    state = app.state.station_state
+    state.home_context_policy_generation = 2
+    events: list[str] = []
+    revoked_snapshot: tuple[asyncio.Task, ...] = ()
+
+    def _revoke_memory() -> tuple[asyncio.Task, ...]:
+        events.append("memory_epoch")
+        return revoked_snapshot
+
+    async def _drain_memory(tasks: tuple[asyncio.Task, ...]) -> None:
+        assert tasks is revoked_snapshot
+        events.append("memory_drain")
+
+    async def _revoke_context_fetch() -> None:
+        events.append("context_fetch")
+
+    def _suspend_context_fetch() -> None:
+        events.append("context_suspend")
+
+    state.ha_context_refresh_mailbox = SimpleNamespace(
+        suspend=_suspend_context_fetch,
+        revoke=_revoke_context_fetch,
+    )
+    with (
+        patch("mammamiradio.web.streamer.revoke_home_memory_extractions", side_effect=_revoke_memory),
+        patch(
+            "mammamiradio.web.streamer.drain_revoked_home_memory_extractions",
+            new=AsyncMock(side_effect=_drain_memory),
+        ),
+        patch("mammamiradio.web.streamer.invalidate_all_home_context"),
+    ):
+        await _disable_home_context_runtime(app.state)
+
+    assert events[:4] == ["memory_epoch", "context_suspend", "context_fetch", "memory_drain"]
+    assert state.home_context_policy_generation == 3
+
+
+def test_home_context_disable_retires_only_pending_home_interrupt(tmp_path):
+    from mammamiradio.core.models import ChaosSubtype
+    from mammamiradio.web.streamer import _retire_pending_home_interrupt
+
+    state = StationState()
+    bridge = tmp_path / "pending-home-interrupt.mp3"
+    bridge.write_bytes(b"ID3")
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    state.interrupt_slot_source = "ha:binary_sensor.kitchen_presence"
+    state.interrupt_slot_home_context_generation = 4
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.force_next = SegmentType.BANTER
+
+    assert _retire_pending_home_interrupt(state) is True
+    assert not bridge.exists()
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert state.interrupt_slot_source == ""
+    assert state.interrupt_slot_home_context_generation is None
+    assert state.chaos_pending is None
+    assert state.force_next is None
+
+    operator_bridge = tmp_path / "pending-operator-interrupt.mp3"
+    operator_bridge.write_bytes(b"ID3")
+    state.interrupt_slot = operator_bridge
+    state.interrupt_slot_ephemeral = True
+    state.interrupt_slot_source = "operator"
+    state.force_next = SegmentType.BANTER
+    state.operator_force_pending = SegmentType.BANTER
+
+    assert _retire_pending_home_interrupt(state) is False
+    assert operator_bridge.exists()
+    assert state.interrupt_slot is operator_bridge
+    assert state.force_next is SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_home_context_disable_contains_every_best_effort_cleanup_failure(tmp_path, caplog):
+    from mammamiradio.web.streamer import _disable_home_context_runtime
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.context_enabled = True
+    app.state.home_context_preview_proof = object()
+    state = app.state.station_state
+    state.home_context_policy_generation = 8
+    coordinator = SimpleNamespace(
+        suspend=MagicMock(side_effect=RuntimeError("suspend failed")),
+        revoke=AsyncMock(side_effect=RuntimeError("revoke failed")),
+    )
+    state.ha_context_refresh_mailbox = coordinator
+    ledger = SimpleNamespace(
+        buckets={"private": object()},
+        _dirty=False,
+        save_if_dirty=MagicMock(side_effect=RuntimeError("ledger save failed")),
+    )
+    state.evening_ledger = ledger
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("mammamiradio.web.streamer.revoke_home_memory_extractions", return_value=()),
+        patch("mammamiradio.web.streamer.invalidate_label_generation", return_value=()),
+        patch(
+            "mammamiradio.web.streamer.drain_revoked_home_memory_extractions",
+            new=AsyncMock(side_effect=RuntimeError("memory drain failed")),
+        ),
+        patch(
+            "mammamiradio.web.streamer.drain_invalidated_label_generation",
+            new=AsyncMock(side_effect=RuntimeError("label drain failed")),
+        ),
+        patch(
+            "mammamiradio.web.streamer.invalidate_all_home_context",
+            side_effect=RuntimeError("cache invalidation failed"),
+        ),
+        patch("mammamiradio.web.streamer.reset_scene_namer_cache"),
+    ):
+        purged = await _disable_home_context_runtime(app.state)
+
+    assert purged == 0
+    assert app.state.config.homeassistant.context_enabled is False
+    assert state.home_context_policy_generation == 9
+    assert app.state.home_context_preview_proof is None
+    assert ledger.buckets == {}
+    assert ledger._dirty is True
+    coordinator.suspend.assert_called_once_with()
+    coordinator.revoke.assert_awaited_once_with()
+    ledger.save_if_dirty.assert_called_once_with(tmp_path)
+    assert {
+        "Home-context refresh suspension failed during revocation",
+        "Home-context refresh cancellation failed during revocation",
+        "Home memory-extraction cancellation failed during revocation",
+        "Home label-generation cancellation failed during revocation",
+        "Home-context cache cleanup failed during revocation",
+        "Home-context running-gag cleanup could not be saved",
+    }.issubset({record.message for record in caplog.records})
+
+
+def test_home_context_runtime_enable_resumes_refresh_mailbox():
+    from mammamiradio.web.streamer import _enable_home_context_runtime
+
+    app = _make_test_app()
+    coordinator = SimpleNamespace(enable=MagicMock())
+    app.state.station_state.ha_context_refresh_mailbox = coordinator
+    app.state.station_state.ha_context_refresh_stage = "disabled"
+    app.state.config.homeassistant.context_enabled = False
+
+    _enable_home_context_runtime(app.state)
+
+    assert app.state.config.homeassistant.context_enabled is True
+    assert app.state.station_state.ha_context_refresh_stage == "idle"
+    coordinator.enable.assert_called_once_with()
+
+
+def test_home_entity_metadata_prefers_cache_then_runtime_then_safe_default(tmp_path):
+    from mammamiradio.web.streamer import _home_entity_metadata
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    cached_context = SimpleNamespace(
+        scored=[
+            SimpleNamespace(to_status_dict=lambda: {"entity_id": "sensor.other"}),
+            SimpleNamespace(
+                to_status_dict=lambda: {
+                    "entity_id": "binary_sensor.kitchen_presence",
+                    "label": "Kitchen presence",
+                    "domain": "binary_sensor",
+                    "area": "Kitchen",
+                }
+            ),
+        ]
+    )
+
+    with patch("mammamiradio.web.streamer.get_cached_home_context", return_value=cached_context):
+        cached = _home_entity_metadata(state, app.state.config, "binary_sensor.kitchen_presence")
+
+    assert cached == {"label": "Kitchen presence", "domain": "binary_sensor", "area": "Kitchen"}
+
+    state.ha_scored_entities = [
+        {"entity_id": "sensor.other"},
+        {
+            "entity_id": "switch.espresso_machine",
+            "label": "",
+            "domain": "",
+            "area": None,
+        },
+    ]
+    with patch("mammamiradio.web.streamer.get_cached_home_context", return_value=None):
+        runtime = _home_entity_metadata(state, app.state.config, "switch.espresso_machine")
+        missing = _home_entity_metadata(state, app.state.config, "light.unlisted")
+
+    assert runtime == {"label": "switch.espresso_machine", "domain": "switch", "area": ""}
+    assert missing == {"label": "light.unlisted", "domain": "light", "area": ""}
+
+
+@pytest.mark.asyncio
+async def test_home_context_enable_rejects_preview_after_policy_revision_changes(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.fetch_home_context_preview",
+        new=AsyncMock(return_value=preview_result),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            set_entity_muted(tmp_path, "weather.forecast_home", True)
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+
+    assert preview.status_code == 200
+    assert enabled.status_code == 409
+    assert enabled.json()["error"]["code"] == "preview_required"
+    assert app.state.config.homeassistant.context_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_home_context_enable_compensates_policy_change_while_choice_persists(tmp_path):
+    """Out-of-band policy drift during durable enable requires a new preview."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    entity_id = "weather.forecast_home"
+    set_entity_muted(tmp_path, entity_id, True)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    persist_started = asyncio.Event()
+    allow_persist = asyncio.Event()
+    persisted_choices: list[bool] = []
+
+    async def persist_choice(_config, enabled: bool) -> None:
+        persisted_choices.append(enabled)
+        if enabled:
+            persist_started.set()
+            await allow_persist.wait()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=preview_result)),
+        patch(
+            "mammamiradio.web.streamer._persist_home_context_choice",
+            new=AsyncMock(side_effect=persist_choice),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enable_task = asyncio.create_task(client.patch("/api/setup/home-context-choice", json={"enabled": True}))
+            await asyncio.wait_for(persist_started.wait(), timeout=1)
+            try:
+                widened_policy = await asyncio.to_thread(
+                    set_entity_muted,
+                    tmp_path,
+                    entity_id,
+                    False,
+                )
+            finally:
+                allow_persist.set()
+            enabled = await asyncio.wait_for(enable_task, timeout=1)
+
+    assert preview.status_code == 200
+    assert entity_id not in widened_policy["muted"]
+    assert enabled.status_code == 409
+    assert enabled.json()["error"]["code"] == "preview_required"
+    assert enabled.json()["enabled"] is False
+    assert enabled.json()["persisted"] is True
+    assert app.state.config.homeassistant.context_enabled is False
+    assert app.state.home_context_choice_explicit is True
+    assert app.state.home_context_preview_proof is None
+    assert persisted_choices == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_home_context_enable_serializes_entity_policy_widening(tmp_path):
+    """The supported policy API cannot commit between proof and enable."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.entity_policy import set_entity_muted
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    entity_id = "weather.forecast_home"
+    set_entity_muted(tmp_path, entity_id, True)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    persist_started = asyncio.Event()
+    allow_persist = asyncio.Event()
+
+    async def persist_choice(_config, enabled: bool) -> None:
+        if enabled:
+            persist_started.set()
+            await allow_persist.wait()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=preview_result)),
+        patch(
+            "mammamiradio.web.streamer._persist_home_context_choice",
+            new=AsyncMock(side_effect=persist_choice),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enable_task = asyncio.create_task(client.patch("/api/setup/home-context-choice", json={"enabled": True}))
+            await asyncio.wait_for(persist_started.wait(), timeout=1)
+            widening_task = asyncio.create_task(
+                client.patch(
+                    "/api/homeassistant/entity-policy",
+                    json={"entity_id": entity_id, "muted": False},
+                )
+            )
+            await asyncio.sleep(0)
+            assert not widening_task.done()
+            allow_persist.set()
+            enabled = await asyncio.wait_for(enable_task, timeout=1)
+            widened = await asyncio.wait_for(widening_task, timeout=1)
+
+    assert preview.status_code == 200
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert widened.status_code == 200
+    assert widened.json()["muted"] is False
+    assert app.state.config.homeassistant.context_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_home_context_preview_rejects_policy_generation_change_during_fetch(tmp_path):
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.station_state.home_context_policy_generation = 3
+
+    async def fetch_after_policy_change(*_args, **_kwargs):
+        app.state.station_state.home_context_policy_generation += 1
+        return HomeContextPreviewResult(
+            kind="fresh",
+            context=HomeContext(
+                authorization_mode=HomeAuthorizationMode.NARROW.value,
+                timestamp=time.time(),
+            ),
+            duration_seconds=0.01,
+        )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.fetch_home_context_preview",
+        new=AsyncMock(side_effect=fetch_after_policy_change),
+    ) as fetch:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/home-context-preview", json={})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "preview_unavailable"
+    assert app.state.station_state.home_context_policy_generation == 4
+    assert getattr(app.state, "home_context_preview_proof", None) is None
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidation", ["expired", "ha_config", "authorization_mode"])
+async def test_home_context_enable_rejects_stale_preview_proof(tmp_path, invalidation):
+    """Every server-bound preview proof dimension is revalidated on Enable."""
+    from dataclasses import replace
+
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    preview_result = HomeContextPreviewResult(
+        kind="fresh",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value, timestamp=time.time()),
+        duration_seconds=0.01,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=preview_result)),
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            assert preview.status_code == 200
+
+            if invalidation == "expired":
+                proof = app.state.home_context_preview_proof
+                app.state.home_context_preview_proof = replace(proof, expires_at=0.0)
+            elif invalidation == "ha_config":
+                app.state.config.ha_token = "rotated-supervisor-token"
+            else:
+                app.state.station_state.home_authorization = HomeAuthorization.legacy()
+
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+
+    assert enabled.status_code == 409
+    assert enabled.json()["error"]["code"] == "preview_required"
+    assert app.state.config.homeassistant.context_enabled is False
+    persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_home_context_preview_never_unlocks_enable(tmp_path):
+    """A failed fresh fetch cannot create the server proof required by Enable."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.ha_context import HomeContext, HomeContextPreviewResult
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://supervisor/core"
+    app.state.config.homeassistant.context_enabled = False
+    app.state.config.ha_token = "supervisor-token"
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    failed_result = HomeContextPreviewResult(
+        kind="failed",
+        context=HomeContext(authorization_mode=HomeAuthorizationMode.NARROW.value),
+        duration_seconds=0.01,
+        error_code="ha_unreachable",
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer.fetch_home_context_preview", new=AsyncMock(return_value=failed_result)),
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+
+    assert preview.status_code == 503
+    assert preview.json()["error"]["code"] == "ha_unreachable"
+    assert getattr(app.state, "home_context_preview_proof", None) is None
+    assert enabled.status_code == 409
+    assert enabled.json()["error"]["code"] == "preview_required"
+    assert app.state.config.homeassistant.context_enabled is False
+    persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keep_home_context_off_clears_all_runtime_context_and_generated_breaks(tmp_path):
+    """Normal global revocation clears every context owner and generated break kind."""
+    import mammamiradio.home.ha_context as ha_context
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+    from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+    from mammamiradio.home.ha_context import HomeContext, HomeRegistrySnapshot
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.homeassistant.context_enabled = True
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    state = app.state.station_state
+    state.home_authorization = HomeAuthorization.narrow()
+    state.home_context_policy_generation = 7
+    state.ha_context = "Private retained context"
+    state.ha_events_summary = "Private event"
+    state.ha_home_mood = "Private mood"
+    state.ha_pending_directive = "Mention the kitchen"
+    state.ha_pending_directive_source = "ha"
+    state.ha_running_gag = "Private running gag"
+    state.ha_running_gag_key = "private-gag"
+    state.last_banter_home_fact = MagicMock()
+
+    director = HomeContextDirector()
+    director.observe(
+        [
+            DirectorObservation(
+                entity_id="weather.forecast_home",
+                domain="weather",
+                state="sunny",
+                score=9.0,
+                temperature_c=24.0,
+            )
+        ],
+        policy_revision=0,
+    )
+    fact = director.select()
+    assert fact is not None
+    assert director.reserve("home-banter", fact)
+    state.home_context_director = director
+
+    ledger = EveningLedger(session_id=1, started_at=1.0, last_active=1.0)
+    ledger.buckets["private-gag"] = GagBucket(
+        "switch.private",
+        "Private switch",
+        "off",
+        "on",
+        count=3,
+        last_ts=1.0,
+    )
+    ledger._dirty = True
+    state.evening_ledger = ledger
+
+    generated = [
+        Segment(
+            type=segment_type,
+            path=tmp_path / f"private-{index}.mp3",
+            metadata={
+                "queue_id": queue_id,
+                "home_context_generation": 7,
+                "home_fact_id": fact.fact_id,
+            },
+            ephemeral=False,
+        )
+        for index, (segment_type, queue_id) in enumerate(
+            (
+                (SegmentType.BANTER, "home-banter"),
+                (SegmentType.AD, "home-ad"),
+                (SegmentType.NEWS_FLASH, "home-news"),
+            )
+        )
+    ]
+    safe_music = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "safe-music.mp3",
+        metadata={"queue_id": "safe-music"},
+        ephemeral=False,
+    )
+    for segment in [*generated, safe_music]:
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "home-banter", "type": "banter"},
+        {"id": "home-ad", "type": "ad"},
+        {"id": "home-news", "type": "news_flash"},
+        {"id": "safe-music", "type": "music"},
+    ]
+
+    retained = HomeContext(
+        raw_states={"switch.private": {"state": "on", "attributes": {}}},
+        authorization_mode=HomeAuthorizationMode.NARROW.value,
+        timestamp=1.0,
+    )
+    registry_cache = tmp_path / "ha_registry.json"
+    registry_cache.write_text("{}", encoding="utf-8")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.object(ha_context, "_ha_cache", retained),
+        patch.object(ha_context, "_radio_event_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_ha_registry_snapshot_cache", HomeRegistrySnapshot(source="memory")),
+        patch.object(ha_context, "_ha_registry_fetched_at", 1.0),
+        patch.object(ha_context, "_weather_forecast_cache", "Private weather"),
+        patch.object(ha_context, "_weather_forecast_cache_en", "Private weather"),
+        patch.object(ha_context, "_weather_forecast_fetched_at", 1.0),
+        patch.object(ha_context, "_home_context_invalidation_generation", 11),
+        patch("mammamiradio.web.streamer._persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.patch("/api/setup/home-context-choice", json={"enabled": False})
+
+        assert ha_context._ha_cache is None
+        assert ha_context._radio_event_state_cache == {}
+        assert ha_context._ritual_recipe_state_cache == {}
+        assert ha_context._ha_registry_snapshot_cache is None
+        assert ha_context._weather_forecast_cache == ""
+        assert ha_context._weather_forecast_cache_en == ""
+        assert ha_context._home_context_invalidation_generation == 12
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["purged_pending_segments"] == 3
+    assert app.state.config.homeassistant.context_enabled is False
+    assert state.home_context_policy_generation == 8
+    assert state.ha_context == ""
+    assert state.ha_events_summary == ""
+    assert state.ha_home_mood == ""
+    assert state.ha_pending_directive == ""
+    assert state.ha_running_gag == ""
+    assert state.last_banter_home_fact is None
+    assert state.home_context_director is not director
+    assert state.home_context_director.admin_status()["reserved_count"] == 0
+    assert ledger.buckets == {}
+    assert EveningLedger.load(tmp_path).buckets == {}
+    assert not registry_cache.exists()
+    assert app.state.queue.qsize() == 1
+    assert app.state.queue.get_nowait() is safe_music
+    assert state.queued_segments == [{"id": "safe-music", "type": "music"}]
+    assert (await app.state.first_listen_store.load()).privacy_complete is True
+    persist.assert_awaited_once_with(app.state.config, False)

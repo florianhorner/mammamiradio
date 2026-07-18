@@ -225,6 +225,335 @@ class RuntimeProviderEvent:
         return asdict(self)
 
 
+SOURCE_READINESS_KINDS: tuple[str, ...] = ("charts", "jamendo", "local", "demo", "recovery")
+_SOURCE_READINESS_ALIASES = {
+    "youtube": "charts",
+    "chart": "charts",
+    "charts": "charts",
+    "jamendo": "jamendo",
+    "local": "local",
+    "demo": "demo",
+    "recovery": "recovery",
+    "continuity": "recovery",
+    "canned": "recovery",
+    "norm_cache": "recovery",
+    "emergency_tone": "recovery",
+}
+_SOURCE_EVIDENCE_LIMIT = 10_000
+_SOURCE_FAILURE_LIMIT = 160
+
+
+def canonical_source_readiness_kind(kind: object) -> str:
+    """Map runtime source labels onto the bounded first-listen source set."""
+    return _SOURCE_READINESS_ALIASES.get(str(kind or "").strip().lower(), "")
+
+
+def _bounded_source_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(parsed, _SOURCE_EVIDENCE_LIMIT))
+
+
+def _safe_source_failure(value: object) -> str:
+    return " ".join(str(value or "").split())[:_SOURCE_FAILURE_LIMIT]
+
+
+@dataclass
+class SourceReadinessEntry:
+    """Bounded event evidence for one human-facing music source."""
+
+    kind: str
+    label: str = ""
+    configured: bool = False
+    attempted: bool = False
+    candidates: int = 0
+    playable: int = 0
+    on_air: bool = False
+    exhausted: bool = False
+    failure: str = ""
+    bundled: bool | None = None
+
+    def clone(self) -> SourceReadinessEntry:
+        return SourceReadinessEntry(**asdict(self))
+
+
+def _empty_source_entries() -> dict[str, SourceReadinessEntry]:
+    return {kind: SourceReadinessEntry(kind=kind) for kind in SOURCE_READINESS_KINDS}
+
+
+@dataclass
+class SourceReadinessEvidence:
+    """Single in-memory owner for source truth, scoped to a source revision."""
+
+    source_revision: int = 0
+    entries: dict[str, SourceReadinessEntry] = field(default_factory=_empty_source_entries)
+    current_rotation_kind: str = ""
+    current_rotation_label: str = ""
+    advanced: SourceReadinessEntry | None = None
+
+    def clone_for_revision(self, source_revision: int) -> SourceReadinessEvidence:
+        clone = SourceReadinessEvidence(source_revision=max(0, int(source_revision)))
+        clone.entries = {
+            kind: self.entries.get(kind, SourceReadinessEntry(kind=kind)).clone() for kind in SOURCE_READINESS_KINDS
+        }
+        clone.current_rotation_kind = self.current_rotation_kind
+        clone.current_rotation_label = self.current_rotation_label
+        clone.advanced = self.advanced.clone() if self.advanced is not None else None
+        clone.clear_on_air()
+        return clone
+
+    def has_signal(self) -> bool:
+        return bool(
+            self.current_rotation_kind
+            or self.advanced is not None
+            or any(
+                entry.configured
+                or entry.attempted
+                or entry.candidates
+                or entry.playable
+                or entry.on_air
+                or entry.exhausted
+                or entry.failure
+                or entry.bundled is not None
+                for entry in self.entries.values()
+            )
+        )
+
+    def configure(self, kind: object, configured: bool = True, *, bundled: bool | None = None) -> None:
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            return
+        entry = self.entries[canonical]
+        entry.configured = bool(configured)
+        if bundled is not None:
+            entry.bundled = bool(bundled)
+
+    def mark_attempted(self, kind: object, *, failure: object = "") -> None:
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            raw_kind = str(kind or "").strip().lower()
+            if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+                self.advanced.configured = True
+                self.advanced.attempted = True
+                if failure:
+                    self.advanced.failure = _safe_source_failure(failure)
+            return
+        entry = self.entries[canonical]
+        entry.configured = True
+        entry.attempted = True
+        if failure:
+            entry.failure = _safe_source_failure(failure)
+
+    def mark_candidates(self, kind: object, count: object) -> None:
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            return
+        entry = self.entries[canonical]
+        entry.configured = True
+        entry.attempted = True
+        entry.candidates = max(entry.candidates, _bounded_source_count(count))
+        if entry.candidates:
+            entry.exhausted = False
+            entry.failure = ""
+
+    def observe_tracks(self, tracks: Collection[Track] | None) -> None:
+        if not tracks:
+            return
+        counts = {kind: 0 for kind in SOURCE_READINESS_KINDS}
+        for track in tracks:
+            canonical = canonical_source_readiness_kind(track.source)
+            if canonical and canonical != "recovery":
+                counts[canonical] += 1
+        for kind, count in counts.items():
+            if count:
+                self.mark_candidates(kind, count)
+
+    def reconcile_active_tracks(
+        self,
+        tracks: Collection[Track] | None,
+        *,
+        removed_tracks: Collection[Track] | None = None,
+    ) -> None:
+        """Replace loader candidate counts with the policy-filtered rotation.
+
+        Loader evidence is captured before the operator blocklist is applied.
+        Without this reconciliation, a source whose every fetched track was
+        removed by local policy would remain ``candidates_only`` forever because
+        the producer never sees a track from that source to mark exhausted.
+        """
+        counts = {kind: 0 for kind in SOURCE_READINESS_KINDS}
+        advanced_count = 0
+        for track in tracks or ():
+            canonical = canonical_source_readiness_kind(track.source)
+            if canonical and canonical != "recovery":
+                counts[canonical] += 1
+            elif self.advanced is not None and str(track.source or "").strip().lower() in {
+                self.advanced.kind,
+                self.current_rotation_kind,
+            }:
+                advanced_count += 1
+
+        # Playable is aggregate evidence, not a per-track identity map. When a
+        # source loses tracks, conservatively require one of its survivors to
+        # pass preparation again instead of attributing a removed track's proof
+        # to a different candidate.
+        removed_kinds: set[str] = set()
+        advanced_removed = False
+        for track in removed_tracks or ():
+            canonical = canonical_source_readiness_kind(track.source)
+            if canonical and canonical != "recovery":
+                removed_kinds.add(canonical)
+            elif self.advanced is not None and str(track.source or "").strip().lower() in {
+                self.advanced.kind,
+                self.current_rotation_kind,
+            }:
+                advanced_removed = True
+
+        empty_reason = "No found track remains in the active rotation after local policy filters."
+        for kind, entry in self.entries.items():
+            if kind == "recovery":
+                continue
+            previous_candidates = entry.candidates
+            previous_playable = entry.playable
+            if kind in removed_kinds:
+                entry.playable = 0
+            active_candidates = _bounded_source_count(counts[kind])
+            if active_candidates:
+                entry.candidates = active_candidates
+                entry.exhausted = False
+                entry.failure = ""
+            elif previous_candidates or previous_playable:
+                entry.candidates = 0
+                self.mark_exhausted(kind, empty_reason)
+
+        if self.advanced is not None:
+            previous_candidates = self.advanced.candidates
+            previous_playable = self.advanced.playable
+            if advanced_removed:
+                self.advanced.playable = 0
+            if advanced_count:
+                self.advanced.candidates = _bounded_source_count(advanced_count)
+                self.advanced.exhausted = False
+                self.advanced.failure = ""
+            elif previous_candidates or previous_playable:
+                self.advanced.candidates = 0
+                self.mark_exhausted(self.current_rotation_kind or self.advanced.kind, empty_reason)
+
+    def mark_playable(self, kind: object, count: object = 1) -> None:
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            raw_kind = str(kind or "").strip().lower()
+            if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+                self.advanced.playable = max(self.advanced.playable, _bounded_source_count(count), 1)
+                self.advanced.exhausted = False
+                self.advanced.failure = ""
+            return
+        if canonical == "recovery":
+            return
+        entry = self.entries[canonical]
+        entry.configured = True
+        entry.attempted = True
+        entry.playable = max(entry.playable, _bounded_source_count(count), 1)
+        entry.exhausted = False
+        entry.failure = ""
+
+    def mark_failure(self, kind: object, reason: object) -> None:
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            raw_kind = str(kind or "").strip().lower()
+            if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+                self.advanced.failure = _safe_source_failure(reason)
+            return
+        entry = self.entries[canonical]
+        entry.configured = True
+        entry.attempted = True
+        entry.failure = _safe_source_failure(reason)
+
+    def mark_exhausted(self, kind: object, reason: object) -> None:
+        """Record that no active candidate for a source remains selectable."""
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            raw_kind = str(kind or "").strip().lower()
+            if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+                self.advanced.attempted = True
+                self.advanced.playable = 0
+                self.advanced.exhausted = True
+                self.advanced.failure = _safe_source_failure(reason)
+            return
+        if canonical == "recovery":
+            return
+        entry = self.entries[canonical]
+        entry.configured = True
+        entry.attempted = True
+        entry.playable = 0
+        entry.exhausted = True
+        entry.failure = _safe_source_failure(reason)
+
+    def clear_exhausted(self, kind: object) -> None:
+        """Re-open a source after a selectable candidate or concrete recovery appears."""
+        canonical = canonical_source_readiness_kind(kind)
+        if not canonical:
+            raw_kind = str(kind or "").strip().lower()
+            if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+                self.advanced.exhausted = False
+            return
+        self.entries[canonical].exhausted = False
+
+    def set_current_rotation(self, kind: object, label: object = "") -> None:
+        raw_kind = str(kind or "").strip().lower()
+        self.current_rotation_kind = raw_kind
+        self.current_rotation_label = _safe_source_failure(label)
+        canonical = canonical_source_readiness_kind(raw_kind)
+        if raw_kind and not canonical:
+            advanced_kind = "classic" if raw_kind == "classic" else "custom"
+            self.advanced = SourceReadinessEntry(
+                kind=advanced_kind,
+                label=self.current_rotation_label or advanced_kind.replace("_", " ").title(),
+                configured=True,
+                attempted=True,
+            )
+        else:
+            self.advanced = None
+
+    def mark_advanced_candidates(self, count: object) -> None:
+        if self.advanced is None:
+            return
+        self.advanced.candidates = max(self.advanced.candidates, _bounded_source_count(count))
+        if self.advanced.candidates:
+            self.advanced.exhausted = False
+            self.advanced.failure = ""
+
+    def clear_on_air(self) -> None:
+        for entry in self.entries.values():
+            entry.on_air = False
+        if self.advanced is not None:
+            self.advanced.on_air = False
+
+    def mark_on_air(self, kind: object, *, recovery: bool = False) -> None:
+        self.clear_on_air()
+        canonical = "recovery" if recovery else canonical_source_readiness_kind(kind)
+        if canonical:
+            entry = self.entries[canonical]
+            entry.configured = True
+            entry.attempted = True
+            entry.on_air = True
+            if canonical != "recovery":
+                entry.playable = max(1, entry.playable)
+                entry.exhausted = False
+                entry.failure = ""
+            return
+        raw_kind = str(kind or "").strip().lower()
+        if self.advanced is not None and raw_kind in {self.advanced.kind, self.current_rotation_kind}:
+            self.advanced.on_air = True
+            self.advanced.playable = max(1, self.advanced.playable)
+            self.advanced.exhausted = False
+            self.advanced.failure = ""
+
+
 @dataclass
 class PlaylistSource:
     """The user-visible source backing the currently loaded playlist."""
@@ -235,6 +564,9 @@ class PlaylistSource:
     label: str = ""
     track_count: int = 0
     selected_at: float = 0.0
+    # Transient load evidence. StationState adopts a revision-scoped clone;
+    # persistence and public source serialization deliberately omit it.
+    readiness_evidence: SourceReadinessEvidence | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -573,6 +905,7 @@ class StationState:
     last_enqueued_type: SegmentType | None = None
     playlist_source: PlaylistSource | None = None
     startup_source_error: str = ""
+    source_readiness: SourceReadinessEvidence = field(default_factory=SourceReadinessEvidence)
     heading: Heading | None = None
     heading_revision: int = 0
     heading_persist_callback: Callable[[Heading], None] | None = None
@@ -605,6 +938,10 @@ class StationState:
     # Producer may mix these under future music for "studio bleed".
     recent_banter_paths: deque[Path] = field(default_factory=lambda: deque(maxlen=5))
     # Home Assistant context (natural language summary of home state)
+    # Privacy cutover fence for generated host segments. Any global Home-context
+    # disable increments this value before purging queued work; producer renders
+    # capture it and may only enter the live queue while it still matches.
+    home_context_policy_generation: int = 0
     ha_context: str = ""
     ha_events_summary: str = ""
     # Phase 1: recent state-change events
@@ -711,6 +1048,11 @@ class StationState:
     interrupt_slot: Path | None = None
     # Whether the current interrupt bridge clip is a generated temp file
     interrupt_slot_ephemeral: bool = False
+    # Provenance for the out-of-band bridge. Home/timer interrupts carry the
+    # privacy generation so a later global cutover can retire them before air;
+    # operator/non-Home bridges remain untagged and are not clobbered.
+    interrupt_slot_source: str = ""
+    interrupt_slot_home_context_generation: int | None = None
     # Timestamp of last fired interrupt (for cooldown enforcement)
     last_interrupt_ts: float = 0.0
     # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.
@@ -896,6 +1238,38 @@ class StationState:
     gen_started: float = 0.0  # time.monotonic() when the current phase began; 0.0 when idle
     gen_recent: deque[dict] = field(default_factory=lambda: deque(maxlen=3))
     # each entry: {"phase": str, "kind": str, "label": str, "ok": bool}
+
+    def __post_init__(self) -> None:
+        self._reset_source_readiness()
+
+    def _reset_source_readiness(self) -> None:
+        """Adopt load-time evidence and clear stale facts on a source revision."""
+        source = self.playlist_source
+        playlist = self.playlist if isinstance(self.playlist, list | tuple) else []
+        seed = source.readiness_evidence if source is not None else None
+        seeded_from_loader = seed is not None
+        if seed is not None:
+            evidence = seed.clone_for_revision(self.source_revision)
+        elif self.source_readiness.has_signal() and self.source_readiness.source_revision == self.source_revision:
+            evidence = self.source_readiness.clone_for_revision(self.source_revision)
+        else:
+            evidence = SourceReadinessEvidence(source_revision=self.source_revision)
+
+        if source is not None:
+            if not evidence.current_rotation_kind:
+                evidence.set_current_rotation(source.kind, source.label)
+            if not seeded_from_loader:
+                canonical = canonical_source_readiness_kind(source.kind)
+                if canonical:
+                    evidence.mark_attempted(canonical)
+                    evidence.mark_candidates(canonical, source.track_count or len(playlist))
+                elif evidence.advanced is not None:
+                    evidence.mark_advanced_candidates(source.track_count or len(playlist))
+            if seeded_from_loader:
+                evidence.reconcile_active_tracks(playlist)
+            source.track_count = len(playlist)
+        evidence.observe_tracks(playlist)
+        self.source_readiness = evidence
 
     def set_gen(self, phase: str, kind: str, label: str, *, track_timing: bool = True) -> None:
         """Mark the producer as actively building a segment (drives 'In produzione').
@@ -1376,6 +1750,7 @@ class StationState:
         self.playlist = tracks
         self.playlist_source = source
         self.startup_source_error = ""
+        self._reset_source_readiness()
         self.songs_since_banter = 0
         self.songs_since_ad = 0
         self.songs_since_news = 0
@@ -1485,6 +1860,16 @@ class StationState:
             self.canned_clips_streamed += 1
         raw_audio_source = str(segment.metadata.get("audio_source") or "")
         fallback_active = is_fallback_active(segment.metadata)
+        # On-air evidence is updated only at stream start. Recovery can prove
+        # the speaker route, but it never upgrades a music source to playable.
+        self.source_readiness.clear_on_air()
+        if fallback_active or segment.metadata.get("rescue"):
+            self.source_readiness.mark_on_air("recovery", recovery=True)
+        elif segment.type == SegmentType.MUSIC:
+            source_kind = segment.metadata.get("source_kind")
+            if not source_kind and self.playlist_source is not None:
+                source_kind = self.playlist_source.kind
+            self.source_readiness.mark_on_air(source_kind)
         if raw_audio_source or segment.metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
             audio_source = raw_audio_source
             if not audio_source and fallback_active:

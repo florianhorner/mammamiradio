@@ -58,6 +58,7 @@ def _make_test_app(
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+    app.state.csrf_token = "json-contract-csrf-token"
     hub = LiveStreamHub()
     hub.bind_state(state)
     app.state.stream_hub = hub
@@ -203,11 +204,19 @@ async def test_json_body_write_routes_reject_bad_bodies_without_mutation(
         base_url="http://testserver",
     ) as client:
         for case_name, body in BAD_JSON_BODIES:
+            headers = {"content-type": "application/json"}
+            if path == "/api/setup/save-keys":
+                headers.update(
+                    {
+                        "host": "127.0.0.1",
+                        "x-radio-csrf-token": "json-contract-csrf-token",
+                    }
+                )
             response = await client.request(
                 method,
                 path,
                 content=body,
-                headers={"content-type": "application/json"},
+                headers=headers,
             )
             payload = response.json()
             assert response.status_code == 422, case_name

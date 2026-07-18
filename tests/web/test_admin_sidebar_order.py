@@ -72,6 +72,7 @@ def test_admin_has_pinned_console_and_full_tabbar() -> None:
     assert not parser._in_admin_content
     assert parser.console_present, "pinned live console (.mmr-console) must be present"
     assert parser.tab_order == [
+        "setup",
         "scaletta",
         "diretta",
         "rotazione",
@@ -86,9 +87,10 @@ def test_admin_tabpanels_cover_every_section() -> None:
     parser = _ProducerDeskParser()
     parser.feed(ADMIN_HTML.read_text(encoding="utf-8"))
 
-    # Panels are emitted in DOM order (Scaletta is first / default-active); the
-    # tab bar orders them for the operator independently.
+    # Panels are emitted in DOM order with First Listen first so a fresh install
+    # can land there; Scaletta remains the static default for completed installs.
     assert parser.panel_names == [
+        "setup",
         "scaletta",
         "rotazione",
         "diretta",
@@ -97,6 +99,7 @@ def test_admin_tabpanels_cover_every_section() -> None:
         "motore",
     ]
     assert parser.panel_ids == [
+        "first-listen-panel",
         "live-queue",
         "rotation-pool",
         "drawer-steer",

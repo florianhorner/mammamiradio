@@ -18,8 +18,10 @@ from mammamiradio.core.models import (
     Heading,
     HostPersonality,
     ListenerProfile,
+    PlaylistSource,
     Segment,
     SegmentType,
+    SourceReadinessEvidence,
     StationState,
     Track,
     normalized_track_key,
@@ -42,6 +44,192 @@ def test_dialogue_line_keeps_delivery_sidecar_out_of_legacy_tuple_contract():
     assert line.delivery == "energetic"
     with pytest.raises(FrozenInstanceError):
         line.delivery = "neutral"  # type: ignore[misc]
+
+
+def test_source_readiness_ignores_unknown_sources_and_bad_counts():
+    evidence = SourceReadinessEvidence()
+
+    evidence.configure("unknown")
+    evidence.mark_attempted(None)
+    evidence.mark_candidates("custom", 4)
+    evidence.mark_attempted("charts", failure="  download\nfailed  ")
+    evidence.mark_candidates("charts", object())
+    evidence.mark_candidates("charts", "not-a-number")
+    evidence.observe_tracks(None)
+
+    charts = evidence.entries["charts"]
+    assert charts.configured is True
+    assert charts.attempted is True
+    assert charts.candidates == 0
+    assert charts.failure == "download failed"
+    assert evidence.advanced is None
+
+
+def test_source_readiness_tracks_advanced_rotation_without_promoting_recovery():
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "  Classic rotation  ")
+
+    evidence.mark_playable("classic", "2")
+    assert evidence.advanced is not None
+    assert evidence.advanced.playable == 2
+    assert evidence.advanced.failure == ""
+
+    evidence.mark_failure("classic", "  temporarily\nmissing  ")
+    assert evidence.advanced.failure == "temporarily missing"
+
+    evidence.mark_playable("another-custom-source")
+    evidence.mark_failure("another-custom-source", "ignored")
+    evidence.mark_playable("recovery", 9)
+
+    assert evidence.advanced.playable == 2
+    assert evidence.advanced.failure == "temporarily missing"
+    assert evidence.entries["recovery"].playable == 0
+
+
+def test_source_readiness_distinguishes_candidate_failure_from_terminal_exhaustion():
+    evidence = SourceReadinessEvidence()
+    evidence.mark_candidates("charts", 2)
+
+    evidence.mark_failure("youtube", "One candidate failed")
+    assert evidence.entries["charts"].exhausted is False
+
+    evidence.mark_playable("charts")
+    evidence.mark_exhausted("charts", "No found track could be prepared")
+    assert evidence.entries["charts"].exhausted is True
+    assert evidence.entries["charts"].playable == 0
+    assert evidence.entries["charts"].failure == "No found track could be prepared"
+
+    evidence.clear_exhausted("charts")
+    assert evidence.entries["charts"].exhausted is False
+
+    evidence.mark_exhausted("charts", "No found track could be prepared")
+    evidence.mark_playable("youtube")
+    assert evidence.entries["charts"].exhausted is False
+    assert evidence.entries["charts"].failure == ""
+
+
+def test_source_readiness_reconciles_policy_filtered_and_removed_tracks():
+    charts = Track(title="Chart", artist="Artist", duration_ms=180_000, source="youtube")
+    local = Track(title="Local", artist="Artist", duration_ms=180_000, source="local")
+    evidence = SourceReadinessEvidence()
+    evidence.observe_tracks([charts, local])
+    evidence.mark_playable("charts")
+    evidence.mark_playable("local")
+
+    evidence.reconcile_active_tracks([local], removed_tracks=[charts])
+
+    assert evidence.entries["charts"].candidates == 0
+    assert evidence.entries["charts"].playable == 0
+    assert evidence.entries["charts"].exhausted is True
+    assert evidence.entries["local"].candidates == 1
+    assert evidence.entries["local"].playable == 1
+
+    evidence.observe_tracks([charts])
+    assert evidence.entries["charts"].candidates == 1
+    assert evidence.entries["charts"].exhausted is False
+    assert evidence.entries["charts"].failure == ""
+
+
+def test_source_readiness_reconciles_advanced_rotation_after_policy_filters():
+    survivor = Track(title="Classic A", artist="Artist", duration_ms=180_000, source="classic")
+    removed = Track(title="Classic B", artist="Artist", duration_ms=180_000, source="classic")
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "Classic rotation")
+    evidence.mark_advanced_candidates(2)
+    evidence.mark_playable("classic", 2)
+
+    evidence.reconcile_active_tracks([survivor], removed_tracks=[removed])
+
+    assert evidence.advanced is not None
+    assert evidence.advanced.candidates == 1
+    # Playable evidence belonged to the pre-filter pool, so the surviving track
+    # must prove itself instead of inheriting the removed track's preparation.
+    assert evidence.advanced.playable == 0
+    assert evidence.advanced.exhausted is False
+    assert evidence.advanced.failure == ""
+
+    evidence.mark_playable("classic")
+    evidence.reconcile_active_tracks([], removed_tracks=[survivor])
+
+    assert evidence.advanced.candidates == 0
+    assert evidence.advanced.playable == 0
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == ("No found track remains in the active rotation after local policy filters.")
+
+
+def test_station_state_reconciles_loader_evidence_after_policy_filters_and_switch():
+    chart_evidence = SourceReadinessEvidence()
+    chart_evidence.set_current_rotation("charts", "Live charts")
+    chart_evidence.mark_candidates("charts", 1)
+    charts = PlaylistSource(
+        kind="charts",
+        label="Live charts",
+        track_count=1,
+        readiness_evidence=chart_evidence,
+    )
+
+    # Models the startup doorway after the only loader candidate was removed by
+    # the operator blocklist before StationState adopted the active rotation.
+    state = StationState(playlist=[], playlist_source=charts)
+
+    assert charts.track_count == 0
+    assert state.source_readiness.entries["charts"].candidates == 0
+    assert state.source_readiness.entries["charts"].exhausted is True
+
+    jamendo_track = Track(title="CC song", artist="Artist", duration_ms=180_000, source="jamendo")
+    jamendo_evidence = SourceReadinessEvidence()
+    jamendo_evidence.set_current_rotation("jamendo", "Jamendo")
+    jamendo_evidence.mark_candidates("jamendo", 1)
+    jamendo = PlaylistSource(
+        kind="jamendo",
+        label="Jamendo",
+        track_count=1,
+        readiness_evidence=jamendo_evidence,
+    )
+
+    state.switch_playlist([jamendo_track], jamendo)
+
+    assert state.source_readiness.entries["charts"].exhausted is False
+    assert state.source_readiness.entries["jamendo"].candidates == 1
+    assert state.playlist_source is jamendo
+
+
+def test_source_readiness_advanced_exhaustion_reopens_on_candidates():
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "Classic rotation")
+
+    evidence.mark_exhausted("classic", "  No selectable\ntrack remains  ")
+    assert evidence.advanced is not None
+    assert evidence.advanced.attempted is True
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == "No selectable track remains"
+
+    evidence.clear_exhausted("classic")
+    assert evidence.advanced.exhausted is False
+
+    evidence.mark_exhausted("classic", "Still empty")
+    evidence.mark_advanced_candidates("not-a-count")
+    assert evidence.advanced.candidates == 0
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == "Still empty"
+
+    evidence.mark_advanced_candidates("3")
+    assert evidence.advanced.candidates == 3
+    assert evidence.advanced.exhausted is False
+    assert evidence.advanced.failure == ""
+
+
+def test_source_readiness_exhaustion_ignores_recovery_and_absent_advanced_rotation():
+    evidence = SourceReadinessEvidence()
+
+    evidence.mark_exhausted("recovery", "Continuity is not a music source")
+    evidence.mark_exhausted("unknown", "ignored")
+    evidence.clear_exhausted("unknown")
+    evidence.mark_advanced_candidates(4)
+
+    assert evidence.entries["recovery"].exhausted is False
+    assert evidence.entries["recovery"].failure == ""
+    assert evidence.advanced is None
 
 
 def test_after_music_updates_counters():

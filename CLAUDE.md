@@ -27,6 +27,15 @@ Every word a listener or operator reads is product copy, not a log line. No tech
 
 `branch → PR → merge → CI builds image → addon updates to new image`
 
+**Default HA development target:** First Listen and other Home Assistant-facing
+branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA
+Container + VLC speaker lab. Never connect branch code to the live home, reuse
+its token or backup, or attach household/cloud/MQTT devices unless Florian
+explicitly authorizes that live action in the current message. Lab runtime and
+credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
+`.context/` or tracked files. See
+`docs/runbooks/first-listen-local-ha.md`.
+
 The restart happens once, planned, when the addon updates. Not during the day. Not as an experiment. Not to "test the fix live."
 
 **NEVER do any of these against the running mammamiradio addon without Florian's explicit confirmation in the current message:**
@@ -65,6 +74,7 @@ Everything else lives under `docs/`:
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk rolling-RC mental model (the *how-to-cut* lives in the runbook below)
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/runbooks/first-listen-local-ha.md` - disposable local HA + real Mac speaker acceptance lab
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
@@ -88,6 +98,7 @@ private durable system for strategy or relationship context.
 - Test: `pytest tests/` or `make test` (with coverage)
 - Test watch: `make test-watch` (re-runs on file save)
 - Test HA add-on build locally: `scripts/validate-addon.sh --build`
+- Run First Listen against disposable local HA: `scripts/first-listen-lab.sh start`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
@@ -112,7 +123,7 @@ private durable system for strategy or relationship context.
 ## Environment
 
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
-- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
+- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`, `MAMMAMIRADIO_MUSIC_DIR`: override cache, temporary-work, and operator-supplied music directories (the supplied containers keep all three under `/data`)
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
@@ -121,9 +132,9 @@ private durable system for strategy or relationship context.
 - `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for host/sweeper/ad voices routed to `engine = "azure"`. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
 - `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`. Absent key falls back to the per-voice Edge fallback.
 - `HA_TOKEN`: Home Assistant API token
-- `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
+- `HA_URL`: Home Assistant API base URL (auto-set by the HA add-on to `http://supervisor/core`; direct Core installs normally use `http://host:8123`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
-- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: whether generated host segments may refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). The HA add-on exposes this as `ha_context_enabled`. Turn it off to keep HA entity publishing and timer interrupts while eliminating the full `/api/states` prompt-context poll.
+- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a proven pre-feature install may restore its legacy-on behavior after background origin migration. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
 - `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`: seconds between full Home Assistant state refreshes for host prompt context (positive integer; default `300`). Maps to `[homeassistant] poll_interval` / add-on `ha_context_poll_interval`; invalid values are ignored with a warning.
 - `MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT`: foreground wall-clock wait (seconds, positive float) before a warm prompt-context refresh falls back to the last prompt-safe snapshot (default `2.0`; env > toml). It never cancels the producer-owned request: one request continues in the background for at most 30 seconds total and may be adopted only at the next `BANTER`/`AD`/`NEWS_FLASH` preparation boundary, never into audio already rendering or queued. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same 30-second cap. The first cold registry/weather warm-up keeps its 20-second foreground wait (`_HA_CONTEXT_COLD_LOAD_TIMEOUT`); later segments while that request runs reuse the safe snapshot immediately. Failed attempts retry no earlier than the configured poll interval. A snapshot older than `max(2 × poll_interval, 120s)` — including a completed reply that becomes stale while waiting in the mailbox — is retained for diagnostics but withheld from prompts and delayed one-shots; the first fresh result after that gap resynchronizes ambient state without replaying delayed full-context events, directives, interrupts, ritual/radio matches, or running gags. Timer interrupts stay on their separate lightweight entity poll with `timer` provenance, so full-context stale suppression cannot erase a current timer alert. No new HA add-on option exposes the 30-second cap. A non-float or ≤0 configured foreground wait is ignored with a warning.
 - `MAMMAMIRADIO_HA_MOOD_LLM`: enable the experimental Home Assistant home-mood scene namer (`true`/`1`/`yes`; default **off**). Off means `classify_home_mood` uses the local heuristic ladder only. On means the station may ask the configured LLM for a short radio-friendly home mood from the already-budgeted HA context slice; missing keys, timeout, rejected or invalid output, disabled HA, and a tripped Anthropic circuit breaker (auth/usage failures already detected by script generation) all fall back to the heuristic ladder.

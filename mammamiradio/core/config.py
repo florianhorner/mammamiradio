@@ -753,6 +753,7 @@ class StationConfig:
     brand_warnings: list[str] = field(default_factory=list)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
+    music_dir: Path = Path("music")
     max_cache_size_mb: int = 500
 
     # Secrets from env
@@ -2193,9 +2194,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         except ValueError:
             playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
 
-    # Env-var overrides for cache/tmp directories (for Docker volume mounts)
+    # Env-var overrides for runtime data directories (for Docker volume mounts).
+    # Keep the music location explicit so every ingest/download path observes
+    # the same operator-owned directory.
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
     tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
+    music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
 
     # Parse sonic brand section
     sonic_brand_raw = raw.get("sonic_brand", {})
@@ -2249,6 +2253,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         brand_warnings=brand_warnings,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
+        music_dir=music_dir,
         max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),
         bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
@@ -2340,6 +2345,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).info("Running as Home Assistant addon")
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
+        config.music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "/data/music"))
         # Auto-enable HA context via Supervisor API unless explicitly disabled.
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
         if supervisor_token and not ha_force_disabled:

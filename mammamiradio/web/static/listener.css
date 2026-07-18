@@ -477,6 +477,15 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   .mmr-stage-header .mmr-np-meta .title.tt-track-roll { overflow: hidden; }
   .mmr-wave { display: none; }
 }
+@media (max-width: 360px) {
+  /* Keep the brand and the primary station-status action fully visible on
+     the smallest supported phone width. The anchor links are already hidden
+     above 600px, so this space belongs to the two remaining header items. */
+  .mmr-nav-inner { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  .mmr-brand { min-width: 0; flex: 0 1 auto; gap: 7px; }
+  .mmr-brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 15px; letter-spacing: -0.02em; }
+  .mmr-live-pill { width: 120px; min-width: 120px; flex: 0 0 120px; justify-content: center; overflow: hidden; white-space: normal; gap: 4px; padding: 7px; font-size: 8px; letter-spacing: 0.06em; line-height: 1.15; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mmr-live-pill .dot, .mmr-live .dot { animation: none; }
   .mmr-wave span { animation: none; }

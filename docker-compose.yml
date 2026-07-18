@@ -7,6 +7,7 @@ services:
       - MAMMAMIRADIO_BIND_HOST=0.0.0.0
       - MAMMAMIRADIO_PORT=8000
       - MAMMAMIRADIO_CACHE_DIR=/data/cache
+      - MAMMAMIRADIO_MUSIC_DIR=/data/music
       - MAMMAMIRADIO_TMP_DIR=/data/tmp
       # Admin token for non-loopback access.
       # If unset, the entrypoint auto-generates one and persists it to

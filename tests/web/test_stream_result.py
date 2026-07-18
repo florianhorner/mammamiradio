@@ -259,6 +259,33 @@ def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
     schedule.assert_not_called()
 
 
+def test_home_memory_not_scheduled_when_privacy_is_revoked_mid_air():
+    """An airing Home segment may finish, but must not submit context afterward."""
+    app_state = SimpleNamespace(background_tasks=set())
+    config = SimpleNamespace(homeassistant=SimpleNamespace(context_enabled=False))
+    state = SimpleNamespace(home_context_policy_generation=10)
+    seg = _segment(
+        {
+            "home_context_generation": 9,
+            "memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]},
+        }
+    )
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()
+
+
 @pytest.mark.asyncio
 async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
     app_state = SimpleNamespace(background_tasks=set())
