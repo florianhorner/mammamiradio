@@ -471,6 +471,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .first-listen-select:focus{border-color:rgba(244,208,72,0.55);outline:none}
 .first-listen-action{min-width:44px;min-height:44px}
 .first-listen-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.first-listen-actions[hidden]{display:none}
 .first-listen-actions .btn{min-height:44px}
 .first-listen-status{min-width:0;min-height:20px;margin-top:8px;font-size:12px;line-height:1.5;color:rgba(245,237,216,0.76);overflow-wrap:anywhere}
 .first-listen-status[data-tone="ready"]{color:var(--ok-text)}
@@ -2456,7 +2457,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <div class="first-listen-summary" id="firstListenVerifySummary">Home Assistant accepting a request is not proof that sound reached the room. You make that call.</div>
                 </div>
                 <div class="first-listen-body" hidden aria-hidden="true" inert>
-                  <div class="first-listen-actions" style="margin-top:0">
+                  <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>Yes — that’s Mamma Mi Radio</button>
                     <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>Not yet</button>
                   </div>
@@ -4345,8 +4346,10 @@ function renderFirstListenProgress(){
   }
 
   const canVerify=projection.accepted&&Boolean(_firstListenUi.attemptId||projection.first.accepted_attempt_id||projection.verification.attempt_id)&&_firstListenUi.dispatch!=='receipt_failed';
+  const verifyActions=document.getElementById('firstListenVerifyActions');
   const heardBtn=document.getElementById('firstListenHeardBtn');
   const notYetBtn=document.getElementById('firstListenNotYetBtn');
+  if(verifyActions)verifyActions.hidden=_firstListenUi.dispatch==='receipt_failed';
   if(heardBtn)heardBtn.disabled=!canVerify||_firstListenUi.busy||_firstListenUi.receiptSaving||projection.heard;
   if(notYetBtn)notYetBtn.disabled=!canVerify||_firstListenUi.busy||_firstListenUi.receiptSaving||projection.heard;
   const receiptRepair=document.getElementById('firstListenReceiptRepair');

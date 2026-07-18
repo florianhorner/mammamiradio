@@ -277,9 +277,12 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "does not send another playback request" in panel
     assert 'id="firstListenSaveAttemptBtn"' in panel
     assert "Save this listening check" in panel
+    assert 'id="firstListenVerifyActions"' in html
     assert "if(accepted&&resp?.receipt_persisted===false)" in start
     assert "_firstListenUi.attemptId=''" in start
     assert "_firstListenUi.dispatch='receipt_failed'" in start
+    assert "verifyActions.hidden=_firstListenUi.dispatch==='receipt_failed'" in progress
+    assert ".first-listen-actions[hidden]{display:none}" in html
     assert "_firstListenUi.receiptSaving=true" in save
     assert "_firstListenUi.receiptSaving=false" in save
     assert "api('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId})" in save

@@ -663,6 +663,7 @@ async (page) => {
   assert(receiptRepairCopy.includes('Home Assistant accepted the show.'), 'receipt recovery lost accepted-play truth');
   assert(receiptRepairCopy.includes('Only this listening check still needs saving.'), 'receipt recovery lost persistence-only guidance');
   assert(receiptRepairCopy.includes('does not send another playback request'), 'receipt recovery did not rule out replay');
+  assert(!(await page.locator('#firstListenVerifyActions').isVisible()), 'receipt recovery left competing listening answers visible');
   assert(await page.locator('#firstListenHeardBtn').isDisabled(), 'verification unlocked before the accepted attempt was saved');
   assert(await page.locator('#firstListenNotYetBtn').isDisabled(), 'Not yet unlocked before the accepted attempt was saved');
   await page.locator('#firstListenSaveAttemptBtn').click();
@@ -674,11 +675,22 @@ async (page) => {
   assert(receiptRetryRequests.length === receiptRetryBaseline + 1, 'first persistence-only retry was not sent');
   assert(playRequests.length === receiptPlayBaseline + 1, 'failed receipt save replayed the station');
   assert(await page.locator('#firstListenReceiptRepair').isVisible(), 'failed receipt save removed its recovery path');
+  assert(!(await page.locator('#firstListenVerifyActions').isVisible()), 'failed receipt save restored competing listening answers');
   assert(await page.locator('#firstListenHeardBtn').isDisabled(), 'failed receipt save unlocked verification');
   await page.locator('#firstListenSaveAttemptBtn').click();
   await page.waitForFunction(() => _firstListenUi.dispatch === 'accepted' && !_firstListenUi.receiptSaving);
   assert(receiptRetryRequests.length === receiptRetryBaseline + 2, 'successful persistence-only retry was not sent');
   assert(playRequests.length === receiptPlayBaseline + 1, 'receipt recovery sent a second playback request');
+  const savedVerifyState = await page.evaluate(() => ({
+    actionsHidden: document.getElementById('firstListenVerifyActions')?.hidden,
+    bodyHidden: document.querySelector('#firstListenVerifyStep > .first-listen-body')?.hidden,
+    stepState: document.getElementById('firstListenVerifyStep')?.dataset.state,
+    dispatch: _firstListenUi.dispatch,
+  }));
+  assert(
+    await page.locator('#firstListenVerifyActions').isVisible(),
+    `saved listening check did not restore verification choices: ${JSON.stringify(savedVerifyState)}`,
+  );
   assert(
     receiptRetryRequests.slice(receiptRetryBaseline).every((entry) => entry.entity_id === 'media_player.mac_lab_speaker'),
     `receipt recovery changed speaker: ${JSON.stringify(receiptRetryRequests.slice(receiptRetryBaseline))}`,
