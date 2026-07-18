@@ -3528,6 +3528,20 @@ function updateRuntimeStatus(st){
       const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
       rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
     }
+    // Cached-music rotation (#illusion): this is a healthy rest window, not a
+    // degraded state. Keep the actual track label admin-only and render only the
+    // sanitized diagnostic returned by /status.
+    const rr=rs.rescue_rotation;
+    let rotationRow;
+    const tracked=Math.max(0,Math.round(Number(rr?.tracked)||0));
+    if(!rr||tracked===0){
+      rotationRow=statusRow('Cached rotation','idle','Standby','No cached music rescue has reached a listener this session');
+    }else{
+      const cooling=Math.min(tracked,Math.max(0,Math.round(Number(rr.cooling)||0)));
+      const cooldownMin=Math.max(1,Math.round((Number(rr.cooldown_seconds)||0)/60));
+      const last=rr.most_recent?`last: ${rr.most_recent}`:'no cached rescue heard yet';
+      rotationRow=statusRow('Cached rotation','ready','Rotating',`${cooling}/${tracked} resting · ${cooldownMin}m rest · ${last}`);
+    }
     // Generated waste (#397): rendered segments discarded before broadcast.
     const gw=rs.generation_waste;
     let wasteRow;
@@ -3607,6 +3621,7 @@ function updateRuntimeStatus(st){
       runtimeProviderRow('TTS provider',providers.tts_provider),
       continuityRow,
       rescueRow,
+      rotationRow,
       wasteRow,
       timingRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)

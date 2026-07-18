@@ -5,7 +5,7 @@
 Celebration-night themes need theatrical behavior that normal stations don't — scoring, drinking rules, over-the-top commentary. But they also need to be:
 
 - **Toggleable at runtime** without a server restart
-- **Idempotent** so double-enabling does not cause double queue purges
+- **Idempotent** so double-enabling does not repeat queue replacement or force-next side effects
 - **Persistent** so a restart at 11 PM doesn't kill the party vibe
 - **Safely isolated** from the chaos mode system, which has a different first-strike mechanism
 
@@ -25,9 +25,12 @@ Adding `"hitster"` means widening that literal and adding a prompt block — eve
 
 `super_italian_mode` follows the same pattern — both are operator behavior flags, not session metrics.
 
-### Queue purge on enable only
+### Queue replacement on enable when fresh runway is available
 
-Enabling purges the lookahead queue and arms `state.force_next = SegmentType.BANTER`. This gives listeners an immediate first-strike festival segment instead of hearing the last pre-produced normal banter play out.
+Enabling reserves fresh protected continuity audio when available, purges the
+lookahead queue it replaces, and arms `state.force_next = SegmentType.BANTER`.
+If no fresh runway is available, the existing playable head/slot is preserved
+instead of cutting current audio into a gap.
 
 Disabling does **not** purge. Purging on disable would drop any in-flight festival segment and cause dead air between the toggle and the next produced normal segment. The in-flight segment plays to completion; normal behavior resumes naturally.
 
@@ -147,7 +150,7 @@ In `mammamiradio/web/templates/admin.html`, copy the `festivalControl` div and u
 
 Three mandatory scenarios from the [audio delivery test coverage rule](../CLAUDE.md):
 
-1. **Normal**: enable → prompt includes hitster block, queue purged, first segment is BANTER; disable → mode cleared, no purge
+1. **Normal**: enable → prompt includes hitster block, fresh runway replaces the eligible queue and the first segment is BANTER; without fresh runway the playable current head/slot is preserved; disable → mode cleared, no purge
 2. **LLM down**: mode arms (`config.party_mode = "hitster"`), but script generation falls back gracefully
 3. **Post-restart**: `MAMMAMIRADIO_HITSTER_MODE=true` in env → config loads with `party_mode = "hitster"` after cold boot
 

@@ -10,7 +10,7 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
@@ -293,6 +293,37 @@ class HostPersonality:
     engine: str = "edge"  # edge|openai|azure|elevenlabs
     edge_fallback_voice: str = ""  # edge-tts voice used when a cloud TTS engine falls back
     voice_settings: dict = field(default_factory=dict)  # per-host ElevenLabs overrides, e.g. {"stability": 0.6}
+    # ElevenLabs v2 remains the backwards-compatible default for every existing
+    # host. V3 is opt-in per host because its compatible tuning and delivery
+    # controls differ from v2.
+    elevenlabs_model: str = "eleven_multilingual_v2"
+    # A profile authorizes the small, code-owned V3 performance cue vocabulary.
+    # It is deliberately separate from the canonical spoken text.
+    delivery_profile: str = "none"
+
+
+@dataclass(frozen=True)
+class DialogueLine:
+    """One clean host line plus an optional semantic delivery cue.
+
+    Iteration intentionally exposes only the historic ``(host, text)`` pair so
+    existing callers keep their clean-text contract while the audio boundary
+    can consume ``delivery`` as sidecar metadata.
+    """
+
+    host: HostPersonality
+    text: str
+    delivery: str = "neutral"
+
+    def __iter__(self) -> Iterator[HostPersonality | str]:
+        yield self.host
+        yield self.text
+
+    def __getitem__(self, index: int | slice) -> HostPersonality | str | tuple[HostPersonality, str]:
+        return (self.host, self.text)[index]
+
+    def __len__(self) -> int:
+        return 2
 
 
 @dataclass
@@ -562,6 +593,12 @@ class StationState:
     # playable duration. The control-plane guard uses this index instead of
     # probing or walking the cache during an operator action.
     immediate_audio_index: dict[Path, float] = field(default_factory=dict)
+    # Session-scoped rescue rotation. Maps normalized-cache paths to the monotonic
+    # time they last aired as a norm-cache rescue. Selection groups bitrate-only
+    # path variants by cache key, so the same cached track cannot air three times
+    # in twenty minutes when the producer stalls (the illusion break this closes).
+    # Cleared on restart; no persistence. Pruned on record. See audio/norm_cache.py.
+    rescue_airplay: dict[Path, float] = field(default_factory=dict)
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Recent generated banter clips that have actually started streaming.
