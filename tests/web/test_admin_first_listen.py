@@ -366,6 +366,11 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
     assert ".first-listen-action{min-width:44px;min-height:44px}" in html
     assert ".first-listen-select{min-width:0;min-height:44px" in html
     assert "@media(max-width:720px)" in html
+    mobile_copy_rule = (
+        ".first-listen-show-copy,.first-listen-show-note,.first-listen-summary,.first-listen-source-detail,"
+        ".first-listen-status,.first-listen-repair,.first-listen-privacy-copy,.first-listen .setup-note{font-size:14px}"
+    )
+    assert mobile_copy_rule in html
     assert ".first-listen-fields{grid-template-columns:1fr}" in html
     assert ".first-listen-actions{flex-direction:column;align-items:stretch}" in html
     assert ".first-listen-summary{min-width:0" in html

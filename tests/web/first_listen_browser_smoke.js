@@ -823,6 +823,21 @@ async (page) => {
   await resetUi(setupProjection());
   await page.setViewportSize({ width: 320, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));
+  const mobileTypeScale = await page.evaluate(() => [
+    '#firstListenShowCopy',
+    '.first-listen-show-note',
+    '#firstListenSpeakerSummary',
+    '#firstListenSpeakerHelp',
+    '#firstListenVerifySummary',
+    '.first-listen-privacy-copy',
+  ].map((selector) => ({
+    selector,
+    size: Number.parseFloat(getComputedStyle(document.querySelector(selector)).fontSize),
+  })));
+  assert(
+    mobileTypeScale.every((row) => row.size >= 14),
+    `mobile First Listen body type dropped below 14px: ${JSON.stringify(mobileTypeScale)}`,
+  );
   const firstActionGeometry = await page.locator('#firstListenQuickAction').evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { top: rect.top, bottom: rect.bottom, viewportHeight: window.innerHeight };
