@@ -371,6 +371,9 @@ async (page) => {
     'optional AI controls appeared before first audio/privacy',
   );
   await assertCurrentStep('firstListenSpeakerStep');
+  assert((await page.locator('#firstListenShowTitle').innerText()) === 'Marco and Giulia are ready to go on air.', 'fresh opening hero lost its ready state');
+  assert((await page.locator('#firstListenShowCopy').innerText()).includes('primary music rotation'), 'healthy source did not reach the opening rundown');
+  assert((await page.locator('#firstListenShowNext').innerText()) === 'Primary rotation', 'healthy opening rundown promised the wrong continuation');
   assert(await page.locator('#firstListenSourceDetails').isVisible(), 'resolved source readiness became unreachable');
   await page.locator('#firstListenSourceDetails > summary').click();
   assert(
@@ -421,6 +424,7 @@ async (page) => {
     `wrong HA target: ${JSON.stringify(playRequests[0])}`,
   );
   await assertCurrentStep('firstListenVerifyStep');
+  assert((await page.locator('#firstListenShowTitle').innerText()) === 'Marco and Giulia are heading to the room.', 'accepted playback left the opening hero in its pre-dispatch state');
   assert(
     await page.evaluate(() => document.activeElement?.id) === 'firstListenVerifyHeading',
     'accepted playback did not focus the listening check',
@@ -441,6 +445,7 @@ async (page) => {
   await page.waitForFunction(() => _firstListenUi.verification === 'heard' && !_firstListenUi.busy);
   assert(verifyRequests.length === 2 && verifyRequests[1].heard === true, 'Heard was not recorded explicitly');
   await assertCurrentStep('firstListenPrivacyStep');
+  assert((await page.locator('#firstListenShowTitle').innerText()) === 'Marco and Giulia made it to the room.', 'heard proof left the opening hero in its pre-dispatch state');
   assert(
     await page.evaluate(() => document.activeElement?.id) === 'firstListenPrivacyHeading',
     'audible confirmation did not focus privacy review',
@@ -529,11 +534,15 @@ async (page) => {
   const recoveryReadyCopy = await page.locator('#firstListenVerifySummary').innerText();
   assert(recoveryReadyCopy.includes('Recovery cover is available'), 'available recovery was not described as standby');
   assert(!recoveryReadyCopy.includes('Recovery audio follows the opening'), 'standby recovery was falsely described as on air');
+  assert((await page.locator('#firstListenSourceChip').innerText()) === 'Backup ready', 'standby recovery kept an ambiguous degraded label');
+  assert((await page.locator('#firstListenShowNext').innerText()) === 'Recovery cover', 'recovery-only rundown promised a first record');
+  assert((await page.locator('#firstListenShowThen').innerText()) === 'Primary music later', 'recovery-only rundown promised an immediate live rotation');
   await resetUi(setupProjection({ audio: true, privacy: true, primary: 'unavailable', recovery: 'on_air' }));
   assert(
     (await page.locator('#firstListenVerifySummary').innerText()).includes('Recovery audio follows the opening'),
     'on-air recovery was not described truthfully',
   );
+  assert((await page.locator('#firstListenSourceChip').innerText()) === 'Recovery on air', 'on-air recovery kept an ambiguous degraded label');
 
   const completed = setupProjection({ audio: true, privacy: true, onboardingRequired: false });
   await resetUi(completed);
@@ -569,6 +578,7 @@ async (page) => {
   };
   await resetUi(setupProjection({ fresh: false, onboardingRequired: true, sources: false }));
   await assertCurrentStep('firstListenPrivacyStep');
+  assert((await page.locator('#firstListenShowTitle').innerText()) === 'Marco and Giulia open every fresh station.', 'existing install retained the fresh ready-to-dispatch hero');
   assert(
     await page.locator('#firstListenSpeakerStep').getAttribute('data-state') === 'complete'
       && await page.locator('#firstListenVerifyStep').getAttribute('data-state') === 'complete',

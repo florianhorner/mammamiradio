@@ -2380,15 +2380,15 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <div class="setup-headline" id="setupHeadline">Checking configuration...</div>
             <div class="setup-meta" id="setupMeta"></div>
             <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
-            <section class="first-listen-show-card" aria-labelledby="firstListenShowTitle">
-              <div class="first-listen-show-kicker">Opening show · ready on every fresh station</div>
+            <section class="first-listen-show-card" id="firstListenShowCard" aria-labelledby="firstListenShowTitle">
+              <div class="first-listen-show-kicker" id="firstListenShowKicker">Opening show · ready on every fresh station</div>
               <h3 class="first-listen-show-title" id="firstListenShowTitle">Marco and Giulia are ready to go on air.</h3>
-              <p class="first-listen-show-copy">Your speaker starts with a short Mamma Mi Radio opening, then rolls straight into the live station. This is radio before you configure anything else.</p>
+              <p class="first-listen-show-copy" id="firstListenShowCopy">Your speaker starts with a short Mamma Mi Radio opening. We are checking what can follow it.</p>
               <ol class="first-listen-show-beats" aria-label="First Listen opening rundown">
                 <li><span class="first-listen-show-beat">Opening</span><strong>Station signature</strong></li>
                 <li><span class="first-listen-show-beat">Hosts</span><strong>Marco + Giulia</strong></li>
-                <li><span class="first-listen-show-beat">Music</span><strong>First record</strong></li>
-                <li><span class="first-listen-show-beat">Then</span><strong>Live station</strong></li>
+                <li><span class="first-listen-show-beat" id="firstListenShowNextLabel">Next</span><strong id="firstListenShowNext">Checking music</strong></li>
+                <li><span class="first-listen-show-beat">Then</span><strong id="firstListenShowThen">Live station</strong></li>
               </ol>
               <div class="first-listen-show-note">No AI key. No Home Assistant context. Nothing personal is read before you choose.</div>
             </section>
@@ -4200,6 +4200,39 @@ function renderFirstListenPlayers(players,savedEntityId='',pendingRecoveryEntity
   }
   return Boolean(current&&!selected);
 }
+function renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall}){
+  const kicker=document.getElementById('firstListenShowKicker');
+  const title=document.getElementById('firstListenShowTitle');
+  const copy=document.getElementById('firstListenShowCopy');
+  const nextLabel=document.getElementById('firstListenShowNextLabel');
+  const next=document.getElementById('firstListenShowNext');
+  const then=document.getElementById('firstListenShowThen');
+
+  if(kicker)kicker.textContent=priorInstall?'Opening show · included for fresh installs':projection.heard?'Opening show · heard on your speaker':projection.accepted?'Opening show · sent through Home Assistant':'Opening show · ready on every fresh station';
+  if(title)title.textContent=priorInstall?'Marco and Giulia open every fresh station.':projection.heard?'Marco and Giulia made it to the room.':projection.accepted?'Marco and Giulia are heading to the room.':'Marco and Giulia are ready to go on air.';
+
+  if(!sourceKnown){
+    if(copy)copy.textContent='Your speaker starts with a short Mamma Mi Radio opening. We are checking what can follow it.';
+    if(nextLabel)nextLabel.textContent='Next';
+    if(next)next.textContent='Checking music';
+    if(then)then.textContent='Live station';
+  }else if(healthy){
+    if(copy)copy.textContent='Your speaker starts with this short Mamma Mi Radio opening, then joins a primary music rotation. This is radio before you configure anything else.';
+    if(nextLabel)nextLabel.textContent='Music';
+    if(next)next.textContent='Primary rotation';
+    if(then)then.textContent='Live station';
+  }else if(recoveryOnAir||recoveryAvailable){
+    if(copy)copy.textContent='Your speaker starts with this short Mamma Mi Radio opening, then joins the live station. Recovery cover keeps it audible while primary music needs attention.';
+    if(nextLabel)nextLabel.textContent='Next';
+    if(next)next.textContent='Recovery cover';
+    if(then)then.textContent='Primary music later';
+  }else{
+    if(copy)copy.textContent='Your speaker starts with this short Mamma Mi Radio opening. Primary music needs repair before the live station can carry on.';
+    if(nextLabel)nextLabel.textContent='Next';
+    if(next)next.textContent='Opening only';
+    if(then)then.textContent='Repair music';
+  }
+}
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
   const source=projection.guided.source_readiness||{};
@@ -4216,6 +4249,7 @@ function renderFirstListenProgress(){
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
   const listenAccepted=projection.accepted||priorInstall;
   const listenComplete=projection.heard||priorInstall;
+  renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall});
   firstListenSetStep('firstListenSourceStep',sourceKnown?'complete':priorInstall?'available':'current');
   firstListenSetStep('firstListenSpeakerStep',priorInstall?'complete':!sourceKnown?'locked':listenAccepted?'complete':'current');
   firstListenSetStep('firstListenVerifyStep',!listenAccepted?'locked':listenComplete?'complete':'current');
@@ -4234,15 +4268,15 @@ function renderFirstListenProgress(){
     if(sourceSummary)sourceSummary.textContent='The authored opening is ready, and a primary music source takes over next.';
     if(sourceRepair)sourceRepair.textContent='';
   }else if(recoveryOnAir){
-    firstListenSetChip('firstListenSourceChip','degraded','Opening ready');
+    firstListenSetChip('firstListenSourceChip','degraded','Recovery on air');
     if(sourceSummary)sourceSummary.textContent='The opening is ready. Recovery cover carries the station afterward while primary music needs attention.';
     if(sourceRepair)sourceRepair.textContent='You can start the station now. For a stronger live rotation, configure Jamendo under App → Configuration → Advanced options; an empty private local-music folder is an advanced path.';
   }else if(recoveryAvailable){
-    firstListenSetChip('firstListenSourceChip','degraded','Opening ready');
+    firstListenSetChip('firstListenSourceChip','degraded','Backup ready');
     if(sourceSummary)sourceSummary.textContent='The opening is ready. Recovery cover is available afterward, but no primary music source is ready.';
     if(sourceRepair)sourceRepair.textContent='You can start the station now. For a stronger live rotation, configure Jamendo under App → Configuration → Advanced options; an empty private local-music folder is an advanced path.';
   }else{
-    firstListenSetChip('firstListenSourceChip','degraded','Opening only');
+    firstListenSetChip('firstListenSourceChip','degraded','Music missing');
     if(sourceSummary)sourceSummary.textContent='The opening is ready, but the live station needs a music source when that short show ends.';
     if(sourceRepair)sourceRepair.textContent='Start the opening if you want, then repair a configured source or add Jamendo under App → Configuration → Advanced options.';
   }
