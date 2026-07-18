@@ -156,7 +156,14 @@ async def _gather_all_settled(
     try:
         results = tuple(await asyncio.shield(group))
     except asyncio.CancelledError:
-        results = tuple(await asyncio.shield(group))
+        # Keep draining even if shutdown issues a second cancellation while an
+        # executor-backed renderer is still writing its output.
+        while not group.done():
+            try:
+                await asyncio.shield(group)
+            except asyncio.CancelledError:
+                continue
+        results = tuple(group.result())
         if scratch is not None:
             _remember_settled_audio_paths(results, scratch)
         raise
@@ -4943,20 +4950,25 @@ async def _run_producer_inner(
 
                             # Concat: transition + banter (both pre-normalized)
                             audio_path = config.tmp_dir / f"banter_full_{uuid4().hex[:8]}.mp3"
+                            render_failure_scratch.add(audio_path)
                             loop = asyncio.get_running_loop()
                             try:
                                 with _timed_render_stage(state, "mix"):
-                                    await loop.run_in_executor(
-                                        None,
-                                        partial(
-                                            concat_files,
-                                            [trans_voice_path, banter_path],
-                                            audio_path,
-                                            200,
-                                            False,
-                                            strict_duration=True,
+                                    concat_results = await _gather_all_settled(
+                                        loop.run_in_executor(
+                                            None,
+                                            partial(
+                                                concat_files,
+                                                [trans_voice_path, banter_path],
+                                                audio_path,
+                                                200,
+                                                False,
+                                                strict_duration=True,
+                                            ),
                                         ),
+                                        scratch=render_failure_scratch,
                                     )
+                                    _raise_first_settled_error(concat_results)
                             except Exception:
                                 audio_path.unlink(missing_ok=True)
                                 raise
@@ -4997,6 +5009,7 @@ async def _run_producer_inner(
                                 }
                             ]
                         else:
+                            _unlink_render_scratch(render_failure_scratch)
                             _abandon_release_beat_commit(state, listener_request_commit)
                             _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             _release_campaign_abandon_in_flight(state)
@@ -5390,7 +5403,9 @@ async def _run_producer_inner(
 
                     state.last_banter_script = [{"host": host.name, "text": text, "type": "news_flash"}]
                 except TTSUnavailableError:
-                    _unlink_render_paths(flash_path)
+                    # flash_path is registered in render_failure_scratch; the outer
+                    # handler sweeps it. Re-raise past the swallowing generic branch
+                    # below so the outage reaches the rescue ladder.
                     raise
                 except Exception as exc:
                     _unlink_render_paths(flash_path)
@@ -5481,9 +5496,15 @@ async def _run_producer_inner(
 
                     # Mix voice over sting
                     with _timed_render_stage(state, "mix"):
-                        await loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path)
+                        mix_results = await _gather_all_settled(
+                            loop.run_in_executor(None, mix_voice_with_sting, voice_path, sting_path, audio_path),
+                            scratch=render_failure_scratch,
+                        )
+                        _raise_first_settled_error(mix_results)
                 except TTSUnavailableError:
-                    _unlink_render_paths(audio_path)
+                    # audio_path is registered in render_failure_scratch; the outer
+                    # handler sweeps it. Re-raise past the swallowing generic branch
+                    # below so the outage reaches the rescue ladder.
                     raise
                 except Exception as exc:
                     _unlink_render_paths(audio_path)
@@ -5508,6 +5529,10 @@ async def _run_producer_inner(
                     sweeper_text = random.choice(sb.sweepers) if sb.sweepers else config.display_station_name
                     audio_path = await _render_sweeper_audio(sweeper_text, config, state, prefix="sweeper")
                 except TTSUnavailableError:
+                    # Fail closed to the recovery ladder like every other required
+                    # speech segment (tested in test_required_imaging_voice_failure_
+                    # uses_recovery_not_local_bed). Re-raise past the swallowing
+                    # generic branch below.
                     raise
                 except Exception as exc:
                     logger.warning("Sweeper generation failed: %s", exc)
@@ -5574,9 +5599,15 @@ async def _run_producer_inner(
                     )
                     _raise_first_settled_error(time_results)
                     with _timed_render_stage(state, "mix"):
-                        await loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False)
+                        concat_results = await _gather_all_settled(
+                            loop.run_in_executor(None, concat_files, [chime_path, voice_path], audio_path, 200, False),
+                            scratch=render_failure_scratch,
+                        )
+                        _raise_first_settled_error(concat_results)
                 except TTSUnavailableError:
-                    _unlink_render_paths(audio_path)
+                    # audio_path is registered in render_failure_scratch; the outer
+                    # handler sweeps it. Re-raise past the swallowing generic branch
+                    # below so the outage reaches the rescue ladder.
                     raise
                 except Exception as exc:
                     _unlink_render_paths(audio_path)
@@ -5954,14 +5985,18 @@ async def _run_producer_inner(
                     render_failure_scratch.add(ad_break_path)
                     try:
                         with _timed_render_stage(state, "mix"):
-                            await loop.run_in_executor(
-                                None,
-                                concat_files,
-                                break_parts,
-                                ad_break_path,
-                                300,
-                                False,
+                            concat_results = await _gather_all_settled(
+                                loop.run_in_executor(
+                                    None,
+                                    concat_files,
+                                    break_parts,
+                                    ad_break_path,
+                                    300,
+                                    False,
+                                ),
+                                scratch=render_failure_scratch,
                             )
+                            _raise_first_settled_error(concat_results)
                     finally:
                         _unlink_render_paths(*break_parts)
 

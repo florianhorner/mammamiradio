@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -65,6 +66,12 @@ async def _wait_for_queue(queue: asyncio.Queue[Segment], timeout: float = 5.0) -
     async with asyncio.timeout(timeout):
         while queue.empty():
             await asyncio.sleep(0.01)
+
+
+async def _wait_for_thread_event(event: threading.Event, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not event.is_set():
+            await asyncio.sleep(0.001)
 
 
 async def _cancel(task: asyncio.Task[None]) -> None:
@@ -311,6 +318,199 @@ def _write_concat(_parts, path: Path, *_args, **_kwargs) -> Path:
 
 
 @pytest.mark.asyncio
+async def test_banter_final_concat_cancellation_waits_before_cleanup(tmp_path: Path) -> None:
+    state = _make_state()
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    concat_started = threading.Event()
+    release_concat = threading.Event()
+
+    async def _voice(_text: str, _voice: str, path: Path, **_kwargs) -> None:
+        path.write_bytes(b"voice")
+
+    async def _dialogue(_lines, _tmp_dir: Path, **_kwargs) -> Path:
+        path = tmp_path / "dialogue_result.mp3"
+        path.write_bytes(b"dialogue")
+        return path
+
+    def _slow_concat(_parts, path: Path, *_args, **_kwargs) -> Path:
+        concat_started.set()
+        assert release_concat.wait(timeout=2.0)
+        path.write_bytes(b"joined")
+        return path
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Restiamo in onda.")], None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, side_effect=_dialogue),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_slow_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        await _wait_for_thread_event(concat_started)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for final banter concat"
+        release_concat.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not list(tmp_path.glob("banter_full_*.mp3"))
+    assert not list(tmp_path.glob("trans_*.mp3"))
+    assert not (tmp_path / "dialogue_result.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_station_id_final_mix_cancellation_waits_before_cleanup(tmp_path: Path) -> None:
+    state = _make_state()
+    state.segments_since_station_id = 9
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    mix_started = threading.Event()
+    release_mix = threading.Event()
+
+    async def _voice(_text: str, _voice: str, path: Path, **_kwargs) -> None:
+        path.write_bytes(b"voice")
+
+    def _slow_mix(_voice_path: Path, _sting_path: Path, output_path: Path) -> Path:
+        mix_started.set()
+        assert release_mix.wait(timeout=2.0)
+        output_path.write_bytes(b"mixed")
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
+        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_write_layer),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_slow_mix),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        await _wait_for_thread_event(mix_started)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for final station ID mix"
+        release_mix.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not list(tmp_path.glob("stid_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_time_check_final_concat_cancellation_waits_before_cleanup(tmp_path: Path) -> None:
+    state = _make_state()
+    state.segments_since_time_check = 9
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    concat_started = threading.Event()
+    release_concat = threading.Event()
+
+    async def _voice(_text: str, _voice: str, path: Path, **_kwargs) -> None:
+        path.write_bytes(b"voice")
+
+    def _slow_concat(_parts, path: Path, *_args, **_kwargs) -> Path:
+        concat_started.set()
+        assert release_concat.wait(timeout=2.0)
+        path.write_bytes(b"joined")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_write_layer),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_slow_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        await _wait_for_thread_event(concat_started)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for final time-check concat"
+        release_concat.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not list(tmp_path.glob("time_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_ad_final_concat_cancellation_waits_before_cleanup(tmp_path: Path) -> None:
+    state = _make_state()
+    state.songs_since_ad = 9
+    config = _make_config(tmp_path)
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    brand, voice_map, script = _ad_fixture(config)
+    concat_started = threading.Event()
+    release_concat = threading.Event()
+
+    async def _voice(_text: str, _voice: str, path: Path, **_kwargs) -> None:
+        path.write_bytes(b"voice")
+
+    async def _ad_voice(*_args, **_kwargs) -> Path:
+        path = tmp_path / "required_ad_voice.mp3"
+        path.write_bytes(b"ad voice")
+        return path
+
+    def _slow_concat(_parts, path: Path, *_args, **_kwargs) -> Path:
+        concat_started.set()
+        assert release_concat.wait(timeout=2.0)
+        path.write_bytes(b"joined")
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", return_value=(brand, script.format, script.sonic, voice_map)),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_slow_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        await _wait_for_thread_event(concat_started)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for final ad concat"
+        release_concat.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not list(tmp_path.glob("adbreak_*.mp3"))
+    assert not list(tmp_path.glob("ad_intro_*.mp3"))
+    assert not list(tmp_path.glob("bumper_*.mp3"))
+    assert not list(tmp_path.glob("ad_outro_*.mp3"))
+    assert not (tmp_path / "required_ad_voice.mp3").exists()
+
+
+@pytest.mark.asyncio
 async def test_optional_promo_tts_failure_does_not_drop_complete_ad(tmp_path: Path) -> None:
     state = _make_state()
     state.songs_since_ad = 9
@@ -404,6 +604,66 @@ async def test_required_ad_voice_failure_uses_recovery_and_resets_due_counter(tm
     assert queue.get_nowait() is recovery
     assert state.songs_since_ad == 0
     assert state.segments_produced == 0
+    assert not list(tmp_path.glob("ad_intro_*.mp3"))
+    assert not list(tmp_path.glob("promo_tag_*.mp3"))
+    assert not list(tmp_path.glob("bumper_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_multi_spot_ad_partial_success_then_failure_cleans_up_first_spot(tmp_path: Path) -> None:
+    """A later ad spot's TTS outage must clean up an earlier spot's rendered audio too."""
+    state = _make_state()
+    state.songs_since_ad = 9
+    config = _make_config(tmp_path)
+    config.pacing.ad_spots_per_break = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = _recovery_segment(tmp_path)
+    host = config.hosts[0]
+    brand, voice_map, script = _ad_fixture(config)
+
+    first_spot_path = tmp_path / "ad_spot_first.mp3"
+    call_count = 0
+
+    async def _voice(text: str, _voice: str, path: Path, **_kwargs) -> None:
+        path.write_bytes(text.encode())
+
+    async def _ad_voice(*_args, **_kwargs) -> Path:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_spot_path.write_bytes(b"first ad spot rendered")
+            return first_spot_path
+        raise TTSUnavailableError("second ad spot voice unavailable")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", return_value=(brand, script.format, script.sonic, voice_map)),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        await _wait_for_queue(queue)
+        await _cancel(task)
+
+    assert call_count == 2
+    assert queue.get_nowait() is recovery
+    assert state.songs_since_ad == 0
+    assert not first_spot_path.exists(), "the successfully-rendered first spot must be cleaned up too"
     assert not list(tmp_path.glob("ad_intro_*.mp3"))
     assert not list(tmp_path.glob("promo_tag_*.mp3"))
     assert not list(tmp_path.glob("bumper_*.mp3"))
@@ -751,3 +1011,59 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
     assert cache_dir == config.cache_dir
     assert len(candidates) == 1
     assert candidates[0].path == norm_path
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_holds_across_resume_from_stopped(tmp_path: Path) -> None:
+    """Scenario 3 (post-restart): with ``session_stopped`` set from a prior run the
+    producer stays idle and never synthesizes a silent speech segment; once a
+    listener resumes, a total TTS outage still fails closed to non-silent recovery
+    rather than silence. The resume music bridge is isolated so the assertion pins
+    the produced segment's fail-closed behavior specifically.
+    """
+    state = _make_state()
+    state.session_stopped = True
+    state.segments_since_station_id = 9
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    recovery = _recovery_segment(tmp_path)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize",
+            new_callable=AsyncMock,
+            side_effect=TTSUnavailableError("no voice route after restart"),
+        ) as synth,
+        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_write_layer),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_write_layer),
+        # Isolate the fail-closed produced segment from the resume music bridge.
+        patch(f"{PRODUCER_MODULE}._queue_continuity_bridge", new_callable=AsyncMock),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+    ):
+        task = asyncio.create_task(producer.run_producer(queue, state, config))
+        # While stopped the producer must neither produce nor synthesize: no silent
+        # speech segment, no fail-closed churn.
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert queue.empty()
+        assert synth.await_count == 0
+
+        # A listener resumes after the restart — fail-closed must still hold.
+        state.session_stopped = False
+        state.resume_event.set()
+        await _wait_for_queue(queue)
+        await _cancel(task)
+
+    queued = queue.get_nowait()
+    assert queued is recovery
+    assert queued.metadata["rescue"] is True
+    assert synth.await_count >= 1
+    assert state.segments_since_station_id == 0
+    assert not list(tmp_path.glob("stid_*.mp3"))

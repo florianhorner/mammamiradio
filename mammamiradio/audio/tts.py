@@ -122,8 +122,23 @@ async def _settle_owned(*awaitables: Awaitable[object]) -> list[object | BaseExc
     try:
         return list(await asyncio.shield(settled))
     except asyncio.CancelledError:
-        await settled
+        # Re-shield: a second cancellation must not interrupt this drain and let
+        # the caller unlink scratch while an FFmpeg worker is still writing.
+        while not settled.done():
+            try:
+                await asyncio.shield(settled)
+            except asyncio.CancelledError:
+                continue
         raise
+
+
+async def _settle_executor(awaitable: Awaitable[object]) -> object:
+    """Await one executor operation until its worker has really settled."""
+    results = await _settle_owned(awaitable)
+    failure = _prioritized_failure(results)
+    if failure is not None:
+        raise failure
+    return results[0]
 
 
 def _looks_like_openai_voice(voice: str) -> bool:
@@ -1061,6 +1076,8 @@ async def synthesize_ad(
                 raise concat_failure
         except BaseException:
             _unlink_speech_artifacts([*voice_sfx_parts, voice_path])
+            if motif_result:
+                _unlink_many([motif_result])
             raise
         _unlink_many(voice_sfx_parts)
 
@@ -1074,6 +1091,10 @@ async def synthesize_ad(
     foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3" if env_name else None
     env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3" if env_name else None
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
+
+    def _cleanup_cancelled_ad_render(*paths: Path | None) -> None:
+        owned = [path for path in (*paths, *voice_sfx_parts, *ad_parts, motif_result) if path is not None]
+        _unlink_speech_artifacts(owned)
 
     # Generate all three beds concurrently
     _dur = voice_duration + 1.0
@@ -1091,10 +1112,7 @@ async def synthesize_ad(
     try:
         bed_results = await _settle_owned(*bed_tasks)
     except BaseException:
-        _unlink_many(bed_paths)
-        _unlink_speech_artifacts([voice_path])
-        if motif_result:
-            _unlink_many([motif_result])
+        _cleanup_cancelled_ad_render(voice_path, output_path, *bed_paths)
         raise
     for bed_result, generated_path in zip(bed_results, bed_paths, strict=True):
         if isinstance(bed_result, BaseException):
@@ -1103,12 +1121,18 @@ async def synthesize_ad(
 
     # Mix foley first (quietest layer — ambient texture under everything else)
     if foley_path and foley_path.exists():
+        foley_mixed_path: Path | None = None
         try:
             foley_mixed_path = tmp_dir / f"foley_mix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, foley_path, foley_mixed_path, 0.07)
+            await _settle_executor(
+                loop.run_in_executor(None, mix_with_bed, voice_path, foley_path, foley_mixed_path, 0.07)
+            )
             foley_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = foley_mixed_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, foley_path, foley_mixed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Foley mix failed (%s), continuing without: %s", env_name, e)
             if foley_path:
@@ -1116,19 +1140,25 @@ async def synthesize_ad(
 
     # Mix env bed (medium layer — tonal environment character)
     if env_bed_path and env_bed_path.exists():
+        env_mixed_path: Path | None = None
         try:
             env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.14)
+            await _settle_executor(
+                loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.14)
+            )
             env_bed_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = env_mixed_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, env_bed_path, env_mixed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
     # Mix music bed (loudest bed layer — harmonic colour)
     if bed_path.exists() and bed_path.stat().st_size > 0:
         try:
-            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+            await _settle_executor(loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24))
             if output_path.exists() and output_path.stat().st_size > 0:
                 bed_path.unlink(missing_ok=True)
                 voice_path.unlink(missing_ok=True)
@@ -1139,6 +1169,9 @@ async def synthesize_ad(
                 if voice_path != output_path:
                     output_path.unlink(missing_ok=True)
                     shutil.move(str(voice_path), str(output_path))
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, bed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
             bed_path.unlink(missing_ok=True)
@@ -1156,10 +1189,13 @@ async def synthesize_ad(
         ad_parts.append(output_path)
         final_path = tmp_dir / f"ad_final_{uuid4().hex[:8]}.mp3"
         try:
-            await loop.run_in_executor(None, concat_files, ad_parts, final_path, 100)
+            await _settle_executor(loop.run_in_executor(None, concat_files, ad_parts, final_path, 100))
             for p in ad_parts:
                 p.unlink(missing_ok=True)
             output_path = final_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(*ad_parts, final_path, output_path)
+            raise
         except Exception as e:
             logger.warning("Motif concat failed, using ad without motif: %s", e)
             for p in ad_parts[:-1]:
@@ -1168,7 +1204,7 @@ async def synthesize_ad(
     # 6. Broadcast-style processing: compression + treble boost + loudness bump
     broadcast_path = tmp_dir / f"ad_broadcast_{uuid4().hex[:8]}.mp3"
     try:
-        await loop.run_in_executor(None, normalize_ad, output_path, broadcast_path)
+        await _settle_executor(loop.run_in_executor(None, normalize_ad, output_path, broadcast_path))
         # Only delete original after verifying broadcast file is non-empty
         if broadcast_path.exists() and broadcast_path.stat().st_size > 0:
             output_path.unlink(missing_ok=True)
@@ -1176,6 +1212,9 @@ async def synthesize_ad(
         logger.warning("Broadcast processing produced empty file, using unprocessed ad")
         broadcast_path.unlink(missing_ok=True)
         return output_path
+    except asyncio.CancelledError:
+        _cleanup_cancelled_ad_render(output_path, broadcast_path)
+        raise
     except Exception as e:
         logger.warning("Broadcast processing failed, using unprocessed ad: %s", e)
         return output_path
@@ -1315,11 +1354,13 @@ async def synthesize_dialogue(
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
     try:
-        await loop.run_in_executor(
-            None,
-            partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+        await _settle_executor(
+            loop.run_in_executor(
+                None,
+                partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+            )
         )
-    except Exception:
+    except BaseException:
         _unlink_many([*parts, raw_path])
         raise
     _unlink_many(parts)
@@ -1327,8 +1368,8 @@ async def synthesize_dialogue(
     # One loudnorm pass on the fully assembled dialogue
     async with _HEAVY_SEM:
         try:
-            await loop.run_in_executor(None, normalize, raw_path, output_path)
-        except Exception:
+            await _settle_executor(loop.run_in_executor(None, normalize, raw_path, output_path))
+        except BaseException:
             _unlink_many([raw_path, output_path])
             raise
     _unlink_many([raw_path])
