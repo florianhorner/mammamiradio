@@ -82,6 +82,7 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     assert 'id="firstListenPanelMount"' in html
     assert 'id="firstListenQuickAction" hidden' in html
     assert 'id="firstListenQuickFindPlayersBtn"' in html
+    assert 'id="firstListenQuickCopy"' in html
     assert html.index('data-tab="setup"') < html.index('data-tab="scaletta"')
 
     mount = _function("initFirstListenPanelMount", "initTabs")
@@ -349,6 +350,9 @@ def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() 
 
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "quickAction.hidden=!quickDiscovery" in progress
+    assert "['error','empty'].includes(_firstListenUi.discovery)&&discoveryStatus" in progress
+    assert "quickCopy.dataset.tone='blocked'" in progress
+    assert "quickCopy.dataset.tone='degraded'" in progress
     assert "firstListenSetActionTone(playBtn,_firstListenUi.players.length>0&&!listenAccepted)" in progress
     assert "select.replaceChildren" not in progress
     assert "playerSelect').innerHTML" not in progress

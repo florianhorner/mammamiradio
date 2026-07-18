@@ -25,6 +25,7 @@ async (page) => {
   let discardNextPlayResponse = false;
   let discardedResponseProjection = null;
   let playerCandidatesAvailable = true;
+  let failNextPlayerDiscovery = false;
   let playerReceiptRecoveryEntity = '';
 
   const sourceRows = ({ primary = 'playable', recovery = 'cover_only' } = {}) => [
@@ -146,6 +147,11 @@ async (page) => {
   });
   await page.route('**/api/setup/first-listen/players', async (route) => {
     playerRequests.push(bodyOf(route));
+    if (failNextPlayerDiscovery) {
+      failNextPlayerDiscovery = false;
+      await fulfillJson(route, { ok: false, error: { code: 'ha_unreachable' } });
+      return;
+    }
     const candidates = playerCandidatesAvailable ? [
       {
         entity_id: 'media_player.mac_lab_speaker',
@@ -385,6 +391,12 @@ async (page) => {
   assert(await page.locator('#firstListenQuickFindPlayersBtn').isEnabled(), 'first speaker action is unavailable');
   assert(await page.locator('#firstListenQuickFindPlayersBtn').evaluate((element) => element.classList.contains('btn-trigger')), 'speaker discovery is not the current primary action');
   assert(await page.locator('#firstListenPlayBtn').evaluate((element) => element.classList.contains('btn-util')), 'unavailable Start action still looks primary');
+  assert(
+    await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => (
+      button.textContent?.trim() === 'Find my speakers' && button.getClientRects().length > 0
+    )).length) === 1,
+    'fresh install exposed duplicate speaker discovery actions',
+  );
   assert(await page.locator('#firstListenFindPlayersBtn').isEnabled(), 'no-key fresh install cannot start speaker discovery');
   assert(
     await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true),
@@ -790,6 +802,24 @@ async (page) => {
   assert(await page.locator('#firstListenHeardBtn').isEnabled(), 'page-reload recovery did not unlock verification');
   playerCandidatesAvailable = true;
 
+  await resetUi(setupProjection());
+  failNextPlayerDiscovery = true;
+  await page.locator('#firstListenQuickFindPlayersBtn').click();
+  await page.waitForFunction(() => _firstListenUi.discovery === 'error' && !_firstListenUi.busy);
+  assert((await page.locator('#firstListenQuickCopy').innerText()).includes('Home Assistant'), 'top discovery action hid its connection failure');
+  assert(await page.locator('#firstListenQuickCopy').getAttribute('data-tone') === 'blocked', 'connection failure lost its blocked treatment');
+  playerCandidatesAvailable = false;
+  await page.locator('#firstListenQuickFindPlayersBtn').click();
+  await page.waitForFunction(() => _firstListenUi.discovery === 'empty' && !_firstListenUi.busy);
+  assert((await page.locator('#firstListenQuickCopy').innerText()).includes('No ready speaker was found'), 'top discovery action hid its empty result');
+  assert(await page.locator('#firstListenQuickCopy').getAttribute('data-tone') === 'degraded', 'empty discovery lost its repair treatment');
+  assert(
+    await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => (
+      button.textContent?.trim() === 'Find my speakers' && button.getClientRects().length > 0
+    )).length) === 1,
+    'failed discovery exposed duplicate Find buttons',
+  );
+  playerCandidatesAvailable = true;
   await resetUi(setupProjection());
   await page.setViewportSize({ width: 320, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));

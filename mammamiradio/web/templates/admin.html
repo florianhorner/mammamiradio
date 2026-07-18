@@ -429,6 +429,8 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .first-listen-quick-action[hidden]{display:none}
 .first-listen-quick-action .btn{flex:0 0 auto;min-height:44px}
 .first-listen-quick-copy{font-size:12px;line-height:1.45;color:rgba(245,237,216,0.68)}
+.first-listen-quick-copy[data-tone="degraded"]{color:var(--warning)}
+.first-listen-quick-copy[data-tone="blocked"]{color:var(--error)}
 .first-listen-show-card{position:relative;overflow:hidden;margin:14px 0 18px;padding:20px;border:1px solid rgba(244,208,72,0.34);border-radius:14px;background:radial-gradient(circle at 92% 4%,rgba(184,44,32,0.22),transparent 38%),linear-gradient(135deg,rgba(46,38,31,0.98),rgba(20,17,15,0.94));box-shadow:inset 0 1px 0 rgba(245,237,216,0.08),0 18px 46px -32px rgba(0,0,0,0.9)}
 .first-listen-show-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,var(--flag-green) 0 33%,var(--flag-white) 33% 66%,var(--flag-red) 66%)}
 .first-listen-show-kicker{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--sun)}
@@ -470,6 +472,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .first-listen-select{min-width:0;min-height:44px;width:100%;max-width:100%;padding:9px 36px 9px 12px;border:1px solid rgba(245,237,216,0.16);border-radius:8px;background:var(--surface);color:var(--cream);font:inherit;font-size:16px}
 .first-listen-select:focus{border-color:rgba(244,208,72,0.55);outline:none}
 .first-listen-action{min-width:44px;min-height:44px}
+.first-listen-action[hidden]{display:none}
 .first-listen-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .first-listen-actions[hidden]{display:none}
 .first-listen-actions .btn{min-height:44px}
@@ -2387,7 +2390,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <div class="setup-next" id="setupNext">Collecting first-run diagnostics.</div>
             <div class="first-listen-quick-action" id="firstListenQuickAction" hidden>
               <button type="button" class="btn btn-trigger first-listen-action" id="firstListenQuickFindPlayersBtn" data-stopped-exempt onclick="findFirstListenPlayers(this)">Find my speakers</button>
-              <span class="first-listen-quick-copy">Nothing plays until you choose a room.</span>
+              <span class="first-listen-quick-copy" id="firstListenQuickCopy">Nothing plays until you choose a room.</span>
             </div>
             <section class="first-listen-show-card" id="firstListenShowCard" aria-labelledby="firstListenShowTitle">
               <div class="first-listen-show-kicker" id="firstListenShowKicker">Opening show · ready on every fresh station</div>
@@ -4300,6 +4303,7 @@ function renderFirstListenProgress(){
 
   const quickAction=document.getElementById('firstListenQuickAction');
   const quickFindBtn=document.getElementById('firstListenQuickFindPlayersBtn');
+  const quickCopy=document.getElementById('firstListenQuickCopy');
   const findBtn=document.getElementById('firstListenFindPlayersBtn');
   const select=document.getElementById('firstListenPlayerSelect');
   const playBtn=document.getElementById('firstListenPlayBtn');
@@ -4312,6 +4316,15 @@ function renderFirstListenProgress(){
   const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':'Find my speakers';
   if(quickAction)quickAction.hidden=!quickDiscovery;
   if(quickFindBtn){quickFindBtn.disabled=!sourceKnown||speakerBusy;quickFindBtn.textContent=discoveryLabel;}
+  if(quickCopy){
+    const discoveryStatus=document.getElementById('firstListenSpeakerStatus')?.textContent?.trim()||'';
+    if(_firstListenUi.discovery==='finding')quickCopy.textContent='Checking Home Assistant for compatible-looking speakers…';
+    else if(['error','empty'].includes(_firstListenUi.discovery)&&discoveryStatus)quickCopy.textContent=discoveryStatus;
+    else quickCopy.textContent='Nothing plays until you choose a room.';
+    if(_firstListenUi.discovery==='error')quickCopy.dataset.tone='blocked';
+    else if(_firstListenUi.discovery==='empty')quickCopy.dataset.tone='degraded';
+    else delete quickCopy.dataset.tone;
+  }
   if(findBtn){findBtn.hidden=quickDiscovery;findBtn.disabled=!sourceKnown||speakerBusy;findBtn.textContent=discoveryLabel;firstListenSetActionTone(findBtn,false);}
   if(select)select.disabled=!sourceKnown||!_firstListenUi.players.length||speakerBusy;
   if(playBtn){
