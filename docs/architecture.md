@@ -323,6 +323,14 @@ normalized-cache candidate passes the same final blocklist rule as every other
 music admission, so a banned song cannot re-enter through this instant-audio
 path.
 
+Cache selection here shares the same rescue-rotation cooldown as the producer and
+playback-gap rescues (`audio/norm_cache.py`): a cached song that aired as a rescue
+within the last hour is deferred in favour of a fresher track, so repeated
+controls do not keep reserving the same song. When every cached candidate is
+still cooling, the reservation books the least-recently-heard one rather than
+dropping to the emergency tone — real music always beats a tone. The cooldown is
+fed only when a rescue is actually heard by a listener and resets on restart.
+
 A successful replacement control supersedes an earlier reservation: it clears
 ordinary and protected queued audio, clears any out-of-band `continuity_slot`,
 and creates a fresh reservation for the new action. The resulting queue and
@@ -546,7 +554,16 @@ just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. Intended for custom character voices in ads, sweepers, and guest bits.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) remains the default for ads, sweepers, guest bits, and every host that has not explicitly opted in. Marco and Giulia use `eleven_v3` with a code-owned `delivery_profile`; V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+
+For selected normal host banter, the script carries one semantic cue beside —
+never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
+`playful`; Giulia may be `dry`, `curious`, or `playful`. Only the V3 TTS boundary
+maps those values to provider audio tags. Ads, news, IDs, sweepers, transitions,
+time checks, stock/fallback/repair lines, V2, and Edge receive no tag. The clean
+line remains the sole input to transcript metadata, safety/language guards,
+memory, accounting, and any Edge fallback, so a failed V3 request cannot make a
+fallback voice read markup aloud.
 
 Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
 
@@ -731,7 +748,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
-| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
+| `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
 | `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -800,7 +817,7 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint triggers immediate cutover: the segment queue is purged, the current segment is skipped, and playback begins from the new source. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint attempts an immediate cutover: when a playable replacement runway is ready, the segment queue is purged and the current segment is skipped; otherwise the current segment finishes and the last safe runway remains in place. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful replacement supersedes existing reservations and fallback

@@ -13,10 +13,11 @@ import re
 import shutil
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -57,6 +58,7 @@ from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
     AdHistoryEntry,
     ChaosSubtype,
+    DialogueLine,
     GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
@@ -1199,25 +1201,47 @@ async def _consume_queued_banter_milestone(state: StationState, commit: object |
         await consume_milestone(state)
 
 
+def _dialogue_line_text(line: DialogueLine | tuple[HostPersonality, str]) -> str:
+    """Return canonical spoken text from new lines and legacy test fixtures."""
+    return line.text if isinstance(line, DialogueLine) else line[1]
+
+
+def _as_dialogue_lines(lines: Sequence[DialogueLine | tuple[HostPersonality, str]]) -> list[DialogueLine]:
+    """Normalize legacy pairs while preserving clean text and semantic delivery.
+
+    The producer remains compatible with test/mocked writers that still return
+    pairs. Real scriptwriter output is already ``DialogueLine``.
+    """
+    return [line if isinstance(line, DialogueLine) else DialogueLine(line[0], line[1]) for line in lines]
+
+
+def _neutral_dialogue_lines(lines: Sequence[DialogueLine | tuple[HostPersonality, str]]) -> list[DialogueLine]:
+    """Drop performance direction when copy is repaired or replaced for safety."""
+    return [
+        DialogueLine(line.host, line.text) if isinstance(line, DialogueLine) else DialogueLine(*line) for line in lines
+    ]
+
+
 async def _listener_truth_guard(
     state: StationState,
     config: StationConfig,
-    lines: list[tuple[HostPersonality, str]],
+    lines: Sequence[DialogueLine | tuple[HostPersonality, str]],
     *,
     transition_text: str | None = None,
-) -> tuple[list[tuple[HostPersonality, str]], str | None, bool, bool]:
+) -> tuple[list[DialogueLine], str | None, bool, bool]:
     """Validate the final spoken copy and perform one bounded repair.
 
     Returns ``(lines, transition, changed, transition_replaced)``.  The check is
     deliberately after transition and banter assembly, immediately before TTS.
     """
-    assembled = ([transition_text] if transition_text is not None else []) + [text for _host, text in lines]
+    dialogue_lines = _as_dialogue_lines(lines)
+    assembled = ([transition_text] if transition_text is not None else []) + [line.text for line in dialogue_lines]
     return_authority = state.last_banter_return_authority
     unsafe_without_authority = contains_unsafe_listener_claims(assembled)
     if not contains_unsafe_listener_claims(assembled, return_authority=return_authority):
         if not unsafe_without_authority:
             state.last_banter_return_authority = None
-        return lines, transition_text, False, False
+        return dialogue_lines, transition_text, False, False
 
     logger.warning("Discarding listener-arrival wording at final banter boundary; attempting one repair")
     # No deferred state from the rejected exchange may travel with the repair.
@@ -1225,9 +1249,13 @@ async def _listener_truth_guard(
     state.last_banter_home_fact = None
     state.last_banter_return_authority = None
     repaired_lines = await _sw.repair_banter_without_listener_context(state, config)
-    if repaired_lines is None or contains_unsafe_listener_claims(text for _host, text in repaired_lines):
+    if repaired_lines is None or contains_unsafe_listener_claims(_dialogue_line_text(line) for line in repaired_lines):
         logger.error("Listener-truth repair remained unsafe; abandoning generated banter")
         repaired_lines = _sw._banter_fallback_pools(config)[0]
+    else:
+        # A replacement exchange must never inherit a theatrical cue from the
+        # rejected one, even if a mocked/legacy repair source supplied it.
+        repaired_lines = _neutral_dialogue_lines(repaired_lines)
 
     repaired_transition = transition_text
     transition_replaced = False
@@ -1236,7 +1264,7 @@ async def _listener_truth_guard(
         transition_replaced = True
 
     final_texts = ([repaired_transition] if repaired_transition is not None else []) + [
-        text for _host, text in repaired_lines
+        _dialogue_line_text(line) for line in repaired_lines
     ]
     if contains_unsafe_listener_claims(final_texts):
         # This is a deterministic last fence, not another generation attempt.
@@ -2015,12 +2043,12 @@ async def _enqueue_with_egress(
     egress_started = time.monotonic()
     segment = await _apply_egress(segment, config)
     state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
-    # Post-egress staleness re-check (opt-in). The egress encode can be slow (the FM
-    # broadcast chain is a full extra FFmpeg pass), and a source switch landing DURING it
-    # would purge the queue before this put. A caller that captured a generation up front
-    # (prewarm) passes stale_check so a now-stale segment is dropped at the last moment
-    # instead of put into the freshly-purged queue (#665). Main-loop callers omit it and
-    # keep their documented pre-egress-only behavior.
+    # Post-egress staleness re-check (when the caller captured generation state). The
+    # egress encode can be slow (the FM broadcast chain is a full extra FFmpeg pass),
+    # and a source switch landing DURING it would purge the queue before this put.
+    # Prewarm and normal producer paths pass stale_check so a now-stale segment is
+    # dropped at the last moment instead of put into the freshly-purged queue (#665).
+    # Direct recovery paths that have no captured generation may omit it by design.
     rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
     if rejection_reason is not None:
         _discard_rejected_admission(state, segment, rejection_reason, phase="post-egress enqueue gate")
@@ -2170,6 +2198,10 @@ async def _synthesize_impossible_moment(
             imp_path,
             engine=host.engine,
             edge_fallback_voice=host.edge_fallback_voice,
+            voice_settings=host.voice_settings,
+            elevenlabs_model=host.elevenlabs_model,
+            delivery_profile=host.delivery_profile,
+            host_name=host.name,
             state=state,
         )
     xfade_out = config.tmp_dir / f"impossible_xf_{uuid4().hex[:8]}.mp3"
@@ -2267,18 +2299,36 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     return pick
 
 
-def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str]:
-    """Return voice, engine, and Edge fallback for sonic-brand sweepers."""
+def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str, HostPersonality | None]:
+    """Return sweeper routing plus the host when a host supplies the voice.
+
+    A configured sonic-brand voice remains its own V2-compatible route.  When
+    the station falls back to Marco or Giulia, retain the full host object so
+    plain non-banter speech still reaches that host's selected V3 model.
+    """
     sb = config.sonic_brand
     sweeper_voice = sb.sweeper_voice
     sweeper_engine = sb.sweeper_engine
     sweeper_fallback = sb.sweeper_edge_fallback_voice
+    sweeper_host: HostPersonality | None = None
     if not sweeper_voice:
         sweeper_host = random.choice(_sw._regular_hosts(config))
         sweeper_voice = sweeper_host.voice
         sweeper_engine = sweeper_host.engine
         sweeper_fallback = sweeper_host.edge_fallback_voice
-    return sweeper_voice, sweeper_engine, sweeper_fallback
+    return sweeper_voice, sweeper_engine, sweeper_fallback, sweeper_host
+
+
+def _host_tts_kwargs(host: HostPersonality | None) -> dict[str, Any]:
+    """Return the non-delivery TTS routing fields owned by a host, if any."""
+    if host is None:
+        return {}
+    return {
+        "voice_settings": host.voice_settings,
+        "elevenlabs_model": host.elevenlabs_model,
+        "delivery_profile": host.delivery_profile,
+        "host_name": host.name,
+    }
 
 
 async def _render_sweeper_audio(
@@ -2290,7 +2340,7 @@ async def _render_sweeper_audio(
     validate_dry: bool = False,
 ) -> Path:
     """Render a short station-imaging sweeper with the configured voice and sting."""
-    sweeper_voice, sweeper_engine, sweeper_fallback = _resolve_sweeper_voice(config)
+    sweeper_voice, sweeper_engine, sweeper_fallback, sweeper_host = _resolve_sweeper_voice(config)
     audio_path = config.tmp_dir / f"{prefix}_{uuid4().hex[:8]}.mp3"
     with _timed_render_stage(state, "tts"):
         await synthesize(
@@ -2299,6 +2349,7 @@ async def _render_sweeper_audio(
             audio_path,
             engine=sweeper_engine,
             edge_fallback_voice=sweeper_fallback,
+            **_host_tts_kwargs(sweeper_host),
             state=state,
         )
     if validate_dry:
@@ -4655,7 +4706,7 @@ async def _run_producer_inner(
                                 _release_campaign_abandon_in_flight(state)
                                 _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
                                 listener_request_commit = None
-                            line_texts = [text for _host, text in lines]
+                            line_texts = [line.text for line in lines]
                             _emit_segment_prepared(
                                 state,
                                 segment_id=_banter_attempt_id,
@@ -4669,12 +4720,12 @@ async def _run_producer_inner(
                                 audio_path = await synthesize_dialogue(lines, config.tmp_dir, state=state)
                             state.last_banter_script = [
                                 {
-                                    "host": h.name,
-                                    "text": t,
+                                    "host": line.host.name,
+                                    "text": line.text,
                                     "type": "chaos_banter",
                                     "chaos_subtype": chaos_subtype.value,
                                 }
-                                for h, t in lines
+                                for line in lines
                             ]
                         else:
                             # Generate transition voice + banter in parallel
@@ -4720,7 +4771,7 @@ async def _run_producer_inner(
                                 listener_request_commit = None
                             if transition_replaced:
                                 trans_track_ref = None
-                            line_texts = [trans_text] + [text for _host, text in lines]
+                            line_texts = [trans_text] + [line.text for line in lines]
                             _emit_segment_prepared(
                                 state,
                                 segment_id=_banter_attempt_id,
@@ -4752,6 +4803,10 @@ async def _run_producer_inner(
                                         **_prosody,
                                         engine=_host.engine,
                                         edge_fallback_voice=_host.edge_fallback_voice,
+                                        voice_settings=_host.voice_settings,
+                                        elevenlabs_model=_host.elevenlabs_model,
+                                        delivery_profile=_host.delivery_profile,
+                                        host_name=_host.name,
                                         state=state,
                                     )
                                 xfade_out = config.tmp_dir / f"banter_trans_{uuid4().hex[:8]}.mp3"
@@ -4795,7 +4850,7 @@ async def _run_producer_inner(
                             state.recent_transition_texts.append(trans_text)
                             state.last_banter_script = [
                                 {"host": trans_host.name, "text": trans_text, "type": "transition"},
-                            ] + [{"host": h.name, "text": t} for h, t in lines]
+                            ] + [{"host": line.host.name, "text": line.text} for line in lines]
                     except Exception as exc:
                         if chaos_subtype is not None:
                             state.chaos_audio_failures += 1
@@ -5156,6 +5211,10 @@ async def _run_producer_inner(
                             rate=flash_rate,
                             engine=host.engine,
                             edge_fallback_voice=host.edge_fallback_voice,
+                            voice_settings=host.voice_settings,
+                            elevenlabs_model=host.elevenlabs_model,
+                            delivery_profile=host.delivery_profile,
+                            host_name=host.name,
                             state=state,
                         )
 
@@ -5219,15 +5278,9 @@ async def _run_producer_inner(
                     voice_path = config.tmp_dir / f"stid_voice_{uuid4().hex[:8]}.mp3"
                     sting_path = config.tmp_dir / f"stid_sting_{uuid4().hex[:8]}.mp3"
 
-                    # Use configured sweeper voice, or a random host
-                    sweeper_voice = sb.sweeper_voice
-                    sweeper_engine = sb.sweeper_engine
-                    sweeper_fallback = sb.sweeper_edge_fallback_voice
-                    if not sweeper_voice:
-                        sweeper_host = random.choice(_sw._regular_hosts(config))
-                        sweeper_voice = sweeper_host.voice
-                        sweeper_engine = sweeper_host.engine
-                        sweeper_fallback = sweeper_host.edge_fallback_voice
+                    # Use configured sweeper voice, or retain the selected host
+                    # object so its V3 model is not lost on an ID route.
+                    sweeper_voice, sweeper_engine, sweeper_fallback, sweeper_host = _resolve_sweeper_voice(config)
                     loop = asyncio.get_running_loop()
 
                     async def _build_station_voice(
@@ -5236,6 +5289,7 @@ async def _run_producer_inner(
                         _path=voice_path,
                         _engine=sweeper_engine,
                         _fallback=sweeper_fallback,
+                        _host=sweeper_host,
                     ) -> None:
                         with _timed_render_stage(state, "tts"):
                             await synthesize(
@@ -5244,6 +5298,7 @@ async def _run_producer_inner(
                                 _path,
                                 engine=_engine,
                                 edge_fallback_voice=_fallback,
+                                **_host_tts_kwargs(_host),
                                 state=state,
                             )
 
@@ -5333,6 +5388,10 @@ async def _run_producer_inner(
                                 _path,
                                 engine=_host.engine,
                                 edge_fallback_voice=_host.edge_fallback_voice,
+                                voice_settings=_host.voice_settings,
+                                elevenlabs_model=_host.elevenlabs_model,
+                                delivery_profile=_host.delivery_profile,
+                                host_name=_host.name,
                                 state=state,
                             )
 
@@ -5436,6 +5495,10 @@ async def _run_producer_inner(
                             ipath,
                             engine=ihost.engine,
                             edge_fallback_voice=ihost.edge_fallback_voice,
+                            voice_settings=ihost.voice_settings,
+                            elevenlabs_model=ihost.elevenlabs_model,
+                            delivery_profile=ihost.delivery_profile,
+                            host_name=ihost.name,
                             state=state,
                         )
                     xout = config.tmp_dir / f"ad_trans_{uuid4().hex[:8]}.mp3"
@@ -5457,10 +5520,18 @@ async def _run_producer_inner(
                             pvoice = promo_voice.voice
                             pengine = promo_voice.engine
                             pfallback = promo_voice.edge_fallback_voice
+                            pvoice_settings = promo_voice.voice_settings
+                            pmodel = "eleven_multilingual_v2"
+                            pdelivery_profile = "none"
+                            phost_name = promo_voice.name
                         else:
                             pvoice = ihost.voice
                             pengine = ihost.engine
                             pfallback = ihost.edge_fallback_voice
+                            pvoice_settings = ihost.voice_settings
+                            pmodel = ihost.elevenlabs_model
+                            pdelivery_profile = ihost.delivery_profile
+                            phost_name = ihost.name
                         with _timed_render_stage(state, "tts"):
                             await synthesize(
                                 promo_text,
@@ -5470,6 +5541,10 @@ async def _run_producer_inner(
                                 pitch="-10Hz",
                                 engine=pengine,
                                 edge_fallback_voice=pfallback,
+                                voice_settings=pvoice_settings,
+                                elevenlabs_model=pmodel,
+                                delivery_profile=pdelivery_profile,
+                                host_name=phost_name,
                                 state=state,
                             )
                         parts.append(ppath)
@@ -5632,6 +5707,10 @@ async def _run_producer_inner(
                             _path,
                             engine=_host.engine,
                             edge_fallback_voice=_host.edge_fallback_voice,
+                            voice_settings=_host.voice_settings,
+                            elevenlabs_model=_host.elevenlabs_model,
+                            delivery_profile=_host.delivery_profile,
+                            host_name=_host.name,
                             state=state,
                         )
 

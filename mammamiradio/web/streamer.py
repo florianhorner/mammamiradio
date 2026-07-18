@@ -25,7 +25,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from mammamiradio.audio.norm_cache import select_norm_cache_rescue as _select_norm_cache_rescue
+from mammamiradio.audio.norm_cache import (
+    record_rescue_airplay as _record_rescue_airplay,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_last_heard_at as _rescue_last_heard_at,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_on_cooldown as _rescue_on_cooldown,
+)
+from mammamiradio.audio.norm_cache import (
+    rescue_rotation_status as _rescue_rotation_status,
+)
+from mammamiradio.audio.norm_cache import (
+    select_norm_cache_rescue as _select_norm_cache_rescue,
+)
 from mammamiradio.audio.normalizer import (
     configure_broadcast_chain,
     humanize_norm_filename,
@@ -602,6 +616,27 @@ def _continuity_reservation_segments(
         selected.append(segment)
         covered += segment.duration_sec
 
+    def _add_cached_segment(cached: Path, duration: float, sidecar: dict) -> None:
+        _add(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=cached,
+                duration_sec=duration,
+                metadata={
+                    "title": str(sidecar.get("title") or "Cached music"),
+                    "title_only": str(sidecar.get("title") or "Cached music"),
+                    "artist": str(sidecar.get("artist") or ""),
+                    "duration_ms": round(duration * 1000),
+                    "audio_source": "norm_cache",
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
+
     if (
         _can_add()
         and recovery not in excluded_paths
@@ -630,7 +665,17 @@ def _continuity_reservation_segments(
     # choose the first one or two immediately playable tracks.
     scanned = 0
     prune_paths: list[Path] = []
-    for cached, duration in state.immediate_audio_index.items():
+    deferred_cooling: list[tuple[Path, float, dict]] = []
+    indexed_items = list(state.immediate_audio_index.items())
+    cooling_by_path: dict[Path, bool] = {}
+    if state.rescue_airplay:
+        rotation_now = time.monotonic()
+        # Cooling entries remain in the index by design. Put eligible entries
+        # first so the bounded scan does not spend all 24 slots on a cooling
+        # prefix while a fresh cache track waits just beyond it.
+        cooling_by_path = {cached: _rescue_on_cooldown(state, cached, now=rotation_now) for cached, _ in indexed_items}
+        indexed_items.sort(key=lambda item: cooling_by_path[item[0]])
+    for cached, duration in indexed_items:
         if not _can_add() or _target_met():
             break
         if scanned >= _CONTINUITY_CACHE_SCAN_LIMIT:
@@ -660,25 +705,23 @@ def _continuity_reservation_segments(
                 # be re-indexed by a later render or the next startup after unban.
                 prune_paths.append(cached)
             continue
-        _add(
-            Segment(
-                type=SegmentType.MUSIC,
-                path=cached,
-                duration_sec=duration,
-                metadata={
-                    "title": str(metadata.get("title") or "Cached music"),
-                    "title_only": str(metadata.get("title") or "Cached music"),
-                    "artist": str(metadata.get("artist") or ""),
-                    "duration_ms": round(duration * 1000),
-                    "audio_source": "norm_cache",
-                    "rescue": True,
-                    _CONTINUITY_RESERVATION_FLAG: True,
-                    "continuity_reservation_id": reservation_id,
-                    "queue_reason": "Protected continuity audio.",
-                },
-                ephemeral=False,
-            )
-        )
+        if cooling_by_path.get(cached, False):
+            # This song aired as a rescue within the hour. Prefer a fresher track
+            # so repeated controls don't reserve the same song; keep it as a
+            # least-recent fallback only if nothing else is available.
+            deferred_cooling.append((cached, duration, metadata))
+            continue
+        _add_cached_segment(cached, duration, metadata)
+
+    # Every fresh cache candidate is still cooling down: reserve the
+    # least-recently-heard one anyway so a control keeps real music, not dead air.
+    if deferred_cooling and _can_add() and not _target_met():
+        for cached, duration, metadata in sorted(
+            deferred_cooling, key=lambda item: _rescue_last_heard_at(state, item[0]) or 0.0
+        ):
+            if not _can_add() or _target_met():
+                break
+            _add_cached_segment(cached, duration, metadata)
 
     for path in prune_paths:
         state.immediate_audio_index.pop(path, None)
@@ -919,6 +962,11 @@ def _reserve_continuity_runway(
                 # this conservative rebuild must not refill the freed tail.
                 # Keep the epoch stable only for the true no-mutation path.
                 state.continuity_epoch += 1
+            elif slot_ready:
+                # A capacity-exempt slot is an out-of-band runway, not a queued
+                # tail. With no queued survivor, the previous queue-tail type is
+                # no longer adjacent and must not supply a speech bed.
+                state.last_enqueued_type = None
             return len(failure_dropped)
         return 0
 
@@ -1717,6 +1765,10 @@ def _runtime_status_snapshot(
         "no_failover_message": "No failover in current session." if not failover_events else "",
         "bridge_health": bridge_health,
         "generation_waste": generation_waste,
+        # How the norm-cache rescue rotation is spending its cooldown. Authenticated
+        # only, and derived purely from in-memory airplay state — no cache walk, no
+        # filesystem paths — so an operator can see the illusion guard working.
+        "rescue_rotation": _rescue_rotation_status(state),
         # Capacity-exempt continuity is intentionally not part of the real queue
         # shadow. Expose it separately to authenticated operators only.
         "continuity_slot": _continuity_slot_status(state),
@@ -3099,6 +3151,11 @@ def _emit_stream_result(
         )
     except Exception as exc:  # pragma: no cover - diagnostics must never break audio
         logger.debug("Anonymous stream outcome recording failed: %s", exc)
+    # Feed the rescue rotation cooldown only from a rescue that was truly heard:
+    # bytes reached at least one listener. A rescue selected then skipped, or
+    # aired to an empty room, must not consume rotation.
+    if bytes_sent > 0 and listeners > 0 and not was_skipped:
+        _record_rescue_airplay(state, segment)
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return

@@ -60,6 +60,13 @@ _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
     "style": (0.0, 1.0),
 }
 _ELEVENLABS_V2_BOOL_SETTINGS = frozenset({"use_speaker_boost"})
+_ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
+_ELEVENLABS_V3_MODEL = "eleven_v3"
+_ELEVENLABS_SUPPORTED_MODELS = frozenset({_ELEVENLABS_V2_MODEL, _ELEVENLABS_V3_MODEL})
+_ELEVENLABS_DELIVERY_PROFILES = frozenset({"none", "marco", "giulia"})
+_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "stability": (0.0, 1.0),
+}
 
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
@@ -1361,6 +1368,8 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
+    for index, host in enumerate(config.hosts):
+        errors.extend(_validate_host_elevenlabs_config(host, index=index))
     # Bounds are shared with env-load clamping and PATCH /api/pacing so the
     # accepted range cannot drift between boot and live admin changes.
     for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
@@ -1493,6 +1502,135 @@ def _env_positive_int(name: str) -> int | None:
 
 def _clean_str(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _parse_host_elevenlabs_model(value: object, *, index: int) -> str:
+    """Parse the explicit ElevenLabs model without silently changing voice behavior."""
+
+    field_name = f"hosts[{index}].elevenlabs_model"
+    if value is None:
+        return _ELEVENLABS_V2_MODEL
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    model = value.strip()
+    if model not in _ELEVENLABS_SUPPORTED_MODELS:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}"))
+    return model
+
+
+def _parse_host_delivery_profile(value: object, *, index: int) -> str:
+    """Parse the constrained semantic performance profile for a host."""
+
+    field_name = f"hosts[{index}].delivery_profile"
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    profile = value.strip().lower()
+    if profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}"))
+    return profile
+
+
+def _parse_host_voice_settings(
+    value: object,
+    *,
+    index: int,
+    engine: object,
+    elevenlabs_model: str,
+) -> dict[str, float | bool]:
+    """Validate host ElevenLabs tuning against the selected model's contract.
+
+    V2 retains its historic pass-through override surface. V3 accepts only
+    stability, because similarity/style/Speaker Boost are incompatible there.
+    """
+
+    field_name = f"hosts[{index}].voice_settings"
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(_err(field_name, "must be a TOML table"))
+    if not value:
+        return {}
+    if elevenlabs_model != _ELEVENLABS_V3_MODEL:
+        # Host V2 settings historically passed straight through to the exact V2
+        # payload. Keep that compatibility boundary intact for existing voices.
+        return dict(value)
+
+    engine_name = _clean_str(engine).lower() or "edge"
+    if engine_name != "elevenlabs":
+        raise ValueError(_err(field_name, "is supported only for engine = 'elevenlabs'"))
+
+    parsed: dict[str, float | bool] = {}
+    for key, raw_value in value.items():
+        if key in _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float) or not math.isfinite(raw_value):
+                raise ValueError(_err(f"{field_name}.{key}", "must be a finite number between 0 and 1"))
+            lower, upper = _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS[key]
+            if not lower <= raw_value <= upper:
+                raise ValueError(_err(f"{field_name}.{key}", "must be between 0 and 1"))
+            parsed[key] = float(raw_value)
+        else:
+            allowed = sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)
+            raise ValueError(_err(f"{field_name}.{key}", f"must be one of {allowed}"))
+    return parsed
+
+
+def _validate_host_elevenlabs_config(host: HostPersonality, *, index: int) -> list[str]:
+    """Return validation errors for direct ``HostPersonality`` construction too."""
+
+    errors: list[str] = []
+    model = host.elevenlabs_model
+    profile = host.delivery_profile
+    field_prefix = f"hosts[{index}]"
+
+    if not isinstance(model, str) or model not in _ELEVENLABS_SUPPORTED_MODELS:
+        errors.append(
+            _err(f"{field_prefix}.elevenlabs_model", f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}")
+        )
+        return errors
+    if not isinstance(profile, str) or profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        errors.append(
+            _err(f"{field_prefix}.delivery_profile", f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}")
+        )
+        return errors
+    if profile != "none" and host.name.strip().casefold() != profile:
+        errors.append(
+            _err(
+                f"{field_prefix}.delivery_profile",
+                f"'{profile}' is reserved for the host named '{profile.title()}'",
+            )
+        )
+    if model == _ELEVENLABS_V3_MODEL:
+        if (host.engine or "edge").strip().lower() != "elevenlabs":
+            errors.append(_err(f"{field_prefix}.elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        if profile == "none":
+            errors.append(
+                _err(
+                    f"{field_prefix}.delivery_profile",
+                    "'eleven_v3' requires the matching audited host delivery profile",
+                )
+            )
+        if not isinstance(host.voice_settings, dict):
+            errors.append(_err(f"{field_prefix}.voice_settings", "must be a TOML table"))
+        elif sorted(set(host.voice_settings) - set(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)):
+            errors.append(
+                _err(
+                    f"{field_prefix}.voice_settings",
+                    f"for eleven_v3 must use only {sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)}",
+                )
+            )
+        elif "stability" in host.voice_settings:
+            stability = host.voice_settings["stability"]
+            if isinstance(stability, bool) or not isinstance(stability, int | float) or not math.isfinite(stability):
+                errors.append(
+                    _err(f"{field_prefix}.voice_settings.stability", "must be a finite number between 0 and 1")
+                )
+            elif not 0 <= stability <= 1:
+                errors.append(_err(f"{field_prefix}.voice_settings.stability", "must be between 0 and 1"))
+    elif profile != "none":
+        errors.append(_err(f"{field_prefix}.delivery_profile", "requires elevenlabs_model = 'eleven_v3'"))
+    return errors
 
 
 def _parse_ad_voice_settings(value: object, *, index: int, engine: object) -> dict[str, float | bool]:
@@ -1808,18 +1946,30 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
-    hosts = [
-        HostPersonality(
-            name=h["name"],
-            voice=h["voice"],
-            style=h["style"],
-            personality=PersonalityAxes.from_dict(h.get("personality", {})),
-            engine=h.get("engine", "edge"),
-            edge_fallback_voice=h.get("edge_fallback_voice", ""),
-            voice_settings=dict(h.get("voice_settings", {})),
+    hosts: list[HostPersonality] = []
+    for index, raw_host in enumerate(raw.get("hosts", [])):
+        elevenlabs_model = _parse_host_elevenlabs_model(raw_host.get("elevenlabs_model"), index=index)
+        engine = raw_host.get("engine", "edge")
+        if elevenlabs_model == _ELEVENLABS_V3_MODEL and _clean_str(engine).lower() != "elevenlabs":
+            raise ValueError(_err(f"hosts[{index}].elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        hosts.append(
+            HostPersonality(
+                name=raw_host["name"],
+                voice=raw_host["voice"],
+                style=raw_host["style"],
+                personality=PersonalityAxes.from_dict(raw_host.get("personality", {})),
+                engine=engine,
+                edge_fallback_voice=raw_host.get("edge_fallback_voice", ""),
+                voice_settings=_parse_host_voice_settings(
+                    raw_host.get("voice_settings", {}),
+                    index=index,
+                    engine=engine,
+                    elevenlabs_model=elevenlabs_model,
+                ),
+                elevenlabs_model=elevenlabs_model,
+                delivery_profile=_parse_host_delivery_profile(raw_host.get("delivery_profile"), index=index),
+            )
         )
-        for h in raw.get("hosts", [])
-    ]
 
     # Parse ads section with structured brands and voices
     ads_raw = raw.get("ads", {})
