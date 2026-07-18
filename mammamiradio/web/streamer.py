@@ -880,6 +880,30 @@ def _rebuild_queue_shadow(q, state: StationState, items: list[Segment]) -> None:
         state.last_enqueued_type = None
 
 
+def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> int:
+    """Drop leading segments that playback would reject before its first byte."""
+    queued = list(getattr(q, "_queue", ()))
+    prefix_length = 0
+    while prefix_length < len(queued) and not _segment_is_immediately_playable(state, queued[prefix_length]):
+        prefix_length += 1
+    if prefix_length == 0:
+        return 0
+
+    dropped = queued[:prefix_length]
+    survivors = queued[prefix_length:]
+    for segment in dropped:
+        discard_reason = reason
+        is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
+        if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
+            discard_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+        state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
+        _drop_segment_moment_receipts(state, segment, discard_reason)
+        _unlink_ephemeral_best_effort(segment)
+    _rebuild_queue_shadow(q, state, survivors)
+    state.continuity_epoch += 1
+    return len(dropped)
+
+
 def _reserve_continuity_runway(
     app_state,
     state: StationState,
@@ -4039,8 +4063,15 @@ async def shuffle_playlist(request: Request, _: None = Depends(require_admin_acc
     return {"ok": True, "message": "Playlist shuffled"}
 
 
-async def _request_skip(app_state, state: StationState, config, *, source: str) -> bool:
-    """Cut the airing segment now, bridging to forced music if the queue is empty.
+async def _request_skip(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    source: str,
+    discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+) -> bool:
+    """Cut the airing segment now, bridging when no playback-valid runway exists.
 
     Shared by ``/api/skip`` and ``/api/track/ban-now-playing`` so the skip semantics
     (listener-skip record, empty-queue bridge, ``skip_event``, ``now_streaming`` ->
@@ -4052,7 +4083,8 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
     next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
     was forced.
     """
-    _reserve_continuity_runway(app_state, state, config, discard_reason=GenerationWasteReason.OPERATOR_PURGE)
+    _reserve_continuity_runway(app_state, state, config, discard_reason=discard_reason)
+    _discard_unplayable_queue_prefix(app_state.queue, state, reason=discard_reason)
     now_seg = state.now_streaming or {}
     skipped_music_metadata: dict | None = None
     skipped_music_listen_sec = 0.0
@@ -4067,7 +4099,7 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
         )
 
     bridged = False
-    if app_state.queue.empty() and not state.queued_segments:
+    if not _playable_runway_available(app_state.queue, state):
         state.force_next = SegmentType.MUSIC
         bridged = True
         state.pending_actions.append(
@@ -4078,7 +4110,7 @@ async def _request_skip(app_state, state: StationState, config, *, source: str) 
                 "created_at": time.time(),
             }
         )
-        logger.info("Skip requested with empty queue — forcing next music before cut")
+        logger.info("Skip requested without playable runway — forcing next music before cut")
 
     app_state.skip_event.set()
     state.now_streaming = {"type": "skipping", "label": "Skipping...", "started": time.time(), "metadata": {}}
@@ -5284,7 +5316,13 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
         discard_reason=GenerationWasteReason.OPERATOR_BAN,
         excluded_track_keys={normalized_track_key(track)},
     )
-    bridged = await _request_skip(request.app.state, state, config, source="ban_now_playing")
+    bridged = await _request_skip(
+        request.app.state,
+        state,
+        config,
+        source="ban_now_playing",
+        discard_reason=GenerationWasteReason.OPERATOR_BAN,
+    )
     return {
         "ok": True,
         "banned": result.get("banned", []),

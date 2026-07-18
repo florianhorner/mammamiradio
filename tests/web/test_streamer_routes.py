@@ -3676,6 +3676,109 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/skip", "/api/track/ban-now-playing"])
+async def test_skip_controls_bridge_after_discarding_stale_companionship_only_runway(tmp_path, endpoint):
+    """A rejected cue cannot hide that an explicit cut needs forced music."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    stale_cue.ephemeral = True
+    stale_cue.metadata["ritual_moment_id"] = "stale-skip-moment"
+    stale_path = stale_cue.path
+    state.moment_store = MagicMock()
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(endpoint)
+
+    assert response.json()["bridged"] is True
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    assert state.force_next is SegmentType.MUSIC
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert not stale_path.exists()
+    state.moment_store.mark_dropped.assert_called_once_with(
+        "stale-skip-moment",
+        GenerationWasteReason.LISTENER_SESSION_STALE,
+    )
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/skip", "/api/track/ban-now-playing"])
+async def test_skip_controls_promote_safe_audio_past_stale_companionship_cue(tmp_path, endpoint):
+    """Skip and Ban-now cut to the first segment playback will accept."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    assert state.listener_session.epoch == claim.epoch + 1
+
+    safe_path = tmp_path / "safe_after_stale_skip.mp3"
+    safe_path.write_bytes(b"safe-audio")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-after-stale-skip",
+            "title": "Safe after stale skip",
+            "title_only": "Safe after stale skip",
+            "artist": "Safe Artist",
+        },
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(safe)
+    safe_shadow = {
+        "id": "safe-after-stale-skip",
+        "type": "music",
+        "label": "Safe after stale skip",
+        "duration_sec": 180.0,
+    }
+    state.queued_segments.append(safe_shadow)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(endpoint)
+
+    assert response.json()["bridged"] is False
+    assert list(app.state.queue._queue) == [safe]
+    assert stale_cue not in app.state.queue._queue
+    assert state.queued_segments == [safe_shadow]
+    assert state.force_next is None
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is safe
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_panic_cut_does_not_skip_for_stale_companionship_only_runway(tmp_path):
     """A cue rejected by playback cannot justify cutting the current segment."""
     app = _make_test_app()
