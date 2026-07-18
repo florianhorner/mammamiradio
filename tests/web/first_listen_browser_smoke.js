@@ -428,6 +428,7 @@ async (page) => {
   );
 
   assert(await page.locator('#firstListenKeepOffBtn').isVisible(), 'fresh-install privacy controls stayed hidden after heard proof');
+  assert(await page.locator('#firstListenPrivacyLock').isHidden(), 'heard proof left the stale privacy lock visible');
   await page.locator('#firstListenKeepOffBtn').click();
   await page.waitForFunction(() => _firstListenUi.privacyChoice === false && !_firstListenUi.privacySaving);
   assert(previewRequests.length === 0, 'Keep off fetched Home context without operator preview');
