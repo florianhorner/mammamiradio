@@ -64,9 +64,11 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
-    assert "body.hidden=!current" in step
-    assert "body.setAttribute('aria-hidden',current?'false':'true')" in step
-    assert "body.toggleAttribute('inert',!current)" in step
+    assert "const reviewable=id==='firstListenSourceStep'&&state==='complete'" in step
+    assert "const visible=current||reviewable" in step
+    assert "body.hidden=!visible" in step
+    assert "body.setAttribute('aria-hidden',visible?'false':'true')" in step
+    assert "body.toggleAttribute('inert',!visible)" in step
     assert html.count('class="first-listen-body" hidden aria-hidden="true" inert') == 3
     assert 'id="firstListenAiBody" hidden aria-hidden="true" inert' in html
 

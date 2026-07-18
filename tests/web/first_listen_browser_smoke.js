@@ -338,6 +338,7 @@ async (page) => {
       return {
         id: step.id,
         state: step.dataset.state,
+        reviewable: step.id === 'firstListenSourceStep' && step.dataset.state === 'complete',
         hidden: body ? body.hidden : true,
         ariaHidden: body ? body.getAttribute('aria-hidden') : null,
         inert: body ? body.inert : true,
@@ -347,8 +348,13 @@ async (page) => {
     assert(current.length === 1 && current[0].id === expectedId, `wrong current step: ${JSON.stringify(state)}`);
     assert(!current[0].hidden && current[0].ariaHidden === 'false' && !current[0].inert, 'current body is unavailable');
     assert(
-      state.filter((row) => row.id !== expectedId).every((row) => row.hidden && row.ariaHidden === 'true' && row.inert),
+      state.filter((row) => row.id !== expectedId && !row.reviewable).every((row) => row.hidden && row.ariaHidden === 'true' && row.inert),
       `non-current body stayed interactive: ${JSON.stringify(state)}`,
+    );
+    const reviewable = state.filter((row) => row.reviewable);
+    assert(
+      reviewable.every((row) => !row.hidden && row.ariaHidden === 'false' && !row.inert),
+      `completed source readiness is not reviewable: ${JSON.stringify(state)}`,
     );
   };
 
@@ -365,6 +371,19 @@ async (page) => {
     'optional AI controls appeared before first audio/privacy',
   );
   await assertCurrentStep('firstListenSpeakerStep');
+  assert(await page.locator('#firstListenSourceDetails').isVisible(), 'resolved source readiness became unreachable');
+  await page.locator('#firstListenSourceDetails > summary').click();
+  assert(
+    await page.locator('#firstListenSources').innerText() === [
+      'Live charts\nLive chart evidence\nReady',
+      'Jamendo\nOptional rights-safe source\nNot configured',
+      'Local music\nPrivate local folder\nNot configured',
+      'Bundled demo music\nNo bundled library\nNot bundled',
+      'Recovery cover\nTransport cover only\nSpeaker-test cover',
+    ].join('\n'),
+    'human source readiness labels drifted',
+  );
+  await page.locator('#firstListenSourceDetails > summary').click();
 
   await page.locator('#tab-scaletta').click();
   await page.evaluate((projection) => {
