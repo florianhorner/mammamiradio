@@ -141,15 +141,26 @@ async (page) => {
   });
   await page.route('**/api/setup/first-listen/players', async (route) => {
     playerRequests.push(bodyOf(route));
-    const candidates = playerCandidatesAvailable ? [{
-      entity_id: 'media_player.mac_lab_speaker',
-      friendly_name: `<img src=x onerror=alert(1)>${'SpeakerWithoutBreak'.repeat(10)}`,
-      area: 'Lab room',
-      state: 'idle',
-      device_class: 'speaker',
-      supports_play_media: true,
-      available: true,
-    }] : [];
+    const candidates = playerCandidatesAvailable ? [
+      {
+        entity_id: 'media_player.mac_lab_speaker',
+        friendly_name: `<img src=x onerror=alert(1)>${'SpeakerWithoutBreak'.repeat(10)}`,
+        area: 'Lab room',
+        state: 'idle',
+        device_class: 'speaker',
+        supports_play_media: true,
+        available: true,
+      },
+      {
+        entity_id: 'media_player.kitchen_speaker',
+        friendly_name: 'Kitchen speaker',
+        area: 'Kitchen',
+        state: 'idle',
+        device_class: 'speaker',
+        supports_play_media: true,
+        available: true,
+      },
+    ] : [];
     await fulfillJson(route, {
       ok: true,
       media_source_ready: true,
@@ -417,7 +428,7 @@ async (page) => {
 
   await page.locator('#firstListenQuickFindPlayersBtn').focus();
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelectorAll('#firstListenPlayerSelect option').length === 2);
+  await page.waitForFunction(() => document.querySelectorAll('#firstListenPlayerSelect option').length === 3);
   assert(playerRequests.length === 1, `speaker discovery count drifted: ${playerRequests.length}`);
   assert(!(await page.locator('#firstListenQuickAction').isVisible()), 'discovery shortcut stayed visible after speakers were found');
   assert(await page.locator('#firstListenFindPlayersBtn').evaluate((element) => element.classList.contains('btn-util')), 'repeat discovery did not become secondary');
@@ -444,15 +455,29 @@ async (page) => {
   await page.waitForFunction(() => _firstListenUi.verification === 'not_yet' && !_firstListenUi.busy);
   assert(verifyRequests.length === 1 && verifyRequests[0].heard === false, 'Not yet was not recorded explicitly');
   assert(await page.locator('#firstListenRepair').isVisible(), 'Not yet hid warm repair guidance');
+  assert(await page.locator('#firstListenChooseAnotherBtn').isEnabled(), 'wrong-room repair has no way to change speakers');
+  await page.locator('#firstListenChooseAnotherBtn').click();
+  await assertCurrentStep('firstListenSpeakerStep');
+  assert(await page.locator('#firstListenPlayerSelect').inputValue() === '', 'wrong-room repair kept the old selection');
+  assert(await page.evaluate(() => document.activeElement?.id) === 'firstListenPlayerSelect', 'wrong-room repair did not focus the room picker');
+  assert(playRequests.length === 1, 'changing rooms replayed the station before confirmation');
+  await page.locator('#firstListenPlayerSelect').selectOption('media_player.kitchen_speaker');
+  await page.locator('#firstListenPlayBtn').click();
+  await page.waitForFunction(() => _firstListenUi.dispatch === 'accepted' && !_firstListenUi.busy);
+  assert(playRequests.length === 2, `new-room start count drifted: ${playRequests.length}`);
+  assert(playRequests[1].entity_id === 'media_player.kitchen_speaker', 'new-room repair reused the old speaker');
+  await page.locator('#firstListenNotYetBtn').click();
+  await page.waitForFunction(() => _firstListenUi.verification === 'not_yet' && !_firstListenUi.busy);
+  assert(verifyRequests.length === 2 && verifyRequests[1].heard === false, 'second Not yet was not recorded explicitly');
   assert(await page.locator('#firstListenRetryBtn').isEnabled(), 'same-speaker retry is unavailable');
   await page.locator('#firstListenRetryBtn').click();
   await page.waitForFunction(() => _firstListenUi.verification === 'awaiting' && !_firstListenUi.busy);
-  assert(playRequests.length === 2, `same-speaker retry count drifted: ${playRequests.length}`);
-  assert(playRequests[1].entity_id === playRequests[0].entity_id, 'retry changed the selected speaker');
+  assert(playRequests.length === 3, `same-speaker retry count drifted: ${playRequests.length}`);
+  assert(playRequests[2].entity_id === playRequests[1].entity_id, 'retry changed the selected speaker');
   assert(!(await page.locator('#firstListenRepair').isVisible()), 'successful retry left repair guidance open');
   await page.locator('#firstListenHeardBtn').click();
   await page.waitForFunction(() => _firstListenUi.verification === 'heard' && !_firstListenUi.busy);
-  assert(verifyRequests.length === 2 && verifyRequests[1].heard === true, 'Heard was not recorded explicitly');
+  assert(verifyRequests.length === 3 && verifyRequests[2].heard === true, 'Heard was not recorded explicitly');
   await assertCurrentStep('firstListenPrivacyStep');
   assert((await page.locator('#firstListenShowTitle').innerText()) === 'Marco and Giulia made it to the room.', 'heard proof left the opening hero in its pre-dispatch state');
   assert(

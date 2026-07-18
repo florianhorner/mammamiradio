@@ -241,6 +241,17 @@ def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
     assert "HACS integration" in repair
     assert 'id="firstListenRetryBtn"' in repair
     assert "Retry on same speaker" in repair
+    assert 'id="firstListenChooseAnotherBtn"' in repair
+    assert "Choose another speaker" in repair
+    assert "Restart Home Assistant only after a new integration install" in repair
+    choose_another = _function("chooseAnotherFirstListenSpeaker", "startFirstListen")
+    assert "_firstListenUi.selectionDirty=true" in choose_another
+    assert "_firstListenUi.selectedEntityId=''" in choose_another
+    assert "_firstListenUi.attemptId=''" in choose_another
+    assert "_firstListenUi.dispatch='ready'" in choose_another
+    assert "_firstListenUi.verification='awaiting'" in choose_another
+    projection = _function("firstListenProjection", "firstListenSourceStatus")
+    assert "serverProofMatches=!_firstListenUi.selectionDirty" in projection
     assert "volume_set" not in html
     assert "volume_level" not in _function("startFirstListen", "verifyFirstListen")
 
@@ -325,6 +336,7 @@ def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() 
         "firstListenHeardBtn",
         "firstListenNotYetBtn",
         "firstListenRetryBtn",
+        "firstListenChooseAnotherBtn",
         "firstListenSaveAttemptBtn",
         "firstListenPreviewBtn",
         "firstListenKeepOffBtn",

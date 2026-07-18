@@ -2473,9 +2473,12 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                       <li>Give the speaker a few seconds, then check mute and volume on the device.</li>
                       <li>Confirm the selected speaker is the room you meant to use.</li>
                       <li>Test <code>media-source://mammamiradio/live</code> in Home Assistant's media browser.</li>
-                      <li>If Live is missing, recheck the HACS integration, Home Assistant restart, and add-on connection.</li>
+                      <li>If Live is missing, recheck the HACS integration and add-on connection. Restart Home Assistant only after a new integration install.</li>
                     </ol>
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRetryBtn" data-stopped-exempt onclick="startFirstListen(this)">Retry on same speaker</button>
+                    <div class="first-listen-actions">
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRetryBtn" data-stopped-exempt onclick="startFirstListen(this)">Retry on same speaker</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenChooseAnotherBtn" data-stopped-exempt onclick="chooseAnotherFirstListenSpeaker()">Choose another speaker</button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -4079,7 +4082,7 @@ function firstListenProjection(){
   const privacy=guided.privacy||{};
   const legacy=!Object.keys(first).length;
   const serverSelection=String(first.selected_entity_id||guided.speaker?.selected_entity_id||'');
-  const serverProofMatches=!_firstListenUi.selectedEntityId||!serverSelection||_firstListenUi.selectedEntityId===serverSelection;
+  const serverProofMatches=!_firstListenUi.selectionDirty&&(!_firstListenUi.selectedEntityId||!serverSelection||_firstListenUi.selectedEntityId===serverSelection);
   const pendingReceiptEntity=firstListenReceiptRecoveryEntity(first);
   const pendingReceiptProjected=Boolean(pendingReceiptEntity&&!_firstListenUi.selectionDirty&&_firstListenUi.selectedEntityId===pendingReceiptEntity);
   const accepted=Boolean(
@@ -4602,6 +4605,24 @@ function firstListenPlayerChanged(select){
   firstListenSetStatus('firstListenSpeakerStatus',entityId?`Ready to start on ${_firstListenUi.selectedName}.`:'Choose a speaker before starting.');
   firstListenSetStatus('firstListenVerifyStatus','');
   renderFirstListenProgress();
+}
+function chooseAnotherFirstListenSpeaker(){
+  if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  _firstListenUi.selectedEntityId='';
+  _firstListenUi.selectedName='';
+  _firstListenUi.selectionDirty=true;
+  _firstListenUi.attemptId='';
+  _firstListenUi.dispatch='ready';
+  _firstListenUi.verification='awaiting';
+  _firstListenUi.repairOpen=false;
+  const select=document.getElementById('firstListenPlayerSelect');
+  if(select)select.value='';
+  firstListenSetStatus('firstListenSpeakerStatus',_firstListenUi.players.length?'Choose the room you want, then start the station there.':'Find speakers again, then choose the room you want.');
+  firstListenSetStatus('firstListenVerifyStatus','');
+  renderFirstListenProgress();
+  const target=_firstListenUi.players.length?select:document.getElementById('firstListenQuickFindPlayersBtn');
+  target?.focus({preventScroll:true});
+  target?.scrollIntoView({block:'center'});
 }
 async function startFirstListen(el){
   const entityId=_firstListenUi.selectedEntityId;

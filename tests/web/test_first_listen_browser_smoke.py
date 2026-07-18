@@ -22,6 +22,7 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "firstListenFindPlayersBtn",
         "firstListenQuickFindPlayersBtn",
         "firstListenRetryBtn",
+        "firstListenChooseAnotherBtn",
         "firstListenSaveAttemptBtn",
         "/api/setup/first-listen/receipt/retry",
         "fresh install did not land on First Listen",
