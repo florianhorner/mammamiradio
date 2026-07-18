@@ -4323,7 +4323,10 @@ function renderFirstListenProgress(){
   const previewBtn=document.getElementById('firstListenPreviewBtn');
   const keepOffBtn=document.getElementById('firstListenKeepOffBtn');
   const enableBtn=document.getElementById('firstListenEnableContextBtn');
-  if(previewBtn){previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Making preview…':'Show filtered preview';}
+  if(previewBtn){
+    previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
+    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Making preview…':_firstListenUi.privacyPreviewValid?'Refresh filtered preview':'Show filtered preview';
+  }
   if(keepOffBtn)keepOffBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||(!projection.privacyEnabled&&projection.privacyReviewed);
   if(enableBtn){
     const receiptRetry=projection.privacyEnabled&&!projection.privacyReviewed;
@@ -4343,6 +4346,12 @@ function renderFirstListenProgress(){
     if(_firstListenUi.privacyPreview==='ambient_only'){
       firstListenSetChip('firstListenPrivacyChip','degraded','Nothing useful yet');
       if(privacySummary)privacySummary.textContent='Only generic daylight is available. It is privacy-safe, but it will not make the station meaningfully more personal.';
+    }else if(_firstListenUi.privacyPreviewValid&&_firstListenUi.privacyPreviewUseful){
+      firstListenSetChip('firstListenPrivacyChip','ready','Preview ready');
+      if(privacySummary)privacySummary.textContent='A useful filtered preview is ready. Nothing was sent to an AI provider; choose whether future hosts may use it.';
+    }else if(_firstListenUi.privacyPreviewValid){
+      firstListenSetChip('firstListenPrivacyChip','degraded','Nothing useful yet');
+      if(privacySummary)privacySummary.textContent='No useful Home context is available. Keep it private now, or refresh the filtered preview later.';
     }else{
       firstListenSetChip('firstListenPrivacyChip','working','Review');
       if(privacySummary)privacySummary.textContent='Review a fresh filtered preview, or keep Home context off without previewing.';
@@ -4386,6 +4395,13 @@ function renderHomeContextPreview(data,targetId='haContextPreview'){
     const empty=document.createElement('div');
     empty.className='empty';
     empty.textContent='Preview unavailable right now. Home context remains off.';
+    box.appendChild(empty);
+    return;
+  }
+  if(payload.status==='expired'){
+    const empty=document.createElement('div');
+    empty.className='empty';
+    empty.textContent='Preview expired. Show a fresh filtered preview before enabling Home context.';
     box.appendChild(empty);
     return;
   }
@@ -4719,6 +4735,7 @@ async function chooseFirstListenPrivacy(enabled,el){
         _firstListenUi.privacyPreviewValid=false;
         _firstListenUi.privacyPreviewUseful=false;
         _firstListenUi.privacyPreview='untouched';
+        renderHomeContextPreview({ok:true,status:'expired',entities:[]});
       }
       focusPreview=code==='preview_required';
       firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage(resp),'blocked');

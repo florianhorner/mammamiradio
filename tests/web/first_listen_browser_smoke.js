@@ -477,6 +477,9 @@ async (page) => {
     (await page.locator('#haContextPreview').innerText()).includes('<script>not markup</script>'),
     'hostile preview label was not rendered as harmless text',
   );
+  assert((await page.locator('#firstListenPrivacyChip').innerText()) === 'Preview ready', 'useful preview kept stale review status');
+  assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('A useful filtered preview is ready'), 'useful preview kept stale guidance');
+  assert((await page.locator('#firstListenPreviewBtn').innerText()) === 'Refresh filtered preview', 'useful preview did not offer an honest refresh action');
   await page.locator('#firstListenEnableContextBtn').click();
   await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === false && !_firstListenUi.privacySaving);
   assert(
@@ -484,6 +487,8 @@ async (page) => {
     'expired preview proof did not return focus to fresh preview',
   );
   assert(await page.locator('#firstListenEnableContextBtn').isDisabled(), 'expired proof left Enable actionable');
+  assert(!(await page.locator('#haContextPreview').innerText()).includes('<script>not markup</script>'), 'expired proof left stale Home context visible');
+  assert((await page.locator('#haContextPreview').innerText()).includes('Preview expired'), 'expired proof did not explain the fresh-preview requirement');
   await page.locator('#firstListenPreviewBtn').click();
   await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
   await page.locator('#firstListenEnableContextBtn').click();
