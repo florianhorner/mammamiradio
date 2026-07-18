@@ -126,6 +126,19 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
     assert "Recovery cover is available, but primary music still needs attention." in html
     assert "source.transport_audible" not in html
     assert "authored opening is ready" in html
+    cue = _function("firstListenListeningCue", "renderFirstListenProgress")
+    assert "if(healthy)" in cue
+    assert "if(recoveryOnAir)" in cue
+    assert "if(recoveryAvailable)" in cue
+    assert "first record" in cue
+    assert "recovery cover carrying the station" in cue
+    assert "Recovery cover is available next" in cue
+    assert "opening may end before music" in cue
+    progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
+    assert "firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable})" in progress
+    render_start = html.index("function renderFirstListen(setup")
+    render = html[render_start : html.index("function setupProviderLabels", render_start)]
+    assert "firstListenListeningCue(state)" in render
 
 
 def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> None:

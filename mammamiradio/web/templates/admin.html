@@ -4254,6 +4254,12 @@ function renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,rec
     if(then)then.textContent='Repair music';
   }
 }
+function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
+  if(healthy)return 'Listen for the station signature, Marco and Giulia, and the first record.';
+  if(recoveryOnAir)return 'Listen for the station signature, Marco and Giulia, then the recovery cover carrying the station.';
+  if(recoveryAvailable)return 'Listen for the station signature and Marco and Giulia. Recovery cover is available next while primary music needs attention.';
+  return 'Listen for the station signature and Marco and Giulia. The opening may end before music because the primary rotation needs repair.';
+}
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
   const source=projection.guided.source_readiness||{};
@@ -4385,7 +4391,7 @@ function renderFirstListenProgress(){
     if(verifySummary)verifySummary.textContent='Home Assistant accepted the show. Only this listening check still needs saving before you confirm what reached the room.';
   }else if(projection.accepted){
     firstListenSetChip('firstListenVerifyChip','working','Listen now');
-    if(verifySummary)verifySummary.textContent='Listen for the station signature, Marco and Giulia, and the first record. Only you can confirm they reached the room.';
+    if(verifySummary)verifySummary.textContent=`${firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable})} Only you can confirm it reached the room.`;
   }else{
     firstListenSetChip('firstListenVerifyChip','idle','Waiting');
   }
@@ -4956,7 +4962,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
     if(badge)badge.textContent='✓ Station heard';
   }else if(projection.accepted){
     if(headline)headline.textContent='The opening is going to your speaker.';
-    if(next)next.textContent='Listen for the station signature, Marco and Giulia, then the first record.';
+    if(next)next.textContent=firstListenListeningCue(state);
   }else{
     if(headline)headline.textContent='Your first show is ready.';
     if(next)next.textContent=state.sourceKnown?'Choose one Home Assistant speaker and put the station in the room.':'Preparing the opening while we check what plays after it.';

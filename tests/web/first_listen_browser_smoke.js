@@ -581,6 +581,26 @@ async (page) => {
   assert(await page.locator('#firstListenKeepOffBtn').isEnabled(), 'recommended private path is unavailable');
   ambientOnlyPreview = false;
 
+  const listeningCues = [
+    { primary: 'playable', recovery: 'cover_only', expected: 'first record', forbidden: 'primary rotation needs repair' },
+    { primary: 'unavailable', recovery: 'on_air', expected: 'recovery cover carrying the station', forbidden: 'first record' },
+    { primary: 'unavailable', recovery: 'cover_only', expected: 'Recovery cover is available next', forbidden: 'first record' },
+    { primary: 'unavailable', recovery: 'unavailable', expected: 'opening may end before music', forbidden: 'first record' },
+  ];
+  for (const cue of listeningCues) {
+    await resetUi(setupProjection({ primary: cue.primary, recovery: cue.recovery }), {
+      attemptId: `cue-${cue.primary}-${cue.recovery}`,
+      dispatch: 'accepted',
+    });
+    await assertCurrentStep('firstListenVerifyStep');
+    const verifyCue = await page.locator('#firstListenVerifySummary').innerText();
+    const nextCue = await page.locator('#setupNext').innerText();
+    assert(verifyCue.includes(cue.expected), `verification cue missed ${cue.expected}: ${verifyCue}`);
+    assert(nextCue.includes(cue.expected), `top next action missed ${cue.expected}: ${nextCue}`);
+    assert(!verifyCue.includes(cue.forbidden), `verification cue promised ${cue.forbidden}: ${verifyCue}`);
+    assert(!nextCue.includes(cue.forbidden), `top next action promised ${cue.forbidden}: ${nextCue}`);
+  }
+
   await resetUi(setupProjection({ audio: true, privacy: true, primary: 'unavailable', recovery: 'cover_only' }));
   const recoveryReadyCopy = await page.locator('#firstListenVerifySummary').innerText();
   assert(recoveryReadyCopy.includes('Recovery cover is available'), 'available recovery was not described as standby');
