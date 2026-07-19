@@ -1366,6 +1366,8 @@ def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_p
         metadata={"continuity_reservation": True, "queue_id": "replacement"},
         ephemeral=False,
     )
+    cue.path.write_bytes(b"ready companionship")
+    replacement.path.write_bytes(b"ready replacement")
     app.state.queue.put_nowait(cue)
     app.state.station_state.queued_segments = [{"id": "cue", "type": "banter"}]
 
@@ -1385,12 +1387,14 @@ def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_p
     assert app.state.queue._unfinished_tasks == 0
 
 
-def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip():
+def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip(tmp_path):
     """Count pressure cannot make listener runway shorter than it was before the guard."""
     app = _make_app()
     app.state.queue = asyncio.Queue(maxsize=3)
     originals = [_queue_segment(f"Long {index}", duration_sec=70.0) for index in range(3)]
-    for segment in originals:
+    for index, segment in enumerate(originals):
+        segment.path = tmp_path / f"long-{index}.mp3"
+        segment.path.write_bytes(b"ready long audio")
         app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"id": f"long-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(originals)

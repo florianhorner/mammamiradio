@@ -1538,6 +1538,65 @@ async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(
 
 
 @pytest.mark.asyncio
+async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_path):
+    """The queue and capacity-exempt slot share the same final ban fence."""
+    app = _make_test_app()
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    blocked_audio = b"blocked-queued-audio" * 512
+    blocked_path = tmp_path / "blocked-queued.mp3"
+    blocked_path.write_bytes(blocked_audio)
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "blocked-queued",
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    safe_audio = b"safe-queued-audio" * 512
+    safe_path = tmp_path / "safe-queued.mp3"
+    safe_path.write_bytes(safe_audio)
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-queued",
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+        },
+        ephemeral=False,
+    )
+    for segment in (blocked, safe):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-queued", "type": "music", "label": "Late Song"},
+        {"id": "safe-queued", "type": "music", "label": "Safe Song"},
+    ]
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        heard = await asyncio.wait_for(listener_queue.get(), timeout=3.0)
+        assert safe_audio.startswith(heard)
+        assert not heard.startswith(blocked_audio[:32])
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_BAN] == 1
+    assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
     """A packaged clip's duration is probed once (as rescue) then reused, so
     rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
@@ -3776,6 +3835,84 @@ async def test_skip_controls_promote_safe_audio_past_stale_companionship_cue(tmp
     assert app.state.queue.get_nowait() is safe
     app.state.queue.task_done()
     await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_skip_ignores_unplayable_duration_when_reserving_before_cut(tmp_path):
+    """Missing queue files cannot shrink the fresh safety-audio target."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    missing_segments = [
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"missing-{index}.mp3",
+            duration_sec=120.0,
+            metadata={"queue_id": f"missing-{index}", "title": f"Missing {index}"},
+            ephemeral=False,
+        )
+        for index in range(2)
+    ]
+    for segment in missing_segments:
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": f"missing-{index}", "type": "music", "label": f"Missing {index}"} for index in range(2)
+    ]
+    recovery_path = tmp_path / "ready-continuity.mp3"
+    recovery_path.write_bytes(b"ready-continuity")
+    recovery = Segment(
+        type=SegmentType.BANTER,
+        path=recovery_path,
+        duration_sec=240.0,
+        metadata={"queue_id": "ready-continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    reservation_builder = MagicMock(return_value=[recovery])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer._continuity_reservation_segments", reservation_builder),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/skip")
+
+    assert response.json()["bridged"] is False
+    assert reservation_builder.call_args.args[2] == pytest.approx(240.0)
+    assert list(app.state.queue._queue) == [recovery]
+    assert state.queued_segments[0]["id"] == "ready-continuity"
+    assert state.force_next is None
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 2
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is recovery
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_public_status_reports_stale_companionship_head_as_skip_bridge(tmp_path):
+    """Status and Skip share the playback-valid runway predicate."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/public-status")
+
+    assert response.json()["playback_actions"] == {"skip_ready": True, "skip_would_bridge": True}
+    assert list(app.state.queue._queue) == [stale_cue]
 
 
 @pytest.mark.asyncio

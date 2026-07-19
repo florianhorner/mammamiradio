@@ -932,6 +932,16 @@ def _reserve_continuity_runway(
     protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
     ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
 
+    def _ready_duration(segment: Segment) -> float:
+        if not _segment_is_immediately_playable(
+            state,
+            segment,
+            excluded_paths=excluded_paths,
+            excluded_track_keys=excluded_track_keys,
+        ):
+            return 0.0
+        return float(getattr(segment, "duration_sec", 0.0) or 0.0)
+
     slot = state.continuity_slot
     if slot is not None and not _segment_is_immediately_playable(
         state,
@@ -945,18 +955,14 @@ def _reserve_continuity_runway(
     # Measure ordinary runway separately from the active protected set. This
     # prevents double-counting an existing reservation: the target is what the
     # protected queue members + capacity-exempt slot must cover together.
-    ordinary_ready = (
-        0.0
-        if replace_queue
-        else buffered_audio_seconds(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in ordinary)
-    )
+    ordinary_ready = 0.0 if replace_queue else buffered_audio_seconds(_ready_duration(segment) for segment in ordinary)
     target = max(0.0, RUNWAY_FLOOR_SECONDS - ordinary_ready)
     protected_ready = (
         0.0
         if replace_queue
         else buffered_audio_seconds(
             [
-                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in protected),
+                *(_ready_duration(segment) for segment in protected),
                 _continuity_slot_seconds(state),
             ]
         )
@@ -1042,9 +1048,7 @@ def _reserve_continuity_runway(
             fresh_capacity = real_protected_capacity or 1  # one capacity-exempt slot
         else:
             fresh_capacity = len(reservation)
-        fresh_ready = buffered_audio_seconds(
-            float(segment.duration_sec or 0.0) for segment in reservation[:fresh_capacity]
-        )
+        fresh_ready = buffered_audio_seconds(_ready_duration(segment) for segment in reservation[:fresh_capacity])
         if protected_ready >= fresh_ready:
             # The active set is already the best runway currently feasible
             # without evicting a ready air-next item. Rebuilding an equivalent
@@ -1095,14 +1099,14 @@ def _reserve_continuity_runway(
     if not replace_queue:
         current_ready = buffered_audio_seconds(
             [
-                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in current_queue),
+                *(_ready_duration(segment) for segment in current_queue),
                 _continuity_slot_seconds(state),
             ]
         )
         planned_ready = buffered_audio_seconds(
             [
-                *(float(getattr(segment, "duration_sec", 0.0) or 0.0) for segment in combined),
-                float(getattr(planned_slot, "duration_sec", 0.0) or 0.0),
+                *(_ready_duration(segment) for segment in combined),
+                _ready_duration(planned_slot) if planned_slot is not None else 0.0,
             ]
         )
         if planned_ready <= current_ready:
@@ -2908,6 +2912,23 @@ async def run_playback_loop(app) -> None:
                 segment_queue.task_done()
             state.queue_empty_since = None
             gap_clips_served = 0
+            continue
+
+        if segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in state.blocklist:
+            # The normal queue is purged synchronously when an operator bans a
+            # track, but keep the same last-mile fence as the out-of-band slot.
+            # A future or degraded mutation path must never turn stale queued
+            # bytes into an exception to the station-wide blocklist invariant.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.OPERATOR_BAN,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_BAN)
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("Discarding blocklisted queued music before playback: %s", segment.path)
             continue
 
         stream_started = False
@@ -6800,7 +6821,7 @@ def _public_status_payload(request: Request) -> dict:
         "playback_actions": {
             "skip_ready": bool(state.now_streaming),
             "skip_would_bridge": bool(
-                state.now_streaming and runtime_health.get("queue_depth", 0) == 0 and not state.queued_segments
+                state.now_streaming and not _playable_runway_available(request.app.state.queue, state)
             ),
         },
         "ha_moments": ha_moments,
