@@ -53,6 +53,7 @@ from mammamiradio.web.streamer import (
     _bridge_health_snapshot,
     _claim_continuity_slot,
     _continuity_reservation_segments,
+    _discard_unplayable_queue_prefix,
     _estimate_api_cost,
     _generation_waste_snapshot,
     _playable_runway_available,
@@ -2015,6 +2016,63 @@ def test_companionship_cue_is_playable_runway_only_while_current_and_queued(tmp_
 
     assert session.epoch == claim.epoch + 1
     assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason",
+    [GenerationWasteReason.OPERATOR_PURGE, GenerationWasteReason.OPERATOR_BAN],
+)
+async def test_discard_unplayable_non_cue_prefix_preserves_operator_reason(tmp_path, reason):
+    """Ordinary rejected audio keeps the Skip/Ban reason while exposing safe runway."""
+    app = _make_app()
+    state = app.state.station_state
+    blocked_path = tmp_path / "blocked-prefix.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "blocked-prefix",
+            "artist": "Blocked Artist",
+            "title_only": "Blocked Song",
+        },
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-survivor.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-survivor",
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+        },
+        ephemeral=False,
+    )
+    for segment in (blocked, safe):
+        app.state.queue.put_nowait(segment)
+    blocked_shadow = {"id": "blocked-prefix", "type": "music", "label": "Blocked Song"}
+    safe_shadow = {"id": "safe-survivor", "type": "music", "label": "Safe Song"}
+    state.queued_segments = [blocked_shadow, safe_shadow]
+    state.blocklist = {("blocked artist", "blocked song"): {"display": "Blocked Artist - Blocked Song"}}
+    state.continuity_epoch = 7
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=reason)
+
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe]
+    assert state.queued_segments == [safe_shadow]
+    assert state.discard_by_reason[reason] == 1
+    assert state.discard_by_reason.get(GenerationWasteReason.LISTENER_SESSION_STALE, 0) == 0
+    assert state.continuity_epoch == 8
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is safe
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
 
 
 @pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
