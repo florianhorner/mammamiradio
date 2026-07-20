@@ -18,9 +18,9 @@ REGENERATED_MP3_BYTES = b"regenerated" * 128
 def _loud_by_default(monkeypatch):
     """Treat every rendered clip as real speech by default.
 
-    The generator probes each output's peak level to reject the TTS silence
-    fallback; stubbing it keeps the generation tests off ffmpeg/volumedetect.
-    The silence test overrides this with a floor-level reading.
+    The generator probes each output's peak level to reject unexpectedly silent
+    audio; stubbing it keeps the generation tests off ffmpeg/volumedetect. The
+    defense-in-depth test overrides this with a floor-level reading.
     """
     monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-18.0, -3.0))
     monkeypatch.setattr(gen, "_probe_duration_sec", lambda _path: 2.0)
@@ -298,26 +298,22 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch, configured_clips) -> None:
-    """synthesize() returns silence (not an error) when the voice backend is down.
-
-    The generator must treat that as a failure and discard the file, so an
-    operator never commits a silent welcome greeting.
-    """
+async def test_generate_clips_rejects_effectively_silent_render(tmp_path, monkeypatch, configured_clips) -> None:
+    """An unexpectedly silent render is rejected even if synthesis returned it."""
 
     async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
         output_path.write_bytes(FAKE_MP3_BYTES)
         return output_path
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
-    # Simulate the silence fallback: every rendered file measures near the floor.
+    # Simulate a malformed silent artifact: every file measures near the floor.
     monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-91.0, -91.0))
 
     results = await gen.generate_clips(configured_clips, tmp_path)
 
     assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
-    assert all("silence" in r.error for r in results)
+    assert all("silent" in r.error for r in results)
     # Silent files are discarded, not left on disk for an operator to commit.
     assert list(tmp_path.iterdir()) == []
 
@@ -395,7 +391,7 @@ async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monk
 
     assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
-    assert all("silence" in r.error for r in results)
+    assert all("silent" in r.error for r in results)
     assert all("could not delete" in r.error for r in results)
 
 

@@ -26,7 +26,7 @@ Market evidence remains thin.
 | Cloud boundary | Dynamic writing and the best voices still depend on external providers. Edge TTS is also an online service. Mamma Mi Radio is self-hosted and needs internet access for the full experience | Current limitation |
 | Privacy | Filtered context preview, entity muting, narrow defaults for new installations, opt-in sensitive moments, and no home-context transmission to a script model without a provider key | Shipped |
 | Reliability | Ahead-of-playback production, continuity reservations, cached recovery, emergency audio, bounded retries, provider circuit breakers, and listener-delivery receipts | Strong CI evidence |
-| Known reliability gap | If every configured TTS route fails, a short silence clip can still enter an otherwise successful segment instead of invoking the broader recovery ladder | Open technical risk |
+| Candidate reliability fix | The current v2.18 candidate fails closed when every configured TTS route is unavailable: required speech enters canned or continuity recovery instead of becoming a silent speech file | Implemented locally; pending merge, public CI, release, and runtime soak |
 | Listener truth | The system distinguishes generated, queued, and heard content. Current `main` adds anonymous aggregate listening epochs and one bounded companionship moment after sustained listening | In v2.18 candidate |
 | Stable release | v2.17.0, published 12 July 2026 | Public |
 | Current development | v2.18.0 rolling candidate; latest `main` CI is green | Not yet the stable release |
@@ -128,9 +128,11 @@ A Music Assistant merge would improve discoverability and reduce integration
 friction. Household adoption remains a separate test.
 
 The product has answered much of its engineering question: it can behave like a
-radio station through provider failures and thin queues, with the all-routes TTS
-silence path still open. It has not answered the market question. Five outside
-households now need to show whether people want to keep it in the room.
+radio station through provider failures and thin queues. The current v2.18
+candidate closes the all-routes TTS silence path in code, but it is not yet
+merged, publicly CI-verified, released, or runtime-soaked. It has not answered
+the market question. Five outside households now need to show whether people
+want to keep it in the room.
 
 ## Public evidence
 

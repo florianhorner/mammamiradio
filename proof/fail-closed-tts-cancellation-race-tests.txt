@@ -1,0 +1,68 @@
+Proof — fix(audio): close cancellation race in TTS fail-closed cleanup
+Branch: agent/fail-closed-tts-v1
+Date: 2026-07-18 (local)
+
+Change: follow-up to 66719a6f. _settle_owned/_settle_executor (tts.py) and
+_gather_all_settled/_raise_first_settled_error (producer.py) shield owned
+concurrent TTS/render fan-outs with asyncio.shield, re-awaiting on repeated
+cancellation, so scratch cleanup only runs after every sibling (including
+executor-backed FFmpeg work) has actually settled. Adds test coverage for
+the ElevenLabs total-outage path, SFX-only ad fallback-voice failure,
+multi-spot ad partial-success cleanup, the chaos-mode strike-abandon branch
+under TTSUnavailableError, and release-beat abandonment on TTSUnavailableError.
+Also makes the non-chaos banter branch's scratch cleanup explicit instead of
+relying on the outer catch-all, matching its siblings.
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+319 files already formatted
+
+=== mypy mammamiradio/ tests/ ===
+Success: no issues found in 290 source files
+
+=== Full test suite ===
+source .venv/bin/activate && pytest tests/ -q
+5337 passed, 3 skipped, 21 deselected, 1 warning in 119.28s
+
+=== Release invariants ===
+bash scripts/check-release-invariants.sh
+Passed: 11  Failed: 0
+All invariants passed.
+
+=== Coverage (aggregate + per-module ratchet) ===
+Required test coverage of 92.0% reached. Total coverage: 92.42%
+All coverage floors held. Total: 92% (floor: 92%)
+No module regressed below its floor; 4 modules gained ratchet headroom.
+
+=== Pre-ship review squad (7 agents, parallel) ===
+- Security specialist: no findings.
+- Maintainability specialist: 4 informational findings (helper duplication
+  between tts.py and producer.py) — tracked in github.com/florianhorner/mammamiradio/issues/876,
+  deferred per repo scope-discipline rule (no refactor bundled into a fix PR).
+- Performance specialist: 1 critical-confidence finding (worst-case latency
+  bounded by the 180s FFmpeg timeout instead of failing fast) — verified
+  against pre-change origin/main behavior (confirmed: real, deliberate
+  correctness-over-latency tradeoff, not a bug); tracked in
+  github.com/florianhorner/mammamiradio/issues/877.
+- Testing specialist: 3 real coverage gaps — all fixed with new tests (see
+  test files below).
+- Docs-consistency check: 2 gaps (CHANGELOG.md missing entry,
+  docs/troubleshooting.md missing terminal-case note) — both fixed.
+- Adversarial correctness review: 3 P2 findings — 1 fixed (explicit scratch
+  cleanup in the non-chaos branch), 1 reassessed as intentional design
+  (chaos-mode TTSUnavailableError escalates immediately rather than
+  retrying with backoff, matching every other TTSUnavailableError call site
+  in this diff), 1 no-fix-needed (documented invariant: every awaitable
+  passed to the shield/gather helpers must be internally time-bounded,
+  already true via the FFmpeg subprocess timeout).
+- Test coverage audit: 95% coverage; confirmed the cancellation-cleanup fix
+  is exercised by 8 tests using real asyncio.Task.cancel() + real
+  ThreadPoolExecutor blocking (not mocks) across both files.
+
+New/changed test files:
+tests/audio/test_tts.py
+tests/scheduling/test_fail_closed_tts_producer.py
+tests/core/test_chaos.py
+tests/scheduling/test_release_campaign_producer.py

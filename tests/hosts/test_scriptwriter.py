@@ -20,6 +20,7 @@ from mammamiradio.core.listener_session import CompanionshipDurationBucket, Comp
 from mammamiradio.core.models import (
     LLM_COST_CATEGORIES,
     ChaosSubtype,
+    DialogueLine,
     Heading,
     HostPersonality,
     SegmentType,
@@ -538,6 +539,70 @@ async def test_write_banter_parses_valid_json(config, state):
     assert result[0][0].name == host_name
     assert result[0][1] == "Ciao a tutti!"
     assert result[1][1] == "Che bella giornata!"
+
+
+@pytest.mark.asyncio
+async def test_write_banter_keeps_v3_delivery_semantic_and_text_clean(config, state):
+    """Only one audited cue per V3 host survives; transcript text stays tag-free."""
+    config.super_italian_mode = True
+    marco, giulia = config.hosts[:2]
+    marco.engine = "elevenlabs"
+    marco.elevenlabs_model = "eleven_v3"
+    marco.delivery_profile = "marco"
+    giulia.engine = "elevenlabs"
+    giulia.elevenlabs_model = "eleven_v3"
+    giulia.delivery_profile = "giulia"
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "[excited] Ci siamo davvero.", "delivery": "energetic"},
+            {"host": marco.name, "text": "[laughs] Non fare il poeta.", "delivery": "playful"},
+            {"host": giulia.name, "text": "[sarcastic] Certo, era indispensabile.", "delivery": "dry"},
+            {"host": giulia.name, "text": "[whispers] Basta così, per favore.", "delivery": "whispers"},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result, _ = await write_banter(state, config)
+
+    assert all(isinstance(line, DialogueLine) for line in result)
+    assert [(line.text, line.delivery) for line in result] == [
+        ("Ci siamo davvero.", "energetic"),
+        ("Non fare il poeta.", "neutral"),
+        ("Certo, era indispensabile.", "dry"),
+        ("Basta così, per favore.", "neutral"),
+    ]
+    assert all("[" not in line.text and "]" not in line.text for line in result)
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "V3 DELIVERY CONTRACT" in prompt
+    assert '"delivery": "neutral"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_keeps_chaos_delivery_neutral(config, state):
+    """Chaos is intentionally expressive in words, never through V3 tag metadata."""
+    config.super_italian_mode = True
+    marco, giulia = config.hosts[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "[excited] No, aspetta—", "delivery": "energetic"},
+            {"host": giulia.name, "text": "[sarcastic] Ti sto aspettando da ore.", "delivery": "dry"},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result, _ = await write_banter(state, config, chaos_subtype=ChaosSubtype.ICON_MOMENT)
+
+    assert [line.delivery for line in result] == ["neutral", "neutral"]
+    assert [line.text for line in result] == ["No, aspetta—", "Ti sto aspettando da ore."]
+    assert "V3 DELIVERY CONTRACT" not in generate.await_args.kwargs["prompt"]
 
 
 @pytest.mark.asyncio
@@ -3932,6 +3997,50 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_v3_delivery_out_of_memory_transcript(config, state, tmp_path):
+    """A live V3 delivery cue rides the DialogueLine sidecar but must never leak into
+    the post-air memory/transcript projection (guards against an asdict()-style refactor)."""
+    config.super_italian_mode = True
+    from mammamiradio.core.sync import init_db
+    from mammamiradio.hosts.persona import PersonaStore
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["ama il jazz notturno"]})
+    await store.increment_session()
+    state.persona_store = store
+
+    marco = config.hosts[0]
+    marco.name = "Marco"
+    marco.engine = "elevenlabs"
+    marco.elevenlabs_model = "eleven_v3"
+    marco.delivery_profile = "marco"
+
+    response_json = json.dumps(
+        {
+            "lines": [{"host": "Marco", "text": "Ci siamo davvero!", "delivery": "energetic"}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+    )
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", _mock_anthropic_response(response_json)),
+    ):
+        result, commit = await write_banter(state, config)
+
+    # The cue is live on the line…
+    assert result[0].delivery == "energetic"
+    # …but the memory/transcript projection carries only host + text, never the cue.
+    memory = commit.memory_extraction
+    assert memory is not None
+    assert memory.script_lines == [{"host": "Marco", "text": "Ci siamo davvero!"}]
+    assert all("delivery" not in entry for entry in memory.script_lines)
+
+
+@pytest.mark.asyncio
 async def test_repair_banter_without_listener_context_returns_safe_exchange(config, state):
     """The final truth fence can obtain a clean exchange without station context."""
     first_host = config.hosts[0]
@@ -3939,8 +4048,8 @@ async def test_repair_banter_without_listener_context_returns_safe_exchange(conf
     response = {
         "lines": [
             None,
-            {"host": first_host.name, "text": "The music keeps moving."},
-            {"host": second_host.name, "text": "And the studio is still awake."},
+            {"host": first_host.name, "text": "[sarcastic] The music keeps moving."},
+            {"host": second_host.name, "text": "[laughs] And the studio is still awake."},
             {"host": first_host.name, "text": ""},
         ]
     }
@@ -3952,9 +4061,10 @@ async def test_repair_banter_without_listener_context_returns_safe_exchange(conf
         result = await repair_banter_without_listener_context(state, config)
 
     assert result == [
-        (first_host, "The music keeps moving."),
-        (second_host, "And the studio is still awake."),
+        DialogueLine(first_host, "The music keeps moving."),
+        DialogueLine(second_host, "And the studio is still awake."),
     ]
+    assert all(line.delivery == "neutral" for line in result)
     generate.assert_awaited_once()
     assert "listener-session" not in generate.await_args.kwargs["prompt"]
 
@@ -4068,7 +4178,7 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
         result, _ = await write_banter(state, config)
 
-    assert result == [(config.hosts[0], "Muoviti.")]
+    assert result == [DialogueLine(config.hosts[0], "Muoviti.")]
     assert "HIGH PRIORITY" in captured["prompt"]
     assert "La pasta scotta" in captured["prompt"]
     assert state.ha_pending_directive == "La pasta scotta. Interrompi tutto."
