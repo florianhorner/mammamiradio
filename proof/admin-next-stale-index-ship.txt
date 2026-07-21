@@ -11,7 +11,7 @@ All checks passed!
 ## mypy (changed source)
 Success: no issues found in 2 source files
 
-## release invariants
+## [build] release invariants
 
 All invariants passed.
 
