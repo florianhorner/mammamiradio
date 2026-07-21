@@ -156,6 +156,7 @@ from mammamiradio.web.provider_verdict import (
     _run_provider_verdict,
 )
 from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    _admin_track_id,
     _cached_cache_size_mb,
     _duration_sec_from_payload,
     _golden_path_status,
@@ -178,6 +179,7 @@ from mammamiradio.web.ui_copy import copy_strings
 
 logger = logging.getLogger(__name__)
 _LONGFORM_NOTICE_REASON = "longform_audio"
+_ADMIN_PLAYLIST_LOCK_TIMEOUT_SECONDS = 0.1
 
 # Bounded pool for the admin /api/search yt-dlp lookup. asyncio.wait_for cancels
 # the awaiting future on timeout but cannot kill the underlying thread (it runs
@@ -222,6 +224,79 @@ def _as_int_index(value, default: int = -1) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _admin_target_error() -> JSONResponse:
+    """Return the strict contract error shared by Admin row mutations."""
+    return JSONResponse(
+        content={
+            "ok": False,
+            "reason": "invalid_target",
+            "error": "That rotation action is missing current track details. Refresh the rotation and try again.",
+        },
+        status_code=422,
+    )
+
+
+def _stale_playlist_error() -> JSONResponse:
+    """Return a recoverable conflict when an Admin row snapshot is stale."""
+    return JSONResponse(
+        content={
+            "ok": False,
+            "reason": "stale_playlist",
+            "error": "The rotation changed before that action finished. Refresh it and try again.",
+        },
+        status_code=409,
+    )
+
+
+def _rotation_updating_error() -> JSONResponse:
+    """Return a recoverable conflict when another rotation update owns the lock."""
+    return JSONResponse(
+        content={
+            "ok": False,
+            "reason": "rotation_updating",
+            "error": "The rotation is updating right now. Wait a moment and try again.",
+        },
+        status_code=409,
+    )
+
+
+def _strict_admin_target(
+    body: Mapping[str, Any],
+    *,
+    index_fields: tuple[str, ...],
+    id_fields: tuple[str, ...],
+) -> tuple[int, dict[str, int], dict[str, str]] | JSONResponse:
+    """Parse one revision plus strict non-negative indices and opaque row tokens."""
+    raw_revision = body.get("revision")
+    if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:
+        return _admin_target_error()
+
+    indices: dict[str, int] = {}
+    for field in index_fields:
+        raw_index = body.get(field)
+        if isinstance(raw_index, bool) or not isinstance(raw_index, int) or raw_index < 0:
+            return _admin_target_error()
+        indices[field] = raw_index
+
+    track_ids: dict[str, str] = {}
+    for field in id_fields:
+        raw_id = body.get(field)
+        if not isinstance(raw_id, str) or not raw_id.strip():
+            return _admin_target_error()
+        track_ids[field] = raw_id.strip()
+
+    return raw_revision, indices, track_ids
+
+
+async def _acquire_admin_playlist_lock(lock: asyncio.Lock) -> bool:
+    """Acquire the rotation lock briefly, returning False instead of waiting indefinitely."""
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=_ADMIN_PLAYLIST_LOCK_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return False
+    return True
 
 
 def _safe_external_album_art(value: Any) -> str:
@@ -5166,21 +5241,36 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
-    """Remove a track from the rotation pool by index — a DURABLE ban.
+    """Remove a captured track from the rotation pool — a DURABLE ban.
 
     Removal now persists: the song joins the operator blocklist so it never re-enters
     the pool on restart, source switch, or mid-session chart refresh (the reported
     "deleted songs come back" bug). Also clears the pin and drops any not-yet-started
-    queued segment of it. A single removal is never rejected for starvation. Body:
-    {index: int}.
+    queued segment of it. A single removal is never rejected for starvation.
+    Body: ``{revision: int, index: int, id: str}``.
     """
     body, error = await read_json_object(request)
     if error is not None:
         return error
-    idx = _as_int_index(body.get("index", -1))
-    state = request.app.state.station_state
-    config = request.app.state.config
-    if 0 <= idx < len(state.playlist):
+    target = _strict_admin_target(body, index_fields=("index",), id_fields=("id",))
+    if isinstance(target, JSONResponse):
+        return target
+    revision, indices, track_ids = target
+
+    source_switch_lock = request.app.state.source_switch_lock
+    if not await _acquire_admin_playlist_lock(source_switch_lock):
+        return _rotation_updating_error()
+    try:
+        state = request.app.state.station_state
+        idx = indices["index"]
+        if (
+            revision != state.playlist_revision
+            or idx >= len(state.playlist)
+            or _admin_track_id(state.playlist[idx]) != track_ids["id"]
+        ):
+            return _stale_playlist_error()
+
+        config = request.app.state.config
         track = state.playlist[idx]
         result = _apply_ban(state, config, [track], queue=request.app.state.queue)
         _reserve_continuity_runway(
@@ -5191,8 +5281,15 @@ async def remove_track(request: Request, _: None = Depends(require_admin_access)
             excluded_track_keys={normalized_track_key(track)},
         )
         display = result["banned"][0] if result.get("banned") else track.display
-        return {"ok": True, "removed": display, "banned": True, "persisted": result.get("persisted", True)}
-    return {"ok": False, "error": "Invalid index"}
+        return {
+            "ok": True,
+            "removed": display,
+            "banned": True,
+            "persisted": result.get("persisted", True),
+            "playlist_revision": state.playlist_revision,
+        }
+    finally:
+        source_switch_lock.release()
 
 
 @router.post("/api/track/ban")
@@ -5389,21 +5486,43 @@ async def banlist(request: Request, _: None = Depends(require_admin_access)):
 
 @router.post("/api/playlist/move")
 async def move_track(request: Request, _: None = Depends(require_admin_access)):
-    """Move a track in the playlist. body: {from: N, to: N}"""
+    """Move a captured track between two captured playlist rows."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
-    src = _as_int_index(body.get("from", -1))
-    dst = _as_int_index(body.get("to", -1))
-    state = request.app.state.station_state
-    pl = state.playlist
-    if 0 <= src < len(pl) and 0 <= dst < len(pl):
+    target = _strict_admin_target(
+        body,
+        index_fields=("from", "to"),
+        id_fields=("from_id", "to_id"),
+    )
+    if isinstance(target, JSONResponse):
+        return target
+    revision, indices, track_ids = target
+
+    source_switch_lock = request.app.state.source_switch_lock
+    if not await _acquire_admin_playlist_lock(source_switch_lock):
+        return _rotation_updating_error()
+    try:
+        state = request.app.state.station_state
+        pl = state.playlist
+        src = indices["from"]
+        dst = indices["to"]
+        if (
+            revision != state.playlist_revision
+            or src >= len(pl)
+            or dst >= len(pl)
+            or _admin_track_id(pl[src]) != track_ids["from_id"]
+            or _admin_track_id(pl[dst]) != track_ids["to_id"]
+        ):
+            return _stale_playlist_error()
+
         _reserve_continuity_runway(request.app.state, state, request.app.state.config)
         track = pl.pop(src)
         pl.insert(dst, track)
         state.playlist_revision += 1
-        return {"ok": True, "moved": track.display}
-    return {"ok": False, "error": "Invalid indices"}
+        return {"ok": True, "moved": track.display, "playlist_revision": state.playlist_revision}
+    finally:
+        source_switch_lock.release()
 
 
 @router.get("/api/playlist")
@@ -5441,8 +5560,12 @@ async def search_tracks(
 
     offset, limit = _page_bounds(offset, limit, default_limit=20, max_limit=50)
     external_offset, external_limit = _page_bounds(external_offset, external_limit, default_limit=5, max_limit=10)
+    state = request.app.state.station_state
+    playlist_revision = state.playlist_revision
+    playlist_snapshot = list(state.playlist)
     if not q.strip():
         return {
+            "revision": playlist_revision,
             "results": [],
             "external": [],
             "total": 0,
@@ -5455,18 +5578,18 @@ async def search_tracks(
             "external_known_count": 0,
         }
     query = q.strip().lower()
-    state = request.app.state.station_state
 
-    # Playlist matches (instant)
+    # Search an immutable row snapshot paired with the captured revision. The
+    # external lookup may await for up to 45 seconds, so its completion must not
+    # recertify these absolute indices against a newer rotation.
     matches = []
-    for i, track in enumerate(state.playlist):
+    for i, track in enumerate(playlist_snapshot):
         text = f"{track.title} {track.artist}".lower()
         if query in text:
             matches.append(
                 {
                     "index": i,
                     **_serialize_track(track),
-                    "id": track.spotify_id or track.cache_key,
                 }
             )
     results = matches[offset : offset + limit]
@@ -5498,6 +5621,7 @@ async def search_tracks(
     external_known_count = len(external_candidates) if include_external else external_offset
 
     return {
+        "revision": playlist_revision,
         "results": results,
         "external": external,
         "total": len(matches),
@@ -6588,15 +6712,25 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
 
 @router.post("/api/playlist/move_to_next")
 async def move_to_next(request: Request, _: None = Depends(require_admin_access)):
-    """Move a track to play next (position 0 in upcoming)."""
+    """Pin a captured rotation row to play next (position 0 in upcoming)."""
     body, error = await read_json_object(request)
     if error is not None:
         return error
-    idx = _as_int_index(body.get("index", -1))
-    state = request.app.state.station_state
-    pl = state.playlist
+    target = _strict_admin_target(body, index_fields=("index",), id_fields=("id",))
+    if isinstance(target, JSONResponse):
+        return target
+    revision, indices, track_ids = target
 
-    if 0 <= idx < len(pl):
+    source_switch_lock = request.app.state.source_switch_lock
+    if not await _acquire_admin_playlist_lock(source_switch_lock):
+        return _rotation_updating_error()
+    try:
+        state = request.app.state.station_state
+        pl = state.playlist
+        idx = indices["index"]
+        if revision != state.playlist_revision or idx >= len(pl) or _admin_track_id(pl[idx]) != track_ids["id"]:
+            return _stale_playlist_error()
+
         track = pl[idx]
         _reserve_continuity_runway(request.app.state, state, request.app.state.config)
         # Pin the track so select_next_track returns it immediately on the next
@@ -6609,8 +6743,14 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
         # songs), which is correct behaviour for "move to upcoming".
         state.playlist_revision += 1
         state.force_next = SegmentType.MUSIC
-        return {"ok": True, "moved": track.display, "to_position": 0}
-    return {"ok": False, "error": "Invalid index"}
+        return {
+            "ok": True,
+            "moved": track.display,
+            "to_position": 0,
+            "playlist_revision": state.playlist_revision,
+        }
+    finally:
+        source_switch_lock.release()
 
 
 @router.post("/api/track-rules")
