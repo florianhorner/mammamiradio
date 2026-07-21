@@ -21,7 +21,7 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, router
+from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, _admin_track_id, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -82,7 +82,7 @@ def _row_target(app: FastAPI, index: int) -> dict[str, object]:
     return {
         "revision": state.playlist_revision,
         "index": index,
-        "id": (track.spotify_id or "").strip() or track.cache_key,
+        "id": _admin_track_id(track),
     }
 
 
@@ -93,9 +93,9 @@ def _move_target(app: FastAPI, source: int, destination: int) -> dict[str, objec
     return {
         "revision": state.playlist_revision,
         "from": source,
-        "from_id": (source_track.spotify_id or "").strip() or source_track.cache_key,
+        "from_id": _admin_track_id(source_track),
         "to": destination,
-        "to_id": (destination_track.spotify_id or "").strip() or destination_track.cache_key,
+        "to_id": _admin_track_id(destination_track),
     }
 
 

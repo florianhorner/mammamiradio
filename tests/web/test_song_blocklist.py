@@ -27,7 +27,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.web import streamer
-from mammamiradio.web.streamer import LiveStreamHub, _apply_ban, router
+from mammamiradio.web.streamer import LiveStreamHub, _admin_track_id, _apply_ban, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -117,7 +117,7 @@ async def test_remove_endpoint_is_a_durable_ban(tmp_path):
             json={
                 "revision": state.playlist_revision,
                 "index": 0,
-                "id": (target.spotify_id or "").strip() or target.cache_key,
+                "id": _admin_track_id(target),
             },
         )
         assert r.json()["banned"] is True
