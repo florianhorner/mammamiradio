@@ -83,7 +83,7 @@ def test_record_hunt_matches_are_highlighted_without_hiding_next_action() -> Non
     assert "data-heading-id" in update
     assert '<span class="hunt-pick">Hunt pick</span>' in update
     assert "sourceChip(t.source)" in update
-    assert "moveNext(${idx})" in update
+    assert 'data-playlist-action="next"' in update
 
     assert ".pl-row.record-hunt-match" in html
     assert ".hunt-pick" in html
@@ -171,14 +171,14 @@ def test_ban_trigger_is_always_visible_not_hover_gated() -> None:
     # ban button is its own labeled, always-visible control, separate from .pl-a
     assert 'class="pl-btn pl-ban"' in update
     assert 'aria-label="Ban from rotation"' in update
-    assert "removeTr(${idx})" in update
+    assert 'data-playlist-action="ban"' in update
     # the ban button is a SIBLING after .pl-a closes (Next stays in the hover block,
     # Ban sits outside it) — proven by the close-tag immediately preceding .pl-ban
     assert '</div><button class="pl-btn pl-ban"' in update
     pl_a_open = update.index('<div class="pl-a">')
     pl_a = update[pl_a_open : update.index("</div>", pl_a_open)]
-    assert "removeTr(" not in pl_a, "ban button must not live in the hover-gated .pl-a"
-    assert "moveNext(" in pl_a
+    assert 'data-playlist-action="ban"' not in pl_a, "ban button must not live in the hover-gated .pl-a"
+    assert 'data-playlist-action="next"' in pl_a
     # CSS keeps the ban control visible without hover
     assert ".pl-ban {" in html and "opacity: 1" in html[html.index(".pl-ban {") : html.index(".pl-ban {") + 120]
 

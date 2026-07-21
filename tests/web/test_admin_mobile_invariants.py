@@ -573,7 +573,7 @@ def test_rotation_rows_group_metadata_without_dropping_actions() -> None:
     assert '<div class="pl-meta"><div class="pl-chips">' in update_block
     assert '${prefControls}</div><div class="pl-a">' in update_block
     assert "pl-ban" in update_block
-    assert "renderPreferenceControls(idx,Number(t.preference||0))" in update_block
+    assert "renderPreferenceControls(t.artist,t.title,Number(t.preference||0))" in update_block
 
 
 def test_on_air_idle_state_compacts_dead_space() -> None:
@@ -865,8 +865,10 @@ def test_playlist_pagination_keeps_accessible_absolute_index_rows() -> None:
     assert 'aria-label="Move to next"' in update_block
     # The ✕ is now a durable ban (persisted blocklist), not an in-memory remove.
     assert 'aria-label="Ban from rotation"' in update_block
-    assert "moveNext(${idx})" in update_block
-    assert "removeTr(${idx})" in update_block
+    assert 'data-playlist-action="next"' in update_block
+    assert 'data-playlist-action="ban"' in update_block
+    assert "data-id=\"${esc(t.id||'')}\"" in update_block
+    assert "data-revision=\"${esc(String(_plPage.revision??''))}\"" in update_block
 
 
 def test_search_external_queue_posts_album_art() -> None:
@@ -892,9 +894,120 @@ def test_load_more_buttons_reset_on_error_paths() -> None:
     assert "btn.classList.remove('loading')" in playlist_block
     assert "btn.textContent='Load more tracks'" in playlist_block
     assert "include_external:String(!isAppend||_sExtPage.has_more)" in search_block
-    assert "prevR=_sR.slice()" in search_block
+    assert "_searchAppendInFlight" in search_block
+    assert "searchRequestStillOwned(generation,q)" in search_block
+    assert "responseRevision!==expectedRevision" in search_block
+    assert "responseRevision!==currentRevision" in search_block
+    assert "revision:responseRevision" in search_block
     assert "renderSearchResults(q)" in search_block
     assert "btn.textContent='Load more results'" in search_block
+
+
+def test_playlist_mutations_send_revision_bound_opaque_targets() -> None:
+    """Next, Ban, and drag-reorder must never certify a stale index with fresh state."""
+    text = _read_admin_html()
+    target_block = text[text.index("function playlistTargetFromElement") : text.index("// The per-row")]
+    remove_block = text[text.index("async function removeTr") : text.index("// --- Bulk select")]
+    drag_block = text[text.index("// ── Drag & Drop") : text.index("// ── Pacing slider")]
+
+    assert "row.dataset.revision" in target_block
+    assert "row.dataset.i" in target_block
+    assert "row.dataset.id" in target_block
+    assert "{revision:target.revision,index:target.index,id:target.id}" in target_block
+    assert "{revision:target.revision,index:target.index,id:target.id}" in remove_block
+    assert "playlist_revision" in target_block
+    assert "mappingUnchanged:true" in target_block
+    assert "updatePl(_plRows,_plPage,true)" in target_block
+    assert "mappingUnchanged:true" not in remove_block
+    assert "revision:src.revision" in drag_block
+    assert "from:src.index" in drag_block and "from_id:src.id" in drag_block
+    assert "to:dst.index" in drag_block and "to_id:dst.id" in drag_block
+    assert "mappingUnchanged:true" not in drag_block
+    assert "await refreshFast()" in drag_block
+
+
+def test_stale_target_errors_are_recoverable_and_never_claim_success() -> None:
+    """Both Next paths surface backend copy and refresh stale search ownership."""
+    text = _read_admin_html()
+    recovery = text[
+        text.index("async function recoverStalePlaylistTarget") : text.index("function adoptPlaylistMutationRevision")
+    ]
+    row_next = text[text.index("async function moveNext") : text.index("// The per-row")]
+    search_next_start = text.index("async function addTr")
+    search_next = text[search_next_start : text.index("document.addEventListener('click',event=>", search_next_start)]
+
+    assert "response&&response.error" in recovery
+    assert "response?.reason==='stale_playlist'" in recovery
+    assert "invalidateSearchResults(message)" in recovery
+    assert "await refreshFast()" in recovery
+    for block in (row_next, search_next):
+        assert "recoverStalePlaylistTarget(r,'move that')" in block
+        assert "adoptPlaylistMutationRevision(r,{mappingUnchanged:true})" in block
+        assert "catch(_){toast(offlineMsg());}" in block
+        assert block.index("recoverStalePlaylistTarget") < block.index("Queued next:")
+
+
+def test_search_cache_has_generation_query_and_revision_ownership() -> None:
+    """A late response or cross-revision page cannot repopulate actionable rows."""
+    text = _read_admin_html()
+    state = text[text.index("let _sR=[]") : text.index("function renderSearchResults")]
+    search = text[text.index("async function doSearch") : text.index("async function addTr")]
+    refresh = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    assert "let _searchGeneration=0" in state
+    assert "let _searchQuery=''" in state
+    assert "let _searchAppendInFlight=false" in state
+    assert "generation===_searchGeneration" in state
+    assert "query===_searchQuery" in state
+    assert "query===si.value.trim()" in state
+    assert "generation=++_searchGeneration" in search
+    assert "_searchAppendInFlight=true" in search
+    assert "responseRevision!==expectedRevision" in search
+    assert "responseRevision!==currentRevision" in search
+    assert "invalidateSearchResults('Rotation changed — search again.')" in search
+    assert "adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision)" in refresh
+
+
+def test_playlist_load_more_cannot_recertify_an_old_tail() -> None:
+    """A poll that advances while load-more is pending must win before cache mutation."""
+    text = _read_admin_html()
+    start = text.index("async function loadMorePlaylist")
+    end = text.index("function focusPlaylistTrack")
+    block = text[start:end]
+
+    assert "authoritativeRevision=currentPlaylistRevision()" in block
+    assert "authoritativeRevision!==expectedRevision" in block
+    assert block.index("authoritativeRevision!==expectedRevision") < block.index("_plRows=_plRows.concat")
+
+
+def test_authoritative_status_can_reset_playlist_revision_after_restart() -> None:
+    """The in-memory server counter may decrease after restart without freezing an open tab."""
+    text = _read_admin_html()
+    start = text.index("function adoptAuthoritativePlaylistRevision")
+    end = text.index("function playlistPreferenceRevision")
+    block = text[start:end]
+
+    assert "revision<previous" not in block
+    assert "revision!==previous" in block
+    assert "_playlistRevision=revision" in block
+    assert "invalidateSearchResults('Rotation changed — search again.')" in block
+
+
+def test_playlist_preferences_use_song_key_not_mutable_index() -> None:
+    """Preference rows already have a canonical artist/title key; send it directly."""
+    text = _read_admin_html()
+    renderer = text[
+        text.index("function renderPreferenceControls") : text.index("function preferencePayloadFromButton")
+    ]
+    resolver = text[
+        text.index("function preferencePayloadFromButton") : text.index("function applyPreferenceToCachedRows")
+    ]
+
+    assert 'data-preference-target="key"' in renderer
+    assert "data-preference-artist=\"${esc(artist||'')}\"" in renderer
+    assert "data-preference-title=\"${esc(title||'')}\"" in renderer
+    assert "key:[el.dataset.preferenceArtist||'',el.dataset.preferenceTitle||'']" in resolver
+    assert "preferenceIndex" not in resolver
 
 
 def test_empty_playlist_art_is_compact_placeholder() -> None:

@@ -766,13 +766,13 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
-| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; never skips, purges, or mutates the blocklist |
+| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; the Admin playlist sends the existing key target so a refreshed row cannot redirect the vote, while the index target remains compatible for existing API clients; never skips, purges, or mutates the blocklist |
 | `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |
 | `/api/purge` | POST | Admin | Remove queued segments |
 | `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
-| `/api/playlist/remove` | POST | Admin | Remove track by index |
-| `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
-| `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
+| `/api/playlist/remove` | POST | Admin | Durably ban one rendered rotation row with `{revision, index, id}`; success returns the new `playlist_revision` |
+| `/api/playlist/move` | POST | Admin | Reorder two rendered rotation rows with `{revision, from, from_id, to, to_id}`; success returns the new `playlist_revision` |
+| `/api/playlist/move_to_next` | POST | Admin | Pin one rendered rotation row as upcoming with `{revision, index, id}`; success returns the new `playlist_revision` |
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
 | `/api/playlist/load` | POST | Admin | Load a playlist by URL |
 | `/api/hosts` | GET | Admin | List hosts with personality settings |
@@ -799,14 +799,26 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
-| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying its current `preference` score |
-| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
+| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying an opaque row `id` and its current `preference` score |
+| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; every response (including an empty query) returns the playlist `revision` captured with the local snapshot before any external lookup, and each local result carries its opaque row `id` |
 | `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
 | `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
 | `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
+
+Rotation-row mutations use optimistic identity checks rather than trusting a
+position by itself. The `id` fields above are opaque Admin row tokens, not song
+identity: callers must echo the revision, position, and token(s) from the same
+rendered snapshot. Missing or malformed fields return `422` with
+`reason: "invalid_target"`. If the revision or
+the token at either submitted position no longer matches, the server returns
+`409` with `reason: "stale_playlist"`; if a source/rotation update already owns
+the mutation boundary, it returns `409` with `reason: "rotation_updating"`.
+Neither conflict mutates the rotation. Search pagination similarly rejects
+mixing pages from different revisions in the Admin client, and late search
+responses are accepted only for the query generation that started them.
 
 ### Auth rules
 
@@ -825,7 +837,19 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint requests immediate cutover only after fresh protected replacement audio is admitted: the current segment is skipped and playback begins from the new source. If the continuity fallback preserves an older queue head or slot, or no ready runway exists, the current segment finishes and the response reports `skipped: false`. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes source imports and
+replacement. Admin row mutations make a bounded attempt to enter that same
+boundary: a busy lock returns the recoverable `rotation_updating` conflict;
+after admission, the route revalidates its revision, index, and opaque token(s)
+before mutating without another await. Source replacement requests immediate
+cutover only after fresh protected replacement audio is admitted: the current
+segment is skipped and playback begins from the new source. If the continuity
+fallback preserves an older queue head or slot, or no ready runway exists, the
+current segment finishes and the response reports `skipped: false`. The producer
+uses a `playlist_revision` counter on `StationState` to detect and discard
+segments generated for a stale source. `/api/shuffle` also increments
+`playlist_revision` so any in-flight producer work targeting the old order is
+discarded and rebuilt against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful fresh replacement supersedes existing reservations and

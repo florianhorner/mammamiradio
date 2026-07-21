@@ -2547,14 +2547,14 @@ function renderPreferenceButton(vote,score,attrs=''){
   const cls=`pl-btn pl-pref pref-btn${isDown?' down':''}`;
   return `<button type="button" class="${cls}" data-preference-vote="${vote}" ${attrs} aria-label="${label}" title="${title}" aria-pressed="${pressed?'true':'false'}"><svg aria-hidden="true"><use href="#${icon}"/></svg></button>`;
 }
-function renderPreferenceControls(index,score){
-  const attrs=`data-preference-target="index" data-preference-index="${Number(index)}"`;
+function renderPreferenceControls(artist,title,score){
+  const attrs=`data-preference-target="key" data-preference-artist="${esc(artist||'')}" data-preference-title="${esc(title||'')}"`;
   return `<div class="pl-pref-group">${renderPreferenceButton('up',score,attrs)}${renderPreferenceButton('down',score,attrs)}</div>`;
 }
 function preferencePayloadFromButton(el){
   const target=el?.dataset?.preferenceTarget;
   if(target==='now')return{now_playing:true};
-  if(target==='index')return{index:Number(el.dataset.preferenceIndex)};
+  if(target==='key')return{key:[el.dataset.preferenceArtist||'',el.dataset.preferenceTitle||'']};
   return null;
 }
 function applyPreferenceToCachedRows(key,score){
@@ -4047,6 +4047,46 @@ let _plRows=[];
 let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
 let _plLoadingMore=false;
 let _plRenderSig='';
+let _playlistRevision=null;
+function playlistRevisionValue(value){
+  if(value===''||value===null||value===undefined||typeof value==='boolean')return null;
+  const revision=Number(value);
+  return Number.isInteger(revision)&&revision>=0?revision:null;
+}
+function currentPlaylistRevision(){
+  return _playlistRevision
+    ??playlistRevisionValue(_plPage?.revision)
+    ??playlistRevisionValue(_st?.playlist_page?.revision);
+}
+function adoptPlaylistRevision(value,{syncCachedPage=false}={}){
+  const revision=playlistRevisionValue(value);
+  const previous=currentPlaylistRevision();
+  if(revision===null)return previous;
+  // Revisions only move forward. A mutation response may race with a newer
+  // status poll; never let the older response recertify cached rows/results.
+  if(previous!==null&&revision<previous)return previous;
+  if(previous!==null&&revision!==previous){
+    invalidateSearchResults('Rotation changed — search again.');
+  }
+  _playlistRevision=revision;
+  if(syncCachedPage){
+    _plPage={..._plPage,revision};
+    if(_st?.playlist_page)_st.playlist_page={..._st.playlist_page,revision};
+  }
+  return revision;
+}
+function adoptAuthoritativePlaylistRevision(value){
+  const revision=playlistRevisionValue(value);
+  if(revision===null)return currentPlaylistRevision();
+  const previous=currentPlaylistRevision();
+  // A generation-owned /status response is authoritative even when the process
+  // restarted and its in-memory revision counter began again from a lower value.
+  if(previous!==null&&revision!==previous){
+    invalidateSearchResults('Rotation changed — search again.');
+  }
+  _playlistRevision=revision;
+  return revision;
+}
 function playlistPreferenceRevision(){
   return Number(_st?.song_preferences?.revision||0);
 }
@@ -4371,6 +4411,9 @@ function updatePl(tracks,page,force){
   const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
   const previousRevision=_plPage.revision;
   const incomingRevision=inPage.revision;
+  const knownRevision=currentPlaylistRevision();
+  if(incomingRevision!=null&&knownRevision!=null&&Number(incomingRevision)<knownRevision)return;
+  if(incomingRevision!=null)adoptPlaylistRevision(incomingRevision);
   // Status polls are capped at server max_limit (200). If we have more rows loaded via
   // load-more, keep the extra cached rows only while the playlist itself is unchanged.
   if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more&&incomingRevision!=null&&incomingRevision===previousRevision){
@@ -4395,13 +4438,13 @@ function updatePl(tracks,page,force){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    const prefControls=renderPreferenceControls(idx,Number(t.preference||0));
+    const prefControls=renderPreferenceControls(t.artist,t.title,Number(t.preference||0));
     const huntMatch=!!(activeHeadingId&&t.heading_id===activeHeadingId);
     const huntTitle='Favored for the current Record Hunt';
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -4420,7 +4463,9 @@ async function loadMorePlaylist(){
     if(!resp.ok){console.warn('Playlist load-more failed:',resp.status);return;}
     const d=await resp.json();
     const responseRevision=d.revision??expectedRevision;
-    const revisionChanged=expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision;
+    const authoritativeRevision=currentPlaylistRevision();
+    const revisionChanged=(expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision)
+      ||(expectedRevision!=null&&authoritativeRevision!=null&&authoritativeRevision!==expectedRevision);
     if(revisionChanged){
       console.warn('Playlist changed while loading more; refreshing first page.');
       const fresh=await fetch(_base+`/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
@@ -4456,39 +4501,86 @@ function focusPlaylistTrack(index, trackId){
   target.scrollIntoView({behavior:'smooth',block:'nearest'});
   setTimeout(()=>target.classList.remove('focus'),1500);
 }
-async function moveNext(i){
-  const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
+function playlistTargetFromElement(element){
+  const row=element?.closest?.('.pl-row');
+  if(!row)return null;
+  const revision=playlistRevisionValue(row.dataset.revision);
+  const index=Number(row.dataset.i);
+  const id=(row.dataset.id||'').trim();
+  if(revision===null||!Number.isInteger(index)||index<0||!id)return null;
+  return{revision,index,id,row};
+}
+async function recoverStalePlaylistTarget(response,action){
+  const message=(response&&response.error)||wayOut(action);
+  toast(message);
+  if(response?.reason==='stale_playlist'){
+    invalidateSearchResults(message);
+    try{await refreshFast();}catch(_){}
+  }
+}
+async function rejectMissingPlaylistTarget(){
+  const response={reason:'stale_playlist',error:'Rotation changed — search again.'};
+  await recoverStalePlaylistTarget(response,'refresh that track');
+}
+function adoptPlaylistMutationRevision(response,{mappingUnchanged=false}={}){
+  const revision=playlistRevisionValue(response?.playlist_revision);
+  if(revision===null)return false;
+  const adopted=adoptPlaylistRevision(revision,{syncCachedPage:mappingUnchanged});
+  // Next only changes producer selection, not row order. Re-render immediately
+  // so every actionable DOM row carries the returned revision before another click.
+  if(mappingUnchanged&&playlistRevisionValue(_plPage.revision)===adopted){
+    updatePl(_plRows,_plPage,true);
+  }
+  return true;
+}
+async function moveNext(element){
+  const target=playlistTargetFromElement(element);
+  if(!target){await rejectMissingPlaylistTarget();return;}
   try{
-    const r=await api('POST','/api/playlist/move_to_next',{index:i});
-    if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
+    const r=await api('POST','/api/playlist/move_to_next',{revision:target.revision,index:target.index,id:target.id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+    if(!adoptPlaylistMutationRevision(r,{mappingUnchanged:true})){toast(wayOut('confirm that move'));await refreshFast();return;}
+    toast('Queued next: '+r.moved);
+    await refreshFast();
   }catch(_){toast(offlineMsg());}
 }
 // The per-row ✕ now BANS the song for good: /api/playlist/remove persists it to the
 // operator blocklist so it never returns on restart, source switch, or chart refresh.
-// Index-based and immediate (no deferred-undo) — a second removal in an undo window
-// would post a stale index after the first ban shifts the list. To bring a song back,
-// use the Banned manager (toggleBanlist) → Unban.
-async function removeTr(i){
+// Revision/index/id guarded and immediate (no deferred-undo). To bring a song back,
+// use the Banned manager (toggleBanlist) → Unban by its stable artist/title key.
+async function removeTr(element){
   // Capture the song identity BEFORE the ban so Undo can lift it by key (the row
   // index shifts the moment the ban lands; unban-by-key is index-shift-safe).
-  const row=document.querySelector('.pl-row[data-i="'+i+'"]');
+  const target=playlistTargetFromElement(element);
+  if(!target){await rejectMissingPlaylistTarget();return;}
+  const row=target.row;
   const artist=row?(row.getAttribute('data-artist')||''):'';
   const title=row?(row.getAttribute('data-title')||''):'';
-  const r=await api('POST','/api/playlist/remove',{index:i});
-  if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban that one');toast(m);return;}
-  await refreshFast();refreshBanCount();
-  const msg=r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back';
-  if(typeof window.undoableToast==='function'&&(artist||title)){
-    // Ban is already committed; this is a reversible-by-key undo, not a deferred commit.
-    window.undoableToast(msg,async()=>{
-      const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
-      toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
-      await refreshFast();refreshBanCount();
-    });
-  }else{
-    toast(msg);
-  }
+  try{
+    const r=await api('POST','/api/playlist/remove',{revision:target.revision,index:target.index,id:target.id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'ban that one');return;}
+    if(!adoptPlaylistMutationRevision(r)){toast(wayOut('confirm that ban'));await refreshFast();return;}
+    await refreshFast();refreshBanCount();
+    const msg=r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back';
+    if(typeof window.undoableToast==='function'&&(artist||title)){
+      // Ban is already committed; this is a reversible-by-key undo, not a deferred commit.
+      window.undoableToast(msg,async()=>{
+        const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
+        toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
+        await refreshFast();refreshBanCount();
+      });
+    }else{
+      toast(msg);
+    }
+  }catch(_){toast(offlineMsg());}
 }
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-playlist-action]');
+  if(!button)return;
+  event.preventDefault();
+  if(button.dataset.playlistAction==='next')moveNext(button);
+  else if(button.dataset.playlistAction==='ban')removeTr(button);
+});
 
 // --- Bulk select + ban -------------------------------------------------------
 function updatePlSelBar(){
@@ -4565,24 +4657,41 @@ async function unbanOne(btn){
 
 // ── Search ──
 const si=document.getElementById('searchInput');
-si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+si.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();clearTimeout(_searchTo);doSearch();}});
 si.addEventListener('input',()=>{
   _plFilter=si.value.trim();
   if(_st.playlist)updatePl(_st.playlist,_st.playlist_page||null);
   clearTimeout(_searchTo);
+  invalidateSearchResults('');
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
-  else document.getElementById('searchResults').innerHTML='';
 });
-let _sR=[],_sExt=[],_sPage={has_more:false},_sExtPage={has_more:false};
+let _sR=[],_sExt=[],_sPage={has_more:false,revision:null},_sExtPage={has_more:false};
+let _searchGeneration=0;
+let _searchQuery='';
+let _searchAppendInFlight=false;
 const SEARCH_PAGE_SIZE=5;
+function resetSearchCache(){
+  _sR=[];_sExt=[];_sPage={has_more:false,revision:null};_sExtPage={has_more:false};
+}
+function invalidateSearchResults(message='Rotation changed — search again.'){
+  _searchGeneration+=1;
+  _searchAppendInFlight=false;
+  _searchQuery=si.value.trim();
+  resetSearchCache();
+  const el=document.getElementById('searchResults');
+  el.innerHTML=message&&_searchQuery.length>=2?`<div class="empty">${esc(message)}</div>`:'';
+}
+function searchRequestStillOwned(generation,query){
+  return generation===_searchGeneration&&query===_searchQuery&&query===si.value.trim();
+}
 function renderSearchResults(q){
   const el=document.getElementById('searchResults');
   let html='';
   if(_sR.length){
-    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" data-search-action="next" data-search-index="${i}">&#9654; Next</button></div>`).join('');
   }
   if(_sExt.length){
-    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
+    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" data-search-action="external" data-search-index="${i}">&#8681; Queue</button></div>`).join('');
   }
   if(_sPage.has_more||_sExtPage.has_more){
     html+='<div class="load-more-row"><button type="button" class="load-more-btn" id="searchMoreBtn" onclick="searchMore()">Load more results</button></div>';
@@ -4591,15 +4700,22 @@ function renderSearchResults(q){
   el.innerHTML=html;
 }
 async function doSearch(append){
-  const q=si.value.trim();if(!q)return;
+  const q=si.value.trim();if(q.length<2)return;
   const el=document.getElementById('searchResults');
   const isAppend=append===true;
-  const prevR=_sR.slice();
-  const prevExt=_sExt.slice();
-  const prevPage={..._sPage};
-  const prevExtPage={..._sExtPage};
-  if(!isAppend){
-    _sR=[];_sExt=[];_sPage={has_more:false};_sExtPage={has_more:false};
+  if(isAppend&&(_searchAppendInFlight||q!==_searchQuery))return;
+  let generation;
+  let expectedRevision;
+  if(isAppend){
+    generation=_searchGeneration;
+    expectedRevision=playlistRevisionValue(_sPage.revision);
+    if(expectedRevision===null)return;
+    _searchAppendInFlight=true;
+  }else{
+    generation=++_searchGeneration;
+    _searchQuery=q;
+    expectedRevision=currentPlaylistRevision();
+    resetSearchCache();
     el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching...</div>';
   }
   try{
@@ -4612,25 +4728,40 @@ async function doSearch(append){
       include_external:String(!isAppend||_sExtPage.has_more),
     });
     const resp=await fetch(_base+'/api/search?'+params.toString(),{headers:H()});
+    if(!searchRequestStillOwned(generation,q))return;
     if(!resp.ok){
       console.warn('Search failed:',resp.status);
-      if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+      if(isAppend)renderSearchResults(q);
       else el.innerHTML='';
       return;
     }
     const d=await resp.json();
+    if(!searchRequestStillOwned(generation,q))return;
+    const responseRevision=playlistRevisionValue(d.revision);
+    const currentRevision=currentPlaylistRevision();
+    const wrongPageRevision=isAppend&&responseRevision!==expectedRevision;
+    const wrongCurrentRevision=currentRevision!==null&&responseRevision!==currentRevision;
+    if(responseRevision===null||wrongPageRevision||wrongCurrentRevision){
+      invalidateSearchResults('Rotation changed — search again.');
+      return;
+    }
+    if(currentRevision===null)adoptPlaylistRevision(responseRevision);
     _sR=isAppend?_sR.concat(d.results||[]):d.results||[];
     _sExt=isAppend?_sExt.concat(d.external||[]):d.external||[];
-    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more};
+    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more,revision:responseRevision};
     _sExtPage={known_count:d.external_known_count||0,offset:d.external_offset||0,limit:d.external_limit||SEARCH_PAGE_SIZE,has_more:!!d.external_has_more};
     renderSearchResults(q);
   }catch(e){
     console.warn('Search error:',e);
-    if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+    if(!searchRequestStillOwned(generation,q))return;
+    if(isAppend)renderSearchResults(q);
     else el.innerHTML='';
+  }finally{
+    if(isAppend&&generation===_searchGeneration)_searchAppendInFlight=false;
   }
 }
 async function searchMore(){
+  if(_searchAppendInFlight)return;
   const btn=document.getElementById('searchMoreBtn');
   if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
   try{
@@ -4639,7 +4770,30 @@ async function searchMore(){
     if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
   }
 }
-async function addTr(i){const t=_sR[i];if(!t)return;const r=await api('POST','/api/playlist/move_to_next',{index:t.index});if(r&&r.ok){toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}else toast(wayOut('move that'))}
+async function addTr(i){
+  const t=_sR[i];
+  const revision=playlistRevisionValue(_sPage.revision);
+  const index=Number(t?.index);
+  const id=(t?.id||'').trim();
+  if(!t||revision===null||!Number.isInteger(index)||index<0||!id){await rejectMissingPlaylistTarget();return;}
+  try{
+    const r=await api('POST','/api/playlist/move_to_next',{revision,index,id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+    if(!adoptPlaylistMutationRevision(r,{mappingUnchanged:true})){toast(wayOut('confirm that move'));await refreshFast();return;}
+    toast('Queued next: '+(r.moved||t.display));
+    si.value='';_plFilter='';invalidateSearchResults('');
+    await refreshFast();
+  }catch(_){toast(offlineMsg());}
+}
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-search-action]');
+  if(!button)return;
+  const index=Number(button.dataset.searchIndex);
+  if(!Number.isInteger(index)||index<0)return;
+  event.preventDefault();
+  if(button.dataset.searchAction==='next')addTr(index);
+  else if(button.dataset.searchAction==='external')addExternal(index);
+});
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -4666,10 +4820,11 @@ let _dragSrc=null;
 function initDragDrop(){
   document.querySelectorAll('.pl-row[draggable]').forEach(row=>{
     row.addEventListener('dragstart',e=>{
-      _dragSrc=parseInt(row.dataset.i);
+      _dragSrc=playlistTargetFromElement(row);
+      if(!_dragSrc){e.preventDefault();rejectMissingPlaylistTarget();return;}
       row.classList.add('dragging');
       e.dataTransfer.effectAllowed='move';
-      e.dataTransfer.setData('text/plain',row.dataset.i);
+      e.dataTransfer.setData('text/plain',String(_dragSrc.index));
     });
     row.addEventListener('dragend',()=>{row.classList.remove('dragging');_dragSrc=null;document.querySelectorAll('.pl-row.drag-over').forEach(r=>r.classList.remove('drag-over'))});
     row.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';row.classList.add('drag-over')});
@@ -4677,11 +4832,16 @@ function initDragDrop(){
     row.addEventListener('drop',async e=>{
       e.preventDefault();
       row.classList.remove('drag-over');
-      const dst=parseInt(row.dataset.i);
-      if(_dragSrc===null||_dragSrc===dst)return;
+      const src=_dragSrc;
+      const dst=playlistTargetFromElement(row);
+      if(!src||!dst||src.index===dst.index)return;
+      if(src.revision!==dst.revision){await rejectMissingPlaylistTarget();return;}
       try{
-        const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-        if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
+        const r=await api('POST','/api/playlist/move',{revision:src.revision,from:src.index,from_id:src.id,to:dst.index,to_id:dst.id});
+        if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+        if(!adoptPlaylistMutationRevision(r)){toast(wayOut('confirm that move'));await refreshFast();return;}
+        toast('Moved: '+r.moved);
+        await refreshFast();
       }catch(_){toast(offlineMsg());}
       _dragSrc=null;
     });
@@ -5396,6 +5556,7 @@ async function refreshFast(){
   }
 
   if(generation!==_fastPollGeneration)return;
+  adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision);
   _st=nextStatus;
   let productionRendered=false;
   try{
