@@ -2159,6 +2159,56 @@ def test_apply_ban_clears_lone_blocked_tail_as_speech_bed(tmp_path):
     assert _adjacent_music_source(state) is None
 
 
+def test_apply_ban_fails_closed_on_exposed_ordinary_music_tail(tmp_path):
+    """An exposed ordinary (non-rescue, non-recycled) tail must not reanchor.
+
+    Ordinary rendered music may carry an egress-processed path, so the
+    adjacency gate in _reconcile_queue_tail_adjacency must fail closed even
+    though the newly exposed tail is itself playable and queue-resident.
+    """
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    ordinary_path = tmp_path / "ordinary-survivor.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    with patch(
+        "mammamiradio.scheduling.producer.load_track_metadata",
+        return_value={"artist": "Safe Artist", "title": "Safe Song"},
+    ):
+        result = _apply_ban(
+            state,
+            app.state.config,
+            [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+            queue=app.state.queue,
+        )
+
+        assert result["purged"] == 1
+        assert list(app.state.queue._queue) == [ordinary]
+        assert state.last_enqueued_type is None
+        assert _adjacent_music_source(state) is None
+
+
 def test_apply_ban_reanchors_exposed_protected_music_tail(tmp_path):
     """An exposed cache-rescue survivor remains a safe, known-clean bed source."""
     app = _make_app()
