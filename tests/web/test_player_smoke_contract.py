@@ -51,7 +51,7 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     assert quality.get("timeout-minutes") == 45, "the complete quality job needs an external deadline"
 
     node_step = _workflow_step(quality, "Set up Node.js for browser smoke")
-    assert node_step.get("uses") == "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+    assert node_step.get("uses") == "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
     assert node_step.get("with") == {"node-version": "22.17.1", "check-latest": False}
 
     install_step = _workflow_step(quality, "Install listener smoke browser")
