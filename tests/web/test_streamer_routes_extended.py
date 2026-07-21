@@ -296,6 +296,52 @@ async def test_queue_remove_item_demotes_carried_moment_receipt(tmp_path):
     assert row.drop_reason == "operator_queue_remove"
 
 
+@pytest.mark.asyncio
+async def test_queue_remove_item_fails_closed_on_exposed_ordinary_music_tail(tmp_path):
+    """Removing the queue tail must not blindly re-trust the newly exposed tail.
+
+    Same invariant _apply_ban was hardened for: an arbitrary single-item
+    removal can expose a previously-interior, untrusted (non-rescue) music
+    segment as the new tail. That segment may carry an egress-processed
+    path, so it must not become the "clean" speech-bed adjacency source.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    ordinary_path = tmp_path / "ordinary-survivor.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"artist": "Safe Artist", "title_only": "Safe Song", "queue_id": "q1"},
+        ephemeral=False,
+    )
+    removable_path = tmp_path / "removable-tail.mp3"
+    removable_path.write_bytes(b"removable")
+    removable = Segment(
+        type=SegmentType.MUSIC,
+        path=removable_path,
+        duration_sec=180.0,
+        metadata={"artist": "Removed Artist", "title_only": "Removed Song", "queue_id": "q2"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(removable)
+    state.queued_segments = [{"id": "q1", "label": "Safe Song"}, {"id": "q2", "label": "Removed Song"}]
+    state.last_music_file = removable_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"id": "q2"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert list(app.state.queue._queue) == [ordinary]
+    assert state.last_enqueued_type is None
+
+
 # ---------------------------------------------------------------------------
 # Skip
 # ---------------------------------------------------------------------------

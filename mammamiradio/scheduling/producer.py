@@ -4589,10 +4589,11 @@ async def _run_producer_inner(
                                     state,
                                     purpose="quality gate circuit breaker",
                                 )
-                                last_good = last_good_payload[0] if last_good_payload else None
+                                if last_good_payload is not None:
+                                    last_good, last_good_meta = last_good_payload
+                                else:
+                                    last_good, last_good_meta = None, {}
                                 if last_good and last_good != norm_cached:
-                                    assert last_good_payload is not None
-                                    last_good_meta = last_good_payload[1]
                                     last_good_title = str(last_good_meta.get("title") or "").strip() or last_good.name
                                     last_good_artist = str(last_good_meta.get("artist") or "").strip()
                                     logger.warning(

@@ -4331,6 +4331,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
             q.task_done()
         except asyncio.QueueEmpty:
             break
+    prior_tail = items[-1] if items else None
 
     # Remove the matching Segment from the real queue. Match by queue_id when
     # available (position-independent); fall back to index alignment otherwise.
@@ -4356,6 +4357,12 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
 
     state.queued_segments.pop(index)
     _rebuild_queue_shadow(q, state, items)
+    if removed_segment is not None:
+        # A single arbitrary-position removal can expose a previously
+        # interior, untrusted segment as the new tail — same risk
+        # _apply_ban guards against. Re-run the fail-closed check rather
+        # than trust _rebuild_queue_shadow's naive tail bookkeeping.
+        _reconcile_queue_tail_adjacency(q, state, prior_tail=prior_tail)
     excluded_paths = {removed_segment.path} if removed_segment is not None else set()
     _reserve_continuity_runway(
         request.app.state,
