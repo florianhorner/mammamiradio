@@ -13,6 +13,7 @@ import math
 import os
 import random as _random
 import re as _re
+import stat as _stat
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -448,13 +449,15 @@ def _is_packaged_asset(path: Path) -> bool:
     return is_packaged_asset(path, _DEMO_ASSETS_DIR)
 
 
-def _queued_audio_seconds(q) -> float:
-    """Sum ready-audio seconds from the real playback queue."""
+def _queued_audio_seconds(q, *, state: StationState | None = None) -> float:
+    """Sum queued audio seconds, optionally requiring playback-valid media."""
     internal = getattr(q, "_queue", None)
     if internal is None:
         return 0.0
 
     def _duration(item) -> float | None:
+        if state is not None and (not isinstance(item, Segment) or not _segment_is_immediately_playable(state, item)):
+            return None
         value = item.get("duration_sec") if isinstance(item, dict) else getattr(item, "duration_sec", None)
         if isinstance(value, bool):
             return None
@@ -559,7 +562,8 @@ def _indexed_audio_path_is_file(path: Path) -> bool:
     if not path:
         return False
     try:
-        return path.is_file()
+        file_stat = path.stat()
+        return _stat.S_ISREG(file_stat.st_mode) and file_stat.st_size > 0
     except OSError:
         return False
 
@@ -794,11 +798,7 @@ def _continuity_slot_seconds(state: StationState) -> float:
     slot = state.continuity_slot
     if slot is None:
         return 0.0
-    try:
-        slot_exists = slot.path.is_file()
-    except OSError:
-        slot_exists = False
-    if not slot_exists:
+    if not _indexed_audio_path_is_file(slot.path):
         logger.warning("Protected continuity slot disappeared before playback; clearing it")
         state.continuity_slot = None
         return 0.0
@@ -878,6 +878,36 @@ def _rebuild_queue_shadow(q, state: StationState, items: list[Segment]) -> None:
         _remember_enqueued(state, items[-1], items[-1].path)
     else:
         state.last_enqueued_type = None
+
+
+def _reconcile_queue_tail_adjacency(q, state: StationState, *, prior_tail: Segment | None) -> None:
+    """Keep speech-bed eligibility aligned after queued audio is removed.
+
+    When the real tail is unchanged, its existing clean-bed bookkeeping remains
+    authoritative. If removal exposes a different tail, only rescue/recycled
+    music can safely re-anchor its clean source from the queued segment itself;
+    ordinary rendered music may carry an egress-processed path, so fail closed.
+    """
+    queued = list(getattr(q, "_queue", ()))
+    tail = queued[-1] if queued else None
+    if tail is None:
+        state.last_enqueued_type = None
+        return
+    if prior_tail is not None and tail is prior_tail:
+        if tail.type is SegmentType.MUSIC and not _segment_is_immediately_playable(state, tail):
+            state.last_enqueued_type = None
+        return
+
+    from mammamiradio.scheduling.producer import _adjacency_type_for, _remember_enqueued
+
+    adjacency = _adjacency_type_for(tail)
+    metadata = tail.metadata if isinstance(tail.metadata, dict) else {}
+    if adjacency is SegmentType.MUSIC and (
+        not (metadata.get("rescue") or metadata.get("recycled")) or not _segment_is_immediately_playable(state, tail)
+    ):
+        state.last_enqueued_type = None
+        return
+    _remember_enqueued(state, tail, tail.path)
 
 
 def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> int:
@@ -1238,16 +1268,20 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         )
         return segment.type is SegmentType.MUSIC and key in banned_keys
 
-    purged = (
-        drop_matching_segments(
+    prior_tail = None
+    if queue is not None:
+        queued_before = list(getattr(queue, "_queue", ()))
+        prior_tail = queued_before[-1] if queued_before else None
+        purged = drop_matching_segments(
             queue,
             state,
             should_drop=_matches_blocklist,
             reason=GenerationWasteReason.OPERATOR_BAN,
         )
-        if queue is not None
-        else 0
-    )
+        if purged:
+            _reconcile_queue_tail_adjacency(queue, state, prior_tail=prior_tail)
+    else:
+        purged = 0
     return {
         "ok": True,
         "banned": [state.blocklist[k].get("display") or f"{k[0]} - {k[1]}" for k in keys],
@@ -1854,14 +1888,17 @@ def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
     from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
 
     config = request.app.state.config
+    state = request.app.state.station_state
+    queue = getattr(request.app.state, "queue", None)
     target_segments = max(4, int(config.pacing.lookahead_segments))
     queue_depth = int(runtime_health.get("queue_depth", 0))
-    slot_audio_sec = _continuity_slot_seconds(request.app.state.station_state)
-    buffered_audio_sec = buffered_audio_seconds(
-        [_queued_audio_seconds(getattr(request.app.state, "queue", None)), slot_audio_sec]
-    )
+    slot_audio_sec = _continuity_slot_seconds(state)
+    slot = state.continuity_slot
+    if slot is None or not _segment_is_immediately_playable(state, slot):
+        slot_audio_sec = 0.0
+    buffered_audio_sec = buffered_audio_seconds([_queued_audio_seconds(queue, state=state), slot_audio_sec])
     queue_capacity = int(runtime_health.get("queue_capacity", -1))
-    headroom_ok = buffered_audio_sec >= RUNWAY_FLOOR_SECONDS
+    headroom_ok = buffered_audio_sec >= RUNWAY_FLOOR_SECONDS and _playable_runway_available(queue, state)
     return {
         "queue_depth": queue_depth,
         "queue_capacity": queue_capacity,
@@ -2928,6 +2965,9 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
+                remaining = list(getattr(segment_queue, "_queue", ()))
+                prior_tail = remaining[-1] if remaining else segment
+                _reconcile_queue_tail_adjacency(segment_queue, state, prior_tail=prior_tail)
             logger.info("Discarding blocklisted queued music before playback: %s", segment.path)
             continue
 

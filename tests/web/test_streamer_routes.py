@@ -1579,6 +1579,8 @@ async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_pat
         {"id": "blocked-queued", "type": "music", "label": "Late Song"},
         {"id": "safe-queued", "type": "music", "label": "Safe Song"},
     ]
+    state.last_music_file = safe_path
+    state.last_enqueued_type = SegmentType.MUSIC
     state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
 
     task = asyncio.create_task(run_playback_loop(app))
@@ -1592,6 +1594,62 @@ async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_pat
 
     assert state.discard_by_reason[GenerationWasteReason.OPERATOR_BAN] == 1
     assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
+    assert state.last_music_file == safe_path
+    assert state.last_enqueued_type is SegmentType.MUSIC
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_playback_rejects_blocklisted_demo_fallback_without_queue_task(tmp_path):
+    """A non-queue rescue obeys the ban fence without unbalancing task accounting."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 64
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    demo_dir = tmp_path / "demo" / "music"
+    demo_dir.mkdir(parents=True)
+    blocked_path = demo_dir / "Late Artist - Late Song.mp3"
+    blocked_audio = b"blocked-demo-audio" * 512
+    blocked_path.write_bytes(blocked_audio)
+    safe_path = demo_dir / "Safe Artist - Safe Song.mp3"
+    safe_audio = b"safe-demo-audio" * 512
+    safe_path.write_bytes(safe_audio)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=_scripted_clock([100.0, 101.1, 102.0, 103.1, 103.2]),
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
+        patch("mammamiradio.web.streamer._random.choice", side_effect=[blocked_path, safe_path]),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while listener_queue.empty():
+                if time.monotonic() > deadline:
+                    raise AssertionError("safe fallback did not follow the rejected blocklisted fallback")
+                await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert safe_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_BAN] == 1
+    assert all(entry.metadata.get("title") != "Late Song" for entry in state.stream_log)
     assert app.state.queue._unfinished_tasks == 0
     await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
 
@@ -3892,6 +3950,40 @@ async def test_skip_ignores_unplayable_duration_when_reserving_before_cut(tmp_pa
     assert app.state.queue._unfinished_tasks == 1
     assert app.state.queue.get_nowait() is recovery
     app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_zero_byte_queue_head_is_not_skip_or_status_runway(tmp_path):
+    """An existing-but-empty file cannot greenlight a live cut."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "banter", "label": "Current", "started": time.time()}
+    empty_path = tmp_path / "empty-runway.mp3"
+    empty_path.touch()
+    empty = Segment(
+        type=SegmentType.MUSIC,
+        path=empty_path,
+        duration_sec=300.0,
+        metadata={"queue_id": "empty-runway", "artist": "Artist", "title_only": "Empty"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(empty)
+    state.queued_segments = [{"id": "empty-runway", "type": "music", "label": "Empty"}]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            status_response = await client.get("/public-status")
+            skip_response = await client.post("/api/skip")
+
+    assert status_response.json()["playback_actions"] == {"skip_ready": True, "skip_would_bridge": True}
+    assert skip_response.json() == {"ok": True, "bridged": True}
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    assert state.force_next is SegmentType.MUSIC
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
+    assert app.state.queue._unfinished_tasks == 0
     await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
 
 

@@ -4304,6 +4304,35 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("sidecar", "expected"),
+    [
+        (("Ordinary", "Alex Warren"), None),
+        (None, None),
+        (("Safe Song", "Safe Artist"), "song"),
+    ],
+    ids=["blocked", "unidentified", "identified-safe"],
+)
+def test_adjacent_music_source_enforces_active_blocklist_identity(tmp_path, sidecar, expected):
+    """Adjacent speech beds fail closed when their durable song identity is unsafe."""
+    from mammamiradio.scheduling.producer import _adjacent_music_source
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"music")
+    if sidecar is not None:
+        title, artist = sidecar
+        save_track_metadata(song, title=title, artist=artist)
+
+    state = StationState()
+    state.last_music_file = song
+    state.last_enqueued_type = SegmentType.MUSIC
+    state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+
+    result = _adjacent_music_source(state)
+
+    assert result == (song if expected == "song" else None)
+
+
+@pytest.mark.parametrize(
     "prev",
     ["AD", "NEWS_FLASH", "BANTER", "STATION_ID", "SWEEPER", "TIME_CHECK", None],
 )

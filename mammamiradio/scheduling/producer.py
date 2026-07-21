@@ -126,7 +126,7 @@ from mammamiradio.playlist.downloader import (
     validate_download,
 )
 from mammamiradio.playlist.music_admission import classify_youtube_candidate, is_youtube_music_candidate
-from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted
+from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted, normalized_track_key
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
 from mammamiradio.scheduling.queue_mutations import drop_matching_segments
@@ -952,29 +952,14 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             ephemeral=False,
         )
 
-    last_good = _get_last_music_file(state)
+    last_good_payload = _blocklist_safe_last_music(state, purpose="error recovery")
+    last_good = last_good_payload[0] if last_good_payload else None
     last_good_title = ""
     last_good_artist = ""
-    if last_good:
-        last_good_meta = load_track_metadata(last_good) or {}
+    if last_good and last_good_payload:
+        last_good_meta = last_good_payload[1]
         last_good_raw_title = str(last_good_meta.get("title") or "").strip()
         last_good_raw_artist = str(last_good_meta.get("artist") or "").strip()
-        if state.blocklist:
-            if last_good_raw_title and last_good_raw_artist:
-                last_good_key = (last_good_raw_artist.lower(), last_good_raw_title.lower())
-                if last_good_key in state.blocklist:
-                    logger.warning(
-                        "Error recovery: skipping blocklisted last-known-good music: %s - %s",
-                        last_good_raw_artist,
-                        last_good_raw_title,
-                    )
-                    last_good = None
-            else:
-                logger.warning(
-                    "Error recovery: skipping unidentified last-known-good music while blocklist is active: %s",
-                    last_good.name,
-                )
-                last_good = None
         if last_good_raw_title:
             last_good_title = strip_foreign_station_name(
                 last_good_raw_title, config.display_station_name, prefix_only=True
@@ -1668,6 +1653,48 @@ def _get_last_music_file(state: StationState) -> Path | None:
     return None
 
 
+def _blocklist_safe_last_music(
+    state: StationState,
+    *,
+    purpose: str,
+) -> tuple[Path, dict[str, str | int]] | None:
+    """Resolve state-owned last-known-good music through its durable identity.
+
+    A populated blocklist makes the norm-cache sidecar mandatory: without both
+    artist and title there is no canonical identity proving that the audio is
+    still eligible.  Recovery and speech-bed reuse share this fail-closed gate
+    so neither can reintroduce an operator-banned song through a cached path.
+    """
+    candidate = _get_last_music_file(state)
+    if candidate is None:
+        return None
+
+    metadata = load_track_metadata(candidate) or {}
+    if not state.blocklist:
+        return candidate, metadata
+
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    if not title or not artist:
+        logger.warning(
+            "%s: skipping unidentified last-known-good music while blocklist is active: %s",
+            purpose.capitalize(),
+            candidate.name,
+        )
+        return None
+
+    identity = normalized_track_key(Track(title=title, artist=artist, duration_ms=0))
+    if identity in state.blocklist:
+        logger.warning(
+            "%s: skipping blocklisted last-known-good music: %s - %s",
+            purpose.capitalize(),
+            artist,
+            title,
+        )
+        return None
+    return candidate, metadata
+
+
 def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
     """Construct a station ImagingLibrary from config."""
     return ImagingLibrary(
@@ -1694,12 +1721,15 @@ def _adjacent_music_source(state: StationState) -> Path | None:
     track under a later announcer (illusion break). Returns None when no song is
     adjacent, in which case callers fall back to dry voice / synthetic bed.
 
-    This is the single place the eligibility rule lives; tightening it to a
-    song-identity/freshness check later is a one-function change.
+    This is the single adjacency rule, layered on the shared durable-identity
+    gate used by recovery paths.
     """
     if state.last_enqueued_type not in _MUSIC_TYPES:
         return None
-    return _get_last_music_file(state)
+    if not state.blocklist:
+        return _get_last_music_file(state)
+    candidate = _blocklist_safe_last_music(state, purpose="speech-bed adjacency")
+    return candidate[0] if candidate else None
 
 
 def _segment_type_from_value(value: object) -> SegmentType | None:
@@ -4555,15 +4585,23 @@ async def _run_producer_inner(
                                     continue
                                 # No packaged recovery clips — recycle the last known-good music
                                 # norm rather than letting a silent file through.
-                                last_good = _get_last_music_file(state)
+                                last_good_payload = _blocklist_safe_last_music(
+                                    state,
+                                    purpose="quality gate circuit breaker",
+                                )
+                                last_good = last_good_payload[0] if last_good_payload else None
                                 if last_good and last_good != norm_cached:
+                                    assert last_good_payload is not None
+                                    last_good_meta = last_good_payload[1]
+                                    last_good_title = str(last_good_meta.get("title") or "").strip() or last_good.name
+                                    last_good_artist = str(last_good_meta.get("artist") or "").strip()
                                     logger.warning(
                                         "Quality gate circuit breaker: silence with no banter fallback — "
                                         "recycling last-known-good music (%s: %s)",
                                         norm_path.name,
                                         exc,
                                     )
-                                    await _queue_segment(
+                                    queued_last_good = await _queue_segment(
                                         Segment(
                                             type=SegmentType.MUSIC,
                                             path=last_good,
@@ -4572,16 +4610,24 @@ async def _run_producer_inner(
                                                 "recycled": True,
                                                 "silence_fallback": True,
                                                 "rescue": True,
-                                                "title": last_good.name,
+                                                "title": last_good_title,
+                                                "title_only": last_good_title,
+                                                "artist": last_good_artist,
                                             },
                                             ephemeral=False,
                                         )
                                     )
-                                    state.finish_render_timing(
-                                        "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                    if queued_last_good:
+                                        state.finish_render_timing(
+                                            "discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT
+                                        )
+                                        continue
+                                    logger.warning(
+                                        "Quality gate circuit breaker: last-known-good music was rejected "
+                                        "at queue admission — entering recovery ladder"
                                     )
-                                    continue
-                                # No recovery clip and no distinct last-known-good file.
+                                # No eligible distinct last-known-good file, or its
+                                # queue admission was rejected.
                                 # Route through the broad producer recovery ladder so its
                                 # sweeper and emergency-tone rungs can keep the station
                                 # audible without ever queueing this rejected silent file.

@@ -49,6 +49,7 @@ from mammamiradio.web.streamer import (
     GENERATION_WASTE_DEGRADED_SECONDS,
     GENERATION_WASTE_WINDOW_SECONDS,
     LiveStreamHub,
+    _apply_ban,
     _apply_loaded_source,
     _bridge_health_snapshot,
     _claim_continuity_slot,
@@ -1267,12 +1268,15 @@ def test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air(
     assert rs["bridge_health"]["unhealthy"] is True
 
 
-def test_runtime_status_snapshot_includes_producer_headroom():
+def test_runtime_status_snapshot_includes_producer_headroom(tmp_path):
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
-    app.state.queue.put_nowait(_queue_segment("A", duration_sec=180.0))
-    app.state.queue.put_nowait(_queue_segment("B", duration_sec=180.0))
+    for title in ("A", "B"):
+        segment = _queue_segment(title, duration_sec=180.0)
+        segment.path = tmp_path / f"{title}.mp3"
+        segment.path.write_bytes(b"ready")
+        app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"type": "music"},
         {"type": "music"},
@@ -1292,12 +1296,15 @@ def test_runtime_status_snapshot_includes_producer_headroom():
     assert headroom["reason"] == "ready runway"
 
 
-def test_runtime_status_snapshot_producer_headroom_ready_runway():
+def test_runtime_status_snapshot_producer_headroom_ready_runway(tmp_path):
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
     for idx in range(4):
-        app.state.queue.put_nowait(_queue_segment(f"Track {idx}", duration_sec=180.0))
+        segment = _queue_segment(f"Track {idx}", duration_sec=180.0)
+        segment.path = tmp_path / f"track-{idx}.mp3"
+        segment.path.write_bytes(b"ready")
+        app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"type": "music"},
         {"type": "music"},
@@ -1314,6 +1321,48 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
     assert headroom["buffered_audio_sec"] == 720.0
     assert headroom["headroom_ok"] is True
     assert headroom["reason"] == "ready runway"
+
+
+@pytest.mark.parametrize("rejection", ["missing", "zero-byte", "blocklisted", "stale-cue"])
+def test_producer_headroom_never_calls_rejected_runway_ready(tmp_path, rejection):
+    """Admin headroom and Skip use the same last-mile playability fence."""
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=6)
+    path = tmp_path / f"{rejection}.mp3"
+    if rejection == "zero-byte":
+        path.touch()
+    elif rejection != "missing":
+        path.write_bytes(b"ready")
+    metadata = {"artist": "Artist", "title_only": "Song"}
+    segment_type = SegmentType.MUSIC
+    if rejection == "blocklisted":
+        state.blocklist = {("artist", "song"): {"display": "Artist - Song"}}
+    elif rejection == "stale-cue":
+        segment_type = SegmentType.BANTER
+        metadata = {
+            "listener_session_cue": "companionship",
+            "listener_session_epoch": state.listener_session.epoch + 1,
+        }
+    segment = Segment(
+        type=segment_type,
+        path=path,
+        duration_sec=300.0,
+        metadata=metadata,
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(segment)
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        req = _fake_request(app)
+        runtime_health = _runtime_health_snapshot(req)
+        rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    headroom = rs["producer_headroom"]
+    assert _playable_runway_available(app.state.queue, state) is False
+    assert headroom["buffered_audio_sec"] == 0.0
+    assert headroom["headroom_ok"] is False
+    assert headroom["reason"] == "building runway"
 
 
 def test_continuity_reservation_evicts_only_the_ordinary_tail():
@@ -2077,6 +2126,88 @@ async def test_discard_unplayable_non_cue_prefix_preserves_operator_reason(tmp_p
     assert app.state.queue.get_nowait() is safe
     app.state.queue.task_done()
     await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+def test_apply_ban_clears_lone_blocked_tail_as_speech_bed(tmp_path):
+    """Purging the final queued song must sever its stale bed eligibility."""
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    result = _apply_ban(
+        state,
+        app.state.config,
+        [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+        queue=app.state.queue,
+    )
+
+    assert result["purged"] == 1
+    assert app.state.queue.empty()
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_apply_ban_reanchors_exposed_protected_music_tail(tmp_path):
+    """An exposed cache-rescue survivor remains a safe, known-clean bed source."""
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    protected_path = tmp_path / "protected-survivor.mp3"
+    protected_path.write_bytes(b"protected")
+    protected = Segment(
+        type=SegmentType.MUSIC,
+        path=protected_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+            "rescue": True,
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(protected)
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    with patch(
+        "mammamiradio.scheduling.producer.load_track_metadata",
+        return_value={"artist": "Safe Artist", "title": "Safe Song"},
+    ):
+        result = _apply_ban(
+            state,
+            app.state.config,
+            [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+            queue=app.state.queue,
+        )
+
+        assert result["purged"] == 1
+        assert list(app.state.queue._queue) == [protected]
+        assert state.last_enqueued_type is SegmentType.MUSIC
+        assert state.last_music_file == protected_path
+        assert _adjacent_music_source(state) == protected_path
 
 
 @pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
