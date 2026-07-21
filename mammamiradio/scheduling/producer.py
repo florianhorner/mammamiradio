@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 from uuid import uuid4
 
 import httpx
@@ -953,19 +953,19 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         )
 
     last_good_payload = _blocklist_safe_last_music(state, purpose="error recovery")
-    last_good = last_good_payload[0] if last_good_payload else None
+    last_good = last_good_payload.path if last_good_payload is not None else None
     last_good_title = ""
     last_good_artist = ""
-    if last_good and last_good_payload:
-        last_good_meta = last_good_payload[1]
+    if last_good_payload is not None:
+        last_good_meta = last_good_payload.metadata
         last_good_raw_title = str(last_good_meta.get("title") or "").strip()
         last_good_raw_artist = str(last_good_meta.get("artist") or "").strip()
         if last_good_raw_title:
             last_good_title = strip_foreign_station_name(
                 last_good_raw_title, config.display_station_name, prefix_only=True
             )
-        elif last_good:
-            last_good_title = last_good.name
+        else:
+            last_good_title = last_good_payload.path.name
         last_good_artist = strip_foreign_station_name(last_good_raw_artist, config.display_station_name)
     if last_good:
         duration_sec = await asyncio.to_thread(_probe_segment_duration, last_good, rescue=True)
@@ -1653,11 +1653,18 @@ def _get_last_music_file(state: StationState) -> Path | None:
     return None
 
 
+class LastGoodMusic(NamedTuple):
+    """A resolved, blocklist-safe last-known-good music file and its sidecar."""
+
+    path: Path
+    metadata: dict[str, str | int]
+
+
 def _blocklist_safe_last_music(
     state: StationState,
     *,
     purpose: str,
-) -> tuple[Path, dict[str, str | int]] | None:
+) -> LastGoodMusic | None:
     """Resolve state-owned last-known-good music through its durable identity.
 
     A populated blocklist makes the norm-cache sidecar mandatory: without both
@@ -1671,7 +1678,7 @@ def _blocklist_safe_last_music(
 
     metadata = load_track_metadata(candidate) or {}
     if not state.blocklist:
-        return candidate, metadata
+        return LastGoodMusic(candidate, metadata)
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
@@ -1692,7 +1699,7 @@ def _blocklist_safe_last_music(
             title,
         )
         return None
-    return candidate, metadata
+    return LastGoodMusic(candidate, metadata)
 
 
 def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
@@ -1729,7 +1736,7 @@ def _adjacent_music_source(state: StationState) -> Path | None:
     if not state.blocklist:
         return _get_last_music_file(state)
     candidate = _blocklist_safe_last_music(state, purpose="speech-bed adjacency")
-    return candidate[0] if candidate else None
+    return candidate.path if candidate is not None else None
 
 
 def _segment_type_from_value(value: object) -> SegmentType | None:
@@ -4590,7 +4597,7 @@ async def _run_producer_inner(
                                     purpose="quality gate circuit breaker",
                                 )
                                 if last_good_payload is not None:
-                                    last_good, last_good_meta = last_good_payload
+                                    last_good, last_good_meta = last_good_payload.path, last_good_payload.metadata
                                 else:
                                     last_good, last_good_meta = None, {}
                                 if last_good and last_good != norm_cached:

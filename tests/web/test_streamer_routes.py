@@ -3215,12 +3215,22 @@ def test_ad_cast_status_payload_rejects_unexpected_report_shapes():
 
 
 @pytest.mark.asyncio
-async def test_status_buffered_audio_sec_sums_real_queue_durations():
-    """buffered_audio_sec surfaces airtime ahead (seconds), not item count."""
+async def test_status_buffered_audio_sec_sums_real_queue_durations(tmp_path):
+    """buffered_audio_sec surfaces airtime ahead (seconds), not item count.
+
+    Counts only immediately-playable audio (matching the producer runway
+    governor), so the queued segments carry real files here.
+    """
     app = _make_test_app()
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/a.mp3"), duration_sec=180.0))
-    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=12.5))
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/c.mp3")))
+    a = tmp_path / "a.mp3"
+    a.write_bytes(b"a" * 1024)
+    b = tmp_path / "b.mp3"
+    b.write_bytes(b"b" * 1024)
+    c = tmp_path / "c.mp3"
+    c.write_bytes(b"c" * 1024)
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=a, duration_sec=180.0))
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=b, duration_sec=12.5))
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=c))
     app.state.station_state.queued_segments = [
         {"type": "music", "label": "A"},
         {"type": "banter", "label": "B"},
@@ -3246,10 +3256,12 @@ async def test_status_buffered_audio_sec_zero_when_queue_empty():
 
 
 @pytest.mark.asyncio
-async def test_status_buffered_audio_sec_respects_drift_guard():
+async def test_status_buffered_audio_sec_respects_drift_guard(tmp_path):
     """The drift guard still trims stale shadow entries, but seconds come from the real queue."""
     app = _make_test_app()
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), duration_sec=180.0))
+    real_path = tmp_path / "real.mp3"
+    real_path.write_bytes(b"x" * 1024)
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=real_path, duration_sec=180.0))
     app.state.station_state.queued_segments = [
         {"type": "music", "label": "A", "duration_sec": 1.0},
         {"type": "music", "label": "B", "duration_sec": 120.0},
@@ -6183,3 +6195,68 @@ async def test_entity_policy_requires_exactly_one_action(tmp_path):
 
     assert both.status_code == 422
     assert neither.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_public_status_skip_hint_does_not_clear_continuity_slot(tmp_path):
+    """A listener /public-status poll must never clear the reserved dead-air slot.
+
+    skip_would_bridge evaluates runway on an unauthenticated GET. With an empty
+    queue it consults the continuity slot; a transient missing/partial slot file
+    must not let that read-only poll clear the safety slot (self_heal=False).
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.now_streaming = {"type": "music", "label": "On air", "started": time.time(), "metadata": {}}
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    # The read path reported no playable runway but left the slot pointer intact.
+    assert body["playback_actions"]["skip_would_bridge"] is True
+    assert state.continuity_slot is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
+    """Admin buffered_audio_sec must match the governor: banned audio is not runway."""
+    app = _make_test_app()
+    state = app.state.station_state
+    clean_path = tmp_path / "clean.mp3"
+    clean_path.write_bytes(b"clean" * 1024)
+    clean = Segment(
+        type=SegmentType.MUSIC,
+        path=clean_path,
+        duration_sec=180.0,
+        metadata={"artist": "Clean Artist", "title_only": "Clean Song"},
+        ephemeral=False,
+    )
+    banned_path = tmp_path / "banned.mp3"
+    banned_path.write_bytes(b"banned" * 1024)
+    banned = Segment(
+        type=SegmentType.MUSIC,
+        path=banned_path,
+        duration_sec=180.0,
+        metadata={"artist": "Banned Artist", "title_only": "Banned Song"},
+        ephemeral=False,
+    )
+    for segment in (clean, banned):
+        app.state.queue.put_nowait(segment)
+    state.blocklist = {("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}}
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin_status = (await client.get("/status")).json()
+
+    # Only the clean track counts; the banned queued segment (which the playback
+    # loop discards before its first byte) must not inflate the honest readout.
+    assert admin_status["buffered_audio_sec"] == 180.0

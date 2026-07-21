@@ -793,14 +793,21 @@ def _continuity_reservation_segments(
     return selected
 
 
-def _continuity_slot_seconds(state: StationState) -> float:
-    """Return ready seconds held in the capacity-exempt continuity slot."""
+def _continuity_slot_seconds(state: StationState, *, self_heal: bool = True) -> float:
+    """Return ready seconds held in the capacity-exempt continuity slot.
+
+    ``self_heal`` clears a slot whose backing file has vanished. Mutation paths
+    (skip / reserve / playback) leave it on so a dangling slot is dropped; the
+    read-only status snapshots pass ``self_heal=False`` so a listener poll can
+    never clear the reserved dead-air safety slot on a transient stat blip.
+    """
     slot = state.continuity_slot
     if slot is None:
         return 0.0
     if not _indexed_audio_path_is_file(slot.path):
-        logger.warning("Protected continuity slot disappeared before playback; clearing it")
-        state.continuity_slot = None
+        if self_heal:
+            logger.warning("Protected continuity slot disappeared before playback; clearing it")
+            state.continuity_slot = None
         return 0.0
     return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
 
@@ -823,8 +830,13 @@ def _claim_continuity_slot(state: StationState) -> Segment | None:
     return slot
 
 
-def _playable_runway_available(q, state: StationState) -> bool:
-    """Return whether cutting the current segment has ready audio behind it."""
+def _playable_runway_available(q, state: StationState, *, self_heal: bool = True) -> bool:
+    """Return whether cutting the current segment has ready audio behind it.
+
+    ``self_heal`` is forwarded to :func:`_continuity_slot_seconds`; read-only
+    callers (status snapshots) pass ``False`` so evaluating runway can never
+    mutate ``state.continuity_slot``.
+    """
     # Mirror ``run_playback_loop``: the capacity-exempt slot is only consumed
     # once the real queue is empty. A non-empty queue means the next audio the
     # loop pulls is ``queued[0]`` — never the slot — so gate strictly on the
@@ -834,7 +846,9 @@ def _playable_runway_available(q, state: StationState) -> bool:
         return _segment_is_immediately_playable(state, queued[0])
     slot = state.continuity_slot
     return bool(
-        slot is not None and _continuity_slot_seconds(state) > 0 and _segment_is_immediately_playable(state, slot)
+        slot is not None
+        and _continuity_slot_seconds(state, self_heal=self_heal) > 0
+        and _segment_is_immediately_playable(state, slot)
     )
 
 
@@ -929,7 +943,15 @@ def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> 
         state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, segment, discard_reason)
         _unlink_ephemeral_best_effort(segment)
+    prior_tail = queued[-1] if queued else None
     _rebuild_queue_shadow(q, state, survivors)
+    # Trimming the head can expose a surviving unplayable MUSIC tail (a queued
+    # song later banned or whose cache file was evicted). _rebuild_queue_shadow
+    # only sets last_enqueued_type naively; re-run the same fail-closed check the
+    # other mutation sites use so a discarded tail can't bed a stale song under
+    # the next speech segment. Because only the head is trimmed, the tail is
+    # unchanged, driving the reconcile's keep-branch (clears when now-unplayable).
+    _reconcile_queue_tail_adjacency(q, state, prior_tail=prior_tail)
     state.continuity_epoch += 1
     return len(dropped)
 
@@ -962,6 +984,11 @@ def _reserve_continuity_runway(
     protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
     ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
 
+    # NOTE (perf, deferred): each segment is measured here 2-3x per reservation
+    # (ordinary/protected, then current_queue/combined), and the playability check
+    # does a path.stat(). If Pi CPU shows up on the skip/remove/reserve path, memoize
+    # this by id(segment) — its inputs (excluded_*, state.blocklist) don't mutate
+    # mid-call, so a per-call cache dict is safe.
     def _ready_duration(segment: Segment) -> float:
         if not _segment_is_immediately_playable(
             state,
@@ -1892,13 +1919,14 @@ def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
     queue = getattr(request.app.state, "queue", None)
     target_segments = max(4, int(config.pacing.lookahead_segments))
     queue_depth = int(runtime_health.get("queue_depth", 0))
-    slot_audio_sec = _continuity_slot_seconds(state)
     slot = state.continuity_slot
-    if slot is None or not _segment_is_immediately_playable(state, slot):
-        slot_audio_sec = 0.0
+    slot_playable = slot is not None and _segment_is_immediately_playable(state, slot)
+    slot_audio_sec = _continuity_slot_seconds(state, self_heal=False) if slot_playable else 0.0
     buffered_audio_sec = buffered_audio_seconds([_queued_audio_seconds(queue, state=state), slot_audio_sec])
     queue_capacity = int(runtime_health.get("queue_capacity", -1))
-    headroom_ok = buffered_audio_sec >= RUNWAY_FLOOR_SECONDS and _playable_runway_available(queue, state)
+    headroom_ok = buffered_audio_sec >= RUNWAY_FLOOR_SECONDS and _playable_runway_available(
+        queue, state, self_heal=False
+    )
     return {
         "queue_depth": queue_depth,
         "queue_capacity": queue_capacity,
@@ -6868,7 +6896,7 @@ def _public_status_payload(request: Request) -> dict:
         "playback_actions": {
             "skip_ready": bool(state.now_streaming),
             "skip_would_bridge": bool(
-                state.now_streaming and not _playable_runway_available(request.app.state.queue, state)
+                state.now_streaming and not _playable_runway_available(request.app.state.queue, state, self_heal=False)
             ),
         },
         "ha_moments": ha_moments,
@@ -7223,8 +7251,10 @@ async def status(
             # Honest airtime-ahead readout for the admin panel: the summed
             # duration of the rendered queue. Surfaces SECONDS of buffered audio,
             # not item count (3 short banters are not 3 songs of runway). Reads
-            # the real asyncio queue, matching the producer runway governor.
-            "buffered_audio_sec": _queued_audio_seconds(segment_queue),
+            # the real asyncio queue and, matching the producer runway governor,
+            # counts only immediately-playable audio (banned/stale/evicted
+            # segments the playback loop will discard don't inflate the number).
+            "buffered_audio_sec": _queued_audio_seconds(segment_queue, state=state),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),
             "uptime_sec": round(time.time() - start_time),

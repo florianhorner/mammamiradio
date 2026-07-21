@@ -2128,6 +2128,143 @@ async def test_discard_unplayable_non_cue_prefix_preserves_operator_reason(tmp_p
     await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
 
 
+def test_discard_unplayable_prefix_clears_exposed_unplayable_music_tail(tmp_path):
+    """A surviving unplayable MUSIC tail must not stay a speech-bed source.
+
+    Trimming the leading unplayable prefix can leave a still-queued but
+    unplayable music segment as the new tail (a track banned or cache-evicted
+    while sitting mid-queue). _rebuild_queue_shadow only sets last_enqueued_type
+    naively, so the prefix-discard must fail closed the same way ban / arbitrary
+    removal do, or the next speech segment beds a stale/discarded song.
+    """
+    app = _make_app()
+    state = app.state.station_state
+    blocked_head_path = tmp_path / "blocked-head.mp3"
+    blocked_head_path.write_bytes(b"blocked-head")
+    blocked_head = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_head_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-head", "artist": "Head Artist", "title_only": "Head Song"},
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-survivor.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "safe-survivor", "artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    blocked_tail_path = tmp_path / "blocked-tail.mp3"
+    blocked_tail_path.write_bytes(b"blocked-tail")
+    blocked_tail = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_tail_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-tail", "artist": "Tail Artist", "title_only": "Tail Song"},
+        ephemeral=False,
+    )
+    for segment in (blocked_head, safe, blocked_tail):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-head", "type": "music", "label": "Head Song"},
+        {"id": "safe-survivor", "type": "music", "label": "Safe Song"},
+        {"id": "blocked-tail", "type": "music", "label": "Tail Song"},
+    ]
+    state.blocklist = {
+        ("head artist", "head song"): {"display": "Head Artist - Head Song"},
+        ("tail artist", "tail song"): {"display": "Tail Artist - Tail Song"},
+    }
+    # Simulate the naive tail bookkeeping the mutation would otherwise leave.
+    state.last_music_file = blocked_tail_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    # Only the leading unplayable head is dropped; the blocked tail survives
+    # in the queue but must not leave MUSIC adjacency behind it.
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe, blocked_tail]
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_discard_unplayable_prefix_keeps_playable_tail_adjacency(tmp_path):
+    """An unchanged, playable surviving tail keeps its existing bed eligibility."""
+    app = _make_app()
+    state = app.state.station_state
+    stale_cue_path = tmp_path / "stale-cue.mp3"
+    stale_cue_path.write_bytes(b"cue")
+    stale_cue = Segment(
+        type=SegmentType.BANTER,
+        path=stale_cue_path,
+        duration_sec=12.0,
+        metadata={
+            "queue_id": "stale-cue",
+            "listener_session_cue": "companionship",
+            # An epoch that no longer matches the live session → unplayable.
+            "listener_session_epoch": 999,
+        },
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-tail.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "safe-tail", "artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    for segment in (stale_cue, safe):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "stale-cue", "type": "banter", "label": "Companionship"},
+        {"id": "safe-tail", "type": "music", "label": "Safe Song"},
+    ]
+    assert _segment_is_immediately_playable(state, stale_cue) is False
+    state.last_music_file = safe_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe]
+    # Tail unchanged and playable: its clean-bed bookkeeping stays authoritative.
+    assert state.last_enqueued_type is SegmentType.MUSIC
+    assert _adjacent_music_source(state) == safe_path
+
+
+def test_playable_runway_check_readonly_preserves_missing_slot(tmp_path):
+    """A read-only runway check must never clear the reserved continuity slot.
+
+    _public_status_payload evaluates skip_would_bridge on a listener GET; a
+    transient stat blip on the slot file must not let that poll clear the
+    reserved dead-air safety slot. The mutating callers keep the self-heal.
+    """
+    app = _make_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    # Read-only: no runway, but the slot pointer must survive.
+    assert _playable_runway_available(app.state.queue, state, self_heal=False) is False
+    assert state.continuity_slot is slot
+
+    # Mutating default path still self-heals a genuinely dangling slot.
+    assert _playable_runway_available(app.state.queue, state) is False
+    assert state.continuity_slot is None
+
+
 def test_apply_ban_clears_lone_blocked_tail_as_speech_bed(tmp_path):
     """Purging the final queued song must sever its stale bed eligibility."""
     app = _make_app()
