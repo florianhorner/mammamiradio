@@ -110,8 +110,16 @@ async def test_bulk_ban_starvation_rejected_with_warm_message(tmp_path):
 async def test_remove_endpoint_is_a_durable_ban(tmp_path):
     app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicità", "Al Bano")])
     state = app.state.station_state
+    target = state.playlist[0]
     async with _client(app) as c:
-        r = await c.post("/api/playlist/remove", json={"index": 0})
+        r = await c.post(
+            "/api/playlist/remove",
+            json={
+                "revision": state.playlist_revision,
+                "index": 0,
+                "id": (target.spotify_id or "").strip() or target.cache_key,
+            },
+        )
         assert r.json()["banned"] is True
     assert ("modugno", "volare") in state.blocklist
     assert [t.title for t in state.playlist] == ["Felicità"]

@@ -446,13 +446,15 @@ def test_admin_html_has_on_air_thumb_preference_buttons_and_handler() -> None:
     assert '[data-preference-target="now"]' in update_now
 
 
-def test_admin_playlist_rows_have_index_targeted_thumb_buttons() -> None:
+def test_admin_playlist_rows_have_key_targeted_thumb_buttons() -> None:
     html = ADMIN_HTML.read_text()
     update_pl = _admin_function_block("updatePl")
     renderer = _admin_function_block("renderPreferenceButton")
     assert "/api/track/preference" in html
     assert "renderPreferenceControls" in update_pl
-    assert 'data-preference-target="index"' in html
+    assert 'data-preference-target="key"' in html
+    assert "data-preference-artist" in html
+    assert "data-preference-title" in html
     assert "Like this song" in renderer
     assert "Dislike this song" in renderer
 
@@ -468,7 +470,8 @@ def test_admin_preference_handler_updates_cached_playlist_rows() -> None:
     assert "_st.playlist=_st.playlist.map(apply)" in cache_updater
     assert "updatePl(_plRows,_plPage,true)" in cache_updater
     assert "now_playing:true" in payload_resolver
-    assert "index:Number(el.dataset.preferenceIndex)" in payload_resolver
+    assert "key:[el.dataset.preferenceArtist||'',el.dataset.preferenceTitle||'']" in payload_resolver
+    assert "preferenceIndex" not in payload_resolver
 
 
 def test_admin_playlist_poll_skips_unchanged_renders() -> None:
