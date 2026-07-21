@@ -320,6 +320,34 @@ def test_capabilities_clean_when_all_voices_valid():
     assert payload["tts_degraded"] is False
 
 
+def test_capabilities_reports_runtime_tts_fallback():
+    """A valid config becomes degraded when a live cloud render falls back."""
+    host = HostPersonality(
+        name="CloudHost",
+        voice="onyx",
+        style="warm",
+        engine="openai",
+        edge_fallback_voice="it-IT-IsabellaNeural",
+        personality=PersonalityAxes(),
+    )
+    config = _build_config([host])
+    _normalize_tts_voices(config)
+    state = StationState()
+    state.update_runtime_provider(
+        "tts_provider",
+        current_provider="edge",
+        primary_provider="openai",
+        fallback_active=True,
+        reason="openai:provider_error:TimeoutError",
+    )
+
+    caps = get_capabilities(config, state)
+    payload = capabilities_to_dict(caps)
+
+    assert caps.tts_degraded is True
+    assert payload["tts_degraded"] is True
+
+
 # ---------------------------------------------------------------------------
 # Scenario 2: backend entirely unreachable after pre-flight pass → typed failure
 # ---------------------------------------------------------------------------

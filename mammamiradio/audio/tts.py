@@ -79,6 +79,10 @@ _XML_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # error. Reset via reset_voice_failures().
 _failed_edge_voices: set[str] = set()
 _failed_cloud_voices: set[tuple[str, str, str, str]] = set()
+# Provider-wide failures (timeouts, 5xx, revoked credentials) are broader than
+# one voice. Do not spend a 30-second cloud timeout on every ad part when the
+# route is already known to be unavailable for this session.
+_failed_cloud_routes: set[tuple[str, str, str, str]] = set()
 _cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
 _cloud_voice_state_lock = threading.Lock()
 
@@ -172,6 +176,7 @@ def reset_voice_failures() -> None:
     _failed_edge_voices.clear()
     with _cloud_voice_state_lock:
         _failed_cloud_voices.clear()
+        _failed_cloud_routes.clear()
         _cloud_voice_attempt_locks.clear()
 
 
@@ -210,6 +215,49 @@ def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str]) -> None:
         _failed_cloud_voices.add(cloud_key)
 
 
+def _cloud_route_key(engine: str, *, elevenlabs_model: str = "") -> tuple[str, str, str, str]:
+    """Identify a provider credential/model route independently of voice ID."""
+    engine = engine.strip().lower()
+    if engine == "azure":
+        return (
+            engine,
+            os.getenv("AZURE_SPEECH_REGION", ""),
+            _secret_fingerprint(os.getenv("AZURE_SPEECH_KEY", "")),
+            "",
+        )
+    if engine == "elevenlabs":
+        return (
+            engine,
+            _secret_fingerprint(os.getenv("ELEVENLABS_API_KEY", "")),
+            elevenlabs_model.strip() if isinstance(elevenlabs_model, str) else "",
+            "",
+        )
+    if engine == "openai":
+        return (engine, _secret_fingerprint(os.getenv("OPENAI_API_KEY", "")), "", "")
+    return (engine, "", "", "")
+
+
+def _cloud_route_failed(route_key: tuple[str, str, str, str]) -> bool:
+    with _cloud_voice_state_lock:
+        return route_key in _failed_cloud_routes
+
+
+def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str]) -> None:
+    with _cloud_voice_state_lock:
+        _failed_cloud_routes.add(route_key)
+
+
+def _should_disable_cloud_route(exc: Exception) -> bool:
+    """Return whether a cloud error is route-wide rather than voice-specific."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        # A 400 can be a single bad voice ID. Keep the existing per-voice
+        # memoization for that case so another configured character can try.
+        if status == 400:
+            return False
+    return True
+
+
 def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.Lock:
     """Return the per-key async lock for cloud attempts.
 
@@ -222,6 +270,82 @@ def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.L
             lock = asyncio.Lock()
             _cloud_voice_attempt_locks[cloud_key] = lock
         return lock
+
+
+def _record_tts_runtime_state(
+    state: StationState | None,
+    *,
+    engine: str,
+    current_provider: str,
+    fallback_active: bool,
+    reason: str,
+) -> None:
+    """Keep the admin TTS provider status aligned with the route just rendered.
+
+    Configured keys only prove that a route can be attempted. The synthesis
+    boundary is where we know whether that route actually produced audio. Keep
+    one per-engine state plus an aggregate ``tts_provider`` state so a mixed
+    configuration can show a live Edge fallback without exposing credentials or
+    raw provider responses.
+    """
+    if state is None or engine == "edge":
+        return
+    try:
+        state.update_runtime_provider(
+            f"tts:{engine}",
+            current_provider=current_provider,
+            primary_provider=engine,
+            fallback_active=fallback_active,
+            reason=reason,
+        )
+        active = [
+            (provider_class.removeprefix("tts:"), details.get("reason") or "fallback active")
+            for provider_class, details in state.runtime_provider_state.items()
+            if provider_class.startswith("tts:") and details.get("fallback_active")
+        ]
+        aggregate_active = bool(active)
+        aggregate_reason = (
+            "Runtime TTS fallback: " + "; ".join(f"{provider}={details}" for provider, details in active)
+            if aggregate_active
+            else "Cloud TTS route rendered successfully"
+        )
+        state.update_runtime_provider(
+            "tts_provider",
+            current_provider="edge" if aggregate_active else current_provider,
+            primary_provider="mixed_tts",
+            fallback_active=aggregate_active,
+            reason=aggregate_reason,
+        )
+    except Exception:  # pragma: no cover - telemetry must never stop synthesis
+        logger.debug("TTS provider state update failed", exc_info=True)
+
+
+def _record_tts_fallback(
+    state: StationState | None,
+    *,
+    requested_engine: str,
+    requested_voice: str,
+    effective_voice: str,
+    reason: str,
+    host_name: str,
+) -> None:
+    """Record and log an explicit provider-to-Edge route transition."""
+    _record_tts_runtime_state(
+        state,
+        engine=requested_engine,
+        current_provider="edge",
+        fallback_active=True,
+        reason=reason,
+    )
+    character = f" character={host_name}" if host_name else ""
+    logger.info(
+        "TTS fallback provider=%s requested_voice=%s effective_provider=edge effective_voice=%s reason=%s%s",
+        requested_engine,
+        requested_voice,
+        effective_voice,
+        reason,
+        character,
+    )
 
 
 def _non_retryable_cloud_tts_error(exc: Exception) -> str:
@@ -660,7 +784,10 @@ async def synthesize(
     Best-effort only: never raises into the audio path.
     """
     engine = (engine or "edge").strip().lower()
+    requested_engine = engine
+    requested_voice = voice
     fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+    fallback_reason = ""
 
     billed = False
 
@@ -681,28 +808,49 @@ async def synthesize(
 
     if engine == "openai":
         if os.getenv("OPENAI_API_KEY", ""):
-            try:
-                async with _HEAVY_SEM:
-                    result = await synthesize_openai(
-                        text,
-                        voice,
-                        output_path,
-                        instructions=openai_instructions,
-                        loudnorm=loudnorm,
-                        on_paid_provider_success=_bill_tts,
+            route_key = _cloud_route_key(engine)
+            if _cloud_route_failed(route_key):
+                fallback_reason = "provider_disabled_session"
+                logger.info("OpenAI TTS route previously failed this session; using edge fallback")
+            else:
+                try:
+                    async with _HEAVY_SEM:
+                        result = await synthesize_openai(
+                            text,
+                            voice,
+                            output_path,
+                            instructions=openai_instructions,
+                            loudnorm=loudnorm,
+                            on_paid_provider_success=_bill_tts,
+                        )
+                    _record_tts_runtime_state(
+                        state,
+                        engine=engine,
+                        current_provider=engine,
+                        fallback_active=False,
+                        reason="primary_success",
                     )
-                return result
-            except Exception as e:
-                logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
+                    return result
+                except Exception as e:
+                    fallback_reason = f"provider_error:{type(e).__name__}"
+                    if _should_disable_cloud_route(e):
+                        _memoize_failed_cloud_route(route_key)
+                    logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
         else:
-            logger.debug("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
         # Use edge fallback voice when falling back from OpenAI
         voice = fallback_voice
     elif engine == "azure":
         if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
             cloud_key = _cloud_failure_key(engine, voice)
+            route_key = _cloud_route_key(engine)
             async with _cloud_voice_attempt_lock(cloud_key):
-                if _cloud_voice_failed(cloud_key):
+                if _cloud_route_failed(route_key):
+                    fallback_reason = "provider_disabled_session"
+                    logger.info("Azure TTS route previously failed this session; using edge fallback")
+                elif _cloud_voice_failed(cloud_key):
+                    fallback_reason = "provider_disabled_session"
                     logger.debug("Azure TTS voice '%s' previously failed this session; using edge fallback", voice)
                 else:
                     try:
@@ -716,26 +864,45 @@ async def synthesize(
                                 loudnorm=loudnorm,
                                 on_paid_provider_success=_bill_tts,
                             )
+                        _record_tts_runtime_state(
+                            state,
+                            engine=engine,
+                            current_provider=engine,
+                            fallback_active=False,
+                            reason="primary_success",
+                        )
                         return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
                             _memoize_failed_cloud_voice(cloud_key)
+                            if _should_disable_cloud_route(e):
+                                _memoize_failed_cloud_route(route_key)
+                            fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "Azure TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
                                 voice,
                                 reason,
                             )
                         else:
+                            fallback_reason = f"provider_error:{type(e).__name__}"
+                            if _should_disable_cloud_route(e):
+                                _memoize_failed_cloud_route(route_key)
                             logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
         else:
-            logger.debug("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
         voice = fallback_voice
     elif engine == "elevenlabs":
         if os.getenv("ELEVENLABS_API_KEY", ""):
             cloud_key = _cloud_failure_key(engine, voice, elevenlabs_model=elevenlabs_model)
+            route_key = _cloud_route_key(engine, elevenlabs_model=elevenlabs_model)
             async with _cloud_voice_attempt_lock(cloud_key):
-                if _cloud_voice_failed(cloud_key):
+                if _cloud_route_failed(route_key):
+                    fallback_reason = "provider_disabled_session"
+                    logger.info("ElevenLabs TTS route previously failed this session; using edge fallback")
+                elif _cloud_voice_failed(cloud_key):
+                    fallback_reason = "provider_disabled_session"
                     logger.debug(
                         "ElevenLabs TTS voice '%s' model '%s' previously failed this session; using edge fallback",
                         voice,
@@ -756,11 +923,21 @@ async def synthesize(
                                 host_name=host_name,
                                 on_paid_provider_success=_bill_tts,
                             )
+                        _record_tts_runtime_state(
+                            state,
+                            engine=engine,
+                            current_provider=engine,
+                            fallback_active=False,
+                            reason="primary_success",
+                        )
                         return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
                             _memoize_failed_cloud_voice(cloud_key)
+                            if _should_disable_cloud_route(e):
+                                _memoize_failed_cloud_route(route_key)
+                            fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
                                 "falling back to edge-tts",
@@ -769,19 +946,26 @@ async def synthesize(
                                 reason,
                             )
                         else:
+                            fallback_reason = f"provider_error:{type(e).__name__}"
+                            if _should_disable_cloud_route(e):
+                                _memoize_failed_cloud_route(route_key)
                             logger.warning(
                                 "ElevenLabs TTS model '%s' failed, falling back to edge-tts: %s",
                                 elevenlabs_model,
                                 e,
                             )
         else:
-            logger.debug("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
         voice = fallback_voice
     elif engine != "edge":
+        fallback_reason = "unknown_engine"
         logger.warning("Unknown TTS engine '%s'; using edge-tts", engine)
         voice = fallback_voice
 
     edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
+    if not fallback_reason and edge_voice != voice:
+        fallback_reason = "invalid_edge_voice"
 
     # Honour runtime memoization: if this voice already failed once this
     # session, skip the primary attempt and go straight to the fallback.
@@ -792,6 +976,17 @@ async def synthesize(
             fallback_voice,
         )
         edge_voice = fallback_voice
+        fallback_reason = fallback_reason or "edge_voice_disabled_session"
+
+    if fallback_reason:
+        _record_tts_fallback(
+            state,
+            requested_engine=requested_engine,
+            requested_voice=requested_voice,
+            effective_voice=edge_voice,
+            reason=fallback_reason,
+            host_name=host_name,
+        )
 
     async with _HEAVY_SEM:
         raw_path = output_path.with_suffix(".raw.mp3")
@@ -803,7 +998,19 @@ async def synthesize(
             await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
             _unlink_many([raw_path])
 
-            logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
+            if fallback_reason:
+                character = f" character={host_name}" if host_name else ""
+                logger.info(
+                    "Synthesized (Edge fallback): %s (voice=%s requested_engine=%s requested_voice=%s reason=%s%s)",
+                    output_path.name,
+                    edge_voice,
+                    requested_engine,
+                    requested_voice,
+                    fallback_reason,
+                    character,
+                )
+            else:
+                logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
             return output_path
         except Exception as e:
             _unlink_many([raw_path])  # clean up orphaned raw file on any failure
@@ -811,6 +1018,16 @@ async def synthesize(
             final_error = e
             # Memoize the failure so subsequent segments skip this voice.
             _failed_edge_voices.add(edge_voice)
+            if not fallback_reason:
+                fallback_reason = "edge_voice_failure"
+                _record_tts_fallback(
+                    state,
+                    requested_engine=requested_engine,
+                    requested_voice=requested_voice,
+                    effective_voice=_EDGE_DEFAULT_FALLBACK_VOICE,
+                    reason=fallback_reason,
+                    host_name=host_name,
+                )
             # Retry with the station's house voice after the configured Edge
             # fallback. Required speech must never degrade into generated
             # silence: the caller owns the canned/music/continuity rescue.
@@ -823,7 +1040,17 @@ async def synthesize(
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
                     _unlink_many([raw_path])
-                    logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
+                    character = f" character={host_name}" if host_name else ""
+                    logger.info(
+                        "Fallback synthesized (Edge fallback): %s (voice=%s requested_engine=%s "
+                        "requested_voice=%s reason=%s%s)",
+                        output_path.name,
+                        fallback,
+                        requested_engine,
+                        requested_voice,
+                        fallback_reason,
+                        character,
+                    )
                     return output_path
                 except Exception as e2:
                     _unlink_many([raw_path])  # clean up on fallback failure too
@@ -946,7 +1173,15 @@ async def synthesize_ad(
             if part.role == "disclaimer_goblin":
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
-            return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False, state=state)
+            return await synthesize(
+                part.text,
+                voice_for_part.voice,
+                part_path,
+                **extra,
+                loudnorm=False,
+                host_name=voice_for_part.name,
+                state=state,
+            )
         if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
             try:
@@ -1052,6 +1287,7 @@ async def synthesize_ad(
             edge_fallback_voice=default_voice.edge_fallback_voice,
             openai_instructions=_openai_instructions_for_ad_voice(default_voice),
             voice_settings=default_voice.voice_settings,
+            host_name=default_voice.name,
             state=state,
         )
         return fallback_path

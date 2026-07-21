@@ -1642,6 +1642,7 @@ def _tts_provider_status(config, state: StationState) -> dict:
     if config.sonic_brand.sweeper_voice:
         engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
     cloud_engines = sorted(engine for engine in engines if engine != "edge")
+    missing: list[str] = []
 
     if cloud_engines:
         primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
@@ -1673,6 +1674,22 @@ def _tts_provider_status(config, state: StationState) -> dict:
         primary = current = "edge"
         fallback_active = False
         reason = "Edge TTS is the configured voice provider"
+
+    # A configured key only proves that a cloud route can be attempted. The
+    # synthesis boundary records the route that actually produced audio; use
+    # that live state when it says a mixed/cloud route degraded to Edge.
+    runtime_tts = state.runtime_provider_state.get("tts_provider", {})
+    if runtime_tts and runtime_tts.get("fallback_active"):
+        current = str(runtime_tts.get("current_provider") or "edge")
+        fallback_active = True
+        reason = str(runtime_tts.get("reason") or "Runtime TTS fallback is active")
+    elif runtime_tts and not missing:
+        saved_current = str(runtime_tts.get("current_provider") or "")
+        if saved_current and saved_current != primary:
+            current = saved_current
+            fallback_active = False
+            reason = str(runtime_tts.get("reason") or reason)
+
     return _provider_status(
         "tts_provider",
         primary_provider=primary,
@@ -1744,7 +1761,7 @@ def _runtime_status_snapshot(
         health_color = "yellow"
         active = [
             providers[name]["current_label"]
-            for name in ("audio_source", "script_provider")
+            for name in ("audio_source", "script_provider", "tts_provider")
             if providers[name]["fallback_active"]
         ]
         health_explanation = "Fallback active: " + ", ".join(active)
@@ -1762,7 +1779,9 @@ def _runtime_status_snapshot(
                 "health_state": health_state,
                 "fallback_active": fallback_active,
                 "runtime_provider_classes": [
-                    name for name in ("audio_source", "script_provider") if providers[name]["fallback_active"]
+                    name
+                    for name in ("audio_source", "script_provider", "tts_provider")
+                    if providers[name]["fallback_active"]
                 ],
             },
         )

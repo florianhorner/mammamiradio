@@ -84,6 +84,7 @@ def _mock_all(monkeypatch):
         tts_mod._elevenlabs_client_key = ""
         tts_mod._failed_edge_voices.clear()  # edge-failure memoization leaks across tests otherwise
         tts_mod._failed_cloud_voices.clear()
+        tts_mod._failed_cloud_routes.clear()
         tts_mod._cloud_voice_attempt_locks.clear()
 
     _reset_provider_clients()
@@ -561,6 +562,39 @@ async def test_synthesize_azure_missing_key_falls_back_to_edge(_mock_all, tmp_pa
     assert result == output
     call = _mock_all["Communicate"].call_args
     assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_fallback_records_route_provenance(_mock_all, tmp_path, monkeypatch, caplog):
+    """A cloud fallback must be visible as degradation, not as ordinary Edge synthesis."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    state = StationState()
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        result = await synthesize(
+            "Ciao",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "azure_provenance.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            host_name="Roberto",
+            state=state,
+        )
+
+    assert result.exists()
+    assert "TTS fallback provider=azure" in caplog.text
+    assert "requested_voice=it-IT-Alessio:DragonHDLatestNeural" in caplog.text
+    assert "effective_provider=edge" in caplog.text
+    assert "reason=missing_credentials" in caplog.text
+    assert "Synthesized (Edge fallback):" in caplog.text
+    assert state.runtime_provider_state["tts_provider"]["current_provider"] == "edge"
+    assert state.runtime_provider_state["tts_provider"]["fallback_active"] is True
+    assert "missing_credentials" in state.runtime_provider_state["tts_provider"]["reason"]
 
 
 @pytest.mark.asyncio
@@ -1074,6 +1108,48 @@ async def test_synthesize_azure_http_error_falls_back_to_edge(_mock_all, tmp_pat
     # Edge fallback ran with the configured edge voice — the illusion is preserved.
     call = _mock_all["Communicate"].call_args
     assert call[0][1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_failure_is_not_retried_for_each_ad_voice(
+    _mock_all, tmp_path, monkeypatch, caplog
+):
+    """A provider-wide 5xx must not spend another cloud timeout on each voice."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-route-err-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    seen = {"posts": 0}
+
+    class _CountingHttpErrorClient(_HttpErrorClient):
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            return await super().post(url, **kwargs)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _CountingHttpErrorClient)
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        first = await synthesize(
+            "Prima",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "route_first.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+        second = await synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "route_second.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert first.exists() and second.exists()
+    assert seen["posts"] == 1
+    assert _mock_all["Communicate"].call_count == 2
+    assert "Azure TTS route previously failed this session" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1679,6 +1755,7 @@ async def test_synthesize_ad_empty_parts_fallback_keeps_direct_voice_settings(tm
             "openai_instructions": "Perform as an Italian radio commercial character. "
             "Role: disclaimer_goblin. Style: fast.",
             "voice_settings": {"stability": 0.6},
+            "host_name": "Il Razzo",
             "state": None,
         }
     ]
@@ -1831,6 +1908,7 @@ async def test_synthesize_ad_forwards_ad_voice_settings_and_direct_default(_mock
             "Role: disclaimer_goblin. Style: fast.",
             "voice_settings": {"stability": 0.6},
             "loudnorm": False,
+            "host_name": "Il Razzo",
             "state": None,
         }
     ]

@@ -80,3 +80,34 @@ def test_openai_tts_without_registry_model_falls_back_to_edge():
     status = _tts_provider_status(config, StationState())
     assert status["current_provider"] == "edge"
     assert status["fallback_active"] is True
+
+
+def test_runtime_fallback_overrides_configured_mixed_tts():
+    """Configured keys are not a health proof once a live render falls back."""
+    config = load_config(TOML_PATH)
+    state = StationState()
+    for host in config.hosts:
+        host.engine = "edge"
+    config.ads.voices = []
+    config.sonic_brand.sweeper_voice = ""
+    config.openai_api_key = "openai-key"
+    config.azure_speech_key = "azure-key"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-key"
+    config.hosts[0].engine = "elevenlabs"
+    config.hosts[1].engine = "azure"
+
+    state.update_runtime_provider(
+        "tts_provider",
+        current_provider="edge",
+        primary_provider="mixed_tts",
+        fallback_active=True,
+        reason="elevenlabs:missing_credentials",
+    )
+
+    status = _tts_provider_status(config, state)
+
+    assert status["primary_provider"] == "mixed_tts"
+    assert status["current_provider"] == "edge"
+    assert status["fallback_active"] is True
+    assert status["switch_reason"] == "elevenlabs:missing_credentials"
