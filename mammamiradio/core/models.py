@@ -1861,7 +1861,7 @@ class Capabilities:
     """Chart reloads are available because yt-dlp is enabled and charts are configured."""
 
     tts_degraded: bool = False
-    """True when one or more configured TTS voices were replaced with a fallback at config load."""
+    """True when TTS was substituted at config load or during live synthesis."""
 
     @property
     def tier(self) -> str:

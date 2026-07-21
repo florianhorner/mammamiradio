@@ -1734,6 +1734,80 @@ _ACTION_REQUIRED_FALLBACK_REASONS = {
 }
 
 
+_TTS_RUNTIME_FALLBACK_PREFIX = "Runtime TTS fallback: "
+
+
+def _tts_single_reason_label(reason: str) -> str:
+    """Translate ONE engine's raw TTS fallback reason token into operator copy."""
+    normalized = reason.strip().lower()
+    if not normalized:
+        return ""
+    if "missing_credentials" in normalized:
+        return "A cloud voice key is missing; Edge voice is carrying the show. Add the key and restart the station."
+    if "provider_disabled:http 401" in normalized or "provider_disabled:http 403" in normalized:
+        return "A cloud voice key was not accepted; check the saved key and restart the station."
+    if "provider_disabled:http 404" in normalized:
+        return "A cloud voice route is not available; check the selected voice and restart the station."
+    if "cloud tts route rendered successfully" in normalized or "primary_success" in normalized:
+        return "Cloud voice route is working."
+    if "provider_cooldown" in normalized or "provider_error" in normalized:
+        return "A cloud voice route had trouble; Edge voice is carrying the show and will retry automatically."
+    if "provider_disabled_session" in normalized:
+        return (
+            "A cloud voice route is temporarily unavailable; Edge voice is carrying the show and will retry "
+            "automatically."
+        )
+    if "edge_voice_failure" in normalized:
+        return "The configured voice was unavailable; the station is trying its house voice."
+    if "invalid_edge_voice" in normalized:
+        return "The requested voice was unavailable; the station is using its house voice."
+    if "unknown_engine" in normalized:
+        return "A voice route is not configured; check the voice settings."
+    return "A cloud voice route is unavailable; Edge voice is carrying the show."
+
+
+def _tts_runtime_reason_label(reason: str) -> str:
+    """Turn internal TTS route reasons into calm operator-facing copy.
+
+    The raw reason remains in the runtime log (and in ``diagnostic_reason``
+    for authenticated API consumers). The admin card should explain what the
+    station is doing and what, if anything, the operator can do next.
+
+    A multi-engine aggregate reason (``"Runtime TTS fallback: azure=X; elevenlabs=Y"``)
+    is translated per engine and rejoined — translating the joined string as one
+    blob would match only the first pattern in the if-chain and silently drop
+    every other engine's status from the admin copy.
+    """
+    if not reason.strip():
+        return ""
+    if reason.startswith(_TTS_RUNTIME_FALLBACK_PREFIX):
+        segments = reason[len(_TTS_RUNTIME_FALLBACK_PREFIX) :].split("; ")
+        labeled = []
+        for segment in segments:
+            engine, _, token = segment.partition("=")
+            engine = engine.strip()
+            label = _tts_single_reason_label(token) if token else ""
+            if engine and label:
+                labeled.append(f"{engine}: {label}")
+            elif label:
+                labeled.append(label)
+        if labeled:
+            return "; ".join(labeled)
+        return _tts_single_reason_label(reason)
+    return _tts_single_reason_label(reason)
+
+
+def _display_runtime_event(event) -> dict:
+    """Project runtime events for the admin UI without losing diagnostics."""
+    payload = event.to_dict()
+    provider_class = str(payload.get("provider_class") or "")
+    if provider_class == "tts_provider" or provider_class.startswith("tts:"):
+        raw_reason = str(payload.get("reason") or "")
+        payload["diagnostic_reason"] = raw_reason
+        payload["reason"] = _tts_runtime_reason_label(raw_reason)
+    return payload
+
+
 def _provider_status(
     provider_class: str,
     *,
@@ -1834,6 +1908,7 @@ def _tts_provider_status(config, state: StationState) -> dict:
     if config.sonic_brand.sweeper_voice:
         engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
     cloud_engines = sorted(engine for engine in engines if engine != "edge")
+    missing: list[str] = []
 
     if cloud_engines:
         primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
@@ -1865,7 +1940,23 @@ def _tts_provider_status(config, state: StationState) -> dict:
         primary = current = "edge"
         fallback_active = False
         reason = "Edge TTS is the configured voice provider"
-    return _provider_status(
+
+    # A configured key only proves that a cloud route can be attempted. The
+    # synthesis boundary records the route that actually produced audio; use
+    # that live state when it says a mixed/cloud route degraded to Edge.
+    runtime_tts = state.runtime_provider_state.get("tts_provider", {})
+    if runtime_tts and runtime_tts.get("fallback_active"):
+        current = str(runtime_tts.get("current_provider") or "edge")
+        fallback_active = True
+        reason = str(runtime_tts.get("reason") or "Runtime TTS fallback is active")
+    elif runtime_tts and not missing:
+        saved_current = str(runtime_tts.get("current_provider") or "")
+        if saved_current and saved_current != primary:
+            current = saved_current
+            fallback_active = False
+            reason = str(runtime_tts.get("reason") or reason)
+
+    status = _provider_status(
         "tts_provider",
         primary_provider=primary,
         current_provider=current,
@@ -1873,6 +1964,10 @@ def _tts_provider_status(config, state: StationState) -> dict:
         reason=reason,
         state=state,
     )
+    runtime_reason = str(runtime_tts.get("reason") or "")
+    if runtime_reason:
+        status["switch_reason"] = _tts_runtime_reason_label(runtime_reason)
+    return status
 
 
 def _runtime_status_snapshot(
@@ -1936,7 +2031,7 @@ def _runtime_status_snapshot(
         health_color = "yellow"
         active = [
             providers[name]["current_label"]
-            for name in ("audio_source", "script_provider")
+            for name in ("audio_source", "script_provider", "tts_provider")
             if providers[name]["fallback_active"]
         ]
         health_explanation = "Fallback active: " + ", ".join(active)
@@ -1954,15 +2049,17 @@ def _runtime_status_snapshot(
                 "health_state": health_state,
                 "fallback_active": fallback_active,
                 "runtime_provider_classes": [
-                    name for name in ("audio_source", "script_provider") if providers[name]["fallback_active"]
+                    name
+                    for name in ("audio_source", "script_provider", "tts_provider")
+                    if providers[name]["fallback_active"]
                 ],
             },
         )
 
     events_desc = list(reversed(state.runtime_events))
-    recent_events = [e.to_dict() for e in events_desc[:10]]
+    recent_events = [_display_runtime_event(e) for e in events_desc[:10]]
     last_switch = recent_events[0] if recent_events else None
-    failover_events = [e.to_dict() for e in events_desc if e.fallback_active][:10]
+    failover_events = [_display_runtime_event(e) for e in events_desc if e.fallback_active][:10]
     return {
         "health_state": health_state,
         "health_color": health_color,

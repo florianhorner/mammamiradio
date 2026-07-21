@@ -533,6 +533,31 @@ class TestRuntimeStatusSnapshot:
         assert snap["health_state"] == "degraded"
         assert snap["station_on_air"] is True
 
+    def test_tts_fallback_is_named_in_degraded_health_status(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.update_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="mixed_tts",
+            fallback_active=True,
+            reason="Runtime TTS fallback: azure=provider_error:TimeoutError",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["health_explanation"] == "Fallback active: Edge TTS"
+        assert snap["providers"]["tts_provider"]["fallback_active"] is True
+        assert "cloud voice route had trouble" in snap["providers"]["tts_provider"]["switch_reason"].lower()
+        assert "TimeoutError" not in snap["providers"]["tts_provider"]["switch_reason"]
+        assert snap["failover_events"][0]["reason"] == snap["providers"]["tts_provider"]["switch_reason"]
+        assert "TimeoutError" not in snap["failover_events"][0]["reason"]
+        assert snap["failover_events"][0]["diagnostic_reason"] == (
+            "Runtime TTS fallback: azure=provider_error:TimeoutError"
+        )
+
     def test_station_on_air_false_when_silence_with_listeners(self):
         app = _make_app()
         app.state.stream_hub.subscribe()
