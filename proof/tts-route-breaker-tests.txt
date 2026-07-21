@@ -1,0 +1,19 @@
+# TTS route circuit breaker + admin fallback provenance — test evidence
+# Generated: 2026-07-21T22:03:11Z
+# Branch: florianhorner/chore/ship  Base: origin/main
+
+$ pytest tests/ -q
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5376 passed, 3 skipped, 21 deselected, 1 warning in 122.12s (0:02:02)
+
+$ pytest tests/audio/test_tts.py tests/web/test_tts_provider_status.py tests/web/test_shadow_queue_sync.py -q
+...................................................                      [100%]
+267 passed in 3.10s
+
+$ ruff check . && ruff format --check .
+All checks passed!
+319 files already formatted
+
+$ mypy mammamiradio/audio/tts.py mammamiradio/web/streamer.py
+Success: no issues found in 2 source files

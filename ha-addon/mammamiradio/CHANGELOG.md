@@ -34,6 +34,7 @@
 
 - **Source changes now report the cutover they actually made.** A switch skips only after fresh replacement audio is admitted; if the fallback preserves prior-source audio or no runway exists, current audio finishes and the API reports `skipped: false`. Panic also fences renders already in flight even when the queue itself did not change.
 - **A host break or ad no longer airs silence if every voice provider fails.** When OpenAI, Azure, ElevenLabs, and Edge are all unavailable for a segment, the add-on skips it and falls back to a pre-recorded clip or its existing recovery audio instead of a synthesized silent clip. A render that gets cancelled mid-voice now waits for any in-progress audio work to actually finish before cleaning up its scratch files, closing a race that could otherwise delete audio still being written.
+- **A single mismatched cloud voice no longer silences every other voice on that same provider.** When one configured OpenAI, Azure, or ElevenLabs voice comes back not-found, only that voice steps aside to the built-in Edge voice for the rest of the session — every other character on the same provider keeps using its cloud voice normally. A busy or slow provider now also gets one automatic retry after a short cooldown instead of being sidelined for the whole show, and the control room's voice status explains what's happening in plain language instead of raw technical codes.
 
 ## 2.18.0
 

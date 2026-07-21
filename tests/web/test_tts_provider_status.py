@@ -110,4 +110,43 @@ def test_runtime_fallback_overrides_configured_mixed_tts():
     assert status["primary_provider"] == "mixed_tts"
     assert status["current_provider"] == "edge"
     assert status["fallback_active"] is True
-    assert status["switch_reason"] == "elevenlabs:missing_credentials"
+    assert "cloud voice key is missing" in status["switch_reason"].lower()
+    assert "missing_credentials" not in status["switch_reason"]
+
+
+def test_multi_engine_aggregate_reason_translates_each_engine_independently():
+    """Two engines degraded for different reasons must both surface in admin copy.
+
+    Regression guard: naive substring-matching against the whole concatenated
+    aggregate reason only matches whichever pattern appears first in the
+    if-chain, silently dropping every other engine's status from the admin
+    copy (and, for HTTP 401, silently swallowing a still-broken key).
+    """
+    config = load_config(TOML_PATH)
+    state = StationState()
+    for host in config.hosts:
+        host.engine = "edge"
+    config.ads.voices = []
+    config.sonic_brand.sweeper_voice = ""
+    config.openai_api_key = ""
+    config.azure_speech_key = "azure-key"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-key"
+    config.hosts[0].engine = "azure"
+    config.hosts[1].engine = "elevenlabs"
+
+    state.update_runtime_provider(
+        "tts_provider",
+        current_provider="edge",
+        primary_provider="mixed_tts",
+        fallback_active=True,
+        reason="Runtime TTS fallback: azure=provider_disabled:HTTP 401; elevenlabs=missing_credentials",
+    )
+
+    status = _tts_provider_status(config, state)
+
+    reason = status["switch_reason"].lower()
+    assert "key was not accepted" in reason  # azure's HTTP 401 translation
+    assert "key is missing" in reason  # elevenlabs' missing_credentials translation
+    assert "http 401" not in reason
+    assert "missing_credentials" not in reason
