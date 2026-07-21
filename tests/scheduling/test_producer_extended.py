@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import (
     AdHistoryEntry,
@@ -1610,6 +1611,74 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
     # must still publish a Scaletta row (the "0 ready" bug this fix closes).
     assert len(state.queued_segments) == 1
     assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ban_timing", ["before-resolution", "before-admission"])
+async def test_music_quality_circuit_breaker_skips_blocklisted_last_good_music(tmp_path, ban_timing):
+    """The direct silence rescue must not bypass an existing or racing operator ban."""
+    from mammamiradio.scheduling import producer as producer_module
+
+    state = _make_state()
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
+    ]
+    blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+    if ban_timing == "before-resolution":
+        state.blocklist = blocklist
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    blocked_last_good = tmp_path / "prior_blocked_norm.mp3"
+    blocked_last_good.write_bytes(b"blocked last known good audio")
+    save_track_metadata(blocked_last_good, title="Ordinary", artist="Alex Warren")
+    state.last_music_file = blocked_last_good
+
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    rejected_norms: list[Path] = []
+
+    def _always_silence(path, seg_type):
+        if seg_type == SegmentType.MUSIC:
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _cached_silent_render(track, *_args, **_kwargs):
+        norm = tmp_path / f"norm_silent_{len(rejected_norms)}.mp3"
+        norm.write_bytes(b"silent normalized audio")
+        rejected_norms.append(norm)
+        return RenderedMusicTrack(track=track, path=norm, cache_path=norm, cache_hit=True)
+
+    original_last_music_resolver = producer_module._blocklist_safe_last_music
+
+    def _resolve_last_music(*args, **kwargs):
+        payload = original_last_music_resolver(*args, **kwargs)
+        if ban_timing == "before-admission":
+            state.blocklist = blocklist
+        return payload
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_cached_silent_render),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._blocklist_safe_last_music", side_effect=_resolve_last_music),
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment is recovery
+    assert segment.path != blocked_last_good
+    assert blocked_last_good.exists()
+    assert len(rejected_norms) == 3
 
 
 @pytest.mark.asyncio

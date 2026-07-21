@@ -307,10 +307,12 @@ async def test_ban_now_playing_bans_skips_and_purges(tmp_path):
             metadata={"artist": "Modugno", "title_only": "Volare", "queue_id": "q-ban"},
         )
     )
+    safe_path = tmp_path / "f.mp3"
+    safe_path.write_bytes(b"safe")
     q.put_nowait(
         Segment(
             type=SegmentType.MUSIC,
-            path=Path("/tmp/f.mp3"),
+            path=safe_path,
             ephemeral=False,
             metadata={"artist": "Al Bano", "title_only": "Felicità", "queue_id": "q-keep"},
         )
