@@ -6208,22 +6208,24 @@ async def test_public_status_skip_hint_does_not_clear_continuity_slot(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
-    state.continuity_slot = Segment(
+    reserved_slot = Segment(
         type=SegmentType.MUSIC,
         path=missing_slot_path,
         duration_sec=180.0,
         metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
         ephemeral=False,
     )
+    state.continuity_slot = reserved_slot
     state.now_streaming = {"type": "music", "label": "On air", "started": time.time(), "metadata": {}}
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         body = (await client.get("/public-status")).json()
 
-    # The read path reported no playable runway but left the slot pointer intact.
+    # The read path reported no playable runway but left the exact same slot
+    # reservation intact (identity, not just non-null — a swap would be a bug too).
     assert body["playback_actions"]["skip_would_bridge"] is True
-    assert state.continuity_slot is not None
+    assert state.continuity_slot is reserved_slot
 
 
 @pytest.mark.asyncio

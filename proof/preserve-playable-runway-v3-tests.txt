@@ -15,6 +15,11 @@
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 5373 passed, 3 skipped, 21 deselected, 1 warning in 143.67s (0:02:23)
 
+# NOTE (accepted): the single warning is an upstream StarletteDeprecationWarning
+# emitted by FastAPI's bundled TestClient (starlette.testclient imports httpx),
+# not by this PR's code. It is accepted as an upstream follow-up pending a
+# fastapi/starlette bump; all 5373 assertions pass.
+
 === pytest -m requires_ffmpeg ===
 # Audio-pipeline change: the FFmpeg-marked suite is deselected by default and is
 # run explicitly here (per the repo's audio-pipeline test rule).
