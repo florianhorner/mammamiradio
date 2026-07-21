@@ -463,6 +463,119 @@ async def test_synthesize_openai_fallback_uses_edge_fallback_voice(_mock_all, tm
 
 
 @pytest.mark.asyncio
+async def test_synthesize_openai_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch):
+    """A bad OpenAI voice ID must not push every other OpenAI voice to Edge.
+
+    Regression coverage: openai.APIStatusError does not subclass
+    httpx.HTTPStatusError, so a naive isinstance(exc, httpx.HTTPStatusError)
+    check never recognized an OpenAI 404 as voice-specific — every OpenAI
+    voice error, including a simple bad voice ID, disabled the whole route.
+    """
+    import openai as openai_mod
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-404-key")
+    calls = {"cloud": 0}
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if voice == "bad-voice-id":
+            request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
+            response = httpx.Response(404, content=b"voice not found", request=request)
+            raise openai_mod.NotFoundError("Not Found", response=response, body=None)
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_openai", _fake_openai)
+
+    bad = await synthesize("Ciao", "bad-voice-id", tmp_path / "openai_404_bad.mp3", engine="openai")
+    good = await synthesize("Ancora", "onyx", tmp_path / "openai_404_good.mp3", engine="openai")
+
+    assert bad.exists() and good.exists()
+    # Both voices reached the cloud call — the 404 did not disable the route.
+    assert calls["cloud"] == 2
+    assert _mock_all["Communicate"].call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_auth_error_stays_disabled_past_cooldown_window(_mock_all, tmp_path, monkeypatch):
+    """An OpenAI auth failure stays disabled for the session, not just 30s.
+
+    Regression coverage: because openai.AuthenticationError never satisfied
+    the old isinstance(exc, httpx.HTTPStatusError) check,
+    ``_non_retryable_cloud_tts_error`` always returned "" for OpenAI, so
+    every OpenAI failure — including a definitely-dead API key — was
+    classified as merely transient and got retried every 30 seconds forever.
+    """
+    import openai as openai_mod
+
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-dead-key")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
+        response = httpx.Response(401, content=b"invalid_api_key", request=request)
+        raise openai_mod.AuthenticationError("Incorrect API key provided", response=response, body=None)
+
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
+
+    first = await synthesize("Ciao", "onyx", tmp_path / "openai_dead_first.mp3", engine="openai")
+    assert first.exists()
+    assert calls["cloud"] == 1
+
+    # Past the transient-failure cooldown window, a truly dead key must NOT
+    # get a half-open retry — it stays disabled until the session restarts.
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    second = await synthesize("Ancora", "nova", tmp_path / "openai_dead_second.mp3", engine="openai")
+
+    assert second.exists()
+    assert calls["cloud"] == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_route_retries_after_transient_cooldown(_mock_all, tmp_path, monkeypatch):
+    """A transient OpenAI route failure gets one half-open retry after its cooldown.
+
+    Mirrors the Azure cooldown test — this path shares the same circuit
+    breaker, but OpenAI's error classification only started working once
+    ``_cloud_http_status`` learned to recognize openai.APIStatusError too.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-cooldown-key")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary OpenAI outage")
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
+
+    first = await synthesize("Prima", "onyx", tmp_path / "openai_cooldown_first.mp3", engine="openai")
+    second = await synthesize("Seconda", "nova", tmp_path / "openai_cooldown_second.mp3", engine="openai")
+
+    assert first.exists() and second.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    third = await synthesize("Terza", "onyx", tmp_path / "openai_cooldown_third.mp3", engine="openai")
+
+    assert third.exists()
+    assert calls["cloud"] == 2
+
+
+@pytest.mark.asyncio
 async def test_openai_instructions_from_personality(_mock_all, tmp_path, monkeypatch):
     """synthesize_dialogue passes personality-aware instructions to OpenAI."""
     from mammamiradio.audio.tts import synthesize_dialogue
@@ -987,6 +1100,51 @@ async def test_synthesize_azure_auth_error_lock_collapses_concurrent_attempts(_m
 
 
 @pytest.mark.asyncio
+async def test_synthesize_azure_401_disables_route_for_a_different_voice_too(_mock_all, tmp_path, monkeypatch):
+    """A 401 must block the whole route, not just the voice that hit it.
+
+    The auth-memoization tests above only ever reuse the SAME voice, so they'd
+    pass even if just per-voice memoization (not route memoization) were doing
+    the work. This proves a 401 on one voice also stops a DIFFERENT voice on
+    the same Azure route from reaching the cloud at all.
+    """
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-401-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        request = httpx.Request("POST", "https://example.invalid/tts")
+        response = httpx.Response(401, content=b"unauthorized", request=request)
+        raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_azure", _fake_azure)
+
+    first = await synthesize(
+        "Ciao",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "azure_401_first.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    second = await synthesize(
+        "Ancora",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        tmp_path / "azure_401_second.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert first.exists() and second.exists()
+    # Only the first (different) voice actually reached Azure — the route,
+    # not just that one voice, was disabled after the 401.
+    assert calls["cloud"] == 1
+    assert _mock_all["Communicate"].call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_auth_error_is_memoized_for_session(_mock_all, tmp_path, monkeypatch, caplog):
     """A non-retryable ElevenLabs auth/config failure warns once, then skips cloud retry."""
     import logging
@@ -1149,7 +1307,420 @@ async def test_synthesize_cloud_route_failure_is_not_retried_for_each_ad_voice(
     assert first.exists() and second.exists()
     assert seen["posts"] == 1
     assert _mock_all["Communicate"].call_count == 2
-    assert "Azure TTS route previously failed this session" in caplog.text
+    assert "Azure TTS route cooldown" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_healthy_route_renders_different_voices_concurrently(_mock_all, tmp_path, monkeypatch):
+    """Marco and Giulia's lines on one healthy route must overlap, not queue.
+
+    Regression guard for the route-wide mutex that briefly serialized every
+    dialogue line on a shared provider route — it doubled banter render time
+    on every break. Only the half-open probe is single-flight; healthy
+    traffic never is.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-healthy-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    first_in_provider = asyncio.Event()
+    second_in_provider = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        if voice == "it-IT-Isabella:DragonHDLatestNeural":
+            first_in_provider.set()
+        else:
+            second_in_provider.set()
+        await release.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    first = asyncio.create_task(
+        synthesize(
+            "Prima",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "healthy_first.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(first_in_provider.wait(), timeout=1.0)
+    second = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "healthy_second.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    # Both provider calls must be in flight AT THE SAME TIME while the first
+    # is still blocked — a route-wide lock would leave the second waiting.
+    await asyncio.wait_for(second_in_provider.wait(), timeout=1.0)
+
+    release.set()
+    first_result, second_result = await asyncio.wait_for(asyncio.gather(first, second), timeout=2.0)
+    assert first_result.exists() and second_result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_recheck_stops_timeout_cascade(_mock_all, tmp_path, monkeypatch):
+    """A call queued behind an outage must not fire its own doomed request.
+
+    With two render slots, a third voice passes the breaker check while the
+    first two calls are still hanging, then waits for a slot. Without the
+    post-acquisition re-check it would fire its own full-timeout call as a
+    slot freed — stacking timeout waves instead of going straight to Edge.
+    """
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-cascade-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    posts_started: list[asyncio.Event] = [asyncio.Event(), asyncio.Event()]
+    release_posts = asyncio.Event()
+    seen = {"posts": 0}
+
+    class _BlockingCountingHttpErrorClient(_HttpErrorClient):
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            if seen["posts"] <= 2:
+                posts_started[seen["posts"] - 1].set()
+            await release_posts.wait()
+            return await super().post(url, **kwargs)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _BlockingCountingHttpErrorClient)
+
+    voices = [
+        "it-IT-Isabella:DragonHDLatestNeural",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        "it-IT-Marcello:DragonHDLatestNeural",
+    ]
+    first = asyncio.create_task(
+        synthesize(
+            "Prima", voices[0], tmp_path / "cascade_1.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    await asyncio.wait_for(posts_started[0].wait(), timeout=1.0)
+    second = asyncio.create_task(
+        synthesize(
+            "Seconda", voices[1], tmp_path / "cascade_2.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    await asyncio.wait_for(posts_started[1].wait(), timeout=1.0)
+    # Both render slots are now occupied by hanging cloud calls. The third
+    # voice passes the pre-check (breaker still closed) and queues on a slot.
+    third = asyncio.create_task(
+        synthesize(
+            "Terza", voices[2], tmp_path / "cascade_3.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert seen["posts"] == 2
+
+    release_posts.set()
+    results = await asyncio.wait_for(asyncio.gather(first, second, third), timeout=2.0)
+
+    assert all(r.exists() for r in results)
+    # The third call re-checked the breaker after getting its slot and went
+    # straight to Edge — no third doomed provider request.
+    assert seen["posts"] == 2
+    assert _mock_all["Communicate"].call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_half_open_probe_is_single_flight(_mock_all, tmp_path, monkeypatch):
+    """After the cooldown, exactly one caller probes; others stay on Edge."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-probe-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        probe_started.set()
+        await release_probe.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    tripped = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "probe_trip.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert tripped.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    probe = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "probe_winner.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(probe_started.wait(), timeout=1.0)
+    # While the probe is in flight, another voice must NOT get a second probe.
+    bystander = await asyncio.wait_for(
+        synthesize(
+            "Terza",
+            "it-IT-Marcello:DragonHDLatestNeural",
+            tmp_path / "probe_bystander.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        ),
+        timeout=2.0,
+    )
+    assert bystander.exists()
+    assert calls["cloud"] == 2  # trip + the single probe; no third call
+
+    release_probe.set()
+    probe_result = await asyncio.wait_for(probe, timeout=2.0)
+    assert probe_result.exists()
+
+    # The successful probe closed the breaker: the next call goes to the cloud.
+    recovered = await synthesize(
+        "Quarta",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "probe_recovered.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert recovered.exists()
+    assert calls["cloud"] == 3
+
+
+@pytest.mark.asyncio
+async def test_synthesize_probe_success_outranks_stale_concurrent_failure(_mock_all, tmp_path, monkeypatch):
+    """A successful probe reopens the route even if a straggler failed meanwhile.
+
+    A call that was already in flight when the breaker first tripped can fail
+    AFTER the probe started and install a fresh cooldown over the probe
+    marker. The probe's success is fresher evidence — it must win, or the
+    route sits on Edge another 30 seconds despite a proven-healthy provider.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-stale-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        probe_started.set()
+        await release_probe.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    tripped = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "stale_trip.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert tripped.exists()
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    route_key = tts_mod._cloud_route_key("azure")
+    probe = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "stale_probe.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(probe_started.wait(), timeout=1.0)
+    # A straggler from before the trip fails route-wide mid-probe.
+    tts_mod._memoize_failed_cloud_route(route_key, retryable=True)
+
+    release_probe.set()
+    assert (await asyncio.wait_for(probe, timeout=2.0)).exists()
+
+    # The probe's success reopened the route despite the stale cooldown.
+    third = await synthesize(
+        "Terza",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "stale_third.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert third.exists()
+    assert calls["cloud"] == 3
+
+
+def test_memoize_never_downgrades_a_session_disable_to_a_cooldown():
+    """A straggler timeout must not turn a revoked-key disable into 30s retries."""
+    import mammamiradio.audio.tts as tts_mod
+
+    tts_mod.reset_voice_failures()
+    route_key = ("azure", "westeurope", "fp", "")
+    try:
+        tts_mod._memoize_failed_cloud_route(route_key, retryable=False)
+        tts_mod._memoize_failed_cloud_route(route_key, retryable=True)
+        assert tts_mod._claim_cloud_route(route_key) == "permanent"
+    finally:
+        tts_mod.reset_voice_failures()
+
+
+def test_should_disable_cloud_route_ignores_local_post_provider_failures():
+    """FFmpeg/disk errors after the provider answered say nothing about the route."""
+    import openai as openai_mod
+
+    from mammamiradio.audio.tts import _should_disable_cloud_route
+
+    # Local failures: never route evidence.
+    assert _should_disable_cloud_route(RuntimeError("normalize failed")) is False
+    assert _should_disable_cloud_route(OSError("disk full")) is False
+
+    # Provider/network failures: route-wide.
+    assert _should_disable_cloud_route(TimeoutError("hung")) is True
+    request = httpx.Request("POST", "https://example.invalid/tts")
+    assert _should_disable_cloud_route(httpx.ConnectError("refused", request=request)) is True
+    response_500 = httpx.Response(500, request=request)
+    assert _should_disable_cloud_route(httpx.HTTPStatusError("boom", request=request, response=response_500)) is True
+    response_401 = httpx.Response(401, request=request, content=b"unauthorized")
+    assert (
+        _should_disable_cloud_route(openai_mod.AuthenticationError("bad key", response=response_401, body=None)) is True
+    )
+
+    # Voice-specific statuses: never route-wide, from either error family.
+    response_404 = httpx.Response(404, request=request, content=b"voice not found")
+    assert _should_disable_cloud_route(httpx.HTTPStatusError("nf", request=request, response=response_404)) is False
+    assert _should_disable_cloud_route(openai_mod.NotFoundError("nf", response=response_404, body=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_retries_after_transient_cooldown(_mock_all, tmp_path, monkeypatch):
+    """A transient route failure gets one half-open retry after its cooldown."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-cooldown-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    first = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "cooldown_first.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    second = await synthesize(
+        "Seconda",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        tmp_path / "cooldown_second.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert first.exists() and second.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    third = await synthesize(
+        "Terza",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "cooldown_third.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert third.exists()
+    assert calls["cloud"] == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch):
+    """A 404 for one bad voice ID must not push other configured voices to Edge."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-404-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if voice == "it-IT-BadVoice:DragonHDLatestNeural":
+            request = httpx.Request("POST", "https://example.invalid/tts")
+            response = httpx.Response(404, content=b"voice not found", request=request)
+            raise httpx.HTTPStatusError("Not Found", request=request, response=response)
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    bad = await synthesize(
+        "Ciao",
+        "it-IT-BadVoice:DragonHDLatestNeural",
+        tmp_path / "bad.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    good = await synthesize(
+        "Ancora",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "good.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert bad.exists() and good.exists()
+    # Both voices reached the cloud call — the 404 did not disable the route.
+    assert calls["cloud"] == 2
+    # Only the bad voice fell back to Edge; the good voice was served by the cloud stub.
+    assert _mock_all["Communicate"].call_count == 1
+    assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
+
+    # The bad voice itself stays memoized this session (per-voice, not route-wide).
+    again = await synthesize(
+        "Ancora una volta",
+        "it-IT-BadVoice:DragonHDLatestNeural",
+        tmp_path / "bad_again.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert again.exists()
+    assert calls["cloud"] == 2
 
 
 @pytest.mark.asyncio
