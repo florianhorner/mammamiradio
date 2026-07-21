@@ -4309,8 +4309,14 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
         (("Ordinary", "Alex Warren"), None),
         (None, None),
         (("Safe Song", "Safe Artist"), "song"),
+        # A sidecar missing the artist yields no durable identity (load_track_metadata
+        # requires both fields), so the bed fails closed while a ban is active —
+        # whether or not the title collides with a ban. This is a deliberate, safe
+        # conservatism; loosening it would mean bypassing the identity contract.
+        (("Ordinary", ""), None),
+        (("Safe Song", ""), None),
     ],
-    ids=["blocked", "unidentified", "identified-safe"],
+    ids=["blocked", "unidentified", "identified-safe", "artist-missing-title-banned", "artist-missing-title-safe"],
 )
 def test_adjacent_music_source_enforces_active_blocklist_identity(tmp_path, sidecar, expected):
     """Adjacent speech beds fail closed when their durable song identity is unsafe."""

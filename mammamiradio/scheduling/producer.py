@@ -1682,6 +1682,11 @@ def _blocklist_safe_last_music(
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
+    # load_track_metadata only returns a dict when BOTH title and artist are
+    # present, so an incomplete sidecar arrives here as empty metadata. Fail
+    # closed: without a full durable identity we cannot prove the song is not
+    # banned. (Degrades a metadata-poor bed to dry voice while any ban is active
+    # — safe and rare; loosening it would mean bypassing that identity contract.)
     if not title or not artist:
         logger.warning(
             "%s: skipping unidentified last-known-good music while blocklist is active: %s",
