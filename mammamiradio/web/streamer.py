@@ -854,9 +854,16 @@ def _playable_runway_available(q, state: StationState, *, self_heal: bool = True
 
 def _continuity_slot_status(state: StationState) -> dict | None:
     """Admin-only projection of the capacity-exempt safety reservation."""
-    duration_sec = _continuity_slot_seconds(state)
     slot = state.continuity_slot
     if slot is None:
+        return None
+    # Read-only status projection: never self-heal (clear) the reserved slot from
+    # a /status poll — only mutation paths may drop a dangling slot. A slot whose
+    # file has vanished still must not be advertised as ready audio, so report
+    # nothing (rather than a phantom 0-duration entry) while leaving the reservation
+    # in place for a mutation path to reconcile.
+    duration_sec = _continuity_slot_seconds(state, self_heal=False)
+    if duration_sec <= 0:
         return None
     metadata = slot.metadata if isinstance(slot.metadata, dict) else {}
     return {
@@ -7251,9 +7258,11 @@ async def status(
             # Honest airtime-ahead readout for the admin panel: the summed
             # duration of the rendered queue. Surfaces SECONDS of buffered audio,
             # not item count (3 short banters are not 3 songs of runway). Reads
-            # the real asyncio queue and, matching the producer runway governor,
-            # counts only immediately-playable audio (banned/stale/evicted
-            # segments the playback loop will discard don't inflate the number).
+            # the real asyncio queue and counts only immediately-playable audio
+            # (same filtering as the producer_headroom.buffered_audio_sec
+            # observability readout; NOT the unfiltered pacing count), so
+            # banned/stale/evicted segments the playback loop will discard don't
+            # inflate the number.
             "buffered_audio_sec": _queued_audio_seconds(segment_queue, state=state),
             "segments_produced": state.segments_produced,
             "tracks_played": len(state.played_tracks),

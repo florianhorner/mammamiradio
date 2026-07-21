@@ -13,7 +13,7 @@
     from starlette.testclient import TestClient as TestClient  # noqa
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-5369 passed, 3 skipped, 21 deselected, 1 warning in 141.23s (0:02:21)
+5373 passed, 3 skipped, 21 deselected, 1 warning in 143.67s (0:02:23)
 
 === pytest -m requires_ffmpeg ===
 # Audio-pipeline change: the FFmpeg-marked suite is deselected by default and is
@@ -21,7 +21,7 @@
 ............
 [broadcast-chain CPU] 3s segment colour pass: 0.04s
 .........                                                    [100%]
-21 passed, 5372 deselected, 1 warning in 6.22s
+21 passed, 5376 deselected, 1 warning in 6.33s
 
 === ruff check . ===
 All checks passed!

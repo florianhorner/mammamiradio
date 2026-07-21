@@ -1748,26 +1748,32 @@ def test_runtime_status_projects_and_counts_capacity_exempt_continuity(tmp_path)
     assert rs["producer_headroom"]["headroom_ok"] is True
 
 
-def test_runtime_status_clears_missing_capacity_exempt_continuity(tmp_path):
-    """A deleted cache slot is not advertised or counted as ready audio."""
+def test_runtime_status_hides_missing_slot_without_clearing_it(tmp_path):
+    """A deleted cache slot is not advertised or counted as ready audio — but a
+    read-only /status poll must not clear the reservation itself. Self-heal is a
+    mutation-path responsibility, so a transient stat blip on a poll can't destroy
+    the reserved dead-air safety slot."""
     app = _make_app()
-    app.state.station_state.continuity_slot = Segment(
+    slot = Segment(
         type=SegmentType.MUSIC,
         path=tmp_path / "norm_missing_slot_128k.mp3",
         duration_sec=240.0,
         metadata={"continuity_reservation": True, "audio_source": "norm_cache"},
         ephemeral=False,
     )
+    app.state.station_state.continuity_slot = slot
 
     with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
         req = _fake_request(app)
         runtime_health = _runtime_health_snapshot(req)
         rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
 
+    # Not advertised, not counted as ready audio…
     assert rs["continuity_slot"] is None
     assert rs["producer_headroom"]["continuity_slot_sec"] == 0.0
     assert rs["producer_headroom"]["headroom_ok"] is False
-    assert app.state.station_state.continuity_slot is None
+    # …but the read did not mutate the reservation.
+    assert app.state.station_state.continuity_slot is slot
 
 
 def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot(tmp_path):
@@ -2263,6 +2269,74 @@ def test_playable_runway_check_readonly_preserves_missing_slot(tmp_path):
     # Mutating default path still self-heals a genuinely dangling slot.
     assert _playable_runway_available(app.state.queue, state) is False
     assert state.continuity_slot is None
+
+
+def test_discard_unplayable_prefix_all_unplayable_clears_music_adjacency(tmp_path):
+    """Draining an entirely-unplayable queue (empty survivors) clears MUSIC adjacency."""
+    app = _make_app()
+    state = app.state.station_state
+    first_path = tmp_path / "blocked-a.mp3"
+    first_path.write_bytes(b"a")
+    second_path = tmp_path / "blocked-b.mp3"
+    second_path.write_bytes(b"b")
+    first = Segment(
+        type=SegmentType.MUSIC,
+        path=first_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-a", "artist": "A Artist", "title_only": "A Song"},
+        ephemeral=False,
+    )
+    second = Segment(
+        type=SegmentType.MUSIC,
+        path=second_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-b", "artist": "B Artist", "title_only": "B Song"},
+        ephemeral=False,
+    )
+    for segment in (first, second):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-a", "type": "music", "label": "A Song"},
+        {"id": "blocked-b", "type": "music", "label": "B Song"},
+    ]
+    state.blocklist = {
+        ("a artist", "a song"): {"display": "A Artist - A Song"},
+        ("b artist", "b song"): {"display": "B Artist - B Song"},
+    }
+    state.last_music_file = second_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == []
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_continuity_slot_status_readonly_preserves_missing_slot(tmp_path):
+    """The admin /status slot projection must not clear the reserved slot on a poll."""
+    from mammamiradio.web.streamer import _continuity_slot_status
+
+    app = _make_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    status = _continuity_slot_status(state)
+
+    # A dead slot is hidden from the projection (not advertised as a phantom
+    # 0-duration entry), but the reservation itself is left intact for a mutation
+    # path to reconcile — a read never clears it.
+    assert status is None
+    assert state.continuity_slot is slot
 
 
 def test_apply_ban_clears_lone_blocked_tail_as_speech_bed(tmp_path):
