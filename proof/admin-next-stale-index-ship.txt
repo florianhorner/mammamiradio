@@ -1,0 +1,23 @@
+# Ship proof — florianhorner/fix/admin-next-stale-index
+# fix(admin): guard rotation-row edits with revision + id tokens
+# Commit d10a6c3b, generated locally
+
+## ruff check (changed source + web tests)
+All checks passed!
+
+## ruff format --check
+68 files already formatted
+
+## mypy (changed source)
+Success: no issues found in 2 source files
+
+## release invariants
+
+All invariants passed.
+
+## pytest — full web surface (tests/web/)
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1588 passed, 1 skipped, 1 warning in 25.53s
+
+## pytest — full suite (run separately, ~3m17s)
+5357 passed, 3 skipped, 21 deselected in 197.64s
