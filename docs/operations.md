@@ -277,9 +277,10 @@ bridge. The fields:
   playback queue, summed from segment durations (plus an active protected
   continuity slot when one exists). Only segments playback would actually
   accept count: a banned/blocklisted song, a companionship cue whose listener
-  session has since moved on, or a file missing from disk contributes `0`
-  seconds even while it still occupies a queue slot, so a queue that looks
-  full on `queue_depth` alone can still show a thin `buffered_audio_sec`.
+  session has since moved on, or a file that is missing, empty, or not a
+  regular file on disk contributes `0` seconds even while it still occupies a
+  queue slot, so a queue that looks full on `queue_depth` alone can still show
+  a thin `buffered_audio_sec`.
 - `runway_floor_sec` — minimum ready-audio runway used by the continuity guard.
 - `continuity_slot_sec` — seconds held in the capacity-exempt protected
   continuity slot (`0` when none is reserved, or when the reserved slot itself
@@ -288,17 +289,25 @@ bridge. The fields:
   out-of-band safety audio rather than queued program.
 - `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec` **and**
   the immediate head of the queue (or the continuity slot, if the queue is
-  empty) is itself playback-valid — a runway that only clears the floor
-  because of unplayable segments further back in the queue is not "ready."
+  empty) is itself playback-valid. Unplayable segments never add seconds to
+  `buffered_audio_sec`, but they can still sit ahead of playable ones in the
+  queue — so the floor can be cleared entirely by playable audio seated
+  *behind* an unplayable head, and `headroom_ok` stays `false` until that head
+  clears, because playback would hit the bad segment first.
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
-The fields are operator-facing observability. The same real-queue seconds
-calculation also informs the producer's runway governor: when natural optional
-speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`) would run below
-the floor while the bounded queue can still build more runway, the producer
-chooses music instead. If the bounded queue is effectively saturated and still
-cannot reach the seconds floor, the due speech is allowed so optional breaks do
-not starve forever on short-track stations.
+The fields are operator-facing observability. The producer's own runway
+governor makes the natural-pacing music-vs-speech call from a separate,
+simpler seconds count (`_producer_buffered_seconds`) that sums raw queued
+segment durations without the blocklist/companionship-session/on-disk
+filtering described above — so `buffered_audio_sec` here and the count behind
+a pacing decision can diverge when the queue holds an otherwise-unplayable
+segment. When natural optional speech (`BANTER`, `AD`, `NEWS_FLASH`,
+`STATION_ID`, `TIME_CHECK`) would run below the floor on the governor's count
+while the bounded queue can still build more runway, the producer chooses
+music instead. If the bounded queue is effectively saturated and still cannot
+reach the seconds floor, the due speech is allowed so optional breaks do not
+starve forever on short-track stations.
 
 ### Reading stream-delivery diagnostics
 
