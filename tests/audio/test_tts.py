@@ -1375,7 +1375,12 @@ async def test_synthesize_cloud_route_recheck_stops_timeout_cascade(_mock_all, t
     post-acquisition re-check it would fire its own full-timeout call as a
     slot freed — stacking timeout waves instead of going straight to Edge.
     """
+    import mammamiradio.audio.tts as tts_mod
     from mammamiradio.audio.tts import synthesize
+
+    # The choreography below saturates the render slots with exactly two
+    # hanging calls; if the concurrency policy changes, rework the setup.
+    assert tts_mod._HEAVY_SEM._value == 2, "cascade setup assumes two render slots"
 
     monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-cascade-key")
     monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
