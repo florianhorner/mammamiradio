@@ -275,13 +275,21 @@ bridge. The fields:
   headroom decision.
 - `buffered_audio_sec` — total seconds of audio already queued in the real
   playback queue, summed from segment durations (plus an active protected
-  continuity slot when one exists).
+  continuity slot when one exists). Only segments playback would actually
+  accept count: a banned/blocklisted song, a companionship cue whose listener
+  session has since moved on, or a file missing from disk contributes `0`
+  seconds even while it still occupies a queue slot, so a queue that looks
+  full on `queue_depth` alone can still show a thin `buffered_audio_sec`.
 - `runway_floor_sec` — minimum ready-audio runway used by the continuity guard.
 - `continuity_slot_sec` — seconds held in the capacity-exempt protected
-  continuity slot (`0` when none is reserved); already included in
-  `buffered_audio_sec`, surfaced separately so an operator can see how much of
-  the runway is out-of-band safety audio rather than queued program.
-- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec`.
+  continuity slot (`0` when none is reserved, or when the reserved slot itself
+  is no longer playback-valid); already included in `buffered_audio_sec`,
+  surfaced separately so an operator can see how much of the runway is
+  out-of-band safety audio rather than queued program.
+- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec` **and**
+  the immediate head of the queue (or the continuity slot, if the queue is
+  empty) is itself playback-valid — a runway that only clears the floor
+  because of unplayable segments further back in the queue is not "ready."
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
 The fields are operator-facing observability. The same real-queue seconds
