@@ -1,0 +1,41 @@
+=== pytest tests/ ===
+........................................................................ [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+.......................................                                  [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /Users/florianhorner/conductor/workspaces/mammamiradio/bordeaux-v1/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5364 passed, 3 skipped, 21 deselected, 1 warning in 226.40s (0:03:46)
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+319 files already formatted
+
+=== mypy mammamiradio/ tests/ ===
+mammamiradio/main.py:605: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+mammamiradio/main.py:620: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_public_status_contract.py:521: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:1214: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 290 source files
+
+=== scripts/validate-addon.sh ===
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/logo.png
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/apparmor.txt
+  [0;34mPASS[0m  ha-addon/mammamiradio-edge/translations/en.yaml
+  [0;34mPASS[0m  edge AppArmor profile matches stable
+  [0;34mPASS[0m  edge host_network: true
+  [0;34mPASS[0m  edge ingress_port: 8000
+  [0;34mPASS[0m  edge timeout: 240 (>= 120)
+
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.
