@@ -34,6 +34,7 @@
 
 - **Source changes now report the cutover they actually made.** A switch skips only after fresh replacement audio is admitted; if the fallback preserves prior-source audio or no runway exists, current audio finishes and the API reports `skipped: false`. Panic also fences renders already in flight even when the queue itself did not change.
 - **A host break or ad no longer airs silence if every voice provider fails.** When OpenAI, Azure, ElevenLabs, and Edge are all unavailable for a segment, the add-on skips it and falls back to a pre-recorded clip or its existing recovery audio instead of a synthesized silent clip. A render that gets cancelled mid-voice now waits for any in-progress audio work to actually finish before cleaning up its scratch files, closing a race that could otherwise delete audio still being written.
+- **The add-on's "how much safe audio is ready" count can no longer be fooled by audio that can't actually play.** Queued or reserved segments that are banned, were queued for a listener who has since moved on, or are missing, empty, or unreadable on disk are no longer counted toward the cushion of ready audio that decides whether Skip has to cut straight to fresh music. A banned song sitting at the front of the queue is now discarded before playback reaches it, and removing queued items — by ban, by a skip, or by an operator's manual removal — can no longer leave a leftover, unverified segment mistakenly reused as backing music under the next host break.
 
 ## 2.18.0
 
