@@ -79,28 +79,51 @@ def test_radio_toml_brand_sonic_signatures_use_real_sfx_types():
                 )
 
 
-def test_load_config_parses_per_host_voice_settings():
-    """Regular hosts opt into V3 without changing the V2 guest/ad baseline."""
-    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+@pytest.mark.parametrize(
+    "toml_path",
+    [
+        Path(__file__).resolve().parents[2] / "radio.toml",
+        Path(__file__).resolve().parents[2] / "ha-addon" / "mammamiradio" / "radio.toml",
+    ],
+)
+def test_load_config_parses_per_host_voice_settings(toml_path):
+    """Every host ships on V2 in both shipped radio.toml copies. Expressive V3
+    delivery is present in the code but disabled after the V3 host-performance
+    audition was rejected, so no host carries eleven_v3 or an audited delivery
+    profile in production config."""
     config = load_config(str(toml_path))
     marco = next(h for h in config.hosts if h.name == "Marco")
     giulia = next(h for h in config.hosts if h.name == "Giulia")
     hans = next(h for h in config.hosts if h.name == "Hans Günther")
     assert marco.voice_settings == {"stability": 0.6}
-    assert marco.elevenlabs_model == "eleven_v3"
-    assert marco.delivery_profile == "marco"
+    assert marco.elevenlabs_model == "eleven_multilingual_v2"
+    assert marco.delivery_profile == "none"
     assert giulia.voice_settings == {}
-    assert giulia.elevenlabs_model == "eleven_v3"
-    assert giulia.delivery_profile == "giulia"
+    assert giulia.elevenlabs_model == "eleven_multilingual_v2"
+    assert giulia.delivery_profile == "none"
     assert hans.elevenlabs_model == "eleven_multilingual_v2"
     assert hans.delivery_profile == "none"
 
 
+def _radio_toml_with_v3_marco() -> str:
+    """Production ships every host on V2 (expressive V3 delivery is present in the
+    code but disabled after the V3 host-performance audition was rejected). The V3
+    config-validation tests below need a host that *has* opted into eleven_v3, so
+    re-opt Marco in here rather than depend on production radio.toml."""
+    source = (Path(__file__).resolve().parents[2] / "radio.toml").read_text()
+    updated = source.replace(
+        'elevenlabs_model = "eleven_multilingual_v2"\nvoice_settings = { stability = 0.6 }',
+        'elevenlabs_model = "eleven_v3"\ndelivery_profile = "marco"\nvoice_settings = { stability = 0.6 }',
+        1,
+    )
+    assert updated != source, "expected Marco's V2 host block to be re-opted into V3"
+    return updated
+
+
 def test_load_config_rejects_v3_host_with_v2_only_settings(tmp_path):
-    source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = tmp_path / "radio.toml"
     custom.write_text(
-        source.read_text().replace(
+        _radio_toml_with_v3_marco().replace(
             "voice_settings = { stability = 0.6 }",
             "voice_settings = { stability = 0.6, style = 0.2 }",
             1,
@@ -112,9 +135,8 @@ def test_load_config_rejects_v3_host_with_v2_only_settings(tmp_path):
 
 
 def test_load_config_rejects_v3_host_on_non_elevenlabs_engine(tmp_path):
-    source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = tmp_path / "radio.toml"
-    content = source.read_text()
+    content = _radio_toml_with_v3_marco()
     content = content.replace('engine = "elevenlabs"', 'engine = "edge"', 1)
     content = content.replace("voice_settings = { stability = 0.6 }", "", 1)
     custom.write_text(content)
@@ -124,10 +146,9 @@ def test_load_config_rejects_v3_host_on_non_elevenlabs_engine(tmp_path):
 
 
 def test_load_config_rejects_delivery_profile_without_v3(tmp_path):
-    source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = tmp_path / "radio.toml"
     custom.write_text(
-        source.read_text().replace(
+        _radio_toml_with_v3_marco().replace(
             'elevenlabs_model = "eleven_v3"',
             'elevenlabs_model = "eleven_multilingual_v2"',
             1,
@@ -139,18 +160,18 @@ def test_load_config_rejects_delivery_profile_without_v3(tmp_path):
 
 
 def test_load_config_rejects_delivery_profile_on_the_wrong_host(tmp_path):
-    source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = tmp_path / "radio.toml"
-    custom.write_text(source.read_text().replace('delivery_profile = "marco"', 'delivery_profile = "giulia"', 1))
+    custom.write_text(
+        _radio_toml_with_v3_marco().replace('delivery_profile = "marco"', 'delivery_profile = "giulia"', 1)
+    )
 
     with pytest.raises(ValueError, match="'giulia' is reserved for the host named 'Giulia'"):
         load_config(str(custom))
 
 
 def test_load_config_rejects_v3_without_an_audited_host_delivery_profile(tmp_path):
-    source = Path(__file__).resolve().parents[2] / "radio.toml"
     custom = tmp_path / "radio.toml"
-    custom.write_text(source.read_text().replace('delivery_profile = "marco"', 'delivery_profile = "none"', 1))
+    custom.write_text(_radio_toml_with_v3_marco().replace('delivery_profile = "marco"', 'delivery_profile = "none"', 1))
 
     with pytest.raises(ValueError, match="'eleven_v3' requires the matching audited host delivery profile"):
         load_config(str(custom))
@@ -447,8 +468,7 @@ def test_load_config_sets_default_edge_fallback_for_openai_hosts(tmp_path):
         'voice = "o4b57JYAECRMJyCEXyIE"\n'
         'engine = "elevenlabs"\n'
         'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n'
-        'elevenlabs_model = "eleven_v3"\n'
-        'delivery_profile = "marco"\n'
+        'elevenlabs_model = "eleven_multilingual_v2"\n'
         "voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)\n",
         'voice = "cedar"\nengine = "openai"\n',
     )
@@ -468,8 +488,7 @@ def test_load_config_normalizes_edge_host_with_openai_voice(tmp_path):
         'voice = "o4b57JYAECRMJyCEXyIE"\n'
         'engine = "elevenlabs"\n'
         'edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"\n'
-        'elevenlabs_model = "eleven_v3"\n'
-        'delivery_profile = "marco"\n'
+        'elevenlabs_model = "eleven_multilingual_v2"\n'
         "voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)",
         'voice = "cedar"\nengine = "edge"\nedge_fallback_voice = ""',
     )

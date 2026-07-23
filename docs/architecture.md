@@ -557,10 +557,10 @@ just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) remains the default for ads, sweepers, guest bits, and every host that has not explicitly opted in. Marco and Giulia use `eleven_v3` with a code-owned `delivery_profile`; V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for ads, sweepers, guest bits, and every host. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
 
-For selected normal host banter, the script carries one semantic cue beside —
-never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
+For selected normal host banter on a V3 host, the script carries one semantic
+cue beside — never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
 `playful`; Giulia may be `dry`, `curious`, or `playful`. Only the V3 TTS boundary
 maps those values to provider audio tags. Ads, news, IDs, sweepers, transitions,
 time checks, stock/fallback/repair lines, V2, and Edge receive no tag. The clean
