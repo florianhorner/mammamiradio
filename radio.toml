@@ -97,8 +97,7 @@ name = "Marco"
 voice = "o4b57JYAECRMJyCEXyIE"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
-elevenlabs_model = "eleven_v3"
-delivery_profile = "marco"
+elevenlabs_model = "eleven_multilingual_v2"
 voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)
 style = "manic energy, steamrolls every conversation, cuts in hard but always leaves the next host an immediate opening to answer or counter him, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it), massive ego, catastrophically bad takes delivered with total conviction, never admits he's wrong — doubles down harder when cornered, genuinely believes he is the reason people tune in"
 [hosts.personality]
@@ -113,8 +112,7 @@ name = "Giulia"
 voice = "fNmw8sukfGuvWVOp33Ge"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-IsabellaNeural"
-elevenlabs_model = "eleven_v3"
-delivery_profile = "giulia"
+elevenlabs_model = "eleven_multilingual_v2"
 style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid, openly contemptuous of Marco's intelligence, delivers devastation with the warmth of a tax audit, treats him like a slow child she is legally obligated to work with"
 [hosts.personality]
 energy = 72

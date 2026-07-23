@@ -383,8 +383,10 @@ of being hidden by the runtime Edge fallback.
 
 ### ElevenLabs V3 host-performance gate
 
-Marco and Giulia are the only configured V3 host profiles. Before an edge
-release, make an on-demand comparison matrix — never infer V3 success from a
+No host currently ships on `eleven_v3`: Marco and Giulia were reverted to V2
+after their V3 host-performance audition was rejected (recorded in the tracked
+receipt `proof/2026-07-16-v3-host-performance.json`). If a host opts back into
+`eleven_v3`, run this gate before an edge release — never infer V3 success from a
 provider-key check or an ordinary live segment:
 
 ```bash
