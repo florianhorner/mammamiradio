@@ -1,20 +1,27 @@
 # Contract-drift guard for the frozen v1 now-playing surface (see CONTRACT.md).
 #
 # Three checks, scoped so unrelated PRs never break:
-#   1. golden-fixture     — always runs; renders the real serializer and
-#                           byte-compares against the committed golden fixture.
-#   2. frozen-path-gate   — only gates PRs whose diff touches frozen paths or
-#                           the fixture; those must carry 'Contract-Change:' in
-#                           a commit message or the PR body. The PR-body line is
-#                           the durable unlock: squash-merge discards individual
-#                           commit messages, but the body line stays on the PR
-#                           record (and in the default squash commit body).
+#   1. golden-fixture     — always runs (every PR + push to main); renders the
+#                           real serializer and byte-compares against the
+#                           committed golden fixture.
+#   2. frozen-path-gate   — only gates PRs whose diff touches frozen paths,
+#                           the fixture, CONTRACT.md, or this workflow; those
+#                           must carry 'Contract-Change:' in a commit message
+#                           or the PR body. The PR-body line is the durable
+#                           unlock: squash-merge discards individual commit
+#                           messages, but the body line stays on the PR record
+#                           (and in the default squash commit body).
 #   3. cross-repo-checksum — informational skip until the sibling fixture lands
 #                           in music-assistant/server; then divergence fails.
 name: contract-drift
 
 on:
   pull_request:
+    # `edited` is required: the documented Contract-Change unlock can live in
+    # the PR body, and adding it after the first push must re-run the gate.
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -47,6 +54,9 @@ jobs:
     name: Frozen paths require Contract-Change
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Gate semantics only exist for a PR diff; the push trigger is covered by
+    # the other two jobs.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -62,9 +72,13 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
-          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          # --no-renames: a rename out of a frozen path must show as a
+          # delete + add inside the frozen list, not slip through as a rename.
+          changed="$(git diff --name-only --no-renames "origin/${BASE_REF}...HEAD")"
+          # CONTRACT.md and this workflow file are in the list so the gate
+          # also protects the rules and itself.
           frozen="$(printf '%s\n' "$changed" | grep -E \
-            '^(mammamiradio/integrations/(schema|serializer|now_playing)\.py|tests/integrations/)' \
+            '^(mammamiradio/integrations/(schema|serializer|now_playing)\.py|tests/integrations/|CONTRACT\.md$|\.github/workflows/contract-drift\.yml$)' \
             || true)"
           if [ -z "$frozen" ]; then
             echo "No frozen-path changes in this PR — gate not applicable."
@@ -72,11 +86,13 @@ jobs:
           fi
           echo "Frozen contract paths touched:"
           printf '%s\n' "$frozen"
-          if printf '%s' "$PR_BODY" | grep -q 'Contract-Change:'; then
+          # Anchored to line start; >/dev/null instead of -q so grep drains
+          # stdin and cannot SIGPIPE the writer under pipefail.
+          if printf '%s\n' "$PR_BODY" | grep -E '^[[:space:]]*Contract-Change:' >/dev/null; then
             echo "Unlock found: 'Contract-Change:' line in the PR body."
             exit 0
           fi
-          if git log --format=%B "origin/${BASE_REF}..HEAD" | grep -q 'Contract-Change:'; then
+          if git log --format=%B "origin/${BASE_REF}..HEAD" | grep -E '^[[:space:]]*Contract-Change:' >/dev/null; then
             echo "Unlock found: 'Contract-Change:' trailer in a commit message."
             exit 0
           fi
@@ -100,7 +116,7 @@ jobs:
           set -euo pipefail
           url="https://raw.githubusercontent.com/music-assistant/server/dev/tests/providers/mammamiradio/fixtures/v1_now_playing.json"
           local_fixture="tests/integrations/golden/v1_now_playing.json"
-          status="$(curl -sS -o sibling.json -w '%{http_code}' "$url" || echo "000")"
+          status="$(curl -sS -o sibling.json -w '%{http_code}' "$url")" || status="000"
           if [ "$status" = "404" ]; then
             echo "NOTICE: sibling fixture not published yet at:"
             echo "  $url"
