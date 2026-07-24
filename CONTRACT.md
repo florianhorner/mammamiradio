@@ -40,6 +40,10 @@ The Music Assistant provider change lands upstream **before** the addon ships
 any contract change. Consumers must already understand a payload before any
 addon in the wild can send it. No exceptions.
 
+Mechanically enforced by the cross-repo checksum job once the fixture exists
+on Music Assistant `dev`; until that bootstrap moment the job skips with a
+notice and the ordering rule is enforced by pull-request review.
+
 ## Changing the contract: the maintenance window
 
 Agents never edit the frozen surface directly. The path is:
@@ -56,6 +60,11 @@ Agents never edit the frozen surface directly. The path is:
    and the matching fixture update in the Music Assistant provider (upstream
    first, per the ordering rule).
 4. **Close the window.** Florian deletes the marker.
+
+The `Contract-Change:` marker is an audit signal, not an authorization
+boundary: it makes contract changes loud and traceable in PR history. The
+authorization is the repository's review gate — the require-PR ruleset and
+maintainer review; nothing reaches `main` without it.
 
 ## How the drift CI enforces this
 

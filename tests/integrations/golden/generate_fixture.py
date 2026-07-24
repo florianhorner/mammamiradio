@@ -151,7 +151,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     raw = FIXTURE_PATH.read_bytes()
     try:
-        on_disk = fixture_bytes(json.loads(raw.decode("utf-8")))
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            print(f"DRIFT: fixture at {FIXTURE_PATH} root is not a JSON object")
+            return 1
+        on_disk = fixture_bytes(parsed)
     except ValueError as exc:
         # Covers invalid JSON/UTF-8 and volatile-field type drift alike.
         print(f"DRIFT: fixture at {FIXTURE_PATH} failed validation: {exc}")

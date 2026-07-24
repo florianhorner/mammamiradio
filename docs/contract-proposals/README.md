@@ -18,7 +18,7 @@ e.g. `001-add-listener-count.md`.
 What is added, exact key path and type, e.g. `now_playing.listener_count: int | null`.
 
 ## Why
-The consumer need this serves. One paragraph.
+Describe the consumer need this proposal serves. One paragraph.
 
 ## Additive proof
 Why this cannot break an existing consumer: new optional key only, no

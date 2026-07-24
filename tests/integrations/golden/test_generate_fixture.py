@@ -59,3 +59,8 @@ def test_check_fails_on_non_canonical_encoding(fixture_path: Path) -> None:
 def test_check_fails_on_invalid_json(fixture_path: Path) -> None:
     fixture_path.write_text("{not json", encoding="utf-8")
     assert generate_fixture.main(["--check"]) == 1
+
+
+def test_check_fails_on_non_object_root(fixture_path: Path) -> None:
+    fixture_path.write_text('["not", "an", "object"]\n', encoding="utf-8")
+    assert generate_fixture.main(["--check"]) == 1
