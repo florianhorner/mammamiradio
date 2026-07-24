@@ -353,3 +353,57 @@ def test_broadcast_chain_defaults_off_without_env(monkeypatch):
     monkeypatch.delenv("MAMMAMIRADIO_BROADCAST_CHAIN", raising=False)
     config = load_config(TOML_PATH)
     assert config.audio.broadcast_chain is False
+
+
+# ── Normalization cache ceiling ──────────────────────────────────────────────
+# A 500 MB ceiling evicted 51-65 files/hour on the HA Green, so more than half a
+# 200-track rotation stayed permanently cold and re-paid the ~65s cold render.
+# The add-on now defaults to 1500 MB. The parsing must never raise: this runs
+# during config load, and an exception here means the station does not boot.
+
+
+def test_max_cache_size_defaults_to_500_standalone(monkeypatch):
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+    assert load_config(TOML_PATH).max_cache_size_mb == 500
+
+
+def test_max_cache_size_defaults_to_1500_on_addon(monkeypatch):
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-abc")
+    config = load_config(TOML_PATH)
+    assert config.is_addon is True
+    assert config.max_cache_size_mb == 1500
+
+
+def test_max_cache_size_env_override_wins(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "2400")
+    assert load_config(TOML_PATH).max_cache_size_mb == 2400
+
+
+def test_max_cache_size_garbage_degrades_to_default_without_raising(monkeypatch, caplog):
+    """The bug this guards: int(os.getenv(...)) raised ValueError and aborted config
+    load, so one bad character meant no station at all."""
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+    monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "1500MB")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(TOML_PATH)
+    assert config.max_cache_size_mb == 500
+    assert "MAMMAMIRADIO_MAX_CACHE_MB" in caplog.text
+
+
+def test_max_cache_size_clamps_below_minimum(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "10")
+    assert load_config(TOML_PATH).max_cache_size_mb == 200
+
+
+def test_max_cache_size_clamps_above_maximum(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "999999")
+    assert load_config(TOML_PATH).max_cache_size_mb == 8000
+
+
+def test_max_cache_size_negative_clamps_not_raises(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "-1")
+    assert load_config(TOML_PATH).max_cache_size_mb == 200

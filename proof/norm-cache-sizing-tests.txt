@@ -1,0 +1,46 @@
+# Proof — norm cache sizing (PR 0)
+# Branch florianhorner/fix/norm-cache-sizing; generated 2026-07-25T00:31:54Z
+# Runtime under test: HA Green add-on reports FFmpeg 6.1.1 (read-only check, no restart)
+
+=== pytest tests/core/test_config_env_overrides.py tests/core/test_config.py -q ===
+........................................................................ [ 87%]
+.....................                                                    [100%]
+165 passed in 1.05s
+
+=== pytest tests/repo/test_run_sh_options_parser.py tests/repo/test_repo_scripts.py -q ===
+........................................................................ [ 74%]
+.........................                                                [100%]
+97 passed in 14.00s
+
+=== pytest tests/web/test_main.py -q ===
+........................................................................ [ 75%]
+........................                                                 [100%]
+96 passed in 2.22s
+
+=== full suite: pytest tests/ -q ===
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5448 passed, 3 skipped, 21 deselected, 1 warning in 136.65s (0:02:16)
+
+=== ./scripts/validate-addon.sh (stable/edge option parity) ===
+  [0;34mPASS[0m  edge timeout: 240 (>= 120)
+
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.
+
+=== scripts/check-release-invariants.sh ===
+  Passed: 11  Failed: 0
+=======================================
+
+All invariants passed.
+
+=== scripts/check-changelog-lint.sh ===
+Changelog lint clean.
+
+=== ruff check . / ruff format --check . / mypy ===
+All checks passed!
+322 files already formatted
+Success: no issues found in 293 source files
+
+=== make coverage-check ===
+All coverage floors held. Total: 92% (floor: 92%)

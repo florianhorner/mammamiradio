@@ -76,6 +76,15 @@ _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
 DEFAULT_STATION_NAME = "Mamma Mi Radio"
 _MAX_STATION_NAME_LEN = 80
 
+# Normalization-cache ceiling, in MB. A normalized track is ~5 MB, so the add-on
+# default holds a full ~200-track rotation and the cold render stops repeating.
+# Bounds exist so a hand-edited or malformed value degrades to a clamp instead of
+# failing config load — the same posture as the pacing overrides.
+DEFAULT_MAX_CACHE_SIZE_MB = 500
+ADDON_MAX_CACHE_SIZE_MB = 1500
+MIN_MAX_CACHE_SIZE_MB = 200
+MAX_MAX_CACHE_SIZE_MB = 8000
+
 _DEFAULT_SONIC_TAGLINE = "Da Windor a Vergen, la voce che non si spegne mai!"
 _DEFAULT_SONIC_GEOGRAPHY = "Windor, Vergen"
 _DEFAULT_SONIC_FULL_IDENT = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
@@ -1140,6 +1149,13 @@ def _apply_addon_options() -> None:
         if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
             os.environ[env_key] = str(pv)
 
+    # Norm-cache ceiling: same non-run.sh boot path as the pacing block above.
+    # Clamping happens at load time in _env_clamped_int, so a stale value here is
+    # bounded rather than fatal.
+    cache_mb = options.get("norm_cache_mb")
+    if isinstance(cache_mb, int) and not isinstance(cache_mb, bool) and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB"):
+        os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
+
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
@@ -1498,6 +1514,34 @@ def _env_positive_int(name: str) -> int | None:
         return value
     log.warning("Ignoring %s=%r (must be > 0)", name, raw)
     return None
+
+
+def _env_clamped_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Parse an integer env var, clamping to range; fall back to ``default`` on garbage.
+
+    Unlike :func:`_env_positive_int` this never returns None — the caller needs a
+    concrete number. A malformed value degrades to the default with a warning
+    instead of raising, because this runs during config load: an exception here
+    means the station never boots at all (leadership principle #2, INSTANT AUDIO).
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer), using %d", name, raw, default)
+        return default
+    if value < minimum:
+        log.warning("Raising %s=%d to the %d minimum", name, value, minimum)
+        return minimum
+    if value > maximum:
+        log.warning("Capping %s=%d at the %d maximum", name, value, maximum)
+        return maximum
+    return value
 
 
 def _clean_str(value: object) -> str:
@@ -2249,7 +2293,16 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         brand_warnings=brand_warnings,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
-        max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),
+        max_cache_size_mb=_env_clamped_int(
+            "MAMMAMIRADIO_MAX_CACHE_MB",
+            # The add-on holds a whole rotation (~200 tracks x ~5 MB); a 500 MB
+            # ceiling evicted 51-65 files/hour on the Green, so more than half the
+            # rotation stayed permanently cold and re-paid the ~65s cold render.
+            # Standalone keeps the smaller default — it is often a laptop.
+            default=ADDON_MAX_CACHE_SIZE_MB if addon_mode else DEFAULT_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        ),
         bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),

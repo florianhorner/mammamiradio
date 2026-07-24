@@ -2755,3 +2755,242 @@ def test_clear_persisted_heading_swallows_oserror():
     _clear_persisted_heading(config)  # must not raise
 
     bad_path.unlink.assert_called_once()
+
+
+# ── Disk-safe cache ceiling ──────────────────────────────────────────────────
+# A ceiling above free space never triggers eviction, so the cache grows until
+# the volume fills. On the add-on that volume is /data, shared with the database
+# and the ledger, so a full disk breaks far more than the cache.
+
+
+def _fake_usage(free_bytes: int) -> SimpleNamespace:
+    return SimpleNamespace(total=free_bytes * 4, used=free_bytes * 3, free=free_bytes)
+
+
+def test_disk_safe_ceiling_keeps_configured_value_when_space_allows(tmp_path):
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(20_000 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == 1500
+
+
+def test_disk_safe_ceiling_trims_when_disk_is_tight(tmp_path):
+    """1200 MB free, 512 MB reserved, nothing cached yet -> 688 MB affordable."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(1200 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == 688
+
+
+def test_disk_safe_ceiling_counts_existing_cache_as_reclaimable(tmp_path):
+    """Bytes already in the cache are reclaimable by eviction, so they must count
+    toward what the ceiling can afford — otherwise a healthy full cache would be
+    read as a full disk and trimmed on every boot."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(1200 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=9) == 697
+
+
+def test_disk_safe_ceiling_never_trims_below_the_config_floor(tmp_path):
+    """A nearly full disk is an operator problem. Starving the cache to nothing
+    would empty the norm-cache rescue pool, which is a dead-air backstop — so the
+    floor deliberately wins even though the disk cannot honour it. Startup says so
+    out loud; see test_lifespan_says_plainly_when_the_disk_is_genuinely_full."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(64 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == 200
+
+
+def test_disk_safe_ceiling_exact_affordable_equals_configured(tmp_path):
+    """Boundary: affordable == configured must pass through, not trim by one."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage((1500 + 512) * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == 1500
+
+
+def test_disk_safe_ceiling_survives_an_unreadable_mount(tmp_path):
+    """Best-effort: a probe failure must not block startup (INSTANT AUDIO)."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", side_effect=OSError("mount gone")):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == 1500
+
+
+# ── Cache directory scan ─────────────────────────────────────────────────────
+
+
+def test_scan_cache_dir_counts_norm_tracks_and_total_size(tmp_path):
+    from mammamiradio.main import _scan_cache_dir
+
+    (tmp_path / "norm_a.mp3").write_bytes(b"\0" * (2 * 1024 * 1024))
+    (tmp_path / "norm_b.mp3").write_bytes(b"\0" * (3 * 1024 * 1024))
+    (tmp_path / "fm_a.mp3").write_bytes(b"\0" * (1 * 1024 * 1024))
+    (tmp_path / "notes.txt").write_bytes(b"ignored")
+
+    norm_count, total_mb = _scan_cache_dir(tmp_path)
+    assert norm_count == 2  # fm_ bakes are cached bytes but not pre-normalized tracks
+    assert total_mb == 6  # all three mp3s count toward disk usage
+
+
+def test_scan_cache_dir_skips_a_file_evicted_mid_scan(tmp_path):
+    """Eviction runs concurrently with startup housekeeping; a file can vanish
+    between glob() and stat(). Sizing the cache must not raise into startup."""
+    from mammamiradio.main import _scan_cache_dir
+
+    (tmp_path / "norm_present.mp3").write_bytes(b"\0" * (4 * 1024 * 1024))
+    (tmp_path / "norm_vanishing.mp3").write_bytes(b"\0" * (4 * 1024 * 1024))
+
+    real_stat = Path.stat
+
+    def _stat_with_one_vanished(self, *args, **kwargs):
+        if self.name == "norm_vanishing.mp3":
+            raise FileNotFoundError(2, "No such file or directory")
+        return real_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", _stat_with_one_vanished):
+        norm_count, total_mb = _scan_cache_dir(tmp_path)
+
+    assert norm_count == 2  # the name was globbed, so it still counts as a track
+    assert total_mb == 4  # but its bytes are gone and must not be counted
+
+
+def test_scan_cache_dir_survives_an_unreadable_directory(tmp_path):
+    from mammamiradio.main import _scan_cache_dir
+
+    with patch.object(Path, "glob", side_effect=OSError("gone")):
+        assert _scan_cache_dir(tmp_path) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_warns_when_the_cache_ceiling_is_trimmed(tmp_path, caplog):
+    """The operator has to be told the configured cache size is not the one in
+    force, and told what to do about it — a silent trim looks like the setting
+    simply did nothing."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 4000
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._disk_safe_cache_ceiling_mb", return_value=900),
+        patch(f"{MODULE}.evict_cache_lru") as mock_evict,
+        caplog.at_level(logging.WARNING),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            pass
+
+    assert "4000" in caplog.text and "900" in caplog.text
+    # The trimmed value is what eviction actually enforces, not the configured one.
+    assert mock_evict.call_args.args[1] == 900
+    # And it is written back, so the producer's periodic eviction pass enforces the
+    # same ceiling. Without this the trim would hold for one startup call only and
+    # the cache would climb back past the disk during a long session.
+    assert mock_config.max_cache_size_mb == 900
+
+
+@pytest.mark.asyncio
+async def test_lifespan_says_plainly_when_the_disk_is_genuinely_full(tmp_path, caplog):
+    """At the floor the trim is not a fix — the disk is full and even the minimum
+    cache may not fit. Reporting a tidy new number there would imply the problem
+    was solved. The operator must be told the real situation and what to do."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 1500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._disk_safe_cache_ceiling_mb", return_value=200),
+        patch(f"{MODULE}.evict_cache_lru"),
+        caplog.at_level(logging.WARNING),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            pass
+
+    assert "nearly full" in caplog.text
+    assert "Free space" in caplog.text
+    # Must not claim the trim fixed anything.
+    assert "trimmed from" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplog):
+    """End-to-end, unmocked: real files -> real scan -> real trim -> real eviction.
+    The norm-cache rescue pool is a dead-air backstop, so an arithmetic or units
+    bug that over-trims and empties it every boot must fail loudly here. The unit
+    tests above mock disk_usage and evict_cache_lru, so neither would catch it."""
+    import json
+
+    from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+    from mammamiradio.core.models import Track
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    blob = b"\0" * (2 * 1024 * 1024)
+    for i in range(6):
+        (cache_dir / f"norm_track{i}_192k.mp3").write_bytes(blob)
+        (cache_dir / f"norm_track{i}_192k.mp3.json").write_text(
+            json.dumps({"title": f"Song {i}", "artist": "Test Artist"})
+        )
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 1500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = cache_dir
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            state = app.state.station_state
+
+    survivors = list(cache_dir.glob("norm_*.mp3"))
+    assert survivors, "startup trim + eviction emptied the norm cache — rescue pool is gone"
+    assert select_norm_cache_rescue(cache_dir, state) is not None

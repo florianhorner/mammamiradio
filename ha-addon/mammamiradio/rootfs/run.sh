@@ -232,6 +232,17 @@ for _pace_opt, _pace_env in (
     except (TypeError, ValueError):
         continue
     print('export ' + _pace_env + '=' + shlex.quote(str(_pace_int)))
+# Normalization cache ceiling. Bigger cache = fewer cold ~65s renders, because a
+# whole rotation stays warm instead of being evicted every hour. Config load
+# clamps the value, so a bad one is bounded rather than fatal.
+cache_mb = opts.get('norm_cache_mb', 1500)
+try:
+    cache_mb_int = int(cache_mb)
+    if cache_mb_int <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    cache_mb_int = 1500
+print('export MAMMAMIRADIO_MAX_CACHE_MB=' + shlex.quote(str(cache_mb_int)))
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null

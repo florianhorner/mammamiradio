@@ -716,3 +716,41 @@ def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ── Music cache size ─────────────────────────────────────────────────────────
+# The cache ceiling reaches the app only through this snippet. A bug here is the
+# class this whole file exists to catch: the export silently vanishes and the
+# station falls back to a default the operator never chose.
+
+
+def test_parser_exports_cache_mb_from_norm_cache_mb_option():
+    rc, stdout, _ = _run_parser({"norm_cache_mb": 2200})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "2200"
+
+
+def test_parser_cache_mb_missing_key_defaults_to_addon_default():
+    """The upgrade shape: an existing install's /data/options.json predates this
+    option entirely. It must still land on the add-on default, not on the smaller
+    standalone one and not on nothing."""
+    rc, stdout, _ = _run_parser({"station_name": "Test"})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
+    for value in ("not-a-number", 0, -5, None):
+        rc, stdout, _ = _run_parser({"norm_cache_mb": value})
+        assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
+        assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+def test_parser_cache_mb_does_not_break_sibling_exports():
+    """A bad value in one key must not take the whole export block down with it —
+    that is the failure mode that once dropped every API key on restart."""
+    rc, stdout, _ = _run_parser({"norm_cache_mb": "garbage", "anthropic_api_key": "sk-ant-abc123"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-abc123"
+    assert exports["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"

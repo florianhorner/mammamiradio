@@ -44,6 +44,9 @@ configuration:
   ad_spots_per_break:
     name: Ads per break
     description: "How many advert spots run back to back in a single ad break. Also adjustable live from the admin panel; the value survives a restart."
+  norm_cache_mb:
+    name: Music cache size (MB)
+    description: "How much disk the station keeps for ready-to-play songs. Each song takes about 5 MB, so 1500 MB holds roughly 300 of them. A song that is already in the cache starts almost instantly; one that isn't takes about a minute to prepare first. If you often hear the same handful of songs while others never seem to come round, the cache is too small for your rotation — raise this. Lower it if the add-on is short on disk space. Turning On-Air Sound on roughly doubles what each song takes up. Takes effect after the add-on restarts."
   jamendo_client_id:
     name: Jamendo Client ID (Advanced)
     description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.

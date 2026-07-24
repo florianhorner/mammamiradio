@@ -1542,3 +1542,55 @@ def test_validate_aggregates_multiple_errors_each_with_hint():
     assert "(set in radio.toml [pacing])" in msg
     assert "(set in radio.toml [persona])" in msg
     assert "(set in radio.toml [playlist])" in msg
+
+
+def test_apply_addon_options_maps_cache_mb(monkeypatch, tmp_path):
+    """/data/options.json norm_cache_mb reaches env via _apply_addon_options (the
+    non-run.sh add-on boot path), matching the pacing keys above. This is the
+    second of the two option-ingestion paths; run.sh is covered separately in
+    tests/repo/test_run_sh_options_parser.py."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"norm_cache_mb": 2200}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] == "2200"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
+
+
+def test_apply_addon_options_cache_mb_absent_leaves_env_unset(monkeypatch, tmp_path):
+    """The upgrade shape: an existing install has no norm_cache_mb key. Nothing is
+    exported, so the add-on default in load_config decides — not a stale value."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"songs_between_banter": 5}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
+    finally:
+        os.environ.pop("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", None)
+
+
+def test_apply_addon_options_cache_mb_rejects_bool(monkeypatch, tmp_path):
+    """bool is an int subclass. A YAML `true` must not become a 1 MB cache."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"norm_cache_mb": True}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
+    finally:
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
