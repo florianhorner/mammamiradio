@@ -30,17 +30,21 @@ voice/interstitial segments without faking music metadata.
 
 ## Versioning policy (written in stone)
 
-- **v1 contract is additive-only.** New fields may appear within
-  `schema_version: "1.*"`. Existing fields will never disappear, rename, or
-  change type within v1.
+- **v1 contract is additive-only.** New fields may appear while
+  `schema_version` stays the literal `"1"`. Existing fields will never
+  disappear, rename, or change type within v1. The change process lives in
+  [`CONTRACT.md`](../../CONTRACT.md) at the repo root.
 - **Breaking changes ship at `/api/integrations/v2/`.** They are not allowed
   in v1.
 - **Deprecation** is announced via the `Deprecation` and `Sunset` HTTP
   response headers per RFC 8594, with a minimum 6-month overlap window.
+- **The golden fixture is byte-authoritative.** The exact reference payload
+  is `tests/integrations/golden/v1_now_playing.json`, rendered by the real
+  serializer and enforced by CI on every pull request (see `CONTRACT.md`).
 - **Sample payloads** under
-  [`sample-payloads/`](./sample-payloads/) are the binding fixture. They are
-  also wired into mammamiradio's own contract tests so they cannot drift.
-  Third-party consumers can pull them straight from raw GitHub:
+  [`sample-payloads/`](./sample-payloads/) are documented examples, one per
+  scenario. They are wired into mammamiradio's own contract tests so they
+  cannot drift. Third-party consumers can pull them straight from raw GitHub:
   `https://raw.githubusercontent.com/florianhorner/mammamiradio/main/docs/integrations/sample-payloads/<file>.json`.
 
 ## Auth model

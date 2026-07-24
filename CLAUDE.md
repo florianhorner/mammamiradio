@@ -56,6 +56,7 @@ Sacred files at the repo root (one viewport, one job each):
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
 - `CLAUDE.md` - agent rules and leadership principles (this file)
 - `CHANGELOG.md` - release notes
+- `CONTRACT.md` - frozen v1 integration surface and change ceremony
 
 Everything else lives under `docs/`:
 
@@ -485,7 +486,20 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 - deadcode: vulture mammamiradio/
 - shell: CI enforces shellcheck scripts/*.sh; broader local sweep: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
 
+## No-touch zones
 
+Two zones are mechanically enforced. Read `CONTRACT.md` before touching anything near them.
+
+**Z-contract — the frozen v1 integration surface.** Do not edit:
+
+- `mammamiradio/integrations/schema.py`, `serializer.py`, `now_playing.py`
+- `tests/integrations/**` (contract tests AND the golden fixture `tests/integrations/golden/v1_now_playing.json`)
+- `CONTRACT.md` and `.github/workflows/contract-drift.yml` (the rules and the gate are gated too)
+- The `/api/integrations/v1/now-playing` endpoint path, its ETag/304 semantics, or `schema_version="1"`
+
+A wire-visible change routed through any other file (e.g. `core/models.py`) is still a contract change — the contract-drift CI renders the serializer on every PR and catches payload drift; the frozen pytest contract tests (run by the quality workflow) hold the route path, ETag/304, and header behavior. Wanted changes go into the proposals queue: write `docs/contract-proposals/NNN-title.md` (format in that directory's README) and stop. Changes land only when Florian opens a contract window (the `.contract-window` marker + a review sitting) and the PR carries a `Contract-Change:` trailer or PR-body line. Never weaken a contract test to make something pass.
+
+**Z-comms — GitHub writes to non-owned repos.** Never run `gh pr comment/review/edit/merge`, `gh issue comment`, or mutating `gh api` calls against any repo not owned by `florianhorner`. This includes flagless invocations inside an upstream checkout. Draft the reply to `.context/pr-replies/*.md` instead; Florian copies and sends. Always.
 
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
 ## Commit message standards
