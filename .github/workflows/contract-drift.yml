@@ -1,0 +1,127 @@
+# Contract-drift guard for the frozen v1 now-playing surface (see CONTRACT.md).
+#
+# Three checks, scoped so unrelated PRs never break:
+#   1. golden-fixture     — always runs; renders the real serializer and
+#                           byte-compares against the committed golden fixture.
+#   2. frozen-path-gate   — only gates PRs whose diff touches frozen paths or
+#                           the fixture; those must carry 'Contract-Change:' in
+#                           a commit message or the PR body. The PR-body line is
+#                           the durable unlock: squash-merge discards individual
+#                           commit messages, but the body line stays on the PR
+#                           record (and in the default squash commit body).
+#   3. cross-repo-checksum — informational skip until the sibling fixture lands
+#                           in music-assistant/server; then divergence fails.
+name: contract-drift
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  golden-fixture:
+    name: Serializer matches golden fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      # Same construction path the fixture was generated with — the generator
+      # is the single source of truth for the golden scenario, so this check
+      # and fixture regeneration stay in lockstep. Volatile fields
+      # (changed_at, now_playing.started_at) are normalized to their pins on
+      # both sides before the byte comparison.
+      - name: Render golden scenario and byte-compare
+        run: python tests/integrations/golden/generate_fixture.py --check
+
+  frozen-path-gate:
+    name: Frozen paths require Contract-Change
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so the merge-base diff against the base branch and the
+          # PR commit messages are both resolvable.
+          fetch-depth: 0
+
+      - name: Gate frozen-path changes on the Contract-Change unlock
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          # PR body via env (never inline interpolation) so body content cannot
+          # inject into the shell.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          frozen="$(printf '%s\n' "$changed" | grep -E \
+            '^(mammamiradio/integrations/(schema|serializer|now_playing)\.py|tests/integrations/)' \
+            || true)"
+          if [ -z "$frozen" ]; then
+            echo "No frozen-path changes in this PR — gate not applicable."
+            exit 0
+          fi
+          echo "Frozen contract paths touched:"
+          printf '%s\n' "$frozen"
+          if printf '%s' "$PR_BODY" | grep -q 'Contract-Change:'; then
+            echo "Unlock found: 'Contract-Change:' line in the PR body."
+            exit 0
+          fi
+          if git log --format=%B "origin/${BASE_REF}..HEAD" | grep -q 'Contract-Change:'; then
+            echo "Unlock found: 'Contract-Change:' trailer in a commit message."
+            exit 0
+          fi
+          echo ""
+          echo "FAIL: this PR touches the frozen v1 contract surface without a"
+          echo "'Contract-Change:' trailer in any commit message or a"
+          echo "'Contract-Change:' line in the PR body."
+          echo "The v1 surface changes only through a contract window — queue a"
+          echo "proposal in docs/contract-proposals/ instead. See CONTRACT.md."
+          exit 1
+
+  cross-repo-checksum:
+    name: Sibling fixture checksum (music-assistant/server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Compare fixture sha256 against the sibling repo
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/music-assistant/server/dev/tests/providers/mammamiradio/fixtures/v1_now_playing.json"
+          local_fixture="tests/integrations/golden/v1_now_playing.json"
+          status="$(curl -sS -o sibling.json -w '%{http_code}' "$url" || echo "000")"
+          if [ "$status" = "404" ]; then
+            echo "NOTICE: sibling fixture not published yet at:"
+            echo "  $url"
+            echo "Skipping cross-repo comparison. This step becomes enforcing once"
+            echo "the Music Assistant provider fixture lands on its dev branch."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "WARNING: could not fetch sibling fixture (HTTP $status) — treating"
+            echo "as a transient skip so unrelated PRs are not blocked."
+            exit 0
+          fi
+          local_sha="$(sha256sum "$local_fixture" | cut -d' ' -f1)"
+          sibling_sha="$(sha256sum sibling.json | cut -d' ' -f1)"
+          echo "local   sha256: $local_sha"
+          echo "sibling sha256: $sibling_sha"
+          if [ "$local_sha" != "$sibling_sha" ]; then
+            echo ""
+            echo "FAIL: the golden fixture diverged between this repo and"
+            echo "music-assistant/server. The two repos must carry the same bytes —"
+            echo "see CONTRACT.md (release ordering: provider lands first)."
+            exit 1
+          fi
+          echo "Fixtures match across repos."
