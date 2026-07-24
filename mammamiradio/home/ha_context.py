@@ -69,6 +69,12 @@ from mammamiradio.home.ritual_recipes import (
     match_ritual_recipes,
     public_family_labels,
 )
+from mammamiradio.home.temperature import (
+    format_celsius,
+    is_plausible_celsius,
+    normalize_temperature,
+    temperature_unit_of,
+)
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
@@ -701,6 +707,8 @@ def _format_state(
     """
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
+    # A malformed payload ("attributes": null) must not raise into the poll.
+    attrs = attrs if isinstance(attrs, Mapping) else {}
     resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
     if resolved is None:
         # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
@@ -711,21 +719,40 @@ def _format_state(
     if state in ("unavailable", "unknown"):
         return None
 
-    # Weather gets special treatment — include temperature and condition
+    # Weather gets special treatment — include temperature and condition.
+    # A temperature we cannot convert is dropped rather than narrated: the raw
+    # unit is entity-controlled text, and an unconverted number read aloud as
+    # Celsius is worse than no number at all.
     if entity_id.startswith("weather."):
         condition = STATE_TRANSLATIONS.get(state, state)
-        temp = attrs.get("temperature")
-        if temp not in (None, "") and not isinstance(temp, bool):
-            unit = attrs.get("temperature_unit", "°C")
-            return f"{label}: {condition}, {_sanitize_state_value(temp)}{unit}"
+        temperature_c = _celsius_for_prompt(attrs.get("temperature"), temperature_unit_of(attrs))
+        if temperature_c is not None:
+            return f"{label}: {condition}, {format_celsius(temperature_c)}°C"
         return f"{label}: {condition}"
 
     # Climate — include current and target temperature
     if entity_id.startswith("climate."):
-        current = attrs.get("current_temperature", "?")
-        target = attrs.get("temperature", "?")
         mode = STATE_TRANSLATIONS.get(state, state)
-        return f"{label}: {mode}, {current}°C (target: {target}°C)"
+        unit = temperature_unit_of(attrs)
+        current_c = _celsius_for_prompt(attrs.get("current_temperature"), unit)
+        target_c = _celsius_for_prompt(attrs.get("temperature"), unit)
+        if current_c is not None and target_c is not None:
+            return f"{label}: {mode}, {format_celsius(current_c)}°C (target: {format_celsius(target_c)}°C)"
+        if current_c is not None:
+            return f"{label}: {mode}, {format_celsius(current_c)}°C"
+        if target_c is not None:
+            return f"{label}: {mode} (target: {format_celsius(target_c)}°C)"
+        return f"{label}: {mode}"
+
+    # Explicit temperature sensors — normalize before the summary crosses into
+    # the host prompt, just like weather and climate entities.  The unit is
+    # mandatory here: Home Assistant always publishes one for a classified
+    # temperature sensor, so a missing unit means the reading is untrustworthy.
+    if entity_id.startswith("sensor.") and attrs.get("device_class") == "temperature":
+        temperature_c = _celsius_for_prompt(state_data.get("state"), temperature_unit_of(attrs), require_unit=True)
+        if temperature_c is None:
+            return None
+        return f"{label}: {format_celsius(temperature_c)}°C"
 
     # Media players — include what's playing
     if entity_id.startswith("media_player."):
@@ -785,6 +812,17 @@ def _format_state(
     # Default: translate the state
     translated = STATE_TRANSLATIONS.get(state, state)
     return f"{label}: {translated}"
+
+
+def _celsius_for_prompt(value: object, unit: object, *, require_unit: bool = False) -> float | None:
+    """Convert one Home Assistant temperature for human-facing copy.
+
+    Returns ``None`` when the value cannot be trusted — unknown unit, malformed
+    number, or a reading so far outside household range that airing it would
+    expose a broken integration rather than describe the home.
+    """
+    celsius = normalize_temperature(value, unit, require_unit=require_unit)
+    return celsius if is_plausible_celsius(celsius) else None
 
 
 def _build_summary(states: dict[str, dict]) -> str:
@@ -1351,18 +1389,34 @@ _weather_forecast_cache: str = ""
 _weather_forecast_cache_en: str = ""
 _weather_forecast_fetched_at: float = 0.0
 _WEATHER_CACHE_TTL = 3600.0
+# How long the current cached arc stays valid. Normally the full hour; shortened
+# when the arc had to air without its temperature.
+_weather_forecast_ttl: float = 3600.0
+_weather_degraded_warned: bool = False
+# A failed unit lookup costs the arc its temperature, so it retries on the next
+# poll instead of pinning a degraded narrative for the full hour.
+_WEATHER_DEGRADED_CACHE_TTL = 300.0
+_WEATHER_FORECAST_ENTITY_ID = "weather.forecast_home"
+# Kept well under _HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT so the unit lookup can
+# never be the reason the whole enrichment misses its deadline.
+_WEATHER_UNIT_TIMEOUT = 2.0
 _SIGNIFICANT_CONDITIONS = {"rainy", "snowy", "lightning", "windy", "fog"}
 
 
-def _build_weather_arc(forecast: list[dict]) -> str:
-    """Build a day-arc weather narrative from hourly forecast items."""
+def _build_weather_arc(forecast: list[dict], *, temperature_unit: object = "°C") -> str:
+    """Build a day-arc weather narrative from hourly forecast items.
+
+    ``temperature_unit`` is mandatory in effect: passing ``None`` (the shape
+    ``fetch_weather_forecast`` produces when Home Assistant would not tell us
+    the unit) withholds the temperature instead of guessing Celsius.
+    """
     if not forecast:
         return ""
 
     now_hour = datetime.datetime.now().hour
     current = forecast[0]
     current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
-    current_temp = current.get("temperature")
+    current_temp = _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True)
 
     # Look 6 hours ahead for upcoming significant weather
     upcoming_sig: str | None = None
@@ -1379,16 +1433,16 @@ def _build_weather_arc(forecast: list[dict]) -> str:
         italian = STATE_TRANSLATIONS.get(upcoming_sig, upcoming_sig)
         return f"Attenzione: {italian} in arrivo questo pomeriggio."
     if current_is_sig and 12 <= now_hour < 18:
-        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        temp_str = f", {format_celsius(current_temp)}°C" if current_temp is not None else ""
         return f"Fuori c'è {current_italian}{temp_str} — come previsto."
     if current_is_sig and now_hour >= 18:
         return f"Siete sopravvissuti alla {current_italian} di oggi?"
     if current_italian and current_temp is not None:
-        return f"Meteo: {current_italian}, {current_temp}°C."
+        return f"Meteo: {current_italian}, {format_celsius(current_temp)}°C."
     return ""
 
 
-def _build_weather_arc_en(forecast: list[dict]) -> str:
+def _build_weather_arc_en(forecast: list[dict], *, temperature_unit: object = "°C") -> str:
     """English version of _build_weather_arc for admin UI display."""
     if not forecast:
         return ""
@@ -1396,7 +1450,7 @@ def _build_weather_arc_en(forecast: list[dict]) -> str:
     now_hour = datetime.datetime.now().hour
     current = forecast[0]
     current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
-    current_temp = current.get("temperature")
+    current_temp = _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True)
 
     upcoming_sig: str | None = None
     for fc in forecast[1:7]:
@@ -1412,45 +1466,138 @@ def _build_weather_arc_en(forecast: list[dict]) -> str:
         en = STATE_TRANSLATIONS_EN.get(upcoming_sig, upcoming_sig)
         return f"Heads up: {en} expected this afternoon."
     if current_is_sig and 12 <= now_hour < 18:
-        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        temp_str = f", {format_celsius(current_temp)}°C" if current_temp is not None else ""
         return f"Outside: {current_en}{temp_str} — as forecast."
     if current_is_sig and now_hour >= 18:
         return f"Did you survive the {current_en} today?"
     if current_en and current_temp is not None:
-        return f"Weather: {current_en}, {current_temp}°C."
+        return f"Weather: {current_en}, {format_celsius(current_temp)}°C."
     return ""
+
+
+async def _fetch_weather_temperature_unit(
+    client: httpx.AsyncClient,
+    ha_url: str,
+    ha_token: str,
+) -> object | None:
+    """Read the configured unit for the forecast entity.
+
+    Home Assistant's ``weather/get_forecasts`` response carries no unit, so this
+    is the load-bearing source rather than a rare fallback.  It stays
+    exception-tolerant, but a failure is not free: the caller withholds the
+    temperature and retries sooner instead of caching a degraded arc for an hour.
+    """
+    try:
+        response = await client.get(
+            f"{ha_url.rstrip('/')}/api/states/{_WEATHER_FORECAST_ENTITY_ID}",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=_WEATHER_UNIT_TIMEOUT,
+        )
+        response.raise_for_status()
+        state_data = response.json()
+        if not isinstance(state_data, Mapping):
+            return None
+        return temperature_unit_of(state_data.get("attributes"))
+    except Exception as exc:
+        logger.debug("Weather temperature unit unavailable: %s", exc)
+        return None
+
+
+def _warn_once_on_weather_degraded(degraded: bool) -> None:
+    """Say once, at WARNING, that the weather arc lost its temperature.
+
+    A permanently mis-scoped token or a renamed forecast entity would otherwise
+    strip the temperature from every break forever with nothing above DEBUG to
+    explain it. Logged on transition only, so a persistent fault does not spam.
+    """
+    global _weather_degraded_warned
+    if degraded and not _weather_degraded_warned:
+        logger.warning(
+            "Weather arc is airing without a temperature: Home Assistant did not report a unit "
+            "for %s. Check that the entity exists and the token can read it.",
+            _WEATHER_FORECAST_ENTITY_ID,
+        )
+    elif not degraded and _weather_degraded_warned:
+        logger.info("Weather arc temperature recovered.")
+    _weather_degraded_warned = degraded
+
+
+def _forecast_unit_was_the_problem(forecast: list[dict], temperature_unit: object) -> bool:
+    """Whether a retry could recover a temperature the arcs had to withhold.
+
+    Only an unresolvable *unit* is worth retrying sooner.  An empty forecast, or
+    entries with no temperature at all, are stable properties of the
+    integration: retrying those every five minutes would put a permanent
+    double-request treadmill on the Pi to re-derive the same empty string.
+    """
+    if not forecast:
+        return False
+    current = forecast[0]
+    if not isinstance(current, Mapping):
+        return False
+    if current.get("temperature") is None:
+        return False
+    return _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True) is None
 
 
 async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
     """Fetch hourly weather forecast from HA and return a narrative arc string (Italian).
 
-    Cached for 1 hour. Returns "" if HA does not support get_forecasts or on error.
+    Cached for 1 hour, or 5 minutes when Home Assistant would not tell us which
+    unit the forecast is in. Returns "" if HA does not support get_forecasts or
+    on error.
     """
-    global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at
-    if time.time() - _weather_forecast_fetched_at < _WEATHER_CACHE_TTL:
+    global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at, _weather_forecast_ttl
+    if time.time() - _weather_forecast_fetched_at < _weather_forecast_ttl:
         return _weather_forecast_cache
 
     try:
         client = _get_ha_client()
-        resp = await client.post(
+        # The forecast and its unit are independent reads, so they overlap
+        # rather than stacking two round trips inside one enrichment deadline.
+        forecast_task = client.post(
             f"{ha_url.rstrip('/')}/api/services/weather/get_forecasts",
             headers={
                 "Authorization": f"Bearer {ha_token}",
                 "Content-Type": "application/json",
             },
-            json={"entity_id": "weather.forecast_home", "type": "hourly"},
+            json={"entity_id": _WEATHER_FORECAST_ENTITY_ID, "type": "hourly"},
             params={"return_response": "true"},
         )
+        unit_task = _fetch_weather_temperature_unit(client, ha_url, ha_token)
+        # return_exceptions keeps a failing forecast from orphaning the in-flight
+        # unit request: gather waits for both, then we surface the real failure.
+        resp, entity_unit = await asyncio.gather(forecast_task, unit_task, return_exceptions=True)
+        if isinstance(resp, BaseException):
+            raise resp
+        if isinstance(entity_unit, BaseException):
+            # The unit helper swallows Exception itself, so anything surfacing
+            # here is a CancelledError from the enrichment deadline. Propagate
+            # it rather than downgrading a cancellation into a normal result and
+            # going on to mutate the shared cache globals.
+            raise entity_unit
         resp.raise_for_status()
         data = resp.json()
         response_data = data.get("response", {}) or data
         first_entry: dict = next(iter(response_data.values()), {})
         forecast_list: list[dict] = first_entry.get("forecast", [])
-        arc = _build_weather_arc(forecast_list)
-        arc_en = _build_weather_arc_en(forecast_list)
+        # An inline unit is authoritative when a custom integration supplies one;
+        # otherwise the entity's own configured unit decides.
+        forecast_unit = temperature_unit_of(first_entry) or entity_unit
+        arc = _build_weather_arc(forecast_list, temperature_unit=forecast_unit)
+        arc_en = _build_weather_arc_en(forecast_list, temperature_unit=forecast_unit)
         _weather_forecast_cache = arc
         _weather_forecast_cache_en = arc_en
+        # A present-but-unreadable unit ("%") is the same outage for a listener
+        # as a missing one, so both retry sooner. An empty forecast does not:
+        # see _forecast_unit_was_the_problem.
+        degraded = _forecast_unit_was_the_problem(forecast_list, forecast_unit)
+        _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL if degraded else _WEATHER_CACHE_TTL
         _weather_forecast_fetched_at = time.time()
+        _warn_once_on_weather_degraded(degraded)
         logger.debug("Weather arc: %s", arc or "(none)")
         return arc
     except Exception as e:
@@ -1458,6 +1605,9 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         _weather_forecast_cache = ""
         _weather_forecast_cache_en = ""
         _weather_forecast_fetched_at = time.time()
+        # A transient blip must not cost the station a full hour of weather.
+        _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL
+        _warn_once_on_weather_degraded(True)
         return ""
 
 

@@ -24,8 +24,19 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from mammamiradio.home.temperature import (
+    format_celsius,
+    normalize_temperature,
+    temperature_unit_of,
+)
+
 COOLDOWN_SECONDS = 30 * 60
 TEMPERATURE_REOPEN_DELTA_C = 2.0
+# Absorbs the rounding error a Fahrenheit-to-Celsius conversion leaves behind, so
+# an exactly-at-threshold change is not lost to the last bits of a float. The
+# real error is ~4e-15; this stays far below any resolution a sensor reports, so
+# it can never turn a genuinely-below-threshold change into a reopen.
+_TEMPERATURE_DELTA_TOLERANCE_C = 1e-9
 
 # This is intentionally a small, explicit allowlist.  A source being present
 # in HomeContext.scored does not make it appropriate routine on-air material.
@@ -139,20 +150,25 @@ class DirectorObservation:
 
         temperature_c: float | None = None
         target_temperature_c: float | None = None
+        temperature_unit = temperature_unit_of(attrs)
         if domain == "weather":
-            temperature_c = _temperature(attrs.get("temperature"))
+            temperature_c = _temperature(attrs.get("temperature"), temperature_unit)
             if temperature_c is None:
                 return None
         elif domain == "climate":
-            temperature_c = _temperature(attrs.get("current_temperature"))
-            target_temperature_c = _temperature(attrs.get("temperature"))
+            temperature_c = _temperature(attrs.get("current_temperature"), temperature_unit)
+            target_temperature_c = _temperature(attrs.get("temperature"), temperature_unit)
             if temperature_c is None and target_temperature_c is None:
                 return None
         elif domain == "sensor" and device_class == "temperature":
             # A numeric temperature sensor is allowed only when Home Assistant
             # has classified it explicitly.  Other ``sensor.*`` values remain
             # deny-by-default, and the raw state never crosses this boundary.
-            temperature_c = _temperature(raw_state)
+            # The unit is mandatory here: HA always publishes one for a
+            # classified sensor, so guessing Celsius would state a wrong number
+            # as fact rather than merely omit one.  Weather and climate keep the
+            # legacy assumption because HA publishes no unit for them at all.
+            temperature_c = _temperature(raw_state, temperature_unit, require_unit=True)
             if temperature_c is None:
                 return None
 
@@ -879,7 +895,12 @@ def _reopens_early(candidate: _Candidate, cooldown: _Cooldown) -> bool:
 
 
 def _temperature_changed(current: float | None, previous: float | None) -> bool:
-    return current is not None and previous is not None and abs(current - previous) >= TEMPERATURE_REOPEN_DELTA_C
+    if current is None or previous is None:
+        return False
+    # Unit conversion loses exactness: 68°F and 71.6°F are exactly 2°C apart, but
+    # convert to a 1.9999999999999964 delta. Without the tolerance a Fahrenheit
+    # household silently never clears the reopen threshold.
+    return abs(current - previous) >= TEMPERATURE_REOPEN_DELTA_C - _TEMPERATURE_DELTA_TOLERANCE_C
 
 
 def _valid_observation(observation: DirectorObservation) -> bool:
@@ -888,8 +909,8 @@ def _valid_observation(observation: DirectorObservation) -> bool:
         and observation.domain == observation.entity_id.split(".", 1)[0]
         and _safe_token(observation.state) is not None
         and _finite_number(observation.score) is not None
-        and (observation.temperature_c is None or _temperature(observation.temperature_c) is not None)
-        and (observation.target_temperature_c is None or _temperature(observation.target_temperature_c) is not None)
+        and (observation.temperature_c is None or _in_temperature_range(observation.temperature_c))
+        and (observation.target_temperature_c is None or _in_temperature_range(observation.target_temperature_c))
     )
 
 
@@ -931,11 +952,22 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _temperature(value: object) -> float | None:
-    temperature = _finite_number(value)
-    if temperature is None or not -90.0 <= temperature <= 70.0:
+def _temperature(value: object, unit: object = None, *, require_unit: bool = False) -> float | None:
+    """Parse one raw Home Assistant temperature attribute into bounded Celsius."""
+    temperature = normalize_temperature(value, unit, require_unit=require_unit)
+    if temperature is None or not _in_temperature_range(temperature):
         return None
     return temperature
+
+
+def _in_temperature_range(value: object) -> bool:
+    """Whether an already-Celsius value is inside the projection's bounds.
+
+    Kept separate from ``_temperature`` so re-validating a stored Celsius float
+    never depends on the parser's "no unit means Celsius" default.
+    """
+    number = _finite_number(value)
+    return number is not None and -90.0 <= number <= 70.0
 
 
 def _temperature_fingerprint(value: float | None) -> str:
@@ -943,8 +975,7 @@ def _temperature_fingerprint(value: float | None) -> str:
 
 
 def _format_temperature(value: float) -> str:
-    numeric = float(value)
-    return f"{numeric:.0f} °C" if numeric.is_integer() else f"{numeric:.1f} °C"
+    return format_celsius(value, suffix=" °C")
 
 
 def _safe_queue_id(value: object) -> bool:
