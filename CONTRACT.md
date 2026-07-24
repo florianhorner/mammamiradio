@@ -14,6 +14,8 @@ lands.
   weakening a test is touching the contract
 - `tests/integrations/golden/v1_now_playing.json` — the golden fixture; the
   fixture, not the code, is the contract
+- `CONTRACT.md` and `.github/workflows/contract-drift.yml` — the rules and
+  the gate change through the same unlock as the surface they guard
 - The endpoint path `/api/integrations/v1/now-playing`
 - ETag / 304 semantics: weak ETag derived from the serialized body,
   `If-None-Match` returns 304, `Cache-Control: public, max-age=2`, HEAD
@@ -21,8 +23,9 @@ lands.
 - `schema_version` stays `"1"` for this surface
 
 A wire-visible change that routes through some other file (for example
-`core/models.py`) is still a contract change. The drift CI catches it by
-rendering the serializer on every pull request, not by watching paths.
+`core/models.py`) is still a contract change. The drift CI catches payload
+drift by rendering the serializer on every pull request, not by watching
+paths; route and header behavior is held by the frozen pytest contract tests.
 
 ## Evolution policy: additive only
 
@@ -61,12 +64,16 @@ Agents never edit the frozen surface directly. The path is:
 - **Golden check (always):** renders the serializer for the golden scenario
   via `tests/integrations/golden/generate_fixture.py --check` and
   byte-compares against the fixture after normalizing the pinned volatile
-  fields (`changed_at`, `now_playing.started_at`). Any wire-visible drift
-  fails, no matter which file caused it.
+  fields (`changed_at`, `now_playing.started_at`). Any payload-visible drift
+  fails, no matter which file caused it. Route and header behavior — the
+  endpoint path, ETag/304, `Cache-Control` — is locked separately by the
+  frozen pytest contract tests under `tests/integrations/`, which run in the
+  quality workflow on every PR.
 - **Frozen-path gate (only when frozen paths change):** a PR touching the
-  frozen paths or the fixture fails unless `Contract-Change:` appears in a
-  commit message or the PR body. The PR-body line survives squash-merge, so
-  the audit trail persists on the merged history.
+  frozen paths, the fixture, this document, or the workflow itself fails
+  unless `Contract-Change:` appears at the start of a line in a commit
+  message or the PR body. The PR-body line survives squash-merge, so the
+  audit trail persists on the merged history.
 - **Cross-repo checksum:** compares this repo's fixture (sha256) against the
   sibling fixture in `music-assistant/server` (dev branch). Skips with a
   notice while the sibling does not exist yet; once it does, divergence
