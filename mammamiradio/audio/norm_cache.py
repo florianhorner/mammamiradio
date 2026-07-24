@@ -65,10 +65,17 @@ def _segment_identity_keys(segment: dict) -> set[str]:
     return {key for key in keys if key}
 
 
-def _norm_cache_identity_keys(path: Path) -> set[str]:
-    """Return comparable title/artist labels for a normalized cache file."""
+def _norm_cache_identity_keys(path: Path, *, sidecar: dict | None = None) -> set[str]:
+    """Return comparable title/artist labels for a normalized cache file.
+
+    Pass ``sidecar`` when the caller already read it, so a hot control path does
+    not pay a second sidecar read per candidate.  An empty dict is a *loaded*
+    sidecar with nothing usable in it, so it contributes no keys instead of
+    triggering a reload.
+    """
     keys = {_identity_key(humanize_norm_filename(path.name))}
-    sidecar = load_track_metadata(path)
+    if sidecar is None:
+        sidecar = load_track_metadata(path)
     if sidecar:
         title = str(sidecar.get("title") or "").strip()
         artist = str(sidecar.get("artist") or "").strip()
@@ -105,7 +112,15 @@ def _last_rescue_airplay(airplay: dict[Path, float], path: Path) -> float | None
     return max(matching, default=None)
 
 
-def _recent_music_identity_keys(state: StationState) -> set[str]:
+def recent_music_identity_keys(state: StationState) -> set[str]:
+    """Identity labels of the song on air now plus the last few music segments.
+
+    The single de-dup source shared by the playback-gap rescue
+    (:func:`select_norm_cache_rescue`) and the live-control continuity
+    reservation in ``web/streamer.py``.  Both need the same answer to "is this
+    cache file the song the listener is hearing right now?", and when only one
+    of them knew, a live control re-reserved the on-air song behind a sweeper.
+    """
     recent_keys: set[str] = set()
     if state.now_streaming:
         recent_keys.update(_segment_identity_keys(state.now_streaming))
@@ -115,6 +130,18 @@ def _recent_music_identity_keys(state: StationState) -> set[str]:
         if entry.type == SegmentType.MUSIC.value:
             recent_keys.update(_segment_identity_keys({"label": entry.label, "metadata": entry.metadata}))
     return recent_keys
+
+
+def is_recent_music(path: Path, recent_keys: set[str], *, sidecar: dict | None = None) -> bool:
+    """True when a cache file IS the song on air now (or one that just aired).
+
+    Pure in-memory comparison against :func:`recent_music_identity_keys`.  Pass
+    ``sidecar`` when the caller already read it to avoid a second read.
+    """
+    if not recent_keys:
+        return False
+    path_keys = _norm_cache_identity_keys(path, sidecar=sidecar)
+    return any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys)
 
 
 def _is_blocklisted(path: Path, blocklist: object) -> bool:
@@ -236,13 +263,36 @@ def rescue_rotation_status(state: StationState) -> dict:
     }
 
 
-def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | None:
+def select_norm_cache_rescue(
+    cache_dir: Path,
+    state: StationState,
+    *,
+    allow_recent_repeat: bool,
+) -> Path | None:
     """Pick a cache rescue clip without replaying the current/recent song first.
 
     A banned song must never re-air, even through the rescue path — so blocklisted
     cache files are dropped first, before the recent-identity de-dup. If every file is
     banned (nothing left) the rescue degrades to ``None`` and the caller's next layer
-    (canned clip / forced banter) keeps audio flowing rather than airing a banned song."""
+    (canned clip / forced banter) keeps audio flowing rather than airing a banned song.
+
+    ``allow_recent_repeat`` is REQUIRED, deliberately. It is the caller's honest
+    answer to "what is below me?", and it defaulted to the permissive value
+    exactly once — during which two ladders silently inherited it and could
+    re-air the song already on the air. A safety policy that can be acquired by
+    forgetting is not a policy; every ladder now has to say what it is.
+
+    * ``True`` (default) — the caller is a near-last rung and the alternative to a
+      repeat is a gap. A one-song warm cache re-serves that song rather than
+      falling silent.
+    * ``False`` — the caller has real audio beneath it (the packaged clip, the
+      emergency tone, the playback ladder). Re-airing the song the listener is
+      hearing right now is never its best option, so it returns ``None`` and lets
+      the rung below take over.
+
+    Passing ``True`` from a caller that DOES have rungs below it is how a drain
+    bridge came to queue the on-air song back-to-back with nothing in between.
+    """
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
     norm_files = [path for path in norm_files if not is_rejected_cache_key(_norm_cache_key(path))]
     blocklist = getattr(state, "blocklist", None)
@@ -251,14 +301,11 @@ def select_norm_cache_rescue(cache_dir: Path, state: StationState) -> Path | Non
     if not norm_files:
         return None
 
-    recent_keys = _recent_music_identity_keys(state)
+    recent_keys = recent_music_identity_keys(state)
     if not recent_keys:
         return _choose_rescue_candidate(norm_files, state)
 
-    candidates: list[Path] = []
-    for path in norm_files:
-        path_keys = _norm_cache_identity_keys(path)
-        if not any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys):
-            candidates.append(path)
-
+    candidates = [path for path in norm_files if not is_recent_music(path, recent_keys)]
+    if not candidates and not allow_recent_repeat:
+        return None
     return _choose_rescue_candidate(candidates or norm_files, state)

@@ -1451,7 +1451,7 @@ class TestRuntimeProviderTransparencyUI:
         assert isinstance(bridge_health["session_count"], int)
         assert isinstance(bridge_health["window_count"], int)
         assert isinstance(bridge_health["unhealthy"], bool)
-        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle"}
+        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle", "continuity"}
         assert bridge_health["threshold"] >= 1
         assert bridge_health["window_seconds"] > 0
         assert "last_fire" in bridge_health

@@ -66,6 +66,7 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    segment_track_key,
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
@@ -804,7 +805,29 @@ async def _queue_continuity_bridge(
     canned_metadata: dict | None = None,
     music_runway: bool = False,
 ) -> bool:
-    """Queue the best available producer-side continuity bridge."""
+    """Queue the best available producer-side continuity bridge.
+
+    Cached music comes FIRST. It is both the better listener experience (a real
+    song instead of a canned line in a voice that belongs to neither host) and
+    the faster one: the norm-cache payload derives its duration from the sidecar,
+    while the packaged clip pays an ffprobe in a worker thread before it can be
+    queued. The clip stays as the rung below, for a cold cache.
+    """
+    if music_runway and await _queue_norm_cache_bridge_segment(
+        queue_segment,
+        state,
+        config,
+        bridge_type=bridge_type,
+        bridge_flag=bridge_flag,
+        # Strict: the packaged clip and the emergency tone sit below this call,
+        # so re-airing the song currently on air is never the best option here.
+        # Without this a one-song warm cache queued that song back-to-back with
+        # nothing in between — a worse repeat than the one this fix exists for.
+        allow_recent_repeat=False,
+    ):
+        _record_bridge_fire(state, bridge_type, "norm_cache")
+        return True
+
     fallback = _pick_recovery_clip(state)
     if fallback:
         duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback, rescue=True)
@@ -832,25 +855,27 @@ async def _queue_continuity_bridge(
         )
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
-            if music_runway and not await _queue_norm_cache_bridge_segment(
-                queue_segment,
-                state,
-                config,
-                bridge_type=bridge_type,
-                bridge_flag=bridge_flag,
-            ):
+            if music_runway:
+                # The music-first attempt above already ran and found nothing
+                # eligible, so there is no second try to make here.
                 logger.info(
-                    "%s bridge: no runway music segment queued behind the canned clip",
+                    "%s bridge: no runway music segment available behind the canned clip",
                     bridge_type.capitalize(),
                 )
         return ok
 
+    # No packaged clip. Retry the cache PERMISSIVELY before the tone: at this
+    # depth the only thing left is 2 seconds of emergency tone, so a song the
+    # listener heard recently genuinely beats it. Every real caller passes
+    # music_runway=True, so gating this rung on `not music_runway` made it dead
+    # code and dropped a warm-cache station straight to the tone.
     ok = await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
         config,
         bridge_type=bridge_type,
         bridge_flag=bridge_flag,
+        allow_recent_repeat=True,
     )
     if ok:
         _record_bridge_fire(state, bridge_type, "norm_cache")
@@ -892,8 +917,9 @@ async def _queue_norm_cache_bridge_segment(
     *,
     bridge_type: str,
     bridge_flag: str,
+    allow_recent_repeat: bool,
 ) -> bool:
-    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    norm_path = select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=allow_recent_repeat)
     if not norm_path:
         return False
     metadata, log_label = _norm_cache_bridge_payload(
@@ -940,7 +966,11 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             ephemeral=False,
         )
 
-    norm_path = select_norm_cache_rescue(config.cache_dir, state)
+    # Permissive on purpose: the rung directly below this one is
+    # _blocklist_safe_last_music, which recycles the last-known-good song — a
+    # guaranteed 100% repeat. Refusing a recent cache pick here would trade a
+    # possibly-different song for a certainly-identical one.
+    norm_path = select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=True)
     if norm_path:
         metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
         logger.warning("Error recovery: using norm-cache rescue instead of silence: %s", log_label)
@@ -2108,15 +2138,42 @@ def _enqueue_rejection_reason(
     """Classify the current enqueue rejection without storing mutable side state."""
     if state.session_stopped:
         return GenerationWasteReason.SESSION_STOPPED
-    if segment.type == SegmentType.MUSIC and state.blocklist:
-        metadata = segment.metadata or {}
-        key = (
-            str(metadata.get("artist", "")).strip().lower(),
-            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
-        )
-        if key in state.blocklist:
-            return GenerationWasteReason.BLOCKLIST_GATE
+    if segment.type == SegmentType.MUSIC and state.blocklist and segment_track_key(segment) in state.blocklist:
+        return GenerationWasteReason.BLOCKLIST_GATE
     return _stale_check_reason(stale_check)
+
+
+def _music_segment_left_rotation(state: StationState, segment: Segment) -> bool:
+    """Return whether a rendered segment's song is genuinely gone from rotation.
+
+    ``playlist_revision`` bumps on ANY in-place edit — add, shuffle, move,
+    enrich, direction retag.  Only a REMOVAL actually invalidates a finished
+    render: ``/api/playlist/remove`` and ``/api/track/ban`` both drop the row
+    from ``state.playlist``, as does a dismissed listener request.  A pool that
+    merely grew leaves the rendered song exactly as playable as when the render
+    started, and binning it costs minutes of Pi CPU for nothing.
+
+    Non-music segments are never bound to a playlist row — the scriptwriter
+    reads ``current_track``, played history, and HA context, never the pool — so
+    a pool edit cannot make a banter/ad/news/station-id stale.  Rescue fills are
+    pool-independent by construction: they exist precisely because the pool
+    could not supply audio.
+    """
+    if segment.type is not SegmentType.MUSIC:
+        return False
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("rescue"):
+        return False
+    if not state.playlist:
+        # An empty pool means "no rotation right now", not "this song was
+        # removed". Reading it as removal would bin finished audio during any
+        # future clear-then-repopulate window.
+        return False
+    key = segment_track_key(segment)
+    # any() short-circuits and Track.normalized_key is a cached_property, so
+    # this stays a tuple compare per track. Materializing a set would cost more
+    # in allocation on the Pi than the scan it saves.
+    return not any(track.normalized_key == key for track in state.playlist)
 
 
 def _discard_rejected_admission(state: StationState, segment: Segment, reason: str, *, phase: str) -> None:
@@ -4224,7 +4281,9 @@ async def _run_producer_inner(
         # while playlist_revision also bumps on benign in-place edits (shuffle/
         # add/move/enrich). Capturing both lets the stale gate tell a source
         # switch (stale_source) apart from a same-source playlist edit
-        # (stale_playlist) for honest waste telemetry (#397).
+        # (stale_playlist) for honest waste telemetry (#397). playlist_revision
+        # is now only a cheap pre-filter: the discard itself needs
+        # _music_segment_left_rotation to confirm the song is actually gone.
         generation_source_revision = state.source_revision
         # Live controls reserve continuity before their destructive queue change.
         # A completed render from before that change must never refill the queue
@@ -6200,13 +6259,26 @@ async def _run_producer_inner(
                 except Exception as exc:
                     logger.warning("Transition sting generation failed, using clean cut: %s", exc)
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
-            if generation_revision != state.playlist_revision:
-                if generation_source_revision != state.source_revision:
-                    logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
-                    stale_reason = GenerationWasteReason.STALE_SOURCE
-                else:
-                    logger.info("Discarding stale %s segment after same-source playlist edit", seg_type.value)
-                    stale_reason = GenerationWasteReason.STALE_PLAYLIST
+            # A source switch is checked unconditionally: gating it behind a
+            # playlist_revision bump let a switch that somehow did not bump the
+            # broad counter slip through entirely.
+            stale_reason: str | None = None
+            if generation_source_revision != state.source_revision:
+                logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
+                stale_reason = GenerationWasteReason.STALE_SOURCE
+            elif generation_revision != state.playlist_revision and _music_segment_left_rotation(state, segment):
+                # playlist_revision is only a cheap pre-filter here. Ten of the
+                # thirteen sites that bump it are benign (add / shuffle / move /
+                # enrich), and binning a finished render for those cost minutes
+                # of Pi CPU and opened the very gap the rescue ladder then had
+                # to cover.
+                logger.info(
+                    "Discarding %s segment: %s left the rotation during the render",
+                    seg_type.value,
+                    (segment.metadata or {}).get("title") or "the song",
+                )
+                stale_reason = GenerationWasteReason.STALE_PLAYLIST
+            if stale_reason is not None:
                 state.record_discard(segment, reason=stale_reason)
                 _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
                 _abandon_release_beat_commit(state, banter_commit)
@@ -6260,7 +6332,13 @@ async def _run_producer_inner(
                     return GenerationWasteReason.SESSION_STOPPED
                 if captured_source_revision != state.source_revision:
                     return GenerationWasteReason.STALE_SOURCE
-                if captured_revision != state.playlist_revision:
+                # Must stay identical to the render epilogue's predicate above —
+                # a benign pool edit is not a reason to drop finished audio at
+                # admission either. `test_epilogue_and_admission_stale_predicates_agree`
+                # pins the two together.
+                if captured_revision != state.playlist_revision and _music_segment_left_rotation(
+                    state, captured_segment
+                ):
                     return GenerationWasteReason.STALE_PLAYLIST
                 if captured_chaos_epoch != state.chaos_cutover_epoch:
                     return GenerationWasteReason.STALE_CHAOS

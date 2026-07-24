@@ -2721,8 +2721,12 @@ async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
         return [(host, "La macchina del caffe si e svegliata.")], None
 
     def _staling_probe(_path):
-        # A same-source playlist edit lands mid-build — the shared epilogue
-        # gate discards this segment before it ever reaches the queue.
+        # A source switch lands mid-build — the shared epilogue gate discards
+        # this segment before it ever reaches the queue. (A same-source playlist
+        # edit no longer does: speech is not bound to a rotation row, so a pool
+        # that merely grew must not bin a finished render. This test is about
+        # receipt demotion on discard, not about which axis triggered it.)
+        state.source_revision += 1
         state.playlist_revision += 1
         return 1.0
 
@@ -2757,7 +2761,7 @@ async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
     assert queue.empty()  # discarded, never queued
     (row,) = state.moment_store.rows
     assert row.status == "dropped"
-    assert row.drop_reason == "stale_playlist"
+    assert row.drop_reason == "stale_source"
 
 
 @pytest.mark.asyncio
@@ -4920,8 +4924,13 @@ async def test_idle_bridge_does_not_run_before_idle_poll_wakes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_available(tmp_path):
-    """Idle wake-up gets a branded clip plus cached music runway."""
+async def test_idle_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
+    """A warm cache means the idle wake-up goes straight into a real song.
+
+    The packaged clip is the rung BELOW cached music, not a preamble to it: a
+    listener reconnecting should hear the station, not a canned line announcing
+    that the station is about to happen.
+    """
     state = _make_state()
     state.listeners_active = 0  # start idle
     config = _make_config()
@@ -4949,9 +4958,9 @@ async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_availa
             # Simulate a listener connecting
             state.listeners_active = 1
             deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.qsize() < 2:
+            while queue.qsize() < 1:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Idle bridge did not queue clip plus cached music")
+                    raise TimeoutError("Idle bridge did not queue cached music")
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()
@@ -4960,33 +4969,21 @@ async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_availa
             except asyncio.CancelledError:
                 pass
 
-    clip = queue.get_nowait()
     runway = queue.get_nowait()
-    assert clip.type == SegmentType.BANTER
-    assert clip.metadata.get("warmup") is True
-    # #547: idle_bridge marks the warm-up clip as rescue audio so the fallback
-    # classifier does not report it as the primary station; warmup stays for the
-    # display contract.
-    assert clip.metadata.get("idle_bridge") is True
-    assert clip.path == canned_clip
-    assert clip.ephemeral is False
-    assert clip.duration_sec == 7.5
-    assert clip.metadata["duration_ms"] == 7500
+    assert queue.empty(), "the packaged clip must not ride in front of cached music"
     assert runway.type == SegmentType.MUSIC
     assert runway.path == norm_file
     assert runway.metadata.get("idle_bridge") is True
     assert runway.metadata.get("audio_source") == "norm_cache"
     assert runway.metadata.get("title") == "Idle Runway"
     assert runway.metadata.get("artist") == "Runway Artist"
-    from mammamiradio.scheduling import producer
-
-    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", demo_root):
-        producer._unlink_if_tmp_render(clip, config.tmp_dir)
-        assert canned_clip.exists()
-    # The bridge itself is recorded once; the cached song is runway behind it.
+    # (packaged assets surviving cleanup is owned by
+    # test_unlink_if_tmp_render_keeps_packaged_assets — this bridge no longer
+    # queues the packaged clip when the cache is warm.)
+    # The bridge is recorded once, and honestly reports what actually aired.
     assert state.bridge_fires_total >= 1
     last = state.bridge_events[-1]
-    assert (last["bridge_type"], last["source"]) == ("idle", "canned")
+    assert (last["bridge_type"], last["source"]) == ("idle", "norm_cache")
 
 
 @pytest.mark.asyncio
@@ -5044,7 +5041,7 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
 
 @pytest.mark.asyncio
 async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
-    """A drain clip is immediately followed by cache music, never another clip."""
+    """A warm cache means a mid-playback drain airs a real song, with no clip in front."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -5069,14 +5066,57 @@ async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
         ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
 
     assert ok is True
-    assert [seg.path for seg in queued] == [canned_clip, norm_file]
-    assert [seg.type for seg in queued] == [SegmentType.BANTER, SegmentType.MUSIC]
+    assert [seg.path for seg in queued] == [norm_file]
+    assert [seg.type for seg in queued] == [SegmentType.MUSIC]
     assert queued[0].metadata.get("queue_drain_recovery") is True
-    assert queued[1].metadata.get("queue_drain_recovery") is True
-    assert queued[1].metadata.get("audio_source") == "norm_cache"
-    assert queued[1].metadata.get("title") == "Runway Song"
-    assert queued[1].metadata.get("artist") == "Cache Artist"
-    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
+    assert queued[0].metadata.get("audio_source") == "norm_cache"
+    assert queued[0].metadata.get("title") == "Runway Song"
+    assert queued[0].metadata.get("artist") == "Cache Artist"
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "norm_cache")]
+
+
+@pytest.mark.asyncio
+async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
+    """A one-song warm cache must not queue the song that is playing right now.
+
+    Music-first ordering made this reachable: the bridge asks the norm cache
+    first, and the cache's near-last-rung fallback will happily re-serve the only
+    file it has — which is the song on air. That would air the same track
+    back-to-back with NOTHING in between, a worse repeat than the incident this
+    whole change exists to fix. The bridge has the packaged clip and the tone
+    below it, so it asks strictly and falls through instead.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    on_air = tmp_path / "norm_on_air_192k.mp3"
+    on_air.write_bytes(b"the song currently playing")
+    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    state.now_streaming = {
+        "type": "music",
+        "label": "Fleece – Dont Lose Your Way",
+        "metadata": {"title_only": "Dont Lose Your Way", "artist": "Fleece"},
+    }
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment) -> bool:
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.4),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
+    assert on_air not in {seg.path for seg in queued}, "the on-air song must not be re-queued behind itself"
+    assert [seg.path for seg in queued] == [canned_clip]
 
 
 @pytest.mark.asyncio
@@ -5187,12 +5227,12 @@ async def test_idle_bridge_music_runway_queues_only_canned_clip_when_cache_cold(
 
 
 @pytest.mark.asyncio
-async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_path, caplog):
-    """A rejected runway enqueue (e.g. a full queue) is logged, not silently dropped.
+async def test_continuity_bridge_falls_back_to_clip_when_cache_music_cannot_enqueue(tmp_path, caplog):
+    """A rejected music enqueue (e.g. a full queue) drops to the packaged clip.
 
-    The canned clip's own success is still the only thing that counts as a bridge
-    fire — the runway segment is a bonus behind it, so a failed runway enqueue must
-    not raise, must not double-fire telemetry, and must not fail the bridge.
+    Music is tried first now, so a rejection there must not fail the bridge and
+    must not leave the listener with nothing — the clip is the rung below it, and
+    exactly one bridge fire is recorded, naming what actually aired.
     """
     from mammamiradio.scheduling import producer
 
@@ -5205,9 +5245,11 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
     norm_file = tmp_path / "norm_resume_runway.mp3"
     norm_file.write_bytes(b"pre-normalized resume runway")
     queued: list[Segment] = []
+    rejected: list[Segment] = []
 
-    async def _reject_second(segment: Segment) -> bool:
-        if queued:
+    async def _reject_music(segment: Segment) -> bool:
+        if segment.type is SegmentType.MUSIC:
+            rejected.append(segment)
             return False
         queued.append(segment)
         return True
@@ -5219,7 +5261,7 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_file),
     ):
         ok = await producer._queue_continuity_bridge(
-            _reject_second,
+            _reject_music,
             state,
             config,
             bridge_type="resume",
@@ -5229,11 +5271,14 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
         )
 
     assert ok is True
+    assert [seg.path for seg in rejected] == [norm_file]
     assert [seg.path for seg in queued] == [canned_clip]
     assert state.bridge_fires_total == 1
     assert state.bridge_events[-1]["bridge_type"] == "resume"
     assert state.bridge_events[-1]["source"] == "canned"
-    assert any("no runway music segment queued behind the canned clip" in record.message for record in caplog.records)
+    assert any(
+        "no runway music segment available behind the canned clip" in record.message for record in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5288,8 +5333,8 @@ def test_write_banter_resolves_via_module_after_reload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_available(tmp_path):
-    """Resume gets a branded clip plus cached music runway."""
+async def test_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
+    """Resuming a stopped session goes straight into cached music when one is warm."""
     state = _make_state()
     state.session_stopped = True
     config = _make_config()
@@ -5312,9 +5357,9 @@ async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_avai
             await asyncio.sleep(0.05)
             state.session_stopped = False
             deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.qsize() < 2:
+            while queue.qsize() < 1:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Resume bridge did not queue clip plus cached music")
+                    raise TimeoutError("Resume bridge did not queue cached music")
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()
@@ -5323,24 +5368,20 @@ async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_avai
             except asyncio.CancelledError:
                 pass
 
-    clip = queue.get_nowait()
     runway = queue.get_nowait()
-    assert clip.type == SegmentType.BANTER
-    assert clip.metadata.get("resume_bridge") is True
-    assert clip.duration_sec == 8.0
-    assert clip.metadata["duration_ms"] == 8000
+    assert queue.empty(), "the packaged clip must not ride in front of cached music"
     assert runway.type == SegmentType.MUSIC
     assert runway.path == norm_file
     assert runway.metadata.get("resume_bridge") is True
     assert runway.metadata.get("audio_source") == "norm_cache"
     assert runway.metadata.get("title") == "Resume Runway"
     assert runway.metadata.get("artist") == "Runway Artist"
-    assert [row["id"] for row in state.queued_segments] == [clip.metadata["queue_id"], runway.metadata["queue_id"]]
-    assert [row["label"] for row in state.queued_segments] == ["Resume bridge", "Resume Runway"]
+    assert [row["id"] for row in state.queued_segments] == [runway.metadata["queue_id"]]
+    assert [row["label"] for row in state.queued_segments] == ["Resume Runway"]
     # #547: the bridge itself is recorded once for observability.
     assert state.bridge_fires_total >= 1
     last = state.bridge_events[-1]
-    assert (last["bridge_type"], last["source"]) == ("resume", "canned")
+    assert (last["bridge_type"], last["source"]) == ("resume", "norm_cache")
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ tests to match.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -315,7 +316,7 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
     )
 
     with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=lambda items: items[0]) as choice:
-        rescue = select_norm_cache_rescue(tmp_path, state)
+        rescue = select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True)
 
     assert rescue == alternative
     choice.assert_called_once_with([alternative])
@@ -339,13 +340,10 @@ def test_continuity_reservation_prefers_non_cooling_cache_track(tmp_path):
     fresh = _write_indexed_cache_track(
         tmp_path, "norm_zzz_fresh_192k.mp3", title="Fresh", artist="B", duration=180.0, state=state
     )
-    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
 
     with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
         state.rescue_airplay[cooling] = 10_000.0 - 60.0
-        segments = _continuity_reservation_segments(
-            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
-        )
+        segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=1.0, max_segments=1)
 
     assert [seg.path for seg in segments] == [fresh]
 
@@ -372,13 +370,10 @@ def test_continuity_reservation_finds_fresh_track_beyond_cooling_scan_prefix(tmp
         duration=180.0,
         state=state,
     )
-    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
 
     with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
         state.rescue_airplay.update({path: 10_000.0 - 60.0 for path in cooling_paths})
-        segments = _continuity_reservation_segments(
-            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
-        )
+        segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=1.0, max_segments=1)
 
     assert [seg.path for seg in segments] == [fresh]
 
@@ -393,16 +388,118 @@ def test_continuity_reservation_falls_back_to_least_recent_when_all_cooling(tmp_
     newer = _write_indexed_cache_track(
         tmp_path, "norm_zzz_newer_192k.mp3", title="Newer", artist="B", duration=180.0, state=state
     )
-    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
 
     with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
         state.rescue_airplay[older] = 10_000.0 - 100.0
         state.rescue_airplay[newer] = 10_000.0 - 10.0
-        segments = _continuity_reservation_segments(
-            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
-        )
+        segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=1.0, max_segments=1)
 
     assert [seg.path for seg in segments] == [older]
+
+
+# ---------------------------------------------------------------------------
+# The 2026-07-24 incident: a live control re-reserved the song still on air,
+# with the packaged sweeper in front of it, so the listener heard
+#   Don't Lose Your Way -> "Siamo sempre in onda..." -> Don't Lose Your Way.
+# All three scenarios required by the audio-delivery test coverage rule.
+# ---------------------------------------------------------------------------
+
+
+def _on_air(state, *, title: str, artist: str) -> None:
+    state.now_streaming = {
+        "type": "music",
+        "label": f"{artist} – {title}",
+        "metadata": {"title": f"{artist} – {title}", "title_only": title, "artist": artist},
+    }
+
+
+def test_continuity_reservation_never_reserves_the_song_on_air_and_skips_the_sweeper(tmp_path):
+    """Scenario 1 (normal): the incident state, replayed.
+
+    A control fires two minutes into a 3.5-minute play, so the on-air song has
+    NO rescue_airplay entry yet — the cooldown cannot see it. The reservation
+    must still refuse it, and must go straight into the other cached song with
+    no packaged clip in front.
+    """
+    state = StationState()
+    on_air = _write_indexed_cache_track(
+        tmp_path, "norm_on_air_192k.mp3", title="Dont Lose Your Way", artist="Fleece", duration=211.0, state=state
+    )
+    other = _write_indexed_cache_track(
+        tmp_path, "norm_other_192k.mp3", title="Something Else", artist="Nomadi", duration=190.0, state=state
+    )
+    _on_air(state, title="Dont Lose Your Way", artist="Fleece")
+    assert state.rescue_airplay == {}  # mid-song: the cooldown has nothing on it
+
+    segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=240.0, max_segments=6)
+
+    assert [seg.path for seg in segments] == [other]
+    assert all(seg.type is SegmentType.MUSIC for seg in segments)
+    assert on_air not in {seg.path for seg in segments}
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert recovery not in {seg.path for seg in segments}
+
+
+def test_continuity_reservation_falls_back_to_packaged_audio_rather_than_repeating_the_on_air_song(tmp_path):
+    """Scenario 2 (empty fallback): the on-air song is the ONLY cached track.
+
+    This is the dead-air proof for refusing to share select_norm_cache_rescue's
+    ``candidates or norm_files`` collapse. The reservation degrades down its own
+    ladder — packaged clip, then emergency tone — but never re-airs the song the
+    listener is hearing right now, and is never empty.
+    """
+    state = StationState()
+    on_air = _write_indexed_cache_track(
+        tmp_path, "norm_on_air_192k.mp3", title="Dont Lose Your Way", artist="Fleece", duration=211.0, state=state
+    )
+    _on_air(state, title="Dont Lose Your Way", artist="Fleece")
+
+    segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=240.0, max_segments=6)
+
+    assert [seg.path for seg in segments] == [_DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"]
+    assert segments[0].type is SegmentType.BANTER
+    assert on_air not in {seg.path for seg in segments}
+
+    # ...and with the packaged speech unavailable too (the real container ships
+    # README stubs), the tone still keeps the station audible.
+    with patch("mammamiradio.web.streamer.is_approved_spoken_asset", return_value=False):
+        segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=240.0, max_segments=6)
+
+    assert [seg.path for seg in segments] == [_DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"]
+    assert segments[0].metadata.get("audio_source") == "emergency_tone"
+    assert on_air not in {seg.path for seg in segments}
+
+
+def test_continuity_reservation_after_restart_does_not_replay_the_handoff_song(tmp_path):
+    """Scenario 3 (post-restart): nothing survives the restart except last_music_file.
+
+    ``stream_log``, ``now_streaming`` and ``rescue_airplay`` are all empty in a
+    fresh process, so the ``cached == state.last_music_file`` guard is the ONLY
+    live guard here — which is exactly why it must be kept alongside the new
+    recent-identity filter.
+    """
+    state = StationState()
+    state.session_stopped = True  # flag persisted from the prior run
+    handoff = _write_indexed_cache_track(
+        tmp_path, "norm_handoff_192k.mp3", title="Handoff Song", artist="A", duration=190.0, state=state
+    )
+    other = _write_indexed_cache_track(
+        tmp_path, "norm_other_192k.mp3", title="Other Song", artist="B", duration=190.0, state=state
+    )
+    state.last_music_file = handoff  # as main.py::_admit_restart_handoff leaves it
+    assert not state.stream_log and not state.now_streaming and not state.rescue_airplay
+
+    segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=190.0, max_segments=6)
+
+    assert [seg.path for seg in segments] == [other]
+
+    # With the handoff song as the only cached track, it still degrades to
+    # packaged audio rather than replaying what the listener just heard.
+    state.immediate_audio_index.pop(other)
+    segments = _continuity_reservation_segments(state, SimpleNamespace(), target_seconds=190.0, max_segments=6)
+
+    assert segments
+    assert handoff not in {seg.path for seg in segments}
 
 
 @pytest.mark.asyncio
@@ -949,6 +1046,106 @@ async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tm
     assert isinstance(result[0], RuntimeError)
     assert app.state.station_state.stream_outcome_history[-1]["terminal_reason"] == "aborted"
     schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rescue_airplay_is_stamped_mid_segment_not_only_at_the_end(tmp_path):
+    """A cached rescue enters the rotation cooldown on its FIRST heard chunk.
+
+    The 2026-07-24 incident happened because the only stamp was at segment end:
+    a live control firing two minutes into a 3.5-minute play saw the on-air song
+    as never heard and re-reserved it. The stamp must land while the song is
+    still playing, so anything asking "has this aired recently?" gets a true
+    answer for the whole duration.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "norm_rescue_192k.mp3"
+    audio_path.write_bytes(b"x" * 65536)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={
+                "title": "Rescue Song",
+                "title_only": "Rescue Song",
+                "artist": "Cache Artist",
+                "audio_source": "norm_cache",
+                "rescue": True,
+            },
+        )
+    )
+
+    stamped_while_playing = asyncio.Event()
+    real_broadcast = app.state.stream_hub.broadcast
+
+    async def _watch(chunk):
+        accepted = await real_broadcast(chunk)
+        if audio_path in state.rescue_airplay:
+            stamped_while_playing.set()
+        return accepted
+
+    app.state.stream_hub.broadcast = _watch
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(stamped_while_playing.wait(), timeout=3.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert audio_path in state.rescue_airplay
+
+
+@pytest.mark.asyncio
+async def test_air_start_stamp_needs_a_listener_to_accept_the_chunk(tmp_path):
+    """The air-start stamp fires only for audio a listener queue actually took.
+
+    Scoped to the air-start stamp: the end-of-segment stamp keeps its own,
+    pre-existing predicate (a listener was in the room and bytes flowed), so
+    this asserts mid-flight state rather than the final map.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "norm_unheard_192k.mp3"
+    audio_path.write_bytes(b"x" * 65536)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={"title": "Unheard", "title_only": "Unheard", "artist": "A", "audio_source": "norm_cache"},
+        )
+    )
+
+    chunks_dropped = 0
+    stamped_mid_flight = False
+
+    async def _drop_every_chunk(_chunk):
+        nonlocal chunks_dropped, stamped_mid_flight
+        chunks_dropped += 1
+        if audio_path in state.rescue_airplay:
+            stamped_mid_flight = True
+        return 0  # no listener queue accepted it
+
+    app.state.stream_hub.broadcast = _drop_every_chunk
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.sleep(0.4)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert chunks_dropped > 1, "the loop must have sent several chunks for this to mean anything"
+    assert not stamped_mid_flight
 
 
 @pytest.mark.asyncio
