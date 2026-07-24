@@ -153,7 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         parsed = json.loads(raw.decode("utf-8"))
         if not isinstance(parsed, dict):
-            print(f"DRIFT: fixture at {FIXTURE_PATH} root is not a JSON object")
+            print(f"DRIFT: the fixture at {FIXTURE_PATH} has the wrong shape (not a JSON object).")
+            print("Regenerate it with: python tests/integrations/golden/generate_fixture.py")
             return 1
         on_disk = fixture_bytes(parsed)
     except ValueError as exc:
