@@ -121,6 +121,43 @@ async def test_post_party_enable_sets_festival_mode_purges_queue_and_arms_banter
 
 
 @pytest.mark.asyncio
+async def test_post_party_enable_preserves_ready_head_when_replacement_is_unavailable(tmp_path, monkeypatch):
+    app = _make_test_app()
+    monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
+    state = app.state.station_state
+    head_path = tmp_path / "festival-head.mp3"
+    tail_path = tmp_path / "festival-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 6
+
+    with (
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
+
+    assert resp.status_code == 200
+    assert resp.json()["active"] is True
+    assert app.state.config.party_mode == "festival"
+    assert state.force_next is SegmentType.BANTER
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 7
+    assert head_path.exists()
+    assert not tail_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_post_party_enable_clears_shadow_queue(tmp_path, monkeypatch):
     """Regression: enabling Festival Mode must clear the UI shadow queue, not just
     the real audio queue. The enable path drained the real queue but forgot the

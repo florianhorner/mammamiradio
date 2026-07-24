@@ -1,0 +1,17 @@
+# Contract-freeze governance — full validation at HEAD
+date: 2026-07-24T10:30:54Z
+branch: governance/contract-freeze @ 86e407ba (tree tested = this commit)
+
+$ .venv/bin/python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output
+
+$ .venv/bin/python -m pytest tests/integrations/golden/ -q
+7 passed in 0.42s
+
+$ .venv/bin/python -m pytest -n auto -q
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5420 passed, 3 skipped, 18 warnings in 26.29s
+
+$ .venv/bin/python -c 'import yaml; yaml.safe_load(open(".github/workflows/contract-drift.yml"))' && echo YAML-OK
+YAML-OK

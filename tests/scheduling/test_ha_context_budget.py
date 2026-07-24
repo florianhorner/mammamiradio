@@ -590,11 +590,12 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
 
 
 @pytest.mark.asyncio
-async def test_stale_fallback_withholds_pending_ha_directives_and_running_gags(tmp_path):
+@pytest.mark.parametrize("directive_source", ["ha", "ha:person.florian_horner"])
+async def test_stale_fallback_withholds_pending_ha_directives_and_running_gags(tmp_path, directive_source):
     config = _config(tmp_path)
     state = StationState(
         ha_pending_directive="old home event",
-        ha_pending_directive_source="ha",
+        ha_pending_directive_source=directive_source,
         ha_running_gag="an old house gag",
         ha_running_gag_key="old-home-event",
     )

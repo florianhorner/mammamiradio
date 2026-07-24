@@ -9,7 +9,10 @@ This file supplements the global instructions for the `mammamiradio` repository.
 
 ## Working Rules
 
-- Conventional commits only: `feat:`, `fix:`, `chore:`, `ci:`, `deps:`
+- Conventional commits only: use `type(scope): subject` with the canonical
+  types `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`,
+  `build`, `perf`, and `revert`.
+- Dependency commits use `chore(deps): ...`; `deps:` is not a commit type.
 - Never modify `.context/` runtime state
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync

@@ -106,6 +106,8 @@ async def test_write_banter_offers_release_beat_and_requires_usage_flag(tmp_path
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    # This test exercises release-beat commit metadata, not Normal Mode copy.
+    config.super_italian_mode = True
     state = StationState(release_campaign=_Campaign())
     captured: dict[str, str] = {}
 
@@ -145,6 +147,8 @@ async def test_write_banter_model_ignored_release_beat_has_no_segment_metadata(t
     config.anthropic_api_key = "test-key"
     config.openai_api_key = ""
     config.cache_dir = tmp_path
+    # This test exercises release-beat commit metadata, not Normal Mode copy.
+    config.super_italian_mode = True
     state = StationState(release_campaign=_Campaign())
 
     async def _ignore_beat(**kwargs):

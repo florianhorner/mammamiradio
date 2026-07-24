@@ -6,6 +6,7 @@ from mammamiradio.core.models import Heading, SegmentLogEntry, StationState, Tra
 from mammamiradio.web import status_payload, streamer
 
 _MOVED_HELPERS = (
+    "_admin_track_id",
     "_page_bounds",
     "_has_any_mp3",
     "_cached_cache_size_mb",
@@ -58,6 +59,7 @@ def test_paginated_tracks_serializes_page_and_revision():
     assert payload == {
         "tracks": [
             {
+                "id": "id-1",
                 "title": "Song 1",
                 "artist": "Artist",
                 "display": "Artist – Song 1",
@@ -84,6 +86,17 @@ def test_serialize_track_includes_heading_id_for_admin_hunt_rows():
     payload = status_payload._serialize_track(track)
 
     assert payload["heading_id"] == "hunt-1"
+
+
+def test_admin_track_id_prefers_trimmed_spotify_id_and_falls_back_to_cache_key():
+    spotify_track = Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="  id-1  ")
+    numeric_track = Track(title="Numeric", artist="Artist", duration_ms=180_000, spotify_id=123)  # type: ignore[arg-type]
+    cache_track = Track(title="Fallback", artist="Artist", duration_ms=180_000, spotify_id="   ")
+
+    assert status_payload._admin_track_id(spotify_track) == "id-1"
+    assert status_payload._admin_track_id(numeric_track) == "123"
+    assert status_payload._admin_track_id(cache_track) == cache_track.cache_key
+    assert status_payload._serialize_track(cache_track)["id"] == cache_track.cache_key
 
 
 def test_status_now_playback_redacts_internal_metadata_and_reports_progress():

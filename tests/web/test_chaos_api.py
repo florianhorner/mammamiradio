@@ -93,6 +93,44 @@ async def test_post_chaos_enable_sets_pending_bumps_epoch_and_purges_queue(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_post_chaos_enable_preserves_ready_head_when_replacement_is_unavailable(tmp_path, monkeypatch):
+    app = _make_test_app()
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    state = app.state.station_state
+    head_path = tmp_path / "chaos-head.mp3"
+    tail_path = tmp_path / "chaos-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 5
+
+    with (
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/chaos", json={"enabled": True})
+
+    assert resp.status_code == 200
+    assert resp.json()["purged"] == 1
+    assert state.chaos_mode_active is True
+    assert state.chaos_pending in {ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM}
+    assert state.chaos_cutover_epoch == 1
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 6
+    assert head_path.exists()
+    assert not tail_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_post_chaos_disable_clears_pending_bumps_epoch_without_purging_queue(tmp_path, monkeypatch):
     app = _make_test_app()
     monkeypatch.setenv("MAMMAMIRADIO_CHAOS_MODE", "true")

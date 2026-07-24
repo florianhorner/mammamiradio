@@ -1454,7 +1454,8 @@ async def test_shutdown_cancels_tasks():
     prewarm_task = AsyncMock()
     producer_task = AsyncMock()
     playback_task = AsyncMock()
-    for task in (prewarm_task, producer_task, playback_task):
+    listener_session_task = AsyncMock()
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
         task.cancel = MagicMock()
 
     main_mod._prewarm_task = prewarm_task
@@ -1464,6 +1465,10 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
     main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = SimpleNamespace(
+        listener_session_tasks={listener_session_task},
+        _restart_handoff_tasks=set(),
+    )
     # Isolate from prior tests that may have left a verdict probe / background
     # tasks on the shared app.state — this test asserts exactly the 3 lifecycle
     # tasks are gathered.
@@ -1473,9 +1478,15 @@ async def test_shutdown_cancels_tasks():
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
 
-    for task in (prewarm_task, producer_task, playback_task):
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
         task.cancel.assert_called_once()
-    mock_gather.assert_called_once_with(prewarm_task, producer_task, playback_task, return_exceptions=True)
+    mock_gather.assert_called_once_with(
+        prewarm_task,
+        producer_task,
+        playback_task,
+        listener_session_task,
+        return_exceptions=True,
+    )
     assert main_mod.app.state.prewarm_task is None
     assert main_mod.app.state.producer_task is None
     assert main_mod.app.state.playback_task is None
@@ -1485,6 +1496,7 @@ async def test_shutdown_cancels_tasks():
     main_mod._prewarm_task = None
     main_mod._producer_task = None
     main_mod._playback_task = None
+    main_mod.app.state.station_state = None
 
 
 @pytest.mark.asyncio

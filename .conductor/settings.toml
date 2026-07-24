@@ -1,0 +1,139 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+# This is a pinned prompt mirror of the repository's current GitHub writing
+# contract. GitHub workflows and branch protection remain authoritative.
+#
+# Sources checked 2026-07-14:
+# - .config/commit-rules.json, vendored from engineering-standards SHA
+#   1fe9a730a3779349ddcea67974f10050a7548a47 (schema 1.1.0)
+# - .github/workflows/commit-lint.yml, reusable workflow SHA
+#   502b48e0521350509f06cd3c6ad65a7c848f23af
+# - local PR-body sources at repository commit
+#   469caa61543573064106a93c44b6e11d31c3a489: scripts/lint-patterns.sh,
+#   scripts/check-pr-body-lint.sh, .github/workflows/pr-body-lint.yml, and
+#   .github/pull_request_template.md
+# - .github/workflows/verify-claims.yml, gh-workflows@v1.3
+#
+# Refresh this block deliberately when any of those sources change. Do not
+# fetch network state during workspace setup. The local proof hook currently
+# uses gh-workflows@v1.1, so the proof guidance below uses syntax accepted by
+# both versions.
+
+[prompts]
+
+general = """
+This repository mirrors its GitHub writing contract here so generated commits
+and pull requests are ready on the first pass. Treat the machine-readable
+contract in .config/commit-rules.json and the GitHub workflows as authoritative
+over any shorter or conflicting prose elsewhere.
+
+COMMITS
+- Use `type(scope): subject` with one of: feat, fix, docs, style, refactor,
+  test, chore, ci, build, perf, revert.
+- If a scope is present, keep it lowercase and use only `[a-z0-9][a-z0-9-]*`.
+- Keep the subject at 72 characters or fewer, use imperative mood, and omit a
+  trailing period. Direct commits omit version prefixes. Use `chore(deps): ...`
+  for dependency work; `deps:` is not an allowed commit type.
+- A `feat` commit with more than 50 changed lines must include a one-line
+  `Why: ...` body entry. Other bodies are optional.
+- Never use operator attribution such as `florian asked`, `as requested`, or
+  `per request`, and never use agent self-talk such as `addressed all comments`
+  or `cleaned up everything`. Describe the concrete change and its reason.
+- `Merge `, `Revert `, `cherry-pick: `, and `[hotfix] ` subjects are the only
+  format exemptions. A sanctioned non-verify bypass requires a
+  `Policy-Override: <reason>` trailer.
+
+PUSHES AND BRANCHES
+- Use `/commit` for a dry-run message proposal and `/ship` for the repository's
+  PR workflow. Do not bypass the local commit/pre-push checks casually.
+- Before pushing, ensure every new commit conforms and re-check the current PR
+  proof body if an open PR exists. A new push requires fresh GitHub checks.
+- Preserve Conductor's `florianhorner/` branch prefix and prefer a short
+  lowercase `<type>/<kebab-slug>` branch name. GitHub does not currently
+  enforce branch naming here; this is a local convention.
+
+VOICE
+- Write like a precise human maintainer: name user-visible outcomes, concrete
+  behavior, evidence, and the next action. Keep internal planning and tool
+  provenance out of public-facing commit/PR prose.
+"""
+
+create_pr = """
+Create this repository's PR only through `/ship`; do not use a bare `gh pr
+create`. Treat the PR title as the eventual squash-merge commit subject.
+
+TITLE
+- Use `type(scope): subject`, <=72 characters, imperative, no trailing period.
+- If a scope is present, keep it lowercase and use only `[a-z0-9][a-z0-9-]*`.
+- A four-component `vMAJOR.MINOR.PATCH.MICRO ` prefix is optional only when
+  `/ship` intentionally uses it as a landing-queue claim. Short prefixes such
+  as `v2`, `v2.18`, or `v2.18.0` are not valid.
+
+BODY
+- Start with `## Summary` and explain what changed and why in user/operator
+  language. Include `## Test plan` with the actual checks and results.
+- Include the repository's `## QA Impact` section for every PR, classifying
+  Player, Admin, Both, None, or Deferred and explaining the touched surfaces.
+- If admin.html or listener.html changed, preserve `## Admin Panel Standards`
+  and check the applicable items from the PR template.
+- End the body with a terminal `## Proof` section. Use checkbox lines such as
+  `- [x] tests: <artifact>` or `- [ ] runtime: n/a — <reason>`. Checked entries
+  need a real test name, CI URL, file, or other artifact; unchecked entries
+  need `n/a — <reason>` or a real artifact.
+- Keep proof artifact values plain. Do not add inline `[proof: key]` tags or
+  append an em-dash description to a path; this keeps the body valid for both
+  the current GitHub validator and the local legacy hook. Nothing may follow
+  the terminal Proof block.
+
+EDITORIAL LINT
+- Do not include internal sprint/workstream labels (`PR-A`, `WS2`, `Phase 1`,
+  `Approach B`, `Concept A`, `finding #N`, `Item N`, `P0-1`, `H2/H3`,
+  `phase A`, `Track A`, or `leadership principle`), planning archaeology
+  (`soak window`, `live session`, dated planning files), or contributor
+  archaeology (`first outside contribution`, `work was superseded`,
+  `red tests ride green`, `informed the later`, `superseded`,
+  `Conductor setup fails`, `CLAUDE.md`).
+- Do not include agent/tool provenance (`/autoplan`, `codex review`, `Claude
+  review`, `Claude Code`, `Conductor agent`, `Conductor session`,
+  `🤖 Generated with`) or architectural process labels such as `cathedral`,
+  `sacred files`, `domain naves`, `god-module`, `nave`, or
+  `operator-honesty`.
+- Do not use PR process narration such as `N commits ahead`, `picked up
+  cleanly`, `auto-decided`, `soak verification`, or `dual-voice review`.
+- Make claims only when the listed evidence proves the current PR head. Do not
+  claim runtime, deployment, release, or QA work that did not happen.
+
+Before submitting, use the exact final title and body for local validation and
+verify live GitHub required checks/review state at landing time rather than
+hardcoding branch-protection assumptions.
+"""
+
+code_review = """
+Before approving or opening a PR in this repository, audit the delivery prose
+as well as the code:
+
+1. Check every new commit and the PR title against .config/commit-rules.json:
+   allowed type, optional lowercase scope matching `[a-z0-9][a-z0-9-]*`, <=72
+   characters, imperative mood, no period, correct `Why:` rule, and no banned
+   attribution/self-talk.
+2. Check the PR body for Summary, Test plan, QA Impact, conditional Admin Panel
+   Standards, and a terminal `## Proof` block with real artifacts or explicit
+   n/a reasons. Keep proof syntax conservative and plain.
+3. Check the body for the repository's editorial bans: internal sprint labels,
+   planning/contributor archaeology, agent/tool provenance, architectural
+   process vocabulary, and PR-process narration.
+4. Separate verified local/CI evidence from live runtime, deployment, release,
+   and merge claims. Query current GitHub checks and review state when landing.
+
+Report the specific line or subject that would fail and provide a compliant
+replacement. Do not rewrite a passing claim into a stronger claim.
+"""
+
+rename_branch = """
+For this repository, preserve Conductor's `florianhorner/` prefix and choose a
+short lowercase branch name in the form `<type>/<kebab-slug>` when creating or
+renaming a branch. Use `feat`, `fix`, `docs`, `chore`, `ci`, `test`, or another
+canonical commit type as appropriate. Do not put release versions or a long
+implementation sentence in the branch name. This is a Conductor convention;
+GitHub currently has no branch-name enforcement rule for this repository.
+"""

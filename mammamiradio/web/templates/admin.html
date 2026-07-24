@@ -175,22 +175,73 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 
 /* ── QUICK ACTIONS ── */
 .quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.course-banner {
-  display: grid; gap: 3px;
-  width: 100%; margin-top: 8px; padding: 9px 11px;
-  border: 1px solid rgba(244,208,72,0.18); border-radius: 8px;
-  background: rgba(20,17,15,0.34); color: rgba(245,237,216,0.78);
-  font-size: 12px; min-width: 0; overflow-wrap: break-word;
+
+/* ── RECORD HUNT ──
+   Rotazione has one creative action: steer the next stretch. Source imports and
+   pool maintenance stay in the quiet Library tools disclosure below the list. */
+.record-hunt {
+  position: relative; overflow: hidden;
+  margin-bottom: 24px; padding: 20px;
+  border: 1px solid rgba(244,208,72,0.30); border-radius: 10px;
+  background: var(--surface-strong);
 }
-.course-banner[data-active="true"] { border-color: rgba(244,208,72,0.32); background: rgba(244,208,72,0.07); }
-.record-hunt-truth { min-width: 0; line-height: 1.35; }
+.record-hunt::before {
+  content: ""; position: absolute; top: 0; left: 28px; right: 28px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(244,208,72,0.72), transparent);
+}
+.record-hunt-label {
+  margin: 0 0 7px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em; line-height: 1.35; text-transform: uppercase;
+}
+.record-hunt-copy {
+  margin: 0 0 16px; color: var(--cream);
+  font-size: 16px; font-weight: 600; line-height: 1.35;
+}
+.record-hunt-copy strong { color: var(--sun); }
+.record-hunt-form {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px;
+}
+.record-hunt-form .search-input {
+  min-height: 52px; font-size: 16px;
+  background: var(--bg-elevated); border-color: rgba(245,237,216,0.22);
+}
+.record-hunt-button {
+  min-width: 126px; min-height: 52px; padding: 10px 18px;
+  color: var(--bg); background: var(--sun2); border-color: var(--sun2);
+  box-shadow: 0 3px 14px rgba(236,204,48,0.24);
+}
+.record-hunt-button:hover { color: var(--bg); background: var(--sun); border-color: var(--sun); }
+.record-hunt-button.loading { opacity: 0.72; pointer-events: none; }
+.record-hunt-status {
+  display: grid; grid-template-columns: minmax(0,1fr) auto;
+  gap: 10px; align-items: center;
+  margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.record-hunt-status-copy {
+  display: grid; grid-template-columns: 18px minmax(0,1fr);
+  gap: 3px 10px; min-width: 0; width: 100%;
+  overflow-wrap: break-word;
+}
+.record-hunt-status-shape {
+  grid-row: 1 / span 2; color: var(--muted);
+  font-family: var(--font-mono); font-size: 15px; font-weight: 700; line-height: 1.3;
+}
+.record-hunt-status-shape.ready { color: var(--ok-text); }
+.record-hunt-status-shape.working { color: var(--sun); }
+.record-hunt-status-shape.idle { color: var(--muted); }
+.record-hunt-status-shape.working { animation: record-hunt-pulse 1.4s ease-in-out infinite; }
+.record-hunt-truth { min-width: 0; color: var(--cream-dk); font-size: 13px; line-height: 1.35; overflow-wrap: break-word; }
+.record-hunt-truth b { color: var(--sun); font-weight: 700; }
 .record-hunt-stage {
-  min-width: 0; color: rgba(245,237,216,0.48); font-family: var(--font-mono);
-  font-size: 10px; line-height: 1.3;
+  grid-column: 2; min-width: 0; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.3;
 }
-.course-banner[data-active="false"] .record-hunt-stage { display: none; }
-.course-banner b { color: var(--sun2); font-weight: 700; }
-.course-banner[data-active="false"] b { color: rgba(245,237,216,0.58); }
+.record-hunt-status-copy[data-active="false"] .record-hunt-stage { display: none; }
+.record-hunt-reset { min-width: 44px; min-height: 44px; white-space: nowrap; }
+.record-hunt-reset[hidden] { display: none; }
+@keyframes record-hunt-pulse { 50% { opacity: 0.38; transform: scale(0.84); } }
 
 /* ── SCRIPT BOX ── */
 .script-box {
@@ -396,14 +447,13 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ── PLAYLIST / SEARCH ── */
+.rotation-library-label {
+  margin: 0 0 10px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.12em; line-height: 1.35; text-transform: uppercase;
+}
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
-.direction-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
-.direction-row .quick-add-label { flex-shrink: 0; }
-.direction-row .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
-.direction-row .btn-direction { min-height: 44px; padding: 10px 16px; }
-.direction-row .btn-direction.loading,
-.direction-row .btn-direction:disabled,
-.direction-row .search-input:disabled { opacity: 0.65; pointer-events: none; }
+.library-search .search-input { min-width: 220px; min-height: 44px; font-size: 16px; }
 .search-input, .input {
   flex: 1; font-family: var(--font-body); font-size: 16px;
   padding: 10px 14px; border-radius: 8px;
@@ -448,7 +498,8 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .pl-art { width: 36px; height: 36px; border-radius: 3px; object-fit: cover; flex-shrink: 0; border: 1px solid rgba(244,208,72,0.2); }
 .pl-art-empty { width: 18px; height: 18px; border-radius: 3px; background: rgba(245,237,216,0.05); border: 1px solid rgba(245,237,216,0.12); flex-shrink: 0; position: relative; }
 .pl-art-empty::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; border-top: 1px solid rgba(245,237,216,0.28); transform: rotate(-35deg); }
-.pl-chips { display: flex; gap: 4px; align-items: center; margin-left: auto; min-width: 0; flex-shrink: 0; }
+.pl-meta { display: flex; gap: 4px; align-items: center; margin-left: auto; min-width: 0; flex-shrink: 0; }
+.pl-chips { display: flex; gap: 4px; align-items: center; min-width: 0; flex-shrink: 0; }
 .pl-era { font-size: 9px; font-weight: 700; font-family: var(--font-mono); color: var(--sun); background: rgba(244,208,72,0.12); border: 1px solid rgba(244,208,72,0.25); border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .pl-src { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
 .pl-src.classic { color: var(--sun); background: rgba(244,208,72,0.10); border: 1px solid rgba(244,208,72,0.20); }
@@ -870,6 +921,31 @@ input[type="range"]:focus-visible {
 }
 .prod-entry .prod-elapsed { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
+/* "Update delayed" fallback: the status message stacks above the retry control so
+   both the recovery sentence and the button label stay readable at 320px. */
+.prod-unavailable { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.prod-unavailable .prod-entry { align-items: flex-start; }
+/* The recovery promise is the primary content of this fallback. Unlike routine
+   production labels, never truncate it after two lines on a narrow console. */
+.prod-unavailable .prod-label {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.prod-retry {
+  min-width: 44px; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg-elevated); color: var(--cream);
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  transition: color 150ms, border-color 150ms, background 150ms;
+}
+.prod-retry:hover { color: var(--sun); border-color: var(--sun2); background: rgba(236,204,48,0.06); }
+.prod-retry:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(236,204,48,0.5); }
+.prod-retry.is-busy, .prod-retry:disabled { opacity: 0.6; cursor: default; }
+
 /* Compact non-status segment labels for programme categories */
 .a-programme .segment-inline,
 .lg-row .segment-inline {
@@ -1180,6 +1256,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .super-italian-switch input:checked + .super-italian-slider::after { animation: none !important; }
   .ha input[type="range"].tt-settling::-webkit-slider-thumb,
   .ha input[type="range"].tt-settling::-moz-range-thumb { animation: none !important; }
+  .record-hunt-status-shape.working { animation: none; }
 }
 
 @media (max-width: 768px) {
@@ -1211,15 +1288,47 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-content { padding: 16px 16px; }
   .lg-row { grid-template-columns: 62px 84px minmax(0, 1fr); gap: 8px; padding: 9px 10px; }
   .lg-row .ts { font-size: 9px; }
-  .search-row, .direction-row { flex-direction: column; align-items: stretch; }
-  .search-row .btn, .direction-row .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .search-row { flex-direction: column; align-items: stretch; }
+  .search-row .btn, .record-hunt-form .btn, .transport .btn-skip, .transport .btn-stop, .transport .btn-resume { width: 100%; }
+  .record-hunt-form { grid-template-columns: 1fr; }
+  .record-hunt-status { grid-template-columns: 1fr; }
+  .record-hunt-reset { justify-self: start; }
   .transport .btn-util { flex: 1 1 auto; min-width: 0; font-size: 0.78em; padding: 0.35rem 0.4rem; }
   .sr-row { flex-wrap: wrap; }
-  /* 481-768px = two-pane desktop column. Keep action buttons on the track
-   * line; never wrap them below — that looks broken. The ≤480px phone block
-   * below switches to a stacked touch-target grid instead. */
-  .pl-a { opacity: 1; }
-  .pl-btn, .sr-add { min-height: 36px; }
+  /* Catalogue rows use one explicit stacked grid through 768px. Every direct
+   * child has a placement so metadata and actions cannot create an implicit
+   * overflow column when the viewport is narrow or split-screen. */
+  .pl-row {
+    display: grid;
+    grid-template-columns: 44px 44px 32px minmax(0, 1fr);
+    gap: 8px;
+    column-gap: 4px;
+    align-items: center;
+  }
+  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
+  .pl-grip { grid-column: 2; grid-row: 1; }
+  .pl-n { display: none; }
+  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; width: 32px; height: 32px; }
+  .pl-t { grid-column: 4; grid-row: 1; }
+  .pl-meta {
+    grid-column: 4 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    min-width: 0;
+  }
+  .pl-chips {
+    margin-left: 0;
+    max-width: 100%;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
+  .pl-ban { grid-column: 4 / -1; grid-row: 3; justify-self: end; margin-left: 0; }
+  .pl-btn, .sr-add { min-height: 44px; }
   .undo-stack {
     left: 12px;
     right: 12px;
@@ -1231,27 +1340,6 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   .a-triggers { grid-template-columns: 1fr 1fr; }
   .a-row-2 { grid-template-columns: 1fr; }
   .a-topbar { flex-wrap: wrap; }
-}
-
-/* Real phones (≤480px): stack the row into a deliberate touch-target grid —
- * action buttons drop to a second row with full 44px hit areas. The two-pane
- * desktop column (481-768px, above) keeps them inline instead. */
-@media (max-width: 480px) {
-  .pl-row {
-    display: grid;
-    grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-  }
-  .pl-check-hit { grid-column: 1; grid-row: 1; margin: 0; }
-  .pl-grip { grid-column: 2; grid-row: 1; }
-  .pl-n { display: none; }
-  .pl-art, .pl-art-empty { grid-column: 3; grid-row: 1; }
-  .pl-t { grid-column: 4; grid-row: 1; }
-  .pl-chips { grid-column: 4 / 6; grid-row: 2; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
-  .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
-  .pl-ban { grid-column: 4 / 6; grid-row: 3; justify-self: end; margin-left: 0; }
-  .pl-btn, .sr-add { min-height: 44px; }
 }
 
 @media (max-width: 768px) {
@@ -1426,13 +1514,50 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   background: rgba(37,99,235,0.08);
   box-shadow: inset 2px 0 0 var(--ok);
 }
-.rotation-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+.rotation-library { margin-top: 2px; }
+.library-tools {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.library-tools summary {
+  display: flex; align-items: center; min-height: 52px;
+  color: var(--text-secondary); cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 600;
+}
+.library-tools summary::-webkit-details-marker { display: none; }
+.library-tools summary::before {
+  content: "+"; width: 20px; color: var(--sun);
+  font-family: var(--font-mono); font-size: 17px; font-weight: 500;
+}
+.library-tools[open] summary::before { content: "−"; }
+.library-tools-banned {
+  display: inline-grid; place-items: center;
+  min-width: 20px; min-height: 20px; margin-left: 7px; padding: 0 5px;
+  border-radius: 999px; color: var(--cream); background: var(--lancia2);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700; line-height: 1;
+}
+.library-tools-banned[hidden] { display: none; }
+.library-tools-body {
+  display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 16px; padding: 0 0 17px;
+}
+.library-tools-group { min-width: 0; }
+.library-tools-group .quick-actions { align-items: center; }
+.library-tools-group .rotation-library-label { margin-bottom: 8px; }
+.library-tools-danger { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.empty-pool-recovery {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 12px; padding: 12px;
+  border: 1px dashed rgba(244,208,72,0.42); border-radius: 8px;
+  color: var(--text-secondary); font-size: 12px; line-height: 1.4;
+}
+.empty-pool-recovery[hidden] { display: none; }
+.empty-pool-recovery .btn { flex: 0 0 auto; min-height: 44px; }
+@media (max-width: 768px) {
+  .library-tools-body { grid-template-columns: 1fr; }
+  .empty-pool-recovery { flex-direction: column; align-items: stretch; }
+  .empty-pool-recovery .btn { width: 100%; }
 }
 /* Bulk-select toolbar (appears only when ≥1 song is checked) */
 .rotation-select {
@@ -1781,6 +1906,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <div class="mmr-side-label sun" id="productionStateLabel">In produzione · building ahead</div>
             <div id="productionFeed"></div>
           </div>
+          <!-- This region must exist before an outage so assistive technology
+               reliably announces its later text update. -->
+          <div id="productionStatusAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
         </div>
       </div>
     </section>
@@ -1857,53 +1985,68 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
         <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
       </header>
-      <div class="rotation-toolbar">
-        <div class="quick-actions" id="playlistSourceControls">
-          <span class="quick-add-label">Add:</span>
-          <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
-          <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_70s',this)">Anni '70</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_80s',this)">Anni '80</button>
-          <button type="button" class="btn btn-chip" onclick="enrichPlaylistSource('classic_90s',this)">Anni '90</button>
+      <section class="record-hunt" aria-labelledby="recordHuntHeading">
+        <p class="record-hunt-label">Record Hunt</p>
+        <p class="record-hunt-copy" id="recordHuntHeading">Steer what the station <strong>becomes next.</strong></p>
+        <div class="record-hunt-form" id="directionControls">
+          <label class="sr-only" for="directionInput">Describe the records to hunt</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="Italian '90s electronica" autocomplete="off" aria-label="Direction" aria-describedby="recordHuntHeading" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-trigger record-hunt-button btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt records</button>
         </div>
-        <div class="quick-actions" id="playlistPoolControls">
-          <span class="quick-add-label">Pool:</span>
-          <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
-          <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
-          <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+        <div class="record-hunt-status">
+          <div class="record-hunt-status-copy" id="courseBanner" data-active="false" role="status" aria-live="polite">
+            <span class="record-hunt-status-shape idle" id="recordHuntStatusShape" aria-label="status: idle">&#9675;</span>
+            <span class="record-hunt-truth" id="recordHuntTruth">Auto rotation is ready for a new direction.</span>
+            <span class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"></span>
+          </div>
+          <button type="button" class="btn btn-util record-hunt-reset" id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>
         </div>
-        <div class="quick-actions" id="headingControls" aria-label="Record Hunt presets">
-          <span class="quick-add-label">Record Hunt:</span>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_70s" onclick="setHeading('classic_70s',this)">Anni '70</button>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_80s" onclick="setHeading('classic_80s',this)">Anni '80</button>
-          <button type="button" class="btn btn-chip" data-heading-kind="classic_90s" onclick="setHeading('classic_90s',this)">Anni '90</button>
-          <button type="button" class="btn btn-chip" onclick="clearHeading(this)">Back to auto</button>
+      </section>
+      <section class="rotation-library" aria-label="Rotation library">
+        <p class="rotation-library-label">Find a specific record</p>
+        <div class="rotation-select" id="plSelectBar" style="display:none">
+          <span id="plSelCount">0 selected</span>
+          <button type="button" class="btn btn-chip" onclick="selectAllPl()">Select all</button>
+          <button type="button" class="btn btn-chip" onclick="clearPlSel()">Clear</button>
+          <button type="button" class="btn btn-chip btn-ban" onclick="banSelected()">Ban selected</button>
         </div>
-        <div class="direction-row" id="directionControls">
-          <label class="quick-add-label" for="directionInput">Find records:</label>
-          <input type="text" class="search-input" id="directionInput" placeholder="2000s female vocals" autocomplete="off" aria-label="Direction" onkeydown="handleDirectionKey(event)">
-          <button type="button" class="btn btn-util btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt</button>
+        <div class="search-row library-search">
+          <label for="searchInput" class="sr-only">Search music</label>
+          <input type="text" class="search-input" id="searchInput" placeholder="Search this rotation or the web..." autocomplete="off" aria-label="Search music">
+          <button type="button" class="btn btn-util" data-stopped-exempt onclick="doSearch()">Search</button>
         </div>
-        <div class="course-banner" id="courseBanner" data-active="false" role="status" aria-live="polite">
-          <span class="record-hunt-truth">Record Hunt: <b>Auto rotation</b></span>
-          <span class="record-hunt-stage" aria-hidden="true"></span>
+        <div id="searchResults"></div>
+        <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo bans in <strong>Library tools</strong>.</div>
+        <div id="plBody"></div>
+        <div class="empty-pool-recovery" id="emptyPoolRecovery" role="status" hidden>
+          <span id="emptyPoolRecoveryText"></span>
+          <button type="button" class="btn btn-util" id="emptyPoolLibraryBtn" data-stopped-exempt onclick="openLibraryTools()">Open Library tools</button>
+          <button type="button" class="btn btn-util" aria-controls="setupGroup" id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()">Open setup</button>
         </div>
-      </div>
-      <div class="rotation-select" id="plSelectBar" style="display:none">
-        <span id="plSelCount">0 selected</span>
-        <button type="button" class="btn btn-chip" onclick="selectAllPl()">Select all</button>
-        <button type="button" class="btn btn-chip" onclick="clearPlSel()">Clear</button>
-        <button type="button" class="btn btn-chip btn-ban" onclick="banSelected()">Ban selected</button>
-      </div>
-      <div class="search-row">
-        <label for="searchInput" class="sr-only">Search music</label>
-        <input type="text" class="search-input" id="searchInput" placeholder="Search rotation and the web..." autocomplete="off" aria-label="Search music">
-        <button type="button" class="btn btn-util" data-stopped-exempt onclick="doSearch()">Search</button>
-      </div>
-      <div id="searchResults"></div>
-      <div id="banlistPanel" style="display:none"></div>
-      <div class="ban-hint" id="banHint">Tap <strong>&#10005; Ban</strong> on any song to drop it for good — it won't come back, even after a restart. See or undo your bans with the <strong>Banned</strong> button above.</div>
-      <div id="plBody"></div>
+      </section>
+      <details class="library-tools" id="libraryTools">
+        <summary>Library tools <span class="library-tools-banned" id="libraryToolsBannedCount" hidden></span></summary>
+        <div class="library-tools-body">
+          <section class="library-tools-group" id="sourceImportGroup">
+            <p class="rotation-library-label">Add a source</p>
+            <div class="quick-actions" id="playlistSourceControls">
+              <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
+              <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
+            </div>
+          </section>
+          <section class="library-tools-group" id="playlistPoolControls">
+            <p class="rotation-library-label">Manage the library</p>
+            <div class="quick-actions">
+              <button type="button" class="btn btn-chip" onclick="shufflePlaylist(this)" title="Shuffle rotation"><svg class="ic" aria-hidden="true"><use href="#ic-shuffle"/></svg> Shuffle</button>
+              <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
+            </div>
+            <div class="library-tools-danger">
+              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+            </div>
+          </section>
+        </div>
+        <div id="banlistPanel" style="display:none"></div>
+      </details>
     </section>
 
     <!-- Diretta zone -->
@@ -1948,7 +2091,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span><strong>Super Italian Mode</strong></span>
           </label>
           <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
-            On: hosts speak 100% Italian and listener utility copy is Italian. Off: hosts speak about 70% English with real Italian moments; listener controls and labels are English while Italian headings and station flair remain.
+            On: hosts speak 100% Italian and listener utility copy is Italian. Off: hosts target about 75% English with real Italian moments; listener controls and labels are English while Italian headings and station flair remain.
           </div>
         </div>
       </div>
@@ -2202,7 +2345,7 @@ const _base = (() => {
   if (p.endsWith('/admin')) return p.slice(0, -6);
   return p === '' ? '' : p;
 })();
-let _st={}, _caps={}, _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
+let _st={}, _caps=null, _capsState='checking', _hostsOk=false, _paceOk=false, _searchTo=null, _keysEditMode=false;
 let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
 let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
 let _programmeFilter='all', _lastProgrammeHash='', _lastRunwayHash='';
@@ -2404,14 +2547,14 @@ function renderPreferenceButton(vote,score,attrs=''){
   const cls=`pl-btn pl-pref pref-btn${isDown?' down':''}`;
   return `<button type="button" class="${cls}" data-preference-vote="${vote}" ${attrs} aria-label="${label}" title="${title}" aria-pressed="${pressed?'true':'false'}"><svg aria-hidden="true"><use href="#${icon}"/></svg></button>`;
 }
-function renderPreferenceControls(index,score){
-  const attrs=`data-preference-target="index" data-preference-index="${Number(index)}"`;
+function renderPreferenceControls(artist,title,score){
+  const attrs=`data-preference-target="key" data-preference-artist="${esc(artist||'')}" data-preference-title="${esc(title||'')}"`;
   return `<div class="pl-pref-group">${renderPreferenceButton('up',score,attrs)}${renderPreferenceButton('down',score,attrs)}</div>`;
 }
 function preferencePayloadFromButton(el){
   const target=el?.dataset?.preferenceTarget;
   if(target==='now')return{now_playing:true};
-  if(target==='index')return{index:Number(el.dataset.preferenceIndex)};
+  if(target==='key')return{key:[el.dataset.preferenceArtist||'',el.dataset.preferenceTitle||'']};
   return null;
 }
 function applyPreferenceToCachedRows(key,score){
@@ -3002,14 +3145,69 @@ function renderProduction(st){
   else{feed.innerHTML='';wrap.style.display='none';}
 }
 
+// True while the panel is showing the "update delayed" fallback. Gates the
+// polite atomic status announcement so a screen reader hears it once on ENTRY,
+// not again on every automatic /status poll that keeps failing. Reset to false
+// by the first successfully rendered poll in refreshFast() so a later outage
+// re-announces.
+let _productionUnavailable=false;
+let _productionRetryInFlight=false;
 function renderProductionUnavailable(){
   const wrap=document.getElementById('queue-production');
   const feed=document.getElementById('productionFeed');
   const stateLabel=document.getElementById('productionStateLabel');
   if(!wrap||!feed||!stateLabel)return;
-  stateLabel.textContent='In produzione · reconnecting';
-  feed.innerHTML=`<div class="prod-entry">${statusInline('working','Reconnecting','Producer desk reconnecting')}<span class="prod-label">The producer desk will retry automatically.</span></div>`;
+  stateLabel.textContent='In produzione · update delayed';
   wrap.style.display='';
+  const alreadyUnavailable=_productionUnavailable;
+  if(!alreadyUnavailable){
+    // Entry: announce once through the persistent live region. It already exists
+    // in the DOM, so assistive technology receives this content change reliably.
+    // The button sits outside that region, so its busy label never re-announces
+    // the failure on later automatic polls.
+    _productionUnavailable=true;
+    const announcement=document.getElementById('productionStatusAnnouncement');
+    if(announcement)announcement.textContent="Status update delayed. Can't update this panel right now. We'll keep trying automatically.";
+    feed.innerHTML=`<div class="prod-unavailable">`
+      +`<div class="prod-entry">`
+      +`${statusInline('working','Status update delayed','Status update delayed')}`
+      +`<span class="prod-label">Can't update this panel right now. We'll keep trying automatically.</span></div>`
+      +`<button type="button" class="prod-retry" id="productionRetryBtn" onclick="retryProductionNow(this)">Try again now</button>`
+      +`</div>`;
+    _setProductionRetryBusy(document.getElementById('productionRetryBtn'),_productionRetryInFlight);
+  }else{
+    // Already announced. A subsequent automatic failure must not re-announce or
+    // release an in-flight manual retry; its owner clears the state in finally.
+    if(!_productionRetryInFlight)_setProductionRetryBusy(document.getElementById('productionRetryBtn'),false);
+  }
+}
+function _setProductionRetryBusy(btn,busy){
+  if(!btn)return;
+  btn.disabled=busy;
+  btn.classList.toggle('is-busy',busy);
+  btn.setAttribute('aria-busy',busy?'true':'false');
+  btn.textContent=busy?'Trying…':'Try again now';
+}
+// Manual "Try again now": reuses the existing refreshFast() poll path, shows a
+// pending/busy state while it runs, and stays available while the station is
+// paused (it is not a producer-action control, so updateStopState never inerts it).
+async function retryProductionNow(btn){
+  if(_productionRetryInFlight)return;
+  _productionRetryInFlight=true;
+  _setProductionRetryBusy(btn,true);
+  try{
+    await refreshFast();
+  }catch(_){
+    // refreshFast swallows its own errors; a throw here is defensive only.
+  }finally{
+    _productionRetryInFlight=false;
+    // On success renderProduction() replaced this panel and the button is gone;
+    // on failure the retry still owns the button state until this finally block.
+    // If a newer failure remounted the fallback while this request was finishing,
+    // release that current button too so it cannot stay busy forever.
+    const still=document.getElementById('productionRetryBtn');
+    if(still)_setProductionRetryBusy(still,false);
+  }
 }
 
 // Turn the real rendered-audio runway into a producer-facing promise. The
@@ -3330,6 +3528,20 @@ function updateRuntimeStatus(st){
       const rescueDetail=`${bh.window_count||0} in ${windowMin}m (session ${bh.session_count||0}) · ${lastLine} · queue empty ${Math.round(bh.queue_empty_elapsed_s||0)}s`;
       rescueRow=statusRow('Queue rescue',rescueState,rescueLabel,rescueDetail);
     }
+    // Cached-music rotation (#illusion): this is a healthy rest window, not a
+    // degraded state. Keep the actual track label admin-only and render only the
+    // sanitized diagnostic returned by /status.
+    const rr=rs.rescue_rotation;
+    let rotationRow;
+    const tracked=Math.max(0,Math.round(Number(rr?.tracked)||0));
+    if(!rr||tracked===0){
+      rotationRow=statusRow('Cached rotation','idle','Standby','No cached music rescue has reached a listener this session');
+    }else{
+      const cooling=Math.min(tracked,Math.max(0,Math.round(Number(rr.cooling)||0)));
+      const cooldownMin=Math.max(1,Math.round((Number(rr.cooldown_seconds)||0)/60));
+      const last=rr.most_recent?`last: ${rr.most_recent}`:'no cached rescue heard yet';
+      rotationRow=statusRow('Cached rotation','ready','Rotating',`${cooling}/${tracked} resting · ${cooldownMin}m rest · ${last}`);
+    }
     // Generated waste (#397): rendered segments discarded before broadcast.
     const gw=rs.generation_waste;
     let wasteRow;
@@ -3409,6 +3621,7 @@ function updateRuntimeStatus(st){
       runtimeProviderRow('TTS provider',providers.tts_provider),
       continuityRow,
       rescueRow,
+      rotationRow,
       wasteRow,
       timingRow,
       statusRow('Recent failover',lastFailover?'degraded':'idle',lastFailover?'Recorded':'None',eventLine)
@@ -3437,7 +3650,11 @@ function openSetupPanel(){
   if(motore)motore.click();
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
-  setTimeout(()=>details?.scrollIntoView({block:'start',behavior:'smooth'}),50);
+  const summary=details?.querySelector('summary');
+  setTimeout(()=>{
+    summary?.focus({preventScroll:true});
+    details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+  },50);
 }
 function renderGuidedSetupStrip(setup){
   const strip=document.getElementById('setupStrip');
@@ -3830,12 +4047,53 @@ let _plRows=[];
 let _plPage={total:0,offset:0,limit:PLAYLIST_PAGE_SIZE,has_more:false};
 let _plLoadingMore=false;
 let _plRenderSig='';
+let _playlistRevision=null;
+function playlistRevisionValue(value){
+  if(value===''||value===null||value===undefined||typeof value==='boolean')return null;
+  const revision=Number(value);
+  return Number.isInteger(revision)&&revision>=0?revision:null;
+}
+function currentPlaylistRevision(){
+  return _playlistRevision
+    ??playlistRevisionValue(_plPage?.revision)
+    ??playlistRevisionValue(_st?.playlist_page?.revision);
+}
+function adoptPlaylistRevision(value,{syncCachedPage=false}={}){
+  const revision=playlistRevisionValue(value);
+  const previous=currentPlaylistRevision();
+  if(revision===null)return previous;
+  // Revisions only move forward. A mutation response may race with a newer
+  // status poll; never let the older response recertify cached rows/results.
+  if(previous!==null&&revision<previous)return previous;
+  if(previous!==null&&revision!==previous){
+    invalidateSearchResults('Rotation changed — search again.');
+  }
+  _playlistRevision=revision;
+  if(syncCachedPage){
+    _plPage={..._plPage,revision};
+    if(_st?.playlist_page)_st.playlist_page={..._st.playlist_page,revision};
+  }
+  return revision;
+}
+function adoptAuthoritativePlaylistRevision(value){
+  const revision=playlistRevisionValue(value);
+  if(revision===null)return currentPlaylistRevision();
+  const previous=currentPlaylistRevision();
+  // A generation-owned /status response is authoritative even when the process
+  // restarted and its in-memory revision counter began again from a lower value.
+  if(previous!==null&&revision!==previous){
+    invalidateSearchResults('Rotation changed — search again.');
+  }
+  _playlistRevision=revision;
+  return revision;
+}
 function playlistPreferenceRevision(){
   return Number(_st?.song_preferences?.revision||0);
 }
 function playlistRenderSignature(page){
   const p=page||{};
-  return [p.revision??'',playlistPreferenceRevision(),p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
+  const heading=_st?.heading||{};
+  return [p.revision??'',playlistPreferenceRevision(),heading.active?'1':'0',heading.id||'',p.offset??0,p.limit??0,p.total??0,p.has_more?'1':'0',_plRows.length,_plFilter].join('|');
 }
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
@@ -3844,12 +4102,46 @@ function sourceControlVisibility(caps){
     charts_reload:Boolean(capabilities.charts_reload),
   };
 }
+function emptyPoolRecoveryState(st,caps,capsState){
+  const visibility=sourceControlVisibility(caps);
+  const sourcesAvailable=visibility.jamendo||visibility.charts_reload;
+  if(capsState==='checking'){
+    return {action:'setup',message:'The rotation is empty. Checking available music sources…'};
+  }
+  if(capsState==='error'){
+    return {action:'setup',message:'The rotation is empty. Could not check available music sources. Open setup to review configuration.'};
+  }
+  if(sourcesAvailable){
+    return {action:'library',message:'The rotation is empty. Add a source from Library tools to start again.'};
+  }
+  const goldenPath=st?.golden_path||caps?.golden_path||{};
+  const hasSetupGuidance=Boolean(String(goldenPath.detail||'').trim());
+  const rawDetail=hasSetupGuidance?String(goldenPath.detail||'').trim():'';
+  const detailLooksTechnical=/\bMAMMAMIRADIO_[A-Z0-9_]+\b|(?:^|\s)(?:\.{0,2}\/|[A-Za-z0-9_.-]+\/)|\b[A-Z][A-Z0-9_]{2,}=/i.test(rawDetail);
+  const detail=goldenPath.stage==='needs_music_source'
+    ?hasSetupGuidance&&!detailLooksTechnical
+      ?rawDetail
+      :hasSetupGuidance
+        ?'No music source is configured. Open setup for configuration details.'
+        :'No music source is configured. Open setup to add one.'
+    :'No import source is available. Open setup to review the current music source.';
+  return {action:'setup',message:`The rotation is empty. ${detail}`};
+}
 function updateSourceControls(st,caps){
   const jamBtn=document.getElementById('sourceJamendoBtn');
   const chartsBtn=document.getElementById('sourceChartsBtn');
+  const sourceGroup=document.getElementById('sourceImportGroup');
   const visibility=sourceControlVisibility(caps);
   if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
+  if(sourceGroup)sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload;
+  updateEmptyPoolRecovery(st,caps);
+}
+function openLibraryTools(){
+  const tools=document.getElementById('libraryTools');
+  if(!tools)return;
+  tools.open=true;
+  tools.scrollIntoView({block:'nearest',behavior:recordHuntReducedMotion()?'auto':'smooth'});
 }
 async function shufflePlaylist(el){
   flash(el);
@@ -3894,6 +4186,7 @@ async function setHeading(kind,el){
   await refreshFast();
 }
 let _directionPending=false;
+let _headingMutationGeneration=0;
 function handleDirectionKey(event){
   if(event.key!=='Enter' || event.repeat || event.isComposing)return;
   event.preventDefault();
@@ -3943,11 +4236,25 @@ function clearRecordHuntOptimistic(){
   _recordHuntOptimistic={active:false,label:'',startedAt:0};
   stopRecordHuntBusywork();
 }
-function renderRecordHuntDesk(active,truthHtml,{busy=false,resetBusy=false,stageText=''}={}){
+function renderRecordHuntDesk(active,truthHtml,{busy=false,resetBusy=false,stageText='',status='',resetLabel='Back to auto'}={}){
   const banner=document.getElementById('courseBanner');
   if(!banner)return;
+  const truth=document.getElementById('recordHuntTruth');
+  const stage=document.getElementById('recordHuntStage');
+  const reset=document.getElementById('clearHeadingBtn');
+  const shape=document.getElementById('recordHuntStatusShape');
   banner.dataset.active=active?'true':'false';
-  banner.innerHTML=`<span class="record-hunt-truth">${truthHtml}</span><span class="record-hunt-stage" aria-hidden="true">${busy?'':esc(stageText)}</span>`;
+  if(truth)truth.innerHTML=truthHtml;
+  if(stage)stage.textContent=busy?'':stageText;
+  if(reset)reset.hidden=!active;
+  if(reset)reset.textContent=resetLabel;
+  if(shape){
+    const canonicalStatus=status||(busy?'working':active?'ready':'idle');
+    const glyph={ready:'✓',working:'●',idle:'○'}[canonicalStatus]||'○';
+    shape.textContent=glyph;
+    shape.setAttribute('aria-label',`status: ${canonicalStatus}`);
+    for(const state of STATUS_STATES)shape.classList.toggle(state,state===canonicalStatus);
+  }
   if(busy)startRecordHuntBusywork(resetBusy);
   else stopRecordHuntBusywork();
 }
@@ -3956,6 +4263,7 @@ async function setDirectionText(el){
   const input=document.getElementById('directionInput');
   const text=(input?.value||'').trim();
   if(!text){toast('Type a direction and try again.');return;}
+  const mutationGeneration=++_headingMutationGeneration;
   flash(el);
   _directionPending=true;
   if(input){input.disabled=true;input.setAttribute('aria-busy','true');}
@@ -3965,6 +4273,7 @@ async function setDirectionText(el){
     // 60s client-side ceiling so a hung request can't leave the control stuck
     // on "Hunting..." forever with no way out — it rejects into catch below.
     const r=await api('POST','/api/direction',{text},60000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
     if(!r.ok){
       clearRecordHuntOptimistic();
       toast(r.message||wayOut('shape that set'));
@@ -3988,6 +4297,7 @@ async function setDirectionText(el){
     if(input)input.value='';
     await refreshFast();
   }catch(e){
+    if(mutationGeneration!==_headingMutationGeneration)return;
     // The 60s client ceiling can fire while the station is still finding songs —
     // that's not an outage. Refresh so the Course banner shows the real state
     // instead of claiming we couldn't reach the studio.
@@ -4002,21 +4312,35 @@ async function setDirectionText(el){
   }finally{
     _directionPending=false;
     if(input){input.disabled=false;input.removeAttribute('aria-busy');}
-    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt';}
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');el.classList.remove('loading');el.textContent='Hunt records';}
   }
 }
 async function clearHeading(el){
+  _headingMutationGeneration+=1;
+  const mutationGeneration=_headingMutationGeneration;
   flash(el);
   clearRecordHuntOptimistic();
-  const r=await api('POST','/api/heading/clear',{});
-  if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
-  toast('Back to auto.');
-  await refreshFast();
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
+  try{
+    const r=await api('POST','/api/heading/clear',{},15000);
+    if(mutationGeneration!==_headingMutationGeneration)return;
+    if(!r.ok){toast(wayOut('return to auto'));await refreshFast();return;}
+    renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.');
+    toast('Back to auto.');
+    await refreshFast();
+  }catch(_){
+    if(mutationGeneration!==_headingMutationGeneration)return;
+    // Keep the active Hunt visible: the request may not have reached the
+    // station, and the next status poll will reconcile if only the reply was lost.
+    toast(offlineMsg());
+  }finally{
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');}
+  }
 }
 function renderRecordHuntPending(label){
   const safeLabel=esc(label||'that vibe');
   _recordHuntOptimistic={active:true,label:label||'that vibe',startedAt:Date.now()};
-  renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${safeLabel}</b>`,{busy:true,resetBusy:true});
+  renderRecordHuntDesk(true,`Hunting for <b>${safeLabel}</b>`,{busy:true,resetBusy:true});
 }
 function updateHeadingBanner(st){
   const heading=st?.heading||{};
@@ -4029,17 +4353,17 @@ function updateHeadingBanner(st){
       const label=esc(heading.label||'that vibe');
       const count=Number(heading.tagged_count||0);
       if(phase==='hunting'||heading.resolving){
-        renderRecordHuntDesk(true,`Record Hunt is searching for <b>${label}</b>`,{busy:true});
+        renderRecordHuntDesk(true,`Hunting for <b>${label}</b>`,{busy:true});
       }else if(phase==='complete'){
-        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> played through. Back on auto.`);
+        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> played through. Back on auto.`,{status:'idle',resetLabel:'Clear completed Hunt'});
       }else{
-        const found=count>0?` - ${count} Hunt pick${count===1?'':'s'} highlighted`:'';
-        renderRecordHuntDesk(true,`Record Hunt: <b>${label}</b> is shaping the next stretch${found}`);
+        const found=count>0?` · ${count} Hunt pick${count===1?'':'s'} favored next`:'';
+        renderRecordHuntDesk(true,`Steering toward <b>${label}</b>${found}`);
       }
     }else if(_recordHuntOptimistic.active){
-      renderRecordHuntDesk(true,`Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>`,{busy:true});
+      renderRecordHuntDesk(true,`Hunting for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>`,{busy:true});
     }else{
-      renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>');
+      renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.');
     }
   }
   document.querySelectorAll('[data-heading-kind]').forEach(btn=>{
@@ -4067,12 +4391,29 @@ function sourceChip(source){
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
 function _plKey(artist,title){return JSON.stringify([(artist||'').trim().toLowerCase(),(title||'').trim().toLowerCase()]);}
+function updateEmptyPoolRecovery(st=_st,caps=_caps){
+  const recovery=document.getElementById('emptyPoolRecovery');
+  const text=document.getElementById('emptyPoolRecoveryText');
+  const libraryButton=document.getElementById('emptyPoolLibraryBtn');
+  const setupButton=document.getElementById('emptyPoolSetupBtn');
+  if(!recovery)return;
+  const empty=!_plRows.length;
+  recovery.hidden=!empty;
+  if(!empty)return;
+  const state=emptyPoolRecoveryState(st,caps,_capsState);
+  if(text)text.textContent=state.message;
+  if(libraryButton)libraryButton.hidden=state.action!=='library';
+  if(setupButton)setupButton.hidden=state.action!=='setup';
+}
 function updatePl(tracks,page,force){
   const el=document.getElementById('plBody');const meta=document.getElementById('plMeta');
   const incoming=tracks||[];
   const inPage=page||{total:incoming.length,offset:0,limit:incoming.length||PLAYLIST_PAGE_SIZE,has_more:false};
   const previousRevision=_plPage.revision;
   const incomingRevision=inPage.revision;
+  const knownRevision=currentPlaylistRevision();
+  if(incomingRevision!=null&&knownRevision!=null&&Number(incomingRevision)<knownRevision)return;
+  if(incomingRevision!=null)adoptPlaylistRevision(incomingRevision);
   // Status polls are capped at server max_limit (200). If we have more rows loaded via
   // load-more, keep the extra cached rows only while the playlist itself is unchanged.
   if(incoming.length&&incoming.length<_plRows.length&&inPage.has_more&&incomingRevision!=null&&incomingRevision===previousRevision){
@@ -4087,7 +4428,8 @@ function updatePl(tracks,page,force){
   const renderSig=playlistRenderSignature(_plPage);
   if(!force&&renderSig===_plRenderSig)return;
   _plRenderSig=renderSig;
-  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';return}
+  if(!_plRows.length){el.innerHTML='<div class="empty">No tracks</div>';meta.textContent='';updateEmptyPoolRecovery();return}
+  updateEmptyPoolRecovery();
   meta.textContent=total>_plRows.length?`${loadedEnd}/${total} tracks`:_plRows.length+' tracks';
   const activeHeadingId=_st?.heading?.active?_st.heading.id:'';
   const filter=_plFilter.toLowerCase();
@@ -4096,13 +4438,13 @@ function updatePl(tracks,page,force){
   el.innerHTML=filtered.map(({t,idx})=>{
     const era=eraLabel(t.year);
     const eraPill=era?`<span class="pl-era">${era}</span>`:'';
-    const prefControls=renderPreferenceControls(idx,Number(t.preference||0));
+    const prefControls=renderPreferenceControls(t.artist,t.title,Number(t.preference||0));
     const huntMatch=!!(activeHeadingId&&t.heading_id===activeHeadingId);
     const huntTitle='Favored for the current Record Hunt';
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.spotify_id||t.id||'')}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}<div class="pl-a"><button class="pl-btn" onclick="moveNext(${idx})" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" onclick="removeTr(${idx})" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -4121,7 +4463,9 @@ async function loadMorePlaylist(){
     if(!resp.ok){console.warn('Playlist load-more failed:',resp.status);return;}
     const d=await resp.json();
     const responseRevision=d.revision??expectedRevision;
-    const revisionChanged=expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision;
+    const authoritativeRevision=currentPlaylistRevision();
+    const revisionChanged=(expectedRevision!=null&&responseRevision!=null&&responseRevision!==expectedRevision)
+      ||(expectedRevision!=null&&authoritativeRevision!=null&&authoritativeRevision!==expectedRevision);
     if(revisionChanged){
       console.warn('Playlist changed while loading more; refreshing first page.');
       const fresh=await fetch(_base+`/api/playlist?offset=0&limit=${PLAYLIST_PAGE_SIZE}`,{headers:H()});
@@ -4157,39 +4501,86 @@ function focusPlaylistTrack(index, trackId){
   target.scrollIntoView({behavior:'smooth',block:'nearest'});
   setTimeout(()=>target.classList.remove('focus'),1500);
 }
-async function moveNext(i){
-  const trackName=document.querySelector(`.pl-row[data-i="${i}"] .pl-t`)?.textContent||'track';
+function playlistTargetFromElement(element){
+  const row=element?.closest?.('.pl-row');
+  if(!row)return null;
+  const revision=playlistRevisionValue(row.dataset.revision);
+  const index=Number(row.dataset.i);
+  const id=(row.dataset.id||'').trim();
+  if(revision===null||!Number.isInteger(index)||index<0||!id)return null;
+  return{revision,index,id,row};
+}
+async function recoverStalePlaylistTarget(response,action){
+  const message=(response&&response.error)||wayOut(action);
+  toast(message);
+  if(response?.reason==='stale_playlist'){
+    invalidateSearchResults(message);
+    try{await refreshFast();}catch(_){}
+  }
+}
+async function rejectMissingPlaylistTarget(){
+  const response={reason:'stale_playlist',error:'Rotation changed — search again.'};
+  await recoverStalePlaylistTarget(response,'refresh that track');
+}
+function adoptPlaylistMutationRevision(response,{mappingUnchanged=false}={}){
+  const revision=playlistRevisionValue(response?.playlist_revision);
+  if(revision===null)return false;
+  const adopted=adoptPlaylistRevision(revision,{syncCachedPage:mappingUnchanged});
+  // Next only changes producer selection, not row order. Re-render immediately
+  // so every actionable DOM row carries the returned revision before another click.
+  if(mappingUnchanged&&playlistRevisionValue(_plPage.revision)===adopted){
+    updatePl(_plRows,_plPage,true);
+  }
+  return true;
+}
+async function moveNext(element){
+  const target=playlistTargetFromElement(element);
+  if(!target){await rejectMissingPlaylistTarget();return;}
   try{
-    const r=await api('POST','/api/playlist/move_to_next',{index:i});
-    if(r.ok)toast('Queued next: '+r.moved);else toast(wayOut('move that'));
+    const r=await api('POST','/api/playlist/move_to_next',{revision:target.revision,index:target.index,id:target.id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+    if(!adoptPlaylistMutationRevision(r,{mappingUnchanged:true})){toast(wayOut('confirm that move'));await refreshFast();return;}
+    toast('Queued next: '+r.moved);
+    await refreshFast();
   }catch(_){toast(offlineMsg());}
 }
 // The per-row ✕ now BANS the song for good: /api/playlist/remove persists it to the
 // operator blocklist so it never returns on restart, source switch, or chart refresh.
-// Index-based and immediate (no deferred-undo) — a second removal in an undo window
-// would post a stale index after the first ban shifts the list. To bring a song back,
-// use the Banned manager (toggleBanlist) → Unban.
-async function removeTr(i){
+// Revision/index/id guarded and immediate (no deferred-undo). To bring a song back,
+// use the Banned manager (toggleBanlist) → Unban by its stable artist/title key.
+async function removeTr(element){
   // Capture the song identity BEFORE the ban so Undo can lift it by key (the row
   // index shifts the moment the ban lands; unban-by-key is index-shift-safe).
-  const row=document.querySelector('.pl-row[data-i="'+i+'"]');
+  const target=playlistTargetFromElement(element);
+  if(!target){await rejectMissingPlaylistTarget();return;}
+  const row=target.row;
   const artist=row?(row.getAttribute('data-artist')||''):'';
   const title=row?(row.getAttribute('data-title')||''):'';
-  const r=await api('POST','/api/playlist/remove',{index:i});
-  if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban that one');toast(m);return;}
-  await refreshFast();refreshBanCount();
-  const msg=r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back';
-  if(typeof window.undoableToast==='function'&&(artist||title)){
-    // Ban is already committed; this is a reversible-by-key undo, not a deferred commit.
-    window.undoableToast(msg,async()=>{
-      const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
-      toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
-      await refreshFast();refreshBanCount();
-    });
-  }else{
-    toast(msg);
-  }
+  try{
+    const r=await api('POST','/api/playlist/remove',{revision:target.revision,index:target.index,id:target.id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'ban that one');return;}
+    if(!adoptPlaylistMutationRevision(r)){toast(wayOut('confirm that ban'));await refreshFast();return;}
+    await refreshFast();refreshBanCount();
+    const msg=r.persisted===false?'Banned for now — but I couldn’t save it, so it may come back after a restart':'Banned — won’t come back';
+    if(typeof window.undoableToast==='function'&&(artist||title)){
+      // Ban is already committed; this is a reversible-by-key undo, not a deferred commit.
+      window.undoableToast(msg,async()=>{
+        const u=await api('POST','/api/track/unban',{keys:[[artist,title]]});
+        toast(u&&u.ok?'Ban lifted — it can come back on the next refresh':wayOut('undo that ban'));
+        await refreshFast();refreshBanCount();
+      });
+    }else{
+      toast(msg);
+    }
+  }catch(_){toast(offlineMsg());}
 }
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-playlist-action]');
+  if(!button)return;
+  event.preventDefault();
+  if(button.dataset.playlistAction==='next')moveNext(button);
+  else if(button.dataset.playlistAction==='ban')removeTr(button);
+});
 
 // --- Bulk select + ban -------------------------------------------------------
 function updatePlSelBar(){
@@ -4222,6 +4613,8 @@ async function banSelected(){
 function setBanCount(n){
   const badge=document.getElementById('banlistCount');
   if(badge){if(n>0){badge.textContent=n;badge.style.display='';}else{badge.style.display='none';badge.textContent='';}}
+  const toolsBadge=document.getElementById('libraryToolsBannedCount');
+  if(toolsBadge){if(n>0){toolsBadge.textContent=`${n} banned`;toolsBadge.hidden=false;}else{toolsBadge.hidden=true;toolsBadge.textContent='';}}
   const hint=document.getElementById('banHint');
   if(hint)hint.style.display=n>0?'none':'';
 }
@@ -4234,7 +4627,9 @@ async function refreshBanCount(){
 async function toggleBanlist(){
   const panel=document.getElementById('banlistPanel');
   const btn=document.getElementById('banlistToggle');
+  const tools=document.getElementById('libraryTools');
   if(!panel)return;
+  if(tools)tools.open=true;
   if(panel.style.display!=='none'){panel.style.display='none';panel.innerHTML='';if(btn){btn.setAttribute('aria-expanded','false');btn.classList.remove('active');}return;}
   await renderBanlist();
   if(btn){btn.setAttribute('aria-expanded','true');btn.classList.add('active');}
@@ -4262,24 +4657,41 @@ async function unbanOne(btn){
 
 // ── Search ──
 const si=document.getElementById('searchInput');
-si.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+si.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();clearTimeout(_searchTo);doSearch();}});
 si.addEventListener('input',()=>{
   _plFilter=si.value.trim();
   if(_st.playlist)updatePl(_st.playlist,_st.playlist_page||null);
   clearTimeout(_searchTo);
+  invalidateSearchResults('');
   if(_plFilter.length>=2)_searchTo=setTimeout(doSearch,400);
-  else document.getElementById('searchResults').innerHTML='';
 });
-let _sR=[],_sExt=[],_sPage={has_more:false},_sExtPage={has_more:false};
+let _sR=[],_sExt=[],_sPage={has_more:false,revision:null},_sExtPage={has_more:false};
+let _searchGeneration=0;
+let _searchQuery='';
+let _searchAppendInFlight=false;
 const SEARCH_PAGE_SIZE=5;
+function resetSearchCache(){
+  _sR=[];_sExt=[];_sPage={has_more:false,revision:null};_sExtPage={has_more:false};
+}
+function invalidateSearchResults(message='Rotation changed — search again.'){
+  _searchGeneration+=1;
+  _searchAppendInFlight=false;
+  _searchQuery=si.value.trim();
+  resetSearchCache();
+  const el=document.getElementById('searchResults');
+  el.innerHTML=message&&_searchQuery.length>=2?`<div class="empty">${esc(message)}</div>`:'';
+}
+function searchRequestStillOwned(generation,query){
+  return generation===_searchGeneration&&query===_searchQuery&&query===si.value.trim();
+}
 function renderSearchResults(q){
   const el=document.getElementById('searchResults');
   let html='';
   if(_sR.length){
-    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" onclick="addTr(${i})">&#9654; Next</button></div>`).join('');
+    html+='<div class="sr-label">In playlist</div>'+_sR.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist)} — ${esc(t.title)}</span><button class="sr-add" data-search-action="next" data-search-index="${i}">&#9654; Next</button></div>`).join('');
   }
   if(_sExt.length){
-    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" onclick="addExternal(${i})">&#8681; Queue</button></div>`).join('');
+    html+='<div class="sr-label" style="margin-top:8px">From the web</div>'+_sExt.map((t,i)=>`<div class="sr-row"><span>${esc(t.artist?t.artist+' — ':'')}${esc(t.title)}</span><button class="sr-add external" id="ext-btn-${i}" data-search-action="external" data-search-index="${i}">&#8681; Queue</button></div>`).join('');
   }
   if(_sPage.has_more||_sExtPage.has_more){
     html+='<div class="load-more-row"><button type="button" class="load-more-btn" id="searchMoreBtn" onclick="searchMore()">Load more results</button></div>';
@@ -4288,15 +4700,22 @@ function renderSearchResults(q){
   el.innerHTML=html;
 }
 async function doSearch(append){
-  const q=si.value.trim();if(!q)return;
+  const q=si.value.trim();if(q.length<2)return;
   const el=document.getElementById('searchResults');
   const isAppend=append===true;
-  const prevR=_sR.slice();
-  const prevExt=_sExt.slice();
-  const prevPage={..._sPage};
-  const prevExtPage={..._sExtPage};
-  if(!isAppend){
-    _sR=[];_sExt=[];_sPage={has_more:false};_sExtPage={has_more:false};
+  if(isAppend&&(_searchAppendInFlight||q!==_searchQuery))return;
+  let generation;
+  let expectedRevision;
+  if(isAppend){
+    generation=_searchGeneration;
+    expectedRevision=playlistRevisionValue(_sPage.revision);
+    if(expectedRevision===null)return;
+    _searchAppendInFlight=true;
+  }else{
+    generation=++_searchGeneration;
+    _searchQuery=q;
+    expectedRevision=currentPlaylistRevision();
+    resetSearchCache();
     el.innerHTML='<div class="sr-label" style="color:rgba(245,237,216,0.25)">Searching...</div>';
   }
   try{
@@ -4309,25 +4728,40 @@ async function doSearch(append){
       include_external:String(!isAppend||_sExtPage.has_more),
     });
     const resp=await fetch(_base+'/api/search?'+params.toString(),{headers:H()});
+    if(!searchRequestStillOwned(generation,q))return;
     if(!resp.ok){
       console.warn('Search failed:',resp.status);
-      if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+      if(isAppend)renderSearchResults(q);
       else el.innerHTML='';
       return;
     }
     const d=await resp.json();
+    if(!searchRequestStillOwned(generation,q))return;
+    const responseRevision=playlistRevisionValue(d.revision);
+    const currentRevision=currentPlaylistRevision();
+    const wrongPageRevision=isAppend&&responseRevision!==expectedRevision;
+    const wrongCurrentRevision=currentRevision!==null&&responseRevision!==currentRevision;
+    if(responseRevision===null||wrongPageRevision||wrongCurrentRevision){
+      invalidateSearchResults('Rotation changed — search again.');
+      return;
+    }
+    if(currentRevision===null)adoptPlaylistRevision(responseRevision);
     _sR=isAppend?_sR.concat(d.results||[]):d.results||[];
     _sExt=isAppend?_sExt.concat(d.external||[]):d.external||[];
-    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more};
+    _sPage={total:d.total||0,offset:d.offset||0,limit:d.limit||SEARCH_PAGE_SIZE,has_more:!!d.has_more,revision:responseRevision};
     _sExtPage={known_count:d.external_known_count||0,offset:d.external_offset||0,limit:d.external_limit||SEARCH_PAGE_SIZE,has_more:!!d.external_has_more};
     renderSearchResults(q);
   }catch(e){
     console.warn('Search error:',e);
-    if(isAppend){_sR=prevR;_sExt=prevExt;_sPage=prevPage;_sExtPage=prevExtPage;renderSearchResults(q);}
+    if(!searchRequestStillOwned(generation,q))return;
+    if(isAppend)renderSearchResults(q);
     else el.innerHTML='';
+  }finally{
+    if(isAppend&&generation===_searchGeneration)_searchAppendInFlight=false;
   }
 }
 async function searchMore(){
+  if(_searchAppendInFlight)return;
   const btn=document.getElementById('searchMoreBtn');
   if(btn){btn.classList.add('loading');btn.textContent='Loading...';}
   try{
@@ -4336,7 +4770,30 @@ async function searchMore(){
     if(btn){btn.classList.remove('loading');btn.textContent='Load more results';}
   }
 }
-async function addTr(i){const t=_sR[i];if(!t)return;const r=await api('POST','/api/playlist/move_to_next',{index:t.index});if(r&&r.ok){toast('Now playing: '+t.display);document.getElementById('searchResults').innerHTML='';si.value='';_plFilter=''}else toast(wayOut('move that'))}
+async function addTr(i){
+  const t=_sR[i];
+  const revision=playlistRevisionValue(_sPage.revision);
+  const index=Number(t?.index);
+  const id=(t?.id||'').trim();
+  if(!t||revision===null||!Number.isInteger(index)||index<0||!id){await rejectMissingPlaylistTarget();return;}
+  try{
+    const r=await api('POST','/api/playlist/move_to_next',{revision,index,id});
+    if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+    if(!adoptPlaylistMutationRevision(r,{mappingUnchanged:true})){toast(wayOut('confirm that move'));await refreshFast();return;}
+    toast('Queued next: '+(r.moved||t.display));
+    si.value='';_plFilter='';invalidateSearchResults('');
+    await refreshFast();
+  }catch(_){toast(offlineMsg());}
+}
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-search-action]');
+  if(!button)return;
+  const index=Number(button.dataset.searchIndex);
+  if(!Number.isInteger(index)||index<0)return;
+  event.preventDefault();
+  if(button.dataset.searchAction==='next')addTr(index);
+  else if(button.dataset.searchAction==='external')addExternal(index);
+});
 async function addExternal(i){
   const t=_sExt[i];if(!t)return;
   const btn=document.getElementById('ext-btn-'+i);
@@ -4363,10 +4820,11 @@ let _dragSrc=null;
 function initDragDrop(){
   document.querySelectorAll('.pl-row[draggable]').forEach(row=>{
     row.addEventListener('dragstart',e=>{
-      _dragSrc=parseInt(row.dataset.i);
+      _dragSrc=playlistTargetFromElement(row);
+      if(!_dragSrc){e.preventDefault();rejectMissingPlaylistTarget();return;}
       row.classList.add('dragging');
       e.dataTransfer.effectAllowed='move';
-      e.dataTransfer.setData('text/plain',row.dataset.i);
+      e.dataTransfer.setData('text/plain',String(_dragSrc.index));
     });
     row.addEventListener('dragend',()=>{row.classList.remove('dragging');_dragSrc=null;document.querySelectorAll('.pl-row.drag-over').forEach(r=>r.classList.remove('drag-over'))});
     row.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';row.classList.add('drag-over')});
@@ -4374,11 +4832,16 @@ function initDragDrop(){
     row.addEventListener('drop',async e=>{
       e.preventDefault();
       row.classList.remove('drag-over');
-      const dst=parseInt(row.dataset.i);
-      if(_dragSrc===null||_dragSrc===dst)return;
+      const src=_dragSrc;
+      const dst=playlistTargetFromElement(row);
+      if(!src||!dst||src.index===dst.index)return;
+      if(src.revision!==dst.revision){await rejectMissingPlaylistTarget();return;}
       try{
-        const r=await api('POST','/api/playlist/move',{from:_dragSrc,to:dst});
-        if(r.ok)toast('Moved: '+r.moved);else toast(wayOut('move that'));
+        const r=await api('POST','/api/playlist/move',{revision:src.revision,from:src.index,from_id:src.id,to:dst.index,to_id:dst.id});
+        if(!(r&&r.ok)){await recoverStalePlaylistTarget(r,'move that');return;}
+        if(!adoptPlaylistMutationRevision(r)){toast(wayOut('confirm that move'));await refreshFast();return;}
+        toast('Moved: '+r.moved);
+        await refreshFast();
       }catch(_){toast(offlineMsg());}
       _dragSrc=null;
     });
@@ -4772,7 +5235,7 @@ async function toggleSuperItalian(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/super-italian',{super_italian_mode:value});
-    if(r&&r.ok)toast(value?'Super Italian ON — hosts and listener utility copy go full Italian':'Super Italian OFF — hosts speak mostly English with real Italian moments (about 70/30); listener controls are English while Italian headlines remain');
+    if(r&&r.ok)toast(value?'Super Italian ON — hosts and listener utility copy go full Italian':'Super Italian OFF — hosts target mostly English with real Italian moments (about 75/25); listener controls are English while Italian headlines remain');
     else{
       el.checked=!value;
       toast(wayOut());
@@ -5093,7 +5556,9 @@ async function refreshFast(){
   }
 
   if(generation!==_fastPollGeneration)return;
+  adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision);
   _st=nextStatus;
+  let productionRendered=false;
   try{
     // Paint the authoritative production state before unrelated widgets. A
     // later renderer failure must not leave yesterday's production row frozen.
@@ -5102,8 +5567,18 @@ async function refreshFast(){
     // the desk could keep showing live On-Air controls over a paused station.
     try{
       renderProduction(_st);
+      productionRendered=true;
     }catch(e){
       console.error('refreshFast production',e);
+      // An authoritative response with an unrenderable production block is not
+      // safe to present as current work. Replace any frozen row with the same
+      // honest recovery state used for a failed status poll, while keeping this
+      // fallback isolated from the paused-state controls below.
+      try{
+        renderProductionUnavailable();
+      }catch(fallbackError){
+        console.error('refreshFast production fallback',fallbackError);
+      }
     }
     if (_st.station) {
       try { localStorage.setItem('stationName', _st.station); } catch (_) {}
@@ -5128,23 +5603,68 @@ async function refreshFast(){
     // source is unavailable. Keep the status-derived production truth visible.
     console.error('refreshFast render',e);
   }
+  // A successfully rendered authoritative poll clears the unavailable latch so
+  // the next outage is announced fresh on entry rather than staying silent. If
+  // production rendering failed, keep the fallback's announcement state intact.
+  if(productionRendered){
+    _productionUnavailable=false;
+    const productionAnnouncement=document.getElementById('productionStatusAnnouncement');
+    if(productionAnnouncement)productionAnnouncement.textContent='';
+  }
 
   const [lrData,hostsData]=await Promise.all([listenerPromise,hostsPromise]);
   if(generation!==_fastPollGeneration)return;
   if(lrData)updateListenerRequests(lrData.requests||[],lrData.recently_consumed||[]);
   if(hostsData){renderHosts(hostsData.hosts||[]);_hostsOk=true;}
 }
-async function refreshSlow(){
+const SLOW_POLL_DEADLINE_MS=10000;
+let _slowPollGeneration=0;
+async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),deadlineMs);
   try{
-    const [cr,or]=await Promise.all([fetch(_base+'/api/capabilities',{headers:H()}),fetch(_base+'/api/setup/status',{headers:H()})]);
-    _caps=await cr.json();
-    const setup=await or.json();
-    updateSystems(_caps,_st);
+    const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
+    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
+    const payload=await response.json();
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    return payload;
+  }finally{clearTimeout(deadline);}
+}
+async function refreshSlow(){
+  const generation=++_slowPollGeneration;
+  if(_caps===null){
+    _capsState='checking';
     updateSourceControls(_st,_caps);
-    renderSetup(setup);
-    loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
-    syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
-  }catch(e){console.error('refreshSlow',e)}
+  }
+  const capabilitiesPromise=fetchSlowJson('/api/capabilities')
+    .then(caps=>{
+      if(generation!==_slowPollGeneration)return;
+      _caps=caps;
+      _capsState='ready';
+      updateSystems(_caps,_st);
+      updateSourceControls(_st,_caps);
+    })
+    .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
+      if(_caps===null){
+        _capsState='error';
+        updateSourceControls(_st,_caps);
+      }
+      console.error('refreshSlow capabilities',e);
+    });
+  const setupPromise=fetchSlowJson('/api/setup/status')
+    .then(setup=>{
+      if(generation!==_slowPollGeneration)return;
+      renderSetup(setup);
+    })
+    .catch(e=>{
+      if(generation!==_slowPollGeneration)return;
+      console.error('refreshSlow setup',e);
+    });
+  await Promise.all([capabilitiesPromise,setupPromise]);
+  if(generation!==_slowPollGeneration)return;
+  loadQuality();  // re-sync the quality dial (not in /status, so poll it here)
+  syncStoppedProducerControls(document.body.getAttribute('data-stopped')==='true');
 }
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 

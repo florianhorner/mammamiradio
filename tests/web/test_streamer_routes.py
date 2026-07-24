@@ -20,6 +20,7 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -28,11 +29,13 @@ from fastapi import FastAPI
 
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
+    _DEMO_ASSETS_DIR,
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
@@ -41,6 +44,8 @@ from mammamiradio.web.streamer import (
     LiveStreamHub,
     StreamPacer,
     _ad_cast_status_payload,
+    _consume_queue_shadow,
+    _continuity_reservation_segments,
     _copy_home_context_to_state,
     _packaged_recovery_segment,
     _persist_completed_music,
@@ -145,6 +150,32 @@ def _make_test_app(
     # the StreamPacer unit tests, not through these wall-clock loop tests.
     app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(bytes_per_second, target_lead_seconds=0.0)
     return app
+
+
+def _install_late_blocklisted_continuity_slot(
+    state: StationState,
+    tmp_path: Path,
+    *,
+    reservation_id: str,
+) -> bytes:
+    """Install ready slot bytes that became banned after reservation."""
+    blocked_audio = b"blocked-slot-audio" * 1024
+    blocked_path = tmp_path / f"{reservation_id}.mp3"
+    blocked_path.write_bytes(blocked_audio)
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+            "continuity_reservation_id": reservation_id,
+        },
+        ephemeral=False,
+    )
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+    return blocked_audio
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +321,90 @@ def test_select_norm_cache_rescue_avoids_current_song_when_alternatives_exist(tm
     choice.assert_called_once_with([alternative])
 
 
+def _write_indexed_cache_track(tmp_path, name: str, *, title: str, artist: str, duration: float, state) -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"audio")
+    (tmp_path / f"{name}.json").write_text(f'{{"title": "{title}", "artist": "{artist}"}}')
+    state.immediate_audio_index[path] = duration
+    return path
+
+
+def test_continuity_reservation_prefers_non_cooling_cache_track(tmp_path):
+    """A live control reserves a fresher cached song over one that just aired as a
+    rescue, so repeated controls don't keep reserving the same track."""
+    state = StationState()
+    cooling = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_cooling_192k.mp3", title="Cooling", artist="A", duration=180.0, state=state
+    )
+    fresh = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_fresh_192k.mp3", title="Fresh", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[cooling] = 10_000.0 - 60.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_finds_fresh_track_beyond_cooling_scan_prefix(tmp_path):
+    """Cooling entries cannot consume the bounded scan before an eligible track."""
+    state = StationState()
+    cooling_paths = []
+    for index in range(24):
+        path = _write_indexed_cache_track(
+            tmp_path,
+            f"norm_cooling_{index:02d}_192k.mp3",
+            title=f"Cooling {index}",
+            artist="A",
+            duration=180.0,
+            state=state,
+        )
+        cooling_paths.append(path)
+    fresh = _write_indexed_cache_track(
+        tmp_path,
+        "norm_fresh_after_prefix_192k.mp3",
+        title="Fresh after prefix",
+        artist="B",
+        duration=180.0,
+        state=state,
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay.update({path: 10_000.0 - 60.0 for path in cooling_paths})
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [fresh]
+
+
+def test_continuity_reservation_falls_back_to_least_recent_when_all_cooling(tmp_path):
+    """When every cached track is cooling, the reservation still books real music —
+    the least-recently-heard one — rather than dropping to the emergency tone."""
+    state = StationState()
+    older = _write_indexed_cache_track(
+        tmp_path, "norm_aaa_older_192k.mp3", title="Older", artist="A", duration=180.0, state=state
+    )
+    newer = _write_indexed_cache_track(
+        tmp_path, "norm_zzz_newer_192k.mp3", title="Newer", artist="B", duration=180.0, state=state
+    )
+    recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+
+    with patch("mammamiradio.audio.norm_cache.time.monotonic", return_value=10_000.0):
+        state.rescue_airplay[older] = 10_000.0 - 100.0
+        state.rescue_airplay[newer] = 10_000.0 - 10.0
+        segments = _continuity_reservation_segments(
+            state, SimpleNamespace(), target_seconds=1.0, max_segments=1, excluded_paths={recovery}
+        )
+
+    assert [seg.path for seg in segments] == [older]
+
+
 @pytest.mark.asyncio
 async def test_subscribe_returns_id_and_queue():
     hub = LiveStreamHub()
@@ -299,18 +414,179 @@ async def test_subscribe_returns_id_and_queue():
     assert hub.has_listener(lid)
 
 
-def test_listener_epoch_advances_only_when_an_empty_room_refills():
+@pytest.mark.asyncio
+async def test_broadcast_reports_only_listener_queues_that_accept_the_chunk():
+    hub = LiveStreamHub(listener_queue_size=1)
+    _, accepting = hub.subscribe()
+    accepting.put_nowait(b"already full")
+    _, open_queue = hub.subscribe()
+
+    accepted = await hub.broadcast(b"next")
+
+    assert accepted == 1
+    assert await open_queue.get() == b"next"
+    assert len(hub._listeners) == 1
+
+
+def test_delivery_generation_advances_only_when_an_empty_room_refills():
     hub = LiveStreamHub()
     first, _ = hub.subscribe()
-    assert hub.listener_epoch == 1
+    assert hub.delivery_generation == 1
 
     second, _ = hub.subscribe()
-    assert hub.listener_epoch == 1
+    assert hub.delivery_generation == 1
 
     hub.unsubscribe(first)
     hub.unsubscribe(second)
     hub.subscribe()
-    assert hub.listener_epoch == 2
+    assert hub.delivery_generation == 2
+
+
+def _queue_companionship_cue(app: FastAPI, tmp_path: Path, *, audio: bytes = b"cue audio"):
+    now = [0.0]
+    session = ListenerSession(monotonic=lambda: now[0])
+    app.state.station_state.listener_session = session
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
+    now[0] = 1800.0
+    claim = session.claim_companionship()
+    assert claim is not None
+
+    path = tmp_path / "companionship.mp3"
+    path.write_bytes(audio)
+    queue_id = "companionship-cue"
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=path,
+        duration_sec=1.0,
+        metadata={
+            "title": "Companionship",
+            "queue_id": queue_id,
+            "listener_session_epoch": claim.epoch,
+            "listener_session_cue": "companionship",
+        },
+        ephemeral=False,
+    )
+    assert session.mark_companionship_queued(claim.epoch)
+    app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {
+            "id": queue_id,
+            "type": "banter",
+            "label": "Companionship",
+            "duration_sec": 1.0,
+        }
+    ]
+    return now, listener_id, listener_queue, segment, claim
+
+
+@pytest.mark.asyncio
+async def test_companionship_cue_is_consumed_only_after_a_listener_accepts_audio(tmp_path):
+    app = _make_test_app()
+    _, _, listener_queue, _, claim = _queue_companionship_cue(app, tmp_path)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(listener_queue.get(), timeout=1.0) == b"cue audio"
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert app.state.station_state.listener_session.companionship_cue_state is ListenerSessionCueState.CONSUMED
+        assert app.state.station_state.now_streaming["label"] == "Companionship"
+        assert claim.epoch == app.state.station_state.listener_session.epoch
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_companionship_cue_without_an_accepting_listener_is_abandoned_before_start(tmp_path):
+    app = _make_test_app()
+    _, listener_id, listener_queue, _, _ = _queue_companionship_cue(app, tmp_path)
+
+    async def _reject_first_chunk(_chunk: bytes) -> int:
+        app.state.stream_hub.unsubscribe(listener_id)
+        return 0
+
+    app.state.stream_hub.broadcast = _reject_first_chunk
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        state = app.state.station_state
+        assert listener_queue.empty()
+        assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+        assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+        assert state.now_streaming.get("label") != "Companionship"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stale_queued_companionship_epoch_is_discarded_before_audio(tmp_path):
+    app = _make_test_app()
+    now, listener_id, _, _, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2400.0  # exactly ten empty minutes starts a new station epoch
+    _, new_listener_queue = app.state.stream_hub.subscribe()
+    assert app.state.station_state.listener_session.epoch == claim.epoch + 1
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        state = app.state.station_state
+        assert new_listener_queue.empty()
+        assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+        assert state.queued_segments == []
+        assert state.now_streaming.get("label") != "Companionship"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_companionship_epoch_fence_stops_remaining_chunks_after_epoch_changes(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 32
+    now, listener_id, first_queue, _, claim = _queue_companionship_cue(app, tmp_path, audio=b"x" * 4096)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(first_queue.get(), timeout=1.0)
+        assert app.state.station_state.listener_session.companionship_cue_state is ListenerSessionCueState.CONSUMED
+        app.state.stream_hub.unsubscribe(listener_id)
+        now[0] = 2400.0
+        _, new_listener_queue = app.state.stream_hub.subscribe()
+        assert app.state.station_state.listener_session.epoch == claim.epoch + 1
+
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert new_listener_queue.empty()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_queue_shadow_consumption_repairs_identity_mismatch_without_blind_pop(tmp_path):
+    state = StationState()
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    pulled = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "pulled.mp3",
+        metadata={"queue_id": "pulled", "title": "Pulled"},
+    )
+    remaining = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "remaining.mp3",
+        metadata={"queue_id": "remaining", "title": "Remaining"},
+    )
+    queue.put_nowait(pulled)
+    queue.put_nowait(remaining)
+    assert queue.get_nowait() is pulled
+    state.queued_segments = [
+        {"id": "remaining", "label": "Remaining", "reason": "preserve me"},
+        {"id": "pulled", "label": "Pulled"},
+    ]
+
+    _consume_queue_shadow(queue, state, pulled)
+
+    assert state.queued_segments == [{"id": "remaining", "label": "Remaining", "reason": "preserve me"}]
 
 
 @pytest.mark.asyncio
@@ -1206,6 +1482,179 @@ async def test_playback_consumes_continuity_slot_and_clears_admin_projection(tmp
 
 
 @pytest.mark.asyncio
+async def test_playback_rejects_late_blocklisted_music_slot_and_serves_recovery(tmp_path):
+    """A song banned after reservation never reaches air; recovery takes over."""
+    app = _make_test_app()
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    blocked_audio = _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="late-blocked-slot",
+    )
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_audio = b"recovery-audio" * 512
+    recovery_path.write_bytes(recovery_audio)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        assert state is app.state.station_state
+        return recovery_path if subdir == "recovery" else None
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        patch("mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 101.2])),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while not state.stream_log:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not fall through to recovery")
+                await asyncio.sleep(0.01)
+            while listener_queue.empty():
+                if time.monotonic() > deadline:
+                    raise AssertionError("recovery started but no bytes reached the listener")
+                await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.continuity_slot is None
+    assert recovery_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
+    assert state.stream_log[0].metadata.get("canned") is True
+    assert state.stream_log[0].metadata.get("rescue") is True
+    assert all(entry.metadata.get("continuity_reservation_id") != "late-blocked-slot" for entry in state.stream_log)
+    assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
+
+
+@pytest.mark.asyncio
+async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_path):
+    """The queue and capacity-exempt slot share the same final ban fence."""
+    app = _make_test_app()
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    blocked_audio = b"blocked-queued-audio" * 512
+    blocked_path = tmp_path / "blocked-queued.mp3"
+    blocked_path.write_bytes(blocked_audio)
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "blocked-queued",
+            "artist": "Late Artist",
+            "title_only": "Late Song",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    safe_audio = b"safe-queued-audio" * 512
+    safe_path = tmp_path / "safe-queued.mp3"
+    safe_path.write_bytes(safe_audio)
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-queued",
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+        },
+        ephemeral=False,
+    )
+    for segment in (blocked, safe):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-queued", "type": "music", "label": "Late Song"},
+        {"id": "safe-queued", "type": "music", "label": "Safe Song"},
+    ]
+    state.last_music_file = safe_path
+    state.last_enqueued_type = SegmentType.MUSIC
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        heard = await asyncio.wait_for(listener_queue.get(), timeout=3.0)
+        assert safe_audio.startswith(heard)
+        assert not heard.startswith(blocked_audio[:32])
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_BAN] == 1
+    assert all(entry.metadata.get("title_only") != "Late Song" for entry in state.stream_log)
+    assert state.last_music_file == safe_path
+    assert state.last_enqueued_type is SegmentType.MUSIC
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_playback_rejects_blocklisted_demo_fallback_without_queue_task(tmp_path):
+    """A non-queue rescue obeys the ban fence without unbalancing task accounting."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 64
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    demo_dir = tmp_path / "demo" / "music"
+    demo_dir.mkdir(parents=True)
+    blocked_path = demo_dir / "Late Artist - Late Song.mp3"
+    blocked_audio = b"blocked-demo-audio" * 512
+    blocked_path.write_bytes(blocked_audio)
+    safe_path = demo_dir / "Safe Artist - Safe Song.mp3"
+    safe_audio = b"safe-demo-audio" * 512
+    safe_path.write_bytes(safe_audio)
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
+        patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            side_effect=_scripted_clock([100.0, 101.1, 102.0, 103.1, 103.2]),
+        ),
+        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
+        patch("mammamiradio.web.streamer._random.choice", side_effect=[blocked_path, safe_path]),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while listener_queue.empty():
+                if time.monotonic() > deadline:
+                    raise AssertionError("safe fallback did not follow the rejected blocklisted fallback")
+                await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert safe_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_BAN] == 1
+    assert all(entry.metadata.get("title") != "Late Song" for entry in state.stream_log)
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_packaged_recovery_segment_caches_duration_per_clip(tmp_path):
     """A packaged clip's duration is probed once (as rescue) then reused, so
     rung-4 repeats stay ffprobe-free; a failed probe is retried, not cached."""
@@ -1334,14 +1783,11 @@ def test_silence_gate_requires_no_air_not_just_an_empty_queue():
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_uses_legacy_welcome_after_recovery_and_banter_absent(tmp_path):
+async def test_run_playback_loop_never_discovers_legacy_welcome_or_banter_clips(tmp_path):
     app = _make_test_app()
-    app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
     app.state.stream_hub.subscribe()
-
-    welcome_path = tmp_path / "welcome.mp3"
-    welcome_path.write_bytes(b"welcome-audio" * 512)
+    checked_recovery = asyncio.Event()
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -1350,27 +1796,28 @@ async def test_run_playback_loop_timeout_uses_legacy_welcome_after_recovery_and_
 
     def _pick_canned_clip(subdir, *, state=None):
         assert state is app.state.station_state
-        return welcome_path if subdir == "welcome" else None
+        checked_recovery.set()
+        return None
 
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip) as pick_canned,
-        patch("mammamiradio.web.streamer._select_norm_cache_rescue") as select_norm_cache_rescue,
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            deadline = time.monotonic() + 3.0
-            while app.state.station_state.now_streaming.get("metadata", {}).get("title") != "Station continuity":
-                if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not stream legacy welcome recovery")
-                await asyncio.sleep(0.01)
+            deadline = time.monotonic() + 1.0
+            while not checked_recovery.is_set():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("playback did not check the approved recovery inventory")
+                await asyncio.sleep(0)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert [call.args[0] for call in pick_canned.call_args_list[:3]] == ["recovery", "banter", "welcome"]
-    assert app.state.station_state.now_streaming["metadata"].get("rescue") is True
-    select_norm_cache_rescue.assert_not_called()
+    assert pick_canned.call_count >= 1
+    assert {call.args[0] for call in pick_canned.call_args_list} == {"recovery"}
+    assert app.state.station_state.now_streaming == {}
 
 
 @pytest.mark.asyncio
@@ -1951,22 +2398,35 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_path, caplog):
+async def test_run_playback_loop_post_restart_rejects_blocked_slot_and_serves_rescue_at_grace(tmp_path, caplog):
     """Scenario 3 (post-restart): session_stopped was set (HA watchdog restart),
-    then resume fires. A listener connecting after resume must get rescue audio
-    at the first-byte grace — not silence, not a 5s wait. Exercises the real
-    stopped -> resume_event -> rescue-ladder path through run_playback_loop with
-    a warm norm cache as the only rescue rung (the realistic restart shape)."""
+    then resume fires with a reserved song banned in the meantime. The banned
+    bytes must be rejected and a listener must get warm-cache rescue audio at
+    the first-byte grace — not silence, not a 5s wait."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     caplog.set_level(logging.WARNING)
     state = app.state.station_state
+    blocked_audio = _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="post-restart-blocked-slot",
+    )
     state.session_stopped = True
+    entered_stopped_wait = asyncio.Event()
+
+    class ObservedResumeEvent(asyncio.Event):
+        async def wait(self) -> Literal[True]:
+            entered_stopped_wait.set()
+            return await super().wait()
+
+    state.resume_event = ObservedResumeEvent()
 
     rescue_path = tmp_path / "norm_rescue.mp3"
-    rescue_path.write_bytes(b"x" * 4096)
+    rescue_audio = b"restart-rescue-audio" * 256
+    rescue_path.write_bytes(rescue_audio)
 
     # Tiny real grace keeps the test fast while exercising the real wait_for /
     # resume_event timing (no wait_for mock, so the resume path is genuine).
@@ -1976,7 +2436,7 @@ async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
-            await asyncio.sleep(0.05)  # loop parks on the stopped/resume wait
+            await asyncio.wait_for(entered_stopped_wait.wait(), timeout=1.0)
             state.session_stopped = False  # the "restart" clears
             state.resume_event.set()  # and resume wakes the loop
             deadline = time.monotonic() + 3.0
@@ -1984,11 +2444,19 @@ async def test_run_playback_loop_post_restart_resume_serves_rescue_at_grace(tmp_
                 if time.monotonic() > deadline:
                     raise AssertionError("post-restart resume did not serve rescue audio at the grace")
                 await asyncio.sleep(0.01)
+            heard = await asyncio.wait_for(listener_queue.get(), timeout=1.0)
+            assert not task.done()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
     assert state.session_stopped is False
+    assert state.continuity_slot is None
+    assert rescue_audio.startswith(heard)
+    assert not heard.startswith(blocked_audio[:32])
+    assert all(
+        entry.metadata.get("continuity_reservation_id") != "post-restart-blocked-slot" for entry in state.stream_log
+    )
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
 
 
@@ -2042,18 +2510,23 @@ async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_ste
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp_path, caplog):
-    """Scenario 2 (fully empty): no canned, no norm cache, no demo assets.
+async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_and_forces_banter(tmp_path, caplog):
+    """Scenario 2 (fully empty): a banned slot and no usable rescue assets.
 
-    Guards the only remaining escape hatch — forced banter — when the operator
-    has stripped every bundled audio rescue from the container. Silence must
-    never be terminal.
+    The banned bytes never reach the listener, and the playback task remains
+    alive long enough to request forced banter as the only remaining escape.
     """
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     caplog.set_level(logging.ERROR)
+    state = app.state.station_state
+    _install_late_blocklisted_continuity_slot(
+        state,
+        tmp_path,
+        reservation_id="fully-empty-blocked-slot",
+    )
 
     empty_pkg = tmp_path / "empty_pkg"
     empty_pkg.mkdir()
@@ -2066,9 +2539,10 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=[200.0, 260.5, 260.6, 260.7, 260.8, 260.9],
+            side_effect=_scripted_clock([200.0, 260.5, 260.6, 260.7, 260.8, 260.9]),
         ),
         patch("mammamiradio.web.streamer._ASSETS_DIR", empty_pkg),
     ):
@@ -2079,12 +2553,16 @@ async def test_run_playback_loop_timeout_fully_empty_container_forces_banter(tmp
                 if time.monotonic() > deadline:
                     raise AssertionError("empty-container run did not reach forced banter fallback")
                 await asyncio.sleep(0.01)
+            assert not task.done()
+            assert state.continuity_slot is None
+            assert listener_queue.empty()
+            assert not state.stream_log
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert app.state.station_state.force_next == SegmentType.BANTER
-    assert app.state.station_state.queue_empty_since is not None, (
+    assert state.force_next == SegmentType.BANTER
+    assert state.queue_empty_since is not None, (
         "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
     )
     assert not any("rescuing with demo asset" in record.message for record in caplog.records), (
@@ -2737,12 +3215,22 @@ def test_ad_cast_status_payload_rejects_unexpected_report_shapes():
 
 
 @pytest.mark.asyncio
-async def test_status_buffered_audio_sec_sums_real_queue_durations():
-    """buffered_audio_sec surfaces airtime ahead (seconds), not item count."""
+async def test_status_buffered_audio_sec_sums_real_queue_durations(tmp_path):
+    """buffered_audio_sec surfaces airtime ahead (seconds), not item count.
+
+    Counts only immediately-playable audio (matching the producer runway
+    governor), so the queued segments carry real files here.
+    """
     app = _make_test_app()
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/a.mp3"), duration_sec=180.0))
-    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=Path("/tmp/b.mp3"), duration_sec=12.5))
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/c.mp3")))
+    a = tmp_path / "a.mp3"
+    a.write_bytes(b"a" * 1024)
+    b = tmp_path / "b.mp3"
+    b.write_bytes(b"b" * 1024)
+    c = tmp_path / "c.mp3"
+    c.write_bytes(b"c" * 1024)
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=a, duration_sec=180.0))
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=b, duration_sec=12.5))
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=c))
     app.state.station_state.queued_segments = [
         {"type": "music", "label": "A"},
         {"type": "banter", "label": "B"},
@@ -2768,10 +3256,12 @@ async def test_status_buffered_audio_sec_zero_when_queue_empty():
 
 
 @pytest.mark.asyncio
-async def test_status_buffered_audio_sec_respects_drift_guard():
+async def test_status_buffered_audio_sec_respects_drift_guard(tmp_path):
     """The drift guard still trims stale shadow entries, but seconds come from the real queue."""
     app = _make_test_app()
-    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=Path("/tmp/fake.mp3"), duration_sec=180.0))
+    real_path = tmp_path / "real.mp3"
+    real_path.write_bytes(b"x" * 1024)
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=real_path, duration_sec=180.0))
     app.state.station_state.queued_segments = [
         {"type": "music", "label": "A", "duration_sec": 1.0},
         {"type": "music", "label": "B", "duration_sec": 120.0},
@@ -3262,7 +3752,7 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
 
 @pytest.mark.asyncio
 async def test_panic_cut_while_streaming():
-    """Panic while a segment is playing: purges queue, fires skip_event, forces next=music, leaves stream live."""
+    """Panic with fresh runway skips safely and forces the next segment to music."""
     from mammamiradio.core.models import SegmentType
 
     app = _make_test_app()
@@ -3277,6 +3767,7 @@ async def test_panic_cut_while_streaming():
     data = resp.json()
     assert data["ok"] is True
     assert "purged" in data
+    assert data["skipped"] is True
     # skip_event must have been set (skip fires for the current segment)
     assert app.state.skip_event.is_set()
     # force_next must be MUSIC
@@ -3286,6 +3777,431 @@ async def test_panic_cut_while_streaming():
     # Stale rows are replaced by an audible protected reservation.
     assert len(state.queued_segments) == app.state.queue.qsize() == 1
     assert state.queued_segments[0]["reason"] == "Protected continuity audio."
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
+    """Panic still steers recovery, but never cuts current audio into an empty queue."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+    assert app.state.queue.empty()
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 6
+
+    # A render that captured the old epoch before Panic must now fail the same
+    # admission gate used by the producer, even though the queue was untouched.
+    captured_epoch = 5
+    assert captured_epoch != state.continuity_epoch
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/skip", "/api/track/ban-now-playing"])
+async def test_skip_controls_bridge_after_discarding_stale_companionship_only_runway(tmp_path, endpoint):
+    """A rejected cue cannot hide that an explicit cut needs forced music."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    stale_cue.ephemeral = True
+    stale_cue.metadata["ritual_moment_id"] = "stale-skip-moment"
+    stale_path = stale_cue.path
+    state.moment_store = MagicMock()
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(endpoint)
+
+    assert response.json()["bridged"] is True
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    assert state.force_next is SegmentType.MUSIC
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert not stale_path.exists()
+    state.moment_store.mark_dropped.assert_called_once_with(
+        "stale-skip-moment",
+        GenerationWasteReason.LISTENER_SESSION_STALE,
+    )
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/skip", "/api/track/ban-now-playing"])
+async def test_skip_controls_promote_safe_audio_past_stale_companionship_cue(tmp_path, endpoint):
+    """Skip and Ban-now cut to the first segment playback will accept."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    assert state.listener_session.epoch == claim.epoch + 1
+
+    safe_path = tmp_path / "safe_after_stale_skip.mp3"
+    safe_path.write_bytes(b"safe-audio")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-after-stale-skip",
+            "title": "Safe after stale skip",
+            "title_only": "Safe after stale skip",
+            "artist": "Safe Artist",
+        },
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(safe)
+    safe_shadow = {
+        "id": "safe-after-stale-skip",
+        "type": "music",
+        "label": "Safe after stale skip",
+        "duration_sec": 180.0,
+    }
+    state.queued_segments.append(safe_shadow)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(endpoint)
+
+    assert response.json()["bridged"] is False
+    assert list(app.state.queue._queue) == [safe]
+    assert stale_cue not in app.state.queue._queue
+    assert state.queued_segments == [safe_shadow]
+    assert state.force_next is None
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is safe
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_skip_ignores_unplayable_duration_when_reserving_before_cut(tmp_path):
+    """Missing queue files cannot shrink the fresh safety-audio target."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Current Artist — Current Song",
+        "started": time.time(),
+        "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
+    }
+    missing_segments = [
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"missing-{index}.mp3",
+            duration_sec=120.0,
+            metadata={"queue_id": f"missing-{index}", "title": f"Missing {index}"},
+            ephemeral=False,
+        )
+        for index in range(2)
+    ]
+    for segment in missing_segments:
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": f"missing-{index}", "type": "music", "label": f"Missing {index}"} for index in range(2)
+    ]
+    recovery_path = tmp_path / "ready-continuity.mp3"
+    recovery_path.write_bytes(b"ready-continuity")
+    recovery = Segment(
+        type=SegmentType.BANTER,
+        path=recovery_path,
+        duration_sec=240.0,
+        metadata={"queue_id": "ready-continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    reservation_builder = MagicMock(return_value=[recovery])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with (
+        patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240),
+        patch("mammamiradio.web.streamer._continuity_reservation_segments", reservation_builder),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/skip")
+
+    assert response.json()["bridged"] is False
+    assert reservation_builder.call_args.args[2] == pytest.approx(240.0)
+    assert list(app.state.queue._queue) == [recovery]
+    assert state.queued_segments[0]["id"] == "ready-continuity"
+    assert state.force_next is None
+    assert app.state.skip_event.is_set()
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 2
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is recovery
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_zero_byte_queue_head_is_not_skip_or_status_runway(tmp_path):
+    """An existing-but-empty file cannot greenlight a live cut."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "banter", "label": "Current", "started": time.time()}
+    empty_path = tmp_path / "empty-runway.mp3"
+    empty_path.touch()
+    empty = Segment(
+        type=SegmentType.MUSIC,
+        path=empty_path,
+        duration_sec=300.0,
+        metadata={"queue_id": "empty-runway", "artist": "Artist", "title_only": "Empty"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(empty)
+    state.queued_segments = [{"id": "empty-runway", "type": "music", "label": "Empty"}]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            status_response = await client.get("/public-status")
+            skip_response = await client.post("/api/skip")
+
+    assert status_response.json()["playback_actions"] == {"skip_ready": True, "skip_would_bridge": True}
+    assert skip_response.json() == {"ok": True, "bridged": True}
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    assert state.force_next is SegmentType.MUSIC
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_public_status_reports_stale_companionship_head_as_skip_bridge(tmp_path):
+    """Status and Skip share the playback-valid runway predicate."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/public-status")
+
+    assert response.json()["playback_actions"] == {"skip_ready": True, "skip_would_bridge": True}
+    assert list(app.state.queue._queue) == [stale_cue]
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_does_not_skip_for_stale_companionship_only_runway(tmp_path):
+    """A cue rejected by playback cannot justify cutting the current segment."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    assert state.listener_session.epoch == claim.epoch + 1
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+    assert list(app.state.queue._queue) == [stale_cue]
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_promotes_safe_audio_past_stale_companionship_cue(tmp_path):
+    """Panic may cut only into a head the playback cue fence will accept."""
+    app = _make_test_app()
+    now, listener_id, _, stale_cue, claim = _queue_companionship_cue(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2_400.0
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    assert state.listener_session.epoch == claim.epoch + 1
+
+    safe_path = tmp_path / "safe_after_stale_cue.mp3"
+    safe_path.write_bytes(b"safe-audio")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-after-stale-cue",
+            "title": "Safe after stale cue",
+            "title_only": "Safe after stale cue",
+            "artist": "Safe Artist",
+        },
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(safe)
+    state.queued_segments.append(
+        {
+            "id": "safe-after-stale-cue",
+            "type": "music",
+            "label": "Safe after stale cue",
+            "duration_sec": 180.0,
+        }
+    )
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 1, "skipped": True}
+    assert list(app.state.queue._queue) == [safe]
+    assert stale_cue not in app.state.queue._queue
+    assert state.queued_segments == [
+        {
+            "id": "safe-after-stale-cue",
+            "type": "music",
+            "label": "Safe after stale cue",
+            "duration_sec": 180.0,
+        }
+    ]
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PANIC] == 1
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_invalidates_in_flight_admission_when_queue_is_unchanged(tmp_path):
+    """Panic fences a render waiting on queue admission even without a purge."""
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    class BlockingQueue(asyncio.Queue[Segment]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.put_started = asyncio.Event()
+            self.allow_put = asyncio.Event()
+
+        async def put(self, item: Segment) -> None:
+            self.put_started.set()
+            await self.allow_put.wait()
+            await super().put(item)
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    queue = BlockingQueue()
+    app.state.queue = queue
+    candidate_path = tmp_path / "stale_panic_candidate.mp3"
+    candidate_path.write_bytes(b"candidate")
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=candidate_path,
+        duration_sec=180.0,
+        metadata={"title": "Stale candidate", "title_only": "Stale candidate", "artist": "Artist"},
+        ephemeral=True,
+    )
+    captured_epoch = state.continuity_epoch
+
+    def stale_reason() -> str | None:
+        if state.continuity_epoch != captured_epoch:
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
+    with (
+        patch("mammamiradio.scheduling.producer._apply_egress", new_callable=AsyncMock, return_value=candidate),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        enqueue_task = asyncio.create_task(
+            _enqueue_with_egress(
+                queue,
+                state,
+                app.state.config,
+                candidate,
+                shadow_entry={"id": "candidate", "type": "music", "label": "Stale candidate"},
+                stale_check=stale_reason,
+            )
+        )
+        try:
+            await asyncio.wait_for(queue.put_started.wait(), timeout=1.0)
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post("/api/panic")
+
+            assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+            assert state.continuity_epoch == captured_epoch + 1
+
+            queue.allow_put.set()
+            assert await asyncio.wait_for(enqueue_task, timeout=1.0) is False
+        finally:
+            queue.allow_put.set()
+            if not enqueue_task.done():
+                enqueue_task.cancel()
+            await asyncio.gather(enqueue_task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert not candidate_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_panic_cut_uses_capacity_exempt_slot_as_playable_runway(tmp_path):
+    """Panic may cut when the protected slot, rather than the queue head, is ready."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.continuity_epoch = 5
+    slot_path = tmp_path / "capacity_exempt_slot.mp3"
+    slot_path.write_bytes(b"slot")
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": True}
+    assert app.state.queue.empty()
+    assert app.state.skip_event.is_set()
+    assert state.continuity_slot is slot
+    assert state.force_next is SegmentType.MUSIC
+    assert state.continuity_epoch == 6
 
 
 @pytest.mark.asyncio
@@ -3301,6 +4217,7 @@ async def test_panic_cut_when_idle():
         resp = await client.post("/api/panic")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is False
     # No segment to skip — skip_event should not be fired
     assert not app.state.skip_event.is_set()
     assert state.force_next == SegmentType.MUSIC
@@ -4688,6 +5605,7 @@ async def test_hot_reload_authenticated_200():
     body = resp.json()
     assert body["ok"] is True
     assert body["reloaded_modules"] == [
+        "mammamiradio.hosts.language_policy",
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
@@ -4710,17 +5628,17 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_prompt_world_stage_failure_returns_500():
-    """First reload stage (prompt_world) raises → 500 with stream_status=unaffected.
+async def test_hot_reload_language_policy_stage_failure_returns_500():
+    """First reload stage (language_policy) raises → 500 with stream_status=unaffected.
 
-    Guards the failure contract for the leaves-first stage. With prompt_world reloaded
+    Guards the failure contract for the leaves-first stage. With language_policy reloaded
     first, a single raising reload exercises this stage.
     """
     app = _make_test_app(admin_token="testtoken")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=ImportError("syntax error in prompt_world.py"),
+        side_effect=ImportError("syntax error in language_policy.py"),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -4733,7 +5651,7 @@ async def test_hot_reload_prompt_world_stage_failure_returns_500():
     assert body["stream_status"] == "unaffected"
     assert body["error_code"] == "reload_failed"
     assert body["retryable"] is True
-    assert "syntax error in prompt_world.py" in body["exception"]
+    assert "syntax error in language_policy.py" in body["exception"]
 
 
 @pytest.mark.asyncio
@@ -4749,7 +5667,7 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
         "mammamiradio.web.streamer.importlib.reload",
-        side_effect=[None, None, None, None, ImportError("syntax error in scriptwriter.py")],
+        side_effect=[None, None, None, None, None, ImportError("syntax error in scriptwriter.py")],
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post(
@@ -4812,6 +5730,7 @@ async def test_hot_reload_reloads_prompt_world_before_scriptwriter():
             )
     assert resp.status_code == 200
     assert reloaded == [
+        "mammamiradio.hosts.language_policy",
         "mammamiradio.hosts.prompt_world",
         "mammamiradio.hosts.transitions",
         "mammamiradio.hosts.fallbacks",
@@ -5276,3 +6195,70 @@ async def test_entity_policy_requires_exactly_one_action(tmp_path):
 
     assert both.status_code == 422
     assert neither.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_public_status_skip_hint_does_not_clear_continuity_slot(tmp_path):
+    """A listener /public-status poll must never clear the reserved dead-air slot.
+
+    skip_would_bridge evaluates runway on an unauthenticated GET. With an empty
+    queue it consults the continuity slot; a transient missing/partial slot file
+    must not let that read-only poll clear the safety slot (self_heal=False).
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    reserved_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.continuity_slot = reserved_slot
+    state.now_streaming = {"type": "music", "label": "On air", "started": time.time(), "metadata": {}}
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    # The read path reported no playable runway but left the exact same slot
+    # reservation intact (identity, not just non-null — a swap would be a bug too).
+    assert body["playback_actions"]["skip_would_bridge"] is True
+    assert state.continuity_slot is reserved_slot
+
+
+@pytest.mark.asyncio
+async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
+    """Admin buffered_audio_sec must match the governor: banned audio is not runway."""
+    app = _make_test_app()
+    state = app.state.station_state
+    clean_path = tmp_path / "clean.mp3"
+    clean_path.write_bytes(b"clean" * 1024)
+    clean = Segment(
+        type=SegmentType.MUSIC,
+        path=clean_path,
+        duration_sec=180.0,
+        metadata={"artist": "Clean Artist", "title_only": "Clean Song"},
+        ephemeral=False,
+    )
+    banned_path = tmp_path / "banned.mp3"
+    banned_path.write_bytes(b"banned" * 1024)
+    banned = Segment(
+        type=SegmentType.MUSIC,
+        path=banned_path,
+        duration_sec=180.0,
+        metadata={"artist": "Banned Artist", "title_only": "Banned Song"},
+        ephemeral=False,
+    )
+    for segment in (clean, banned):
+        app.state.queue.put_nowait(segment)
+    state.blocklist = {("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}}
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        admin_status = (await client.get("/status")).json()
+
+    # Only the clean track counts; the banned queued segment (which the playback
+    # loop discards before its first byte) must not inflate the honest readout.
+    assert admin_status["buffered_audio_sec"] == 180.0

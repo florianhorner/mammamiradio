@@ -9,11 +9,19 @@ import pytest
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, StationState, Track
 from mammamiradio.hosts.fallbacks import (
+    AD_BREAK_INTROS,
+    AD_BREAK_NORMAL_INTROS,
+    AD_BREAK_NORMAL_OUTROS,
+    AD_BREAK_OUTROS,
     CHAOS_NORMAL_STOCK_LINES,
     CHAOS_STOCK_LINES,
     chaos_solo_recovery_lines,
     chaos_stock_lines,
+    select_ad_break_intro,
+    select_ad_break_outro,
+    select_ad_promo_tag,
 )
+from mammamiradio.hosts.language_policy import normal_mode_language_ok
 from mammamiradio.hosts.scriptwriter import _chaos_stock_exchange, write_banter
 
 
@@ -73,6 +81,37 @@ def test_chaos_stock_uses_normal_mode_when_super_italian_has_non_italian_station
     # Hot reload replaces the module-level dictionaries. The contract is the
     # selected copy, not object identity with a pre-reload import.
     assert selected == CHAOS_NORMAL_STOCK_LINES
+
+
+def test_ad_break_selectors_keep_wrapper_copy_mode_aware(monkeypatch):
+    """Normal-mode wrappers cannot fall through to the legacy Italian pools."""
+    monkeypatch.setattr("mammamiradio.hosts.fallbacks.random.choice", lambda pool: pool[0])
+
+    assert select_ad_break_intro(False) == AD_BREAK_NORMAL_INTROS[0]
+    assert select_ad_break_outro(False) == AD_BREAK_NORMAL_OUTROS[0]
+    assert select_ad_break_intro(True) == AD_BREAK_INTROS[0]
+    assert select_ad_break_outro(True) == AD_BREAK_OUTROS[0]
+
+
+@pytest.mark.parametrize(
+    ("super_italian", "expected"),
+    [
+        (False, "A word from our sponsors, amici."),
+        (True, "Messaggio promozionale."),
+    ],
+)
+def test_ad_promo_tag_follows_spoken_mode(super_italian, expected):
+    assert select_ad_promo_tag(super_italian) == expected
+
+
+def test_normal_ad_wrapper_inventory_is_english_led():
+    assert all(normal_mode_language_ok(text) for text in AD_BREAK_NORMAL_INTROS)
+    assert all(normal_mode_language_ok(text) for text in AD_BREAK_NORMAL_OUTROS)
+    assert normal_mode_language_ok(select_ad_promo_tag(False))
+
+
+def test_normal_chaos_inventory_stays_inside_the_language_band():
+    assert all(normal_mode_language_ok(text) for lines in CHAOS_NORMAL_STOCK_LINES.values() for text in lines)
 
 
 @pytest.mark.parametrize(

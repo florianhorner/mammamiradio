@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import (
     AdHistoryEntry,
@@ -36,6 +37,7 @@ from mammamiradio.hosts.ad_creative import (
 )
 from mammamiradio.scheduling.producer import (
     FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE,
+    RenderedMusicTrack,
     _home_context_ready_for_first_moment,
     _maybe_arm_first_home_context_moment,
     run_producer,
@@ -1068,7 +1070,9 @@ async def test_banter_generated_audio_passes_expected_duration_context(tmp_path)
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1110,7 +1114,9 @@ async def test_banter_implausibly_short_with_no_canned_fallback_is_not_queued(tm
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1161,7 +1167,9 @@ async def test_banter_concat_duration_failure_cleans_temporary_parts(tmp_path):
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1219,7 +1227,9 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(_long_banter_lines(host), None)
         ),
         patch(
-            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Bentornati.", None)
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=trans_path),
         patch(f"{MODULE}._try_crossfade", new_callable=AsyncMock, return_value=trans_path),
@@ -1604,9 +1614,177 @@ async def test_music_quality_circuit_breaker_recycles_last_good_music(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ban_timing", ["before-resolution", "before-admission"])
+async def test_music_quality_circuit_breaker_skips_blocklisted_last_good_music(tmp_path, ban_timing):
+    """The direct silence rescue must not bypass an existing or racing operator ban."""
+    from mammamiradio.scheduling import producer as producer_module
+
+    state = _make_state()
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
+    ]
+    blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+    if ban_timing == "before-resolution":
+        state.blocklist = blocklist
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    blocked_last_good = tmp_path / "prior_blocked_norm.mp3"
+    blocked_last_good.write_bytes(b"blocked last known good audio")
+    save_track_metadata(blocked_last_good, title="Ordinary", artist="Alex Warren")
+    state.last_music_file = blocked_last_good
+
+    recovery_path = tmp_path / "recovery.mp3"
+    recovery_path.write_bytes(b"recovery")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    rejected_norms: list[Path] = []
+
+    def _always_silence(path, seg_type):
+        if seg_type == SegmentType.MUSIC:
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _cached_silent_render(track, *_args, **_kwargs):
+        norm = tmp_path / f"norm_silent_{len(rejected_norms)}.mp3"
+        norm.write_bytes(b"silent normalized audio")
+        rejected_norms.append(norm)
+        return RenderedMusicTrack(track=track, path=norm, cache_path=norm, cache_hit=True)
+
+    original_last_music_resolver = producer_module._blocklist_safe_last_music
+
+    def _resolve_last_music(*args, **kwargs):
+        payload = original_last_music_resolver(*args, **kwargs)
+        if ban_timing == "before-admission":
+            state.blocklist = blocklist
+        return payload
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_cached_silent_render),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._blocklist_safe_last_music", side_effect=_resolve_last_music),
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment is recovery
+    assert segment.path != blocked_last_good
+    assert blocked_last_good.exists()
+    assert len(rejected_norms) == 3
+
+
+@pytest.mark.asyncio
+async def test_music_quality_circuit_breaker_purges_fresh_rejected_render_before_recycling_last_good(tmp_path):
+    """A cache-miss silent render must be removed before a distinct rescue airs."""
+    state = _make_state()
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
+    ]
+    config = _make_config(tmp_path)
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    last_good = tmp_path / "prior_good_norm.mp3"
+    last_good.write_bytes(b"real audio bytes")
+    state.last_music_file = last_good
+    rejected_norms: list[Path] = []
+    rejected_renders: list[Path] = []
+    quality_calls = 0
+
+    def _always_silence(path, seg_type):
+        nonlocal quality_calls
+        if seg_type == SegmentType.MUSIC:
+            quality_calls += 1
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _fresh_silent_render(track, *_args, **_kwargs):
+        index = len(rejected_norms)
+        norm = tmp_path / f"norm_silent_{index}.mp3"
+        render = tmp_path / f"music_silent_{index}.mp3"
+        norm.write_bytes(b"silent normalized cache audio")
+        render.write_bytes(b"silent transient audio")
+        rejected_norms.append(norm)
+        rejected_renders.append(render)
+        return RenderedMusicTrack(track=track, path=render, cache_path=norm, cache_hit=False)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_fresh_silent_render),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.path == last_good
+    assert seg.metadata.get("recycled") is True
+    assert quality_calls == 3
+    assert len(rejected_norms) == 3
+    assert all(not path.exists() for path in rejected_norms)
+    assert all(not path.exists() for path in rejected_renders)
+
+
+@pytest.mark.asyncio
+async def test_music_quality_circuit_breaker_replaces_rejected_cache_with_recovery_sweeper(tmp_path):
+    """A stale rejected norm must be removed before the recovery ladder takes over."""
+    state = _make_state()
+    state.playlist = [
+        Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
+    ]
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rejected_norm = tmp_path / "norm_rejected.mp3"
+    rejected_norm.write_bytes(b"silent normalized audio")
+    state.last_music_file = rejected_norm
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+    quality_calls = 0
+
+    def _always_silence(path, seg_type):
+        nonlocal quality_calls
+        if seg_type == SegmentType.MUSIC:
+            quality_calls += 1
+            raise AudioQualityError("music has too much silence (100% > 95%)")
+
+    def _cached_silent_render(track, *_args, **_kwargs):
+        return RenderedMusicTrack(track=track, path=rejected_norm, cache_path=rejected_norm, cache_hit=True)
+
+    with (
+        patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_cached_silent_render),
+        patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
+        patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert not rejected_norm.exists()
+    assert quality_calls == 3
+    segment = queue.get_nowait()
+    assert segment is recovery
+    assert segment.path != rejected_norm
+    assert segment.metadata["rescue"] is True
+
+
+@pytest.mark.asyncio
 async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
     """When all-silence rejections hit the circuit breaker, the breaker must use
-    the full recovery clip ladder instead of the older banter/welcome-only path."""
+    the full recovery clip ladder and remove its poisoned norm cache."""
     state = _make_state()
     state.playlist = [
         Track(title=f"Track {i}", artist="A", duration_ms=200_000, spotify_id=f"demo{i}") for i in range(6)
@@ -1617,6 +1795,7 @@ async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
     recovery_clip = tmp_path / "continuity_1.mp3"
     recovery_clip.write_bytes(b"fake")
     picked_subdirs: list[str] = []
+    rejected_norms: list[Path] = []
 
     def _always_silence(path, seg_type):
         if seg_type == SegmentType.MUSIC:
@@ -1626,11 +1805,15 @@ async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
         picked_subdirs.append(subdir)
         return recovery_clip if subdir == "recovery" else None
 
+    def _cached_silent_render(track, *_args, **_kwargs):
+        norm = tmp_path / f"norm_silent_{len(rejected_norms)}.mp3"
+        norm.write_bytes(b"silent normalized audio")
+        rejected_norms.append(norm)
+        return RenderedMusicTrack(track=track, path=norm, cache_path=norm, cache_hit=True)
+
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{MODULE}.normalize", side_effect=_fake_path),
-        patch(f"{MODULE}.shutil.copy2"),
+        patch(f"{MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_cached_silent_render),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_always_silence),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{MODULE}._pick_canned_clip", side_effect=_pick_recovery_only),
@@ -1645,6 +1828,8 @@ async def test_circuit_breaker_silence_prefers_packaged_recovery_clip(tmp_path):
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("title") == "Station continuity"
     assert picked_subdirs == ["recovery"]
+    assert len(rejected_norms) == 3
+    assert all(not path.exists() for path in rejected_norms)
     # Packaged-recovery-clip rescue is also a direct _queue_segment call with no
     # shadow_entry — it must still publish a Scaletta row.
     assert len(state.queued_segments) == 1
@@ -1908,7 +2093,7 @@ async def test_news_flash_tts_failure_skips_gracefully(tmp_path):
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
         patch(f"{MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),

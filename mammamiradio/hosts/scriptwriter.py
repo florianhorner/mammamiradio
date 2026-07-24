@@ -19,6 +19,7 @@ import random
 import re
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import cycle
 from typing import TYPE_CHECKING, cast
@@ -27,10 +28,13 @@ import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_model
+from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
+from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
     RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
     CostCategory,
+    DialogueLine,
     Heading,
     HostPersonality,
     PersonalityAxes,
@@ -51,10 +55,22 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.context_cues import compute_context_block
 from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — AD_BREAK_* are read only as scriptwriter.* (CHAOS_STOCK_LINES is also used in-module)
     AD_BREAK_INTROS,
+    AD_BREAK_NORMAL_INTROS,
+    AD_BREAK_NORMAL_OUTROS,
     AD_BREAK_OUTROS,
     CHAOS_STOCK_LINES,
     chaos_solo_recovery_lines,
     chaos_stock_lines,
+    select_ad_break_intro,
+    select_ad_break_outro,
+    select_ad_promo_tag,
+)
+from mammamiradio.hosts.language_policy import (
+    NORMAL_MODE_ENGLISH_TARGET,
+    assess_language,
+)
+from mammamiradio.hosts.language_policy import (
+    normal_mode_language_ok as _normal_mode_language_policy_ok,
 )
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
 from mammamiradio.hosts.prompt_world import (
@@ -150,6 +166,7 @@ def _warn_budget_pressure(output_tokens: object, budget: object, caller: str | N
 
 _SCRIPT_COST_CATEGORY_BY_CALLER: dict[str, CostCategory] = {
     "banter": "script_banter",
+    "banter_listener_truth_repair": "script_banter",
     "direction": "script_banter",
     "news_flash": "script_banter",
     "transition": "script_transition",
@@ -297,6 +314,13 @@ class GuestHostBanterCooldownCommit:
             state.guest_host_banter_cooldown_remaining = max(0, state.guest_host_banter_cooldown_remaining - 1)
 
 
+@dataclass(frozen=True)
+class CompanionshipBanterCommit:
+    """Proof that accepted generated copy used the bounded cue prompt."""
+
+    duration_bucket: CompanionshipDurationBucket
+
+
 @dataclass
 class BanterCommit:
     """Deferred banter state updates, applied only after banter queues."""
@@ -306,8 +330,28 @@ class BanterCommit:
     release_beat: ReleaseBeatBanterCommit | None = None
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None
     memory_extraction: MemoryExtractionCommit | None = None
+    companionship: CompanionshipBanterCommit | None = None
+    persona_milestone: int | None = None
+    pending_joke: dict[str, str | float | None] | None = None
+
+    def apply_queue_acceptance(self, state: StationState) -> None:
+        """Apply synchronous mutations at the successful queue boundary."""
+
+        if self.pending_joke is not None:
+            joke_text = str(self.pending_joke.get("text") or "").strip()
+            if joke_text:
+                state.add_joke(joke_text)
+                state.pending_verbal_gag = dict(self.pending_joke)
+
+    async def consume_queued_milestone(self, state: StationState) -> None:
+        """Consume a milestone only after its truth-safe banter has queued."""
+
+        persona_store = getattr(state, "persona_store", None)
+        if self.persona_milestone is not None and persona_store is not None:
+            await persona_store.consume_milestone()
 
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
+        self.apply_queue_acceptance(state)
         if self.listener_request is not None:
             self.listener_request.apply(state)
         if self.heading_announcement is not None:
@@ -324,12 +368,18 @@ def _banter_commit(
     release_beat: ReleaseBeatBanterCommit | None = None,
     guest_host_cooldown: GuestHostBanterCooldownCommit | None = None,
     memory_extraction: MemoryExtractionCommit | None = None,
+    companionship: CompanionshipBanterCommit | None = None,
+    persona_milestone: int | None = None,
+    pending_joke: dict[str, str | float | None] | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
     if (
         heading_announcement is None
         and release_beat is None
         and guest_host_cooldown is None
         and memory_extraction is None
+        and companionship is None
+        and persona_milestone is None
+        and pending_joke is None
     ):
         return listener_request
     return BanterCommit(
@@ -338,6 +388,9 @@ def _banter_commit(
         release_beat=release_beat,
         guest_host_cooldown=guest_host_cooldown,
         memory_extraction=memory_extraction,
+        companionship=companionship,
+        persona_milestone=persona_milestone,
+        pending_joke=pending_joke,
     )
 
 
@@ -1311,6 +1364,85 @@ _BANTER_UNFINISHED_MARKERS = ("—", "–", "--", "-", "...", "…")
 _BANTER_TRAILING_DIALOGUE_CLOSERS = "\"'”’)]}»"
 _BANTER_COMPLETE_ENDINGS = (".", "!", "?")
 
+# V3 delivery is deliberately a semantic sidecar, never part of the spoken
+# transcript.  The actual ElevenLabs tags live at the final TTS boundary; this
+# layer accepts only the small vocabulary that product has auditioned.
+_DELIVERY_CUES_BY_PROFILE: dict[str, frozenset[str]] = {
+    "marco": frozenset({"neutral", "energetic", "curious", "playful"}),
+    "giulia": frozenset({"neutral", "dry", "curious", "playful"}),
+}
+_RAW_DELIVERY_DIRECTIVE_RE = re.compile(r"\[[^\]\r\n]{0,120}\]")
+
+
+def _dialogue_line_parts(line: DialogueLine | tuple[HostPersonality, str]) -> tuple[HostPersonality, str]:
+    """Read a clean host/text pair while accepting historic tuple test fixtures."""
+    if isinstance(line, DialogueLine):
+        return line.host, line.text
+    return line
+
+
+def _strip_raw_delivery_directives(text: str) -> str:
+    """Remove model-supplied bracket directions before any text contract sees them.
+
+    LLM output sometimes folds stage direction into dialogue (for example,
+    ``[sarcastic] certo``).  It must not become listener copy, memory input, or
+    an Edge fallback utterance.  Code-owned semantic delivery travels separately.
+    """
+    without_directives = _RAW_DELIVERY_DIRECTIVE_RE.sub(" ", text)
+    return re.sub(r"[ \t]+", " ", without_directives).strip()
+
+
+def _allowed_delivery_for_host(host: HostPersonality) -> frozenset[str]:
+    """Return the audited V3 cue set for one host, or neutral-only otherwise."""
+    if host.engine != "elevenlabs" or host.elevenlabs_model != "eleven_v3":
+        return frozenset({"neutral"})
+    return _DELIVERY_CUES_BY_PROFILE.get(host.delivery_profile, frozenset({"neutral"}))
+
+
+def _delivery_contract_for_hosts(config: StationConfig, *, allow_delivery: bool) -> tuple[str, str]:
+    """Build the prompt contract and JSON field only when a V3 host can use it."""
+    if not allow_delivery:
+        return "", ""
+    hosts_with_cues = [
+        (host.name, sorted(_allowed_delivery_for_host(host) - {"neutral"}))
+        for host in _regular_hosts(config)
+        if len(_allowed_delivery_for_host(host)) > 1
+    ]
+    if not hosts_with_cues:
+        return "", ""
+
+    choices = "\n".join(f"- {name}: {', '.join(cues)} or neutral." for name, cues in hosts_with_cues)
+    instruction = f"""
+V3 DELIVERY CONTRACT:
+- Each line MAY include a semantic `delivery` value. Use `neutral` unless the line genuinely earns a performance beat.
+- At most ONE non-neutral delivery per host in this entire break. Never make the exchange theatrical by default.
+{choices}
+- `text` is spoken copy only: NEVER put brackets, audio tags, SSML, sound effects, actions, or stage directions in it.
+- Do not invent delivery words. Missing or invalid delivery is neutral.
+"""
+    return instruction, ', "delivery": "neutral"'
+
+
+def _resolve_delivery(
+    raw_delivery: object,
+    host: HostPersonality,
+    *,
+    allow_delivery: bool,
+    non_neutral_hosts: set[str],
+) -> str:
+    """Validate a generated delivery value and enforce the per-host break cap."""
+    if not allow_delivery or not isinstance(raw_delivery, str):
+        return "neutral"
+    delivery = raw_delivery.strip().casefold()
+    allowed = _allowed_delivery_for_host(host)
+    if delivery not in allowed or delivery == "neutral":
+        return "neutral"
+    host_key = _normalize_host_tag(host.name)
+    if host_key in non_neutral_hosts:
+        return "neutral"
+    non_neutral_hosts.add(host_key)
+    return delivery
+
 
 def _banter_line_needs_immediate_reply(text: str) -> bool:
     """Return whether a spoken banter line is an interruption, not a finished thought."""
@@ -1321,7 +1453,7 @@ def _banter_line_needs_immediate_reply(text: str) -> bool:
     return len(stripped.split()) <= 2 and not spoken_end.endswith(_BANTER_COMPLETE_ENDINGS)
 
 
-def _banter_turn_taking_ok(lines: list[tuple[HostPersonality, str]]) -> bool:
+def _banter_turn_taking_ok(lines: Sequence[DialogueLine | tuple[HostPersonality, str]]) -> bool:
     """Ensure every cut-off is answered immediately by a different host.
 
     This runs after parsing, guest filtering, and de-duplication, so it checks the
@@ -1329,18 +1461,19 @@ def _banter_turn_taking_ok(lines: list[tuple[HostPersonality, str]]) -> bool:
     """
     if not lines:
         return False
-    for index, (host, text) in enumerate(lines):
+    for index, line in enumerate(lines):
+        host, text = _dialogue_line_parts(line)
         if not _banter_line_needs_immediate_reply(text):
             continue
         if index + 1 >= len(lines):
             return False
-        next_host, _next_text = lines[index + 1]
+        next_host, _next_text = _dialogue_line_parts(lines[index + 1])
         if _normalize_host_tag(host.name) == _normalize_host_tag(next_host.name):
             return False
     return True
 
 
-def _banter_fallback_pools(config: StationConfig) -> list[list[tuple[HostPersonality, str]]]:
+def _banter_fallback_pools(config: StationConfig) -> list[list[DialogueLine]]:
     """Return the complete stock exchanges used after generated banter is rejected."""
     hosts = _regular_hosts(config)
     h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
@@ -1351,26 +1484,26 @@ def _banter_fallback_pools(config: StationConfig) -> list[list[tuple[HostPersona
     if config.super_italian_mode and config.station.language == "it":
         return [
             [
-                (h0, "Comunque, mica male questa."),
-                (h1, interruption_reply),
-                (h0, "Musica. Adesso. Fidiamoci."),
+                DialogueLine(h0, "Comunque, mica male questa."),
+                DialogueLine(h1, interruption_reply),
+                DialogueLine(h0, "Musica. Adesso. Fidiamoci."),
             ],
             [
-                (h1, "Senti, non ne parliamo."),
-                (h0, "Giusto. Andiamo avanti."),
-                (h1, "Come sempre, come da sempre."),
+                DialogueLine(h1, "Senti, non ne parliamo."),
+                DialogueLine(h0, "Giusto. Andiamo avanti."),
+                DialogueLine(h1, "Come sempre, come da sempre."),
             ],
             [
-                (h0, "Cos'era quello? No, niente. Niente."),
-                (h1, "Il corridoio. Lascia stare."),
-                (h0, "Sì. Lasciamo stare. Musica."),
+                DialogueLine(h0, "Cos'era quello? No, niente. Niente."),
+                DialogueLine(h1, "Il corridoio. Lascia stare."),
+                DialogueLine(h0, "Sì. Lasciamo stare. Musica."),
             ],
         ]
     return [
         [
-            (h0, "Anyway. Not bad."),
-            (h1, normal_interruption_reply),
-            (h0, "Music. Now. Trust the process."),
+            DialogueLine(h0, "Anyway. Not bad."),
+            DialogueLine(h1, normal_interruption_reply),
+            DialogueLine(h0, "Music. Now. Trust the process."),
         ],
     ]
 
@@ -1378,7 +1511,7 @@ def _banter_fallback_pools(config: StationConfig) -> list[list[tuple[HostPersona
 def _chaos_stock_exchange(
     config: StationConfig,
     subtype: ChaosSubtype,
-) -> list[tuple[HostPersonality, str]]:
+) -> list[DialogueLine]:
     hosts = _regular_hosts(config)
     h0: HostPersonality = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
     h1: HostPersonality = hosts[1] if len(hosts) > 1 else h0
@@ -1387,12 +1520,12 @@ def _chaos_stock_exchange(
         super_italian_mode=config.super_italian_mode,
         station_language=config.station.language,
     )
-    exchange = [(next(speakers), line) for line in stock_lines[subtype]]
+    exchange = [DialogueLine(next(speakers), line) for line in stock_lines[subtype]]
     if _banter_turn_taking_ok(exchange):
         return exchange
     logger.warning("Chaos stock exchange needs two distinct hosts; using complete solo-host fallback")
     return [
-        (h0, line)
+        DialogueLine(h0, line)
         for line in chaos_solo_recovery_lines(
             super_italian_mode=config.super_italian_mode,
             station_language=config.station.language,
@@ -1451,139 +1584,14 @@ def _anthropic_text(content: object) -> str:
     return "\n".join(chunks)
 
 
-_LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")
-
 _NORMAL_MODE_LANGUAGE_REPAIR = """
 NORMAL MODE LANGUAGE REPAIR:
 The previous JSON was too Italian for Normal Mode. Rewrite the same content as
-English-led host speech: roughly 70% English / 30% Italian. English carries the
+English-led host speech: target roughly 75% English / 25% Italian, staying within
+the accepted 70–85% English range. English carries the
 information and full sentences; Italian is only greetings, reactions, punchlines,
 and colour. Keep the same JSON schema and valid host names.
 """.strip()
-
-_NORMAL_MODE_ENGLISH_MARKERS = frozenset(
-    {
-        "a",
-        "about",
-        "after",
-        "again",
-        "all",
-        "and",
-        "anyway",
-        "are",
-        "back",
-        "be",
-        "because",
-        "been",
-        "but",
-        "by",
-        "can",
-        "could",
-        "did",
-        "do",
-        "does",
-        "english",
-        "exactly",
-        "for",
-        "from",
-        "had",
-        "has",
-        "have",
-        "here",
-        "in",
-        "is",
-        "it",
-        "keep",
-        "little",
-        "more",
-        "music",
-        "next",
-        "no",
-        "not",
-        "now",
-        "of",
-        "on",
-        "or",
-        "out",
-        "room",
-        "say",
-        "song",
-        "stay",
-        "still",
-        "that",
-        "the",
-        "then",
-        "there",
-        "this",
-        "to",
-        "track",
-        "was",
-        "we",
-        "what",
-        "with",
-        "you",
-    }
-)
-
-_NORMAL_MODE_ITALIAN_MARKERS = frozenset(
-    {
-        "abbiamo",
-        "adesso",
-        "allora",
-        "anche",
-        "ancora",
-        "ascolta",
-        "bene",
-        "benissimo",
-        "calma",
-        "canzone",
-        "casa",
-        "che",
-        "ci",
-        "come",
-        "con",
-        "continua",
-        "cosa",
-        "cosi",
-        "così",
-        "da",
-        "dai",
-        "della",
-        "di",
-        "e",
-        "era",
-        "finisce",
-        "fretta",
-        "in",
-        "italiano",
-        "la",
-        "lo",
-        "ma",
-        "musica",
-        "nel",
-        "nella",
-        "nessuna",
-        "non",
-        "ora",
-        "piano",
-        "poi",
-        "questa",
-        "questo",
-        "qui",
-        "respira",
-        "restiamo",
-        "senza",
-        "si",
-        "sì",
-        "studio",
-        "tutti",
-        "un",
-        "una",
-        "va",
-    }
-)
-
-_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS = frozenset({"a", "in", "no"})
 
 
 def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
@@ -1618,30 +1626,45 @@ def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
     return [text] if isinstance(text, str) else []
 
 
+def _json_has_spoken_role(data: object, required_role: str) -> bool:
+    """Return whether an ad JSON payload contains non-empty text for a role."""
+    if not isinstance(data, dict) or not required_role:
+        return False
+    raw_parts = data.get("parts")
+    if not isinstance(raw_parts, list):
+        return False
+    return any(
+        isinstance(part, dict)
+        and part.get("type", "voice") == "voice"
+        and part.get("role") == required_role
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+        for part in raw_parts
+    )
+
+
 def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
-    """Return false only for clearly all-Italian generated speech in Normal Mode."""
-    if config.super_italian_mode:
-        return True
-    combined = " ".join(text.strip() for text in texts if text and text.strip())
-    if not combined:
-        return True
-    tokens = [token.casefold() for token in _LANGUAGE_TOKEN_RE.findall(combined)]
-    if len(tokens) < 12:
-        return True
+    """Apply the shared language policy using the station's active mode."""
+    return _normal_mode_language_policy_ok(texts, super_italian=config.super_italian_mode)
 
-    english_hits = sum(
-        token in _NORMAL_MODE_ENGLISH_MARKERS and token not in _NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS
-        for token in tokens
-    )
-    italian_hits = sum(
-        token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù") for token in tokens
-    )
-    english_floor = max(2, len(tokens) // 10)
-    if english_hits >= english_floor:
-        return True
 
-    italian_floor = max(4, len(tokens) // 4)
-    return italian_hits < italian_floor
+def assess_spoken_texts(texts: list[str], config: StationConfig) -> dict[str, object]:
+    """Return JSON-safe policy telemetry for final spoken provenance rows."""
+    assessment = assess_language(texts)
+    accepted = _normal_mode_language_ok(texts, config)
+    return {
+        "mode": "super_italian" if config.super_italian_mode else "normal",
+        "target_english_share": NORMAL_MODE_ENGLISH_TARGET,
+        "total_tokens": assessment.total_tokens,
+        "english_tokens": assessment.english_tokens,
+        "italian_tokens": assessment.italian_tokens,
+        "unclassified_tokens": assessment.unclassified_tokens,
+        "classified_tokens": assessment.classified_tokens,
+        "english_share": assessment.english_share,
+        "italian_share": assessment.italian_share,
+        "accepted": accepted,
+        "decision": "accepted" if accepted else "rejected",
+    }
 
 
 async def _generate_json_response_with_language_guard(
@@ -1653,6 +1676,7 @@ async def _generate_json_response_with_language_guard(
     max_tokens: int,
     caller: str | None = None,
     role: str | None = None,
+    required_role: str | None = None,
     spot_index: int | None = None,
 ) -> dict:
     """Generate JSON and enforce Normal Mode's English-led output invariant."""
@@ -1669,6 +1693,12 @@ async def _generate_json_response_with_language_guard(
             role=role,
             spot_index=spot_index,
         )
+        # Direct campaigns have a structural safety repair below this guard.
+        # Let that repair replace partner-only output with owned fallback copy;
+        # otherwise the language retry raises first and skips the campaign-role
+        # invariant entirely.
+        if surface == "ad" and required_role and not _json_has_spoken_role(data, required_role):
+            return data
         if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config):
             return data
         if attempt == 0:
@@ -1878,35 +1908,47 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
     if not regulars:
         return ""
     regular_hosts_text = _host_names_text(regulars)
-    station_conversation_lang = "Italian" if super_italian else "mostly English with Italian colour"
+    if super_italian:
+        guest_language_clause = (
+            "He is ON ITALIAN RADIO, so his on-air language is Italian-first: roughly 75-85% Italian, "
+            "enough that he belongs inside the full Italian conversation instead of sounding pasted in "
+            "from a German sketch."
+        )
+        conversation_word = "Italian"
+    else:
+        guest_language_clause = (
+            "Normal Mode is English-led: keep Hans Günther inside the 75% English / 25% Italian contract. "
+            "English carries the information; Italian and short Bavarian phraselets add the color without "
+            "turning his lines into an Italian monologue."
+        )
+        conversation_word = "English-led"
     return (
         " GUEST HOST — Hans Günther: a Bavarian in his mid-twenties — Munich tech-scene "
-        "sharp, fast, funny. He is ON ITALIAN RADIO, so his on-air language is Italian-first: "
-        "roughly 75-85% Italian, enough that he belongs inside the full Italian conversation "
-        "instead of sounding pasted in from a German sketch. Make him about 50% MORE Bavarian "
+        f"sharp, fast, funny. {guest_language_clause} Make him about 50% MORE Bavarian "
         "than before, but as texture: rhythm, swagger, nicknames, comparisons, and short "
         "Boarisch phraselets the TTS can pronounce as one unit. Do NOT sprinkle isolated "
-        "single words like 'fei' or 'mei' into otherwise Italian sentences; those sound off. "
+        f"single words like 'fei' or 'mei' into otherwise {conversation_word} sentences; those sound off. "
         "If a Bavarian marker appears, attach it to a phrase: 'passt scho, ragazzi', "
         "'des is ned normale', 'wia schee questa radio', 'des is fei a Witz', "
         "'passt wie Arsch auf Eimer'. "
         "Prefer one phraselet in a Hans line, "
         "not a confetti of particles. Do NOT push complete Hochdeutsch/German sentences into normal "
-        "Italian banter. No German monologues. Full German is rare and only works as an "
+        f"{conversation_word} banter. No German monologues. Full German is rare and only works as an "
         "explicit 'nobody understood him' gag; otherwise keep German/Boarisch to 2-6 word "
-        "bursts inside Italian lines. Vary how he enters every time — never reuse the same "
+        f"bursts inside {conversation_word} lines. Vary how he enters every time — never reuse the same "
         "greeting or opener. "
         f"{regular_hosts_text} "
-        f"keep the station conversation {station_conversation_lang}; they react to his Bavarianisms naturally, "
+        f"keep the station conversation {'Italian' if super_italian else 'mostly English with Italian colour'}; "
+        "they react to his Bavarianisms naturally, "
         "roasting or misunderstanding the flavor without formally translating every line. "
-        "Never put fake or broken German in the Italian hosts' mouths, and never write pidgin "
+        "Never put fake or broken German in the station hosts' mouths, and never write pidgin "
         "'ja ja' tourist-German for Hans Günther — his Bavarian fragments must be idiomatic. "
         "Hans Günther is a GUEST STAR, not a co-host: he is available only when a "
         "specific banter prompt explicitly opens the guest-host gate. When the gate "
         "is closed, he stays off-mic and the regular hosts carry the exchange. "
         "When invited, he makes one short interruption and hands the floor back to "
         f"{regular_hosts_text}. Tag that invited line with the exact host name "
-        '"Hans Günther" (never just "Hans") so it attributes to him, not to an Italian host.'
+        '"Hans Günther" (never just "Hans") so it attributes to him, not to a station host.'
     )
 
 
@@ -2020,8 +2062,8 @@ Rules:
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
-- START MID-CONVERSATION: sometimes begin as if the listener tuned in halfway through
-  an argument or a laugh. No setup. Just drop in.
+- START MID-CONVERSATION: sometimes begin in the middle of an ongoing host argument
+  or laugh. No setup and no claim about when anyone began listening. Just drop in.
 - ANSWERED INTERRUPTIONS: a host may cut off with "Lo so, ma comunque—" only when a different
   host immediately answers or counters it. The final line of every exchange is a complete thought.
 - ABSURDIST TANGENT: at least once per exchange, someone says something that has no
@@ -2061,12 +2103,11 @@ async def write_banter(
     state: StationState,
     config: StationConfig,
     *,
-    is_new_listener: bool = False,
-    is_first_listener: bool = False,
     chaos_subtype: ChaosSubtype | None = None,
     prompt_fact: PromptFact | None = None,
     use_directed_home_context: bool = False,
-) -> tuple[list[tuple[HostPersonality, str]], BanterCommit | ListenerRequestCommit | None]:
+    companionship_context: CompanionshipPromptContext | None = None,
+) -> tuple[list[DialogueLine], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
     Always returns ``(lines, commit)`` where ``commit`` is a deferred state
@@ -2082,8 +2123,10 @@ async def write_banter(
             logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
         host = random.choice(_regular_hosts(config))
-        fallback = {"it": "E torniamo alla musica!", "en": "And back to the music!"}
-        return [(host, fallback.get(config.station.language, fallback["en"]))], None
+        fallback = (
+            "E torniamo alla musica!" if _spoken_fallback_language(config) == "it" else "And back to the music, amici!"
+        )
+        return [DialogueLine(host, fallback)], None
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
@@ -2128,12 +2171,16 @@ async def write_banter(
         home_state_sections.append("AMBIENT CUE:\n" + _sanitize_prompt_data(prompt_fact.prompt, max_len=280))
     elif state.ha_context and not use_directed_home_context:
         home_state_sections.append(state.ha_context)
-    if state.ha_events_summary and not use_directed_home_context:
-        home_state_sections.append("EVENTI RECENTI:\n" + state.ha_events_summary)
+    events_summary = (
+        state.ha_events_summary if _spoken_fallback_language(config) == "it" else state.ha_events_summary_en
+    )
+    if events_summary and not use_directed_home_context:
+        home_state_sections.append("EVENTI RECENTI:\n" + events_summary)
     if state.ha_ritual_context:
         home_state_sections.append("RITUALI DI CASA:\n" + _sanitize_prompt_data(state.ha_ritual_context, max_len=160))
-    if state.ha_weather_arc and not use_directed_home_context:
-        home_state_sections.append("WEATHER ARC: " + state.ha_weather_arc)
+    weather_arc = _localized_weather_arc(state, config)
+    if weather_arc and not use_directed_home_context:
+        home_state_sections.append("WEATHER ARC: " + weather_arc)
 
     # Impossible Moments v2 (A): the evening running-gag. DATA goes INSIDE the
     # fence (sanitized like all other home data); the use/no-use INSTRUCTION goes
@@ -2151,7 +2198,8 @@ async def write_banter(
 
     if home_state_sections:
         # Tiered reference depth: mood active = up to 2 total, no mood = 1 max
-        if state.ha_home_mood:
+        active_home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
+        if active_home_mood:
             ref_instruction = (
                 "You may reference UP TO TWO home details total (mood counts toward this cap). "
                 "Connect them naturally — don't list. Like glancing around the room."
@@ -2168,18 +2216,19 @@ async def write_banter(
 
     # Phase 2: home mood — interpretive, placed OUTSIDE the data fence
     mood_block = ""
-    if state.ha_home_mood:
+    active_home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
+    if active_home_mood:
         mood_block = (
-            f"HOME MOOD: {state.ha_home_mood} — "
+            f"HOME MOOD: {active_home_mood} — "
             "reference this at most once, like a passing observation. Never as a report.\n"
         )
-        example = _MOOD_EXAMPLES.get(state.ha_home_mood)
+        example = _MOOD_EXAMPLES.get(active_home_mood)
         if example:
             mood_block += f"{example}\n"
 
     # Weather-mood fusion: when both are set, allow natural connection
     weather_mood_fusion = ""
-    if state.ha_home_mood and state.ha_weather_arc and not use_directed_home_context:
+    if active_home_mood and weather_arc and not use_directed_home_context:
         weather_mood_fusion = (
             "Weather and home mood are aligned — you may connect outdoor conditions "
             "to indoor activity naturally. This counts toward the 2-item cap.\n"
@@ -2193,7 +2242,7 @@ async def write_banter(
     # Listener behavior patterns (generic, never personal)
     listener_block = ""
     behavior_desc = state.listener.describe_for_prompt()
-    if behavior_desc:
+    if behavior_desc and companionship_context is None:
         listener_block = f"""
 <listener_behavior>
 {behavior_desc}
@@ -2202,29 +2251,22 @@ Never say "the data shows" or reference tracking. Maintain plausible deniability
 </listener_behavior>
 """
 
-    # New listener awareness — the "benvenuto" impossible moment
-    new_listener_block = ""
-    if is_first_listener:
-        new_listener_block = """
-IMPOSSIBLE MOMENT: Someone JUST tuned in — they are the FIRST listener!
-Acknowledge this naturally. Be excited but not desperate. "Finalmente qualcuno ci ascolta!"
-This is the WOW moment — the listener just connected and immediately hears the DJ notice.
-"""
-    elif is_new_listener:
-        new_listener_block = """
-IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!
-Acknowledge this subtly — "oh, abbiamo compagnia" or "qualcuno si è sintonizzato".
-Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
-"""
-
-    # Compounding listener memory — persona built across sessions
+    # Compounding station memory — persona built across station sessions.  The
+    # prompt receives only coarse, identity-free session context; it must never
+    # turn an HTTP connection edge into a claim about a person.
     persona_block = ""
     arc_phase_block = ""
     persona_ctx = ""
     persona_session_count = 0
     persona_store = getattr(state, "persona_store", None)
     milestone: int | None = None
-    if persona_store:
+    listener_session_block = ""
+    if companionship_context is not None:
+        listener_session_block = (
+            f"\n<listener_session>\n{companionship_context.to_prompt_context()}\n</listener_session>\n"
+        )
+
+    if persona_store and companionship_context is None:
         try:
             from mammamiradio.hosts.persona import _ARC_DIRECTIVES
 
@@ -2238,7 +2280,9 @@ Don't over-explain. The uncanny part is that the DJ noticed IMMEDIATELY.
             milestone = persona.pending_milestone
             milestone_line = ""
             if milestone:
-                milestone_line = f"\nMilestone: session #{milestone}. Acknowledge indirectly."
+                milestone_line = (
+                    f"\nStation milestone: session #{milestone}. Acknowledge only as shared station continuity."
+                )
             arc_phase_block = f"""
 <arc_phase>
 Phase: {phase} (session #{persona.session_count})
@@ -2247,14 +2291,12 @@ Directive: {directive}{milestone_line}
 """
             if persona_ctx:
                 persona_block = f"""
-<listener_memory>
+<station_memory>
 {persona_ctx}
-Use this to make the listener feel recognized — callback old songs, reference
-running jokes from past sessions, build on your theories about who's listening.
-Never explain HOW you remember. Just casually reference things as if it's natural.
-The more sessions they've had, the more familiar and personal you should sound.
-First-time listeners get curiosity and intrigue. Returning listeners get inside jokes.
-</listener_memory>
+Use this as aggregate station mythology — callback old songs, reference running
+jokes from past sessions, and build on open station theories. Never claim that a
+specific person has arrived, returned, tuned in, or is being identified.
+</station_memory>
 """
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
@@ -2280,6 +2322,10 @@ CHAOS DIRECTION:
     raw_pending_directive = state.ha_pending_directive
     raw_pending_directive_moment_id = state.ha_pending_directive_moment_id
     raw_pending_directive_source = state.ha_pending_directive_source
+    return_authority = home_return_authority_for_directive(
+        raw_pending_directive_source,
+        raw_pending_directive,
+    )
     pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
     consumed_pending_directive = False
     if pending_directive:
@@ -2323,7 +2369,7 @@ Make this the focus of this banter break. It happened just now — react natural
     release_beat_schema = ""
     release_beat_commit: ReleaseBeatBanterCommit | None = None
     release_campaign = getattr(state, "release_campaign", None)
-    if chaos_subtype is None and release_campaign is not None:
+    if companionship_context is None and chaos_subtype is None and release_campaign is not None:
         try:
             release_offer = release_campaign.begin_attempt()
         except Exception:
@@ -2366,7 +2412,7 @@ beat in the lines you wrote. Otherwise set it false.
             chaos_subtype is not None,
             listener_request_block,
             release_beat_block,
-            new_listener_block,
+            listener_session_block,
         )
     )
     if heading_announcement and raw_heading is not None and raw_heading_announcement_id and not record_hunt_blocked:
@@ -2417,7 +2463,7 @@ beat in the lines you wrote. Otherwise set it false.
             bool(course_change_block),
             bool(listener_request_block),
             bool(release_beat_block),
-            bool(new_listener_block),
+            bool(listener_session_block),
         )
     )
     if guest_regulars:
@@ -2450,7 +2496,7 @@ GUEST HOST GATE:
         or release_beat_block
         or festival_block
         or chaos_subtype is not None
-        or new_listener_block
+        or listener_session_block
     )
     exchange_count = _banter_exchange_count(warranted=warranted_long)
     home_fact_schema = (
@@ -2462,6 +2508,27 @@ GUEST HOST GATE:
         if prompt_fact is not None
         else "\nHOME FACT CONTRACT: Return home_fact_id as null.\n"
     )
+    companionship_proof_schema = ""
+    companionship_proof_instruction = ""
+    if companionship_context is not None:
+        duration_bucket = companionship_context.duration_bucket.value
+        companionship_proof_schema = (
+            f', "listener_session_cue": "companionship", "listener_session_duration_bucket": "{duration_bucket}"'
+        )
+        companionship_proof_instruction = (
+            "\nCOMPANIONSHIP PROOF CONTRACT: If the lines actually use the companionship cue, return "
+            f"listener_session_cue as 'companionship' and listener_session_duration_bucket as {duration_bucket!r}. "
+            "Otherwise return both fields as null.\n"
+        )
+
+    # Chaos, stock, and listener-truth-repaired exchanges stay neutral by
+    # contract. Only an ordinary generated host break may opt into the V3
+    # semantic delivery sidecar.
+    allow_delivery = chaos_subtype is None and state.chaos_pending is None and not state.chaos_mode_active
+    delivery_instruction, delivery_schema = _delivery_contract_for_hosts(
+        config,
+        allow_delivery=allow_delivery,
+    )
 
     prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
@@ -2471,9 +2538,9 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{new_listener_block}{guest_host_block}{listener_block}{arc_phase_block}{persona_block}{home_fact_instruction}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
 Return JSON:
-{{"lines": [{{"host": "HostName", "text": "what they say"}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}}}"""
+{{"lines": [{{"host": "HostName", "text": "what they say"{delivery_schema}}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}{companionship_proof_schema}}}"""
 
     try:
         data = await _generate_json_response_with_language_guard(
@@ -2531,7 +2598,7 @@ Return JSON:
                 if director is not None:
                     director.note_repaired()
 
-        result = []
+        result: list[DialogueLine] = []
         raw_lines = data.get("lines")
         if not isinstance(raw_lines, list):
             raw_lines = []
@@ -2539,6 +2606,7 @@ Return JSON:
         accepted_guest_host_line = False
         regular_host_line_count = 0
         dropped_guest_host_line = False
+        non_neutral_delivery_hosts: set[str] = set()
         # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
@@ -2554,6 +2622,7 @@ Return JSON:
                 # coerce to "None"/"[]"/"{...}" and get spoken aloud — treat as unusable
                 # so a malformed line falls through to stock copy instead of airing junk.
                 text = raw_text if isinstance(raw_text, str) else ""
+                raw_delivery = line.get("delivery")
             elif isinstance(line, str):
                 # The OpenAI fallback sometimes returns lines as plain
                 # strings with no host. Alternate hosts across the string lines we
@@ -2563,9 +2632,11 @@ Return JSON:
                 host = fallback_hosts[str_line_idx % len(fallback_hosts)]
                 text = line
                 raw_guest_host_tag = False
+                raw_delivery = None
             else:
                 continue
-            if not text.strip():
+            text = _strip_raw_delivery_directives(text)
+            if not text:
                 continue
             if isinstance(line, str):
                 str_line_idx += 1
@@ -2577,7 +2648,18 @@ Return JSON:
                 accepted_guest_host_line = True
             else:
                 regular_host_line_count += 1
-            result.append((host, text))
+            result.append(
+                DialogueLine(
+                    host,
+                    text,
+                    _resolve_delivery(
+                        raw_delivery,
+                        host,
+                        allow_delivery=allow_delivery,
+                        non_neutral_hosts=non_neutral_delivery_hosts,
+                    ),
+                )
+            )
 
         # Genuinely unusable shape (no airable lines) → fall to stock copy via except.
         if not result:
@@ -2588,56 +2670,63 @@ Return JSON:
             raise ValueError("banter response contained no full exchange after guest-host gate")
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
-        deduped: list[tuple[HostPersonality, str]] = []
+        deduped: list[DialogueLine] = []
         for entry in result:
-            if deduped and entry[1] == deduped[-1][1]:
-                logger.warning("Dropped duplicate banter line: %r", entry[1][:60])
+            if deduped and entry.text == deduped[-1].text:
+                logger.warning("Dropped duplicate banter line: %r", entry.text[:60])
                 continue
             deduped.append(entry)
         result = deduped
-        deduped_has_guest_host_line = any(_is_local_guest_host_name(host.name) for host, _ in result)
-        deduped_has_regular_host_line = any(not _is_local_guest_host_name(host.name) for host, _ in result)
+        deduped_has_guest_host_line = any(_is_local_guest_host_name(line.host.name) for line in result)
+        deduped_has_regular_host_line = any(not _is_local_guest_host_name(line.host.name) for line in result)
         if dropped_guest_host_line and len(result) < 2:
             raise ValueError("banter response contained no full exchange after guest-host gate after dedup")
         if accepted_guest_host_line and not deduped_has_regular_host_line:
             raise ValueError("banter response contained no regular host lines after dedup")
         if deduped_has_guest_host_line:
-            guest_host_index = next(idx for idx, (host, _) in enumerate(result) if _is_local_guest_host_name(host.name))
-            has_regular_before = any(not _is_local_guest_host_name(host.name) for host, _ in result[:guest_host_index])
+            guest_host_index = next(idx for idx, line in enumerate(result) if _is_local_guest_host_name(line.host.name))
+            has_regular_before = any(
+                not _is_local_guest_host_name(line.host.name) for line in result[:guest_host_index]
+            )
             has_regular_after = any(
-                not _is_local_guest_host_name(host.name) for host, _ in result[guest_host_index + 1 :]
+                not _is_local_guest_host_name(line.host.name) for line in result[guest_host_index + 1 :]
             )
             if not (has_regular_before and has_regular_after):
                 raise ValueError("banter response did not frame guest-host line as a cameo")
             guest_host_cooldown_commit = GuestHostBanterCooldownCommit(invited_guest=True)
 
-        if not _normal_mode_language_ok([text for _, text in result], config):
-            raise ValueError("banter response violated Normal Mode language mix after guest-host gate")
-
         # Sanitize: replace any wrong station names the LLM may have hallucinated
-        result = [(host, _fix_wrong_station_names(text, config.display_station_name)) for host, text in result]
+        result = [
+            DialogueLine(
+                line.host,
+                _fix_wrong_station_names(line.text, config.display_station_name),
+                line.delivery,
+            )
+            for line in result
+        ]
         if not _banter_turn_taking_ok(result):
             raise ValueError("banter response contained an orphaned host cut-off")
-        # A milestone belongs to an accepted generated exchange, not merely a
-        # prompt attempt. Every response-shape, language, sanitation,
-        # de-duplication, and turn-taking guard above must pass first.
-        if milestone is not None and persona_store is not None:
-            await persona_store.consume_milestone()
+        # This is the final speech boundary: station-name cleanup and any other
+        # post-processing must not turn an accepted response into Italian-heavy
+        # Normal Mode copy.
+        if not _normal_mode_language_ok([line.text for line in result], config):
+            raise ValueError("banter response violated Normal Mode language mix after post-processing")
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
         state.last_banter_home_fact = prompt_fact
+        state.last_banter_return_authority = return_authority
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
         # cross-domain ledger at QUEUE time (B-i). pending is set ONLY on this
         # success path; the producer resets it to None before each banter so a
         # canned/failed banter never leaves a stale gag to commit.
+        pending_joke: dict[str, str | float | None] | None = None
         new_joke = data.get("new_joke")
         if new_joke:
             gag_text, gag_punch = _normalize_new_joke(new_joke)
             if gag_text:
-                state.add_joke(gag_text)
-                state.pending_verbal_gag = {"text": gag_text, "punch": gag_punch}
+                pending_joke = {"text": gag_text, "punch": gag_punch}
 
         if release_beat_commit is not None:
             release_beat_commit.release_beat_used = bool(data.get("release_beat_used"))
@@ -2649,7 +2738,7 @@ Return JSON:
                 _last_track = list(state.played_tracks)[-1]
                 known_yt = getattr(_last_track, "youtube_id", "") or ""
             memory_extraction_commit = MemoryExtractionCommit(
-                script_lines=[{"host": host.name, "text": text} for host, text in result],
+                script_lines=[{"host": line.host.name, "text": line.text} for line in result],
                 persona_context=persona_ctx,
                 interaction_context={
                     "recent_tracks": recent,
@@ -2661,7 +2750,7 @@ Return JSON:
                     "listener_request": listener_request_block,
                     "reactive_directive": reactive_block,
                     "course_change": course_change_block,
-                    "new_listener": new_listener_block,
+                    "listener_session": listener_session_block,
                     "listener_behavior": listener_block,
                     "arc_phase": arc_phase_block,
                     "release_beat": release_beat_block,
@@ -2673,16 +2762,37 @@ Return JSON:
             )
 
         logger.info("Generated banter: %d lines", len(result))
+        companionship_commit = None
+        if companionship_context is not None:
+            proof_fields_match = (
+                data.get("listener_session_cue") == "companionship"
+                and data.get("listener_session_duration_bucket") == companionship_context.duration_bucket.value
+            )
+            copy_uses_context = companionship_context.is_used_by(line.text for line in result)
+            if proof_fields_match and copy_uses_context:
+                companionship_commit = CompanionshipBanterCommit(
+                    duration_bucket=companionship_context.duration_bucket,
+                )
+            else:
+                logger.warning(
+                    "Generated banter omitted valid companionship proof (fields=%s, copy=%s)",
+                    proof_fields_match,
+                    copy_uses_context,
+                )
         return result, _banter_commit(
             listener_request_commit,
             heading_announcement_commit,
             release_beat_commit,
             guest_host_cooldown_commit,
             memory_extraction_commit,
+            companionship_commit,
+            milestone,
+            pending_joke,
         )
 
     except Exception as e:
         state.last_banter_home_fact = None
+        state.last_banter_return_authority = None
         if prompt_fact is not None:
             director = getattr(state, "home_context_director", None)
             if director is not None:
@@ -2729,33 +2839,104 @@ Return JSON:
         return random.choice(_banter_fallback_pools(config)), None
 
 
+async def repair_banter_without_listener_context(
+    state: StationState,
+    config: StationConfig,
+) -> list[DialogueLine] | None:
+    """Make one bounded, identity-free repair after a final truth violation.
+
+    This path intentionally does not load PersonaStore, listener-session state,
+    pending requests, or one-shot directives.  It is a pure replacement
+    exchange; the producer keeps no commit from the rejected first result.
+    """
+    if not has_script_llm(config):
+        return None
+
+    hosts = _regular_hosts(config)
+    fallback_host = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
+    host_names = {host.name.casefold(): host for host in hosts}
+    recent = [_sanitize_prompt_data(track.display) for track in list(state.played_tracks)[-2:]]
+    prompt = f"""Write a short two-host radio exchange in JSON.
+
+Recent music: {recent if recent else "the show opening"}
+Use only the station world, the music, and broad time-of-day context.
+Do not mention listeners, audience arrivals, tuning in, joining, returning,
+welcoming anyone back, or identifying who is listening. Aggregate phrases such
+as "we have company" are allowed only when they do not imply a new arrival.
+{language_mode_rule(config.super_italian_mode, config.station.language)}
+Every cut-off must be answered by a different host and the final line must be complete.
+Use clean spoken text only: no brackets, audio tags, SSML, stage directions, or sound effects.
+Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
+
+    try:
+        data = await _generate_json_response_with_language_guard(
+            prompt=prompt,
+            config=config,
+            state=state,
+            model=resolve_model(config.models, "banter", "anthropic"),
+            max_tokens=_BANTER_MAX_TOKENS,
+            caller="banter_listener_truth_repair",
+        )
+    except Exception:
+        logger.warning("Listener-truth banter repair failed", exc_info=True)
+        return None
+
+    raw_lines = data.get("lines")
+    if not isinstance(raw_lines, list):
+        return None
+    result: list[DialogueLine] = []
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, dict):
+            continue
+        text = raw_line.get("text")
+        if not isinstance(text, str):
+            continue
+        text = _strip_raw_delivery_directives(text)
+        if not text:
+            continue
+        host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
+        if _is_local_guest_host_name(host.name):
+            continue
+        result.append(DialogueLine(host, _fix_wrong_station_names(text, config.display_station_name)))
+
+    if not result:
+        return None
+    if not _normal_mode_language_ok([line.text for line in result], config):
+        return None
+    if not _banter_turn_taking_ok(result):
+        return None
+    if contains_unsafe_listener_claims(line.text for line in result):
+        return None
+    return result
+
+
 NEWS_FLASH_CATEGORIES = {
     "traffic": (
-        "Absurd Italian traffic bulletin. Invent a fresh, specific road incident every time: "
+        "Absurd traffic bulletin with Italian local color. Invent a fresh, specific road incident every time: "
         "unexpected vehicles, impossible detours, bureaucratic road signs, dramatic commuters, "
         "family-lunch indecision, scolding navigation systems, or municipal mishaps. "
         "Deliver it like a real traffic update — professional tone, insane content."
     ),
     "breaking": (
-        "Absurd Italian breaking news. Invent a new civic, culinary, political, or architectural scandal "
+        "Absurd breaking news with Italian local color. Invent a new civic, culinary, political, or architectural scandal "
         "with one concrete consequence and one offended group. Useful directions include food etiquette, "
         "domestic diplomacy, public hand gestures, or negotiations interrupted by table manners. "
         "Delivered with fake-serious urgency."
     ),
     "sports": (
-        "Fake Italian sports desk update delivered by a measured, informed radio host. "
+        "Fake sports-desk update with Italian local color, delivered by a measured, informed radio host. "
         "Invent fictional teams and players, but keep the scoreline followable and the analysis clear: "
         "who scored, what changed, and why the match matters. Everyday Italian athletic feats are fair game: "
         "staircases, grocery bags, family endurance, espresso-powered comebacks. Light dry wit is welcome; "
         "avoid meltdown commentary, all-caps hype, extended goal screams, and breathless incoherence."
     ),
     "weather": (
-        "Absurd Italian weather report. Invent a new impossible forecast with a clear location, "
+        "Absurd weather report with Italian local color. Invent a new impossible forecast with a clear location, "
         "a visible effect on daily life, and one practical-sounding warning. Lean into heat, gelato logic, "
         "coffee dependency, seaside optimism, or umbrella superstition. Professional meteorologist tone."
     ),
     "culture": (
-        "Absurd Italian culture bulletin. Invent a fresh arts, museum, cinema, church, fashion, or food-world "
+        "Absurd culture bulletin with Italian local color. Invent a fresh arts, museum, cinema, church, fashion, or food-world "
         "controversy with a specific institution and a ridiculous official response. Good directions include "
         "mothers treating appetite as medical evidence, family lunches that outlast the calendar, "
         "untranslatable gestures, or sacred arguments about pasta. "
@@ -2809,7 +2990,7 @@ def _callback_block(callback_gag: str | None) -> str:
 
 _NEWS_FLASH_FALLBACK = {
     "it": "Notizia dell'ultima ora: tutto a posto. Più o meno.",
-    "en": "And in breaking news: everything's fine. More or less.",
+    "en": "And in breaking news: everything's fine, amici. More or less.",
 }
 
 
@@ -2823,7 +3004,7 @@ def _localized_weather_arc(state: StationState, config: StationConfig) -> str:
     the English arc when a forecast exists and an empty string (no grounding,
     static fictional fallback) when it does not.
     """
-    if config.station.language == "it":
+    if _spoken_fallback_language(config) == "it":
         return state.ha_weather_arc
     return state.ha_weather_arc_en
 
@@ -2848,10 +3029,26 @@ def _transition_fallback_text(config: StationConfig, next_segment: str) -> str:
     return _transition_stock_copy(next_segment, super_italian=_spoken_fallback_language(config) == "it")
 
 
+def listener_truth_safe_transition_text(config: StationConfig, next_segment: str = "banter") -> str:
+    """Return deterministic transition copy safe for the final truth boundary."""
+    return _transition_fallback_text(config, next_segment)
+
+
 def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
     if _spoken_fallback_language(config) == "it":
         return f"{brand.name}. {brand.tagline or 'Perché te lo meriti.'}"
-    return f"{brand.name}. Because you deserve it."
+    return f"{brand.name}. Because you deserve it, amici."
+
+
+def _pharma_disclaimer_text(config: StationConfig) -> str:
+    """Return the legally styled fictional-pharma tail for the spoken mode."""
+    if _spoken_fallback_language(config) == "it":
+        return (
+            "È un medicinale a base di ibuprofene. Leggere attentamente "
+            "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
+            "Non somministrare ai bambini al di sotto dei 12 anni."
+        )
+    return "Medicine disclaimer, amici: read the leaflet; do not give to children under twelve."
 
 
 async def write_news_flash(
@@ -2860,7 +3057,7 @@ async def write_news_flash(
     category: str | None = None,
     callback_gag: str | None = None,
 ) -> tuple[HostPersonality, str, str]:
-    """Generate an absurd Italian news/traffic/sports flash bulletin.
+    """Generate an absurd news/traffic/sports flash bulletin with Italian station character.
 
     Returns (host, text, category) — the host delivers the flash solo.
 
@@ -2886,7 +3083,7 @@ async def write_news_flash(
     weather_arc = _localized_weather_arc(state, config)
     if category == "weather" and weather_arc.strip():
         real_weather = _sanitize_prompt_data(weather_arc, max_len=200)
-        home_mood = state.ha_home_mood if config.station.language == "it" else state.ha_home_mood_en
+        home_mood = state.ha_home_mood if _spoken_fallback_language(config) == "it" else state.ha_home_mood_en
         mood_line = ""
         if home_mood:
             mood_line = "\nHome mood: " + _sanitize_prompt_data(home_mood, max_len=120)
@@ -2922,7 +3119,7 @@ RULES:
 - 2-4 sentences MAX. Punchy, clear, and delivered with total conviction.
 - For sports: sound like an informed radio sports desk. Keep the update measured and followable.
 - For sports: no all-caps hype, no extended goal screams, no crescendo-meltdown delivery.
-- Must feel like a real Italian radio news flash interrupting the programming.
+- Must feel like a real radio news flash with Italian station character, interrupting the programming.
 - {language_mode_rule(config.super_italian_mode, config.station.language)}
 
 Return JSON:
@@ -2941,10 +3138,15 @@ Return JSON:
         text = sanitize_spoken_station_name(
             data.get("text") or _news_flash_fallback(config), config.display_station_name
         )
+        callback_landed = bool(data.get("callback_used"))
+        if not _normal_mode_language_ok([text], config):
+            logger.warning("News flash failed final Normal Mode language check; using stock copy")
+            text = _news_flash_fallback(config)
+            callback_landed = False
         if callback_gag:
             # Model-reported: did it actually land the cross-domain gag? The
             # producer retires the gag only when this is true (queue-time != used).
-            state.pending_callback_landed = bool(data.get("callback_used"))
+            state.pending_callback_landed = callback_landed
         logger.info("Generated %s flash: %d chars", category, len(text))
         return (host, text, category)
 
@@ -3065,9 +3267,17 @@ Return JSON:
         if not isinstance(raw_text, str) or not _transition_text_usable(raw_text):
             logger.warning("Transition response was unusable; using deterministic stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
-        text = _massage_transition_text(raw_text, next_segment, recent_texts)
+        text = _massage_transition_text(
+            raw_text,
+            next_segment,
+            recent_texts,
+            super_italian=_spoken_fallback_language(config) == "it",
+        )
         if not _transition_text_usable(text):
             logger.warning("Massaged transition response was unusable; using deterministic stock copy")
+            return (host, _transition_fallback_text(config, next_segment), None)
+        if not _normal_mode_language_ok([text], config):
+            logger.warning("Massaged transition failed final Normal Mode language check; using stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
         return (host, text, played_track_ref)
@@ -3198,7 +3408,7 @@ Recently played music: {recent_tracks if recent_tracks else "show just started"}
 
 RULES:
 - Absurd but delivered with COMPLETE sincerity. The product may be insane but the pitch is 100% professional.
-- Think Italian TV shopping channel meets GTA radio meets a faded political showman's fever dream.
+- Think late-night TV shopping meets GTA radio meets a faded political showman's fever dream, with Italian station character.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 {direct_spokesperson_rule}
@@ -3233,13 +3443,13 @@ Return JSON:
             max_tokens=800,
             caller="ad",
             role="ad_spot",
+            required_role=direct_primary_role,
             spot_index=spot_index,
         )
 
-        if callback_gag:
-            # Model-reported: did the ad land the cross-domain gag? Producer
-            # retires only when true (queue-time != used).
-            state.pending_callback_landed = bool(data.get("callback_used"))
+        # Model-reported callback usage is only eligible for retirement if the
+        # exact generated copy survives all structural and language repairs.
+        callback_landed = bool(data.get("callback_used"))
 
         parts = []
         for p in data.get("parts", []):
@@ -3258,6 +3468,7 @@ Return JSON:
         used_owned_fallback = False
         if not any(p.type == "voice" for p in parts):
             parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+            used_owned_fallback = True
         if direct_primary_role and not any(
             part.type == "voice"
             and part.role == direct_primary_role
@@ -3311,14 +3522,28 @@ Return JSON:
             parts.append(
                 AdPart(
                     type="voice",
-                    text=(
-                        "È un medicinale a base di ibuprofene. Leggere attentamente "
-                        "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
-                        "Non somministrare ai bambini al di sotto dei 12 anni."
-                    ),
+                    text=_pharma_disclaimer_text(config),
                     role="disclaimer_goblin",
                 )
             )
+
+        voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
+        if not _normal_mode_language_ok(voice_texts, config):
+            logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
+            fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
+            if brand.category == "pharma":
+                fallback_parts.append(
+                    AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
+                )
+            parts = fallback_parts
+            actual_format = AdFormat.CLASSIC_PITCH
+            roles_found = {p.role for p in parts if p.type == "voice" and p.role}
+            used_owned_fallback = True
+
+        if callback_gag:
+            # A structural or language fallback did not speak the model's
+            # callback, so do not retire the pending offer as if it aired.
+            state.pending_callback_landed = callback_landed and not used_owned_fallback
 
         return AdScript(
             brand=brand.name,

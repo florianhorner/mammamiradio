@@ -14,12 +14,18 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
   `emergency_tone.mp3` is the required 2-second cold-cache/no-clip final rung.
   Keep both under this package tree so they are available without rendering in
   standalone and Home Assistant add-on builds.
-- `welcome/` — placeholder for onboarding clips (currently a README stub).
-- `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder.
+- `spoken_assets.json` — reviewed transcript, language, role, and SHA-256 for
+  every MP3 inventoried under recovery/banter. Missing, changed,
+  unlisted, or listener-unsafe speech fails closed. Runtime may admit approved
+  recovery and neutral banter speech; welcome discovery stays disabled.
+- `welcome/` — historical generator documentation only. The runtime no longer
+  discovers welcome or unmanifested banter clips from directory contents.
+- `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder. Any future packaged banter must also be declared in `spoken_assets.json` before runtime can use it.
 
 ## Generation
 
-Welcome clips have a generator: `scripts/generate_welcome_clips.py` renders the fixed welcome-clip contract through the existing TTS pipeline (free Edge engine by default — no API key). Run it, listen, and commit the MP3s if they sound right.
+The historical welcome-clip generator now emits neutral station-continuity
+lines for local review only. Its output is not runtime-discoverable.
 
 The `banter/`, `ads/`, `music/`, and `jingles/` directories stay empty pending the demo-asset contract decision (see the 2026-04-16 documentation audit in `docs/`). If and when we ship a generator for those, it will likewise route through the existing TTS pipeline.
 

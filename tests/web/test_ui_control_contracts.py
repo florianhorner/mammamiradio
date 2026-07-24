@@ -210,7 +210,7 @@ class TestSkipEndpoint:
         assert app.state.station_state.force_next is SegmentType.MUSIC
 
     @pytest.mark.asyncio
-    async def test_skip_does_not_purge_queue(self):
+    async def test_skip_does_not_purge_playable_queue(self, tmp_path):
         """Skip only interrupts the current segment; queued segments survive."""
         shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]
         app = _make_app(
@@ -218,6 +218,9 @@ class TestSkipEndpoint:
             shadow=shadow,
             queue_items=1,
         )
+        queued_path = tmp_path / "next-up.mp3"
+        queued_path.write_bytes(b"playable")
+        app.state.queue._queue[0].path = queued_path
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
@@ -470,7 +473,8 @@ class TestBanNowPlayingEndpoint:
         key_handler = _admin_function_block("handleDirectionKey")
         assert 'id="directionInput"' in html
         assert 'aria-label="Direction"' in html
-        assert 'class="btn btn-util btn-direction"' in html
+        assert 'class="btn btn-trigger record-hunt-button btn-direction"' in html
+        assert "Hunt records" in html
         assert "font-size: 16px" in html
         assert "min-height: 44px" in html
         assert "let _directionPending=false" in html
@@ -478,6 +482,7 @@ class TestBanNowPlayingEndpoint:
         assert "input.disabled=true" in handler
         assert "el.disabled=true" in handler
         assert "aria-busy" in handler
+        assert "el.textContent='Hunt records'" in handler
         assert "event.repeat" in key_handler
         assert "event.isComposing" in key_handler
 
@@ -1041,7 +1046,36 @@ class TestSourceControlVisibilityContract:
         assert "function sourceControlVisibility(caps)" in html
         assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html
+        assert 'id="libraryTools"' in html
+        tools = html[html.index('id="libraryTools"') : html.index("<!-- Diretta zone -->")]
+        assert 'id="sourceJamendoBtn"' in tools
+        assert 'id="sourceChartsBtn"' in tools
+        assert "sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload" in html
         assert "jamendoSourceAvailable" not in html
+
+    @pytest.mark.asyncio
+    async def test_empty_pool_recovery_keeps_capability_truth_independent_from_setup_status(self):
+        app = _make_app()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/admin", headers=AUTH)
+
+        html = resp.text
+        recovery = html[html.index("function emptyPoolRecoveryState") : html.index("function updateSourceControls")]
+        refresh_slow = html[html.index("async function fetchSlowJson") : html.index("async function refresh()")]
+
+        assert "_caps=null, _capsState='checking'" in html
+        assert "Checking available music sources" in recovery
+        assert "Could not check available music sources" in recovery
+        assert "goldenPath.stage==='needs_music_source'" in recovery
+        assert "goldenPath.detail" in recovery
+        assert "No import source is available" in recovery
+        assert "fetchSlowJson('/api/capabilities')" in refresh_slow
+        assert "fetchSlowJson('/api/setup/status')" in refresh_slow
+        assert "const capabilitiesPromise" in refresh_slow
+        assert "const setupPromise" in refresh_slow
+        assert "if(_caps===null){\n        _capsState='error';" in refresh_slow
+        assert "await Promise.all([capabilitiesPromise,setupPromise]);" in refresh_slow
 
 
 # ---------------------------------------------------------------------------
@@ -1510,6 +1544,8 @@ class TestStoppedStateQuietsTheUI:
             r'setup-strip-action" data-stopped-exempt',
             r'ha-preview-action" data-stopped-exempt',
             r'btn btn-util" data-stopped-exempt style="font-size:0\.8em[^>]*clearArchivioFilters',
+            r'<button\b(?=[^>]*\bid="emptyPoolLibraryBtn")(?=[^>]*\bdata-stopped-exempt\b)(?=[^>]*\bonclick="openLibraryTools\(\)")[^>]*>',
+            r'<button\b(?=[^>]*\bid="emptyPoolSetupBtn")(?=[^>]*\bdata-stopped-exempt\b)(?=[^>]*\bonclick="openSetupPanel\(\)")[^>]*>',
         ):
             assert re.search(pattern, html), f"missing stopped-state exemption: {pattern}"
 

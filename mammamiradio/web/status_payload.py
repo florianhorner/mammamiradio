@@ -418,8 +418,14 @@ def _track_preference_score(track: Track, preferences: object) -> int:
     return preference_score(preferences, normalized_track_key(track))
 
 
+def _admin_track_id(track: Track) -> str:
+    """Return the opaque row token used by Admin playlist mutations."""
+    return str(track.spotify_id or "").strip() or track.cache_key
+
+
 def _serialize_track(track: Track, *, preferences: object | None = None) -> dict:
     payload = {
+        "id": _admin_track_id(track),
         "title": track.title,
         "artist": track.artist,
         "display": track.display,
@@ -486,6 +492,11 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "home_fact_fingerprint",
         "home_fact_entity_id",
         "home_fact_policy_revision",
+        "home_return_fact_id",
+        # Listener-session lifecycle metadata is an internal delivery fence.
+        # Public status keeps its pre-feature segment schema unchanged.
+        "listener_session_epoch",
+        "listener_session_cue",
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",

@@ -18,9 +18,9 @@ REGENERATED_MP3_BYTES = b"regenerated" * 128
 def _loud_by_default(monkeypatch):
     """Treat every rendered clip as real speech by default.
 
-    The generator probes each output's peak level to reject the TTS silence
-    fallback; stubbing it keeps the generation tests off ffmpeg/volumedetect.
-    The silence test overrides this with a floor-level reading.
+    The generator probes each output's peak level to reject unexpectedly silent
+    audio; stubbing it keeps the generation tests off ffmpeg/volumedetect. The
+    defense-in-depth test overrides this with a floor-level reading.
     """
     monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-18.0, -3.0))
     monkeypatch.setattr(gen, "_probe_duration_sec", lambda _path: 2.0)
@@ -56,11 +56,7 @@ def configured_clips() -> tuple[gen.WelcomeClip, ...]:
 
 
 def test_welcome_clip_contract_is_italian_and_well_formed() -> None:
-    """The contract must stay non-empty, .mp3-named, and free of empty text/host.
-
-    The runtime globs welcome/*.mp3, so a clip with a non-mp3 name or blank text
-    would silently never air. This guards the shape the generator promises.
-    """
+    """The local-review contract stays non-empty, mp3-named, and complete."""
     assert gen.WELCOME_CLIPS, "welcome clip contract must not be empty"
     names = [clip.filename for clip in gen.WELCOME_CLIPS]
     assert len(names) == len(set(names)), "welcome clip filenames must be unique"
@@ -185,13 +181,11 @@ async def test_overwrite_failure_preserves_existing_clip(tmp_path, monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatch, configured_clips) -> None:
-    """No partial or raw render may surface under the runtime-globbed clip dir.
+    """No partial or raw render may surface in the top-level review inventory.
 
-    The playback loop serves any ``*.mp3`` directly under welcome/ (Path.glob
-    matches dotfiles too), and the real ``synthesize`` writes a sibling
-    ``.raw.mp3`` next to its target. Both must stay in the staging subdir, so an
-    interrupted generation can never leave a servable partial/un-normalized clip
-    where the station would pick it up.
+    The real ``synthesize`` writes a sibling ``.raw.mp3`` next to its target.
+    Both intermediates stay in the staging subdirectory so a future explicit
+    manifest review can never mistake a partial render for a published clip.
     """
     mid_run_globs: list[list[str]] = []
 
@@ -200,7 +194,7 @@ async def test_intermediates_never_land_in_globbed_clip_dir(tmp_path, monkeypatc
         raw = output_path.with_suffix(".raw.mp3")
         raw.write_bytes(FAKE_MP3_BYTES)
         output_path.write_bytes(FAKE_MP3_BYTES)
-        # Capture what the runtime glob would see while a render is in flight.
+        # Capture what a top-level publication scan sees while rendering.
         mid_run_globs.append([p.name for p in tmp_path.glob("*.mp3")])
         raw.unlink(missing_ok=True)
         return output_path
@@ -304,26 +298,22 @@ async def test_generate_clips_one_failure_does_not_abort_batch(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_generate_clips_rejects_silent_tts_fallback(tmp_path, monkeypatch, configured_clips) -> None:
-    """synthesize() returns silence (not an error) when the voice backend is down.
-
-    The generator must treat that as a failure and discard the file, so an
-    operator never commits a silent welcome greeting.
-    """
+async def test_generate_clips_rejects_effectively_silent_render(tmp_path, monkeypatch, configured_clips) -> None:
+    """An unexpectedly silent render is rejected even if synthesis returned it."""
 
     async def fake_synthesize(text, voice, output_path, *, engine="edge", **kwargs):
         output_path.write_bytes(FAKE_MP3_BYTES)
         return output_path
 
     monkeypatch.setattr(gen.tts_module, "synthesize", fake_synthesize)
-    # Simulate the silence fallback: every rendered file measures near the floor.
+    # Simulate a malformed silent artifact: every file measures near the floor.
     monkeypatch.setattr(gen, "_probe_volume", lambda _path: (-91.0, -91.0))
 
     results = await gen.generate_clips(configured_clips, tmp_path)
 
     assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
-    assert all("silence" in r.error for r in results)
+    assert all("silent" in r.error for r in results)
     # Silent files are discarded, not left on disk for an operator to commit.
     assert list(tmp_path.iterdir()) == []
 
@@ -401,7 +391,7 @@ async def test_silent_clip_cleanup_failure_is_recorded_not_raised(tmp_path, monk
 
     assert len(results) == len(configured_clips)
     assert all(r.status == gen.STATUS_FAILED for r in results)
-    assert all("silence" in r.error for r in results)
+    assert all("silent" in r.error for r in results)
     assert all("could not delete" in r.error for r in results)
 
 

@@ -18,7 +18,7 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +40,8 @@ DEFAULT_CONFIG_PATH = REPO_ROOT / "radio.toml"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "tmp" / "voice-auditions"
 SELECTION_RECEIPT_PATH = REPO_ROOT / "proof" / "2026-07-13-voice-diversity-selection.json"
 SELECTION_RECEIPT_SCHEMA_VERSION = 1
+HOST_PERFORMANCE_RECEIPT_PATH = REPO_ROOT / "proof" / "2026-07-16-v3-host-performance.json"
+HOST_PERFORMANCE_RECEIPT_SCHEMA_VERSION = 1
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -70,6 +72,15 @@ DEFAULT_SAMPLE_TEXT = (
     "Mamma Mi Radio, prova microfono. Questa e una voce italiana per annunci, "
     "sweepers e personaggi in onda. Dimmi se ha carattere, calore e presenza."
 )
+DEFAULT_V3_HOST_PERFORMANCE_TEXT = "La prossima canzone arriva proprio quando serve: non fate domande, fate spazio."
+
+ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
+ELEVENLABS_V3_MODEL = "eleven_v3"
+NEUTRAL_DELIVERY_CUE = "neutral"
+V3_DELIVERY_CUES_BY_PROFILE: dict[str, tuple[str, ...]] = {
+    "marco": ("energetic", "curious", "playful"),
+    "giulia": ("dry", "curious", "playful"),
+}
 
 
 @dataclass
@@ -85,6 +96,9 @@ class VoiceAuditionTarget:
     pitch: str | None = None
     openai_instructions: str = ""
     voice_settings: dict | None = None
+    elevenlabs_model: str = ELEVENLABS_V2_MODEL
+    delivery_profile: str = "none"
+    delivery_cue: str = NEUTRAL_DELIVERY_CUE
 
 
 @dataclass
@@ -105,10 +119,44 @@ class VoiceAuditionResult:
     profile: dict | None = None
     audio_sha256: str | None = None
     audio_duration_seconds: float | None = None
+    # V3 performance receipts distinguish canonical spoken text from the
+    # provider-only rendered payload. Keep the historic text_sha256 field for
+    # the existing V2 selection receipt contract.
+    clean_text_sha256: str = ""
+    rendered_text_sha256: str = ""
+    elevenlabs_model: str = ELEVENLABS_V2_MODEL
+    delivery_profile: str = "none"
+    delivery_cue: str = NEUTRAL_DELIVERY_CUE
 
 
 def _text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _rendered_text_for_target(target: VoiceAuditionTarget) -> str:
+    """Return the provider payload text without contaminating canonical copy.
+
+    Production owns the actual V3 rendering at the TTS request boundary. The
+    audition reuses that boundary's resolver only to hash the rendered payload
+    without retaining either string. Invalid cue/model combinations are
+    rejected instead of being silently rendered as speech.
+    """
+    if target.provider != "elevenlabs" or target.elevenlabs_model != ELEVENLABS_V3_MODEL:
+        return target.text
+    if target.delivery_cue == NEUTRAL_DELIVERY_CUE:
+        return target.text
+    tag, resolved_cue = tts_module._resolve_elevenlabs_v3_delivery_tag(
+        target.delivery_cue,
+        target.delivery_profile,
+    )
+    if resolved_cue != target.delivery_cue or not tag:
+        raise ValueError(f"delivery cue {target.delivery_cue!r} is not allowed for profile {target.delivery_profile!r}")
+    return f"{tag} {target.text}"
+
+
+def _audition_text_hashes(target: VoiceAuditionTarget) -> tuple[str, str]:
+    clean_text_sha256 = _text_sha256(target.text)
+    return clean_text_sha256, _text_sha256(_rendered_text_for_target(target))
 
 
 def _selection_profile_for_target(target: VoiceAuditionTarget) -> dict[str, object]:
@@ -119,8 +167,19 @@ def _selection_profile_for_target(target: VoiceAuditionTarget) -> dict[str, obje
     claiming a profile different from the audition payload.
     """
     if target.provider == "elevenlabs":
-        voice_settings = tts_module._resolve_elevenlabs_v2_voice_settings(target.voice_settings)
-        return {"engine": target.provider, "model": "eleven_multilingual_v2", "voice_settings": voice_settings}
+        if target.elevenlabs_model == ELEVENLABS_V2_MODEL:
+            voice_settings = tts_module._resolve_elevenlabs_v2_voice_settings(target.voice_settings)
+        elif target.elevenlabs_model == ELEVENLABS_V3_MODEL:
+            unsupported = set(target.voice_settings or {}) - {"stability"}
+            if unsupported:
+                raise ValueError(
+                    "ElevenLabs V3 auditions only support stability; unsupported settings: "
+                    + ", ".join(sorted(unsupported))
+                )
+            voice_settings = dict(target.voice_settings or {})
+        else:
+            raise ValueError(f"Unsupported ElevenLabs audition model: {target.elevenlabs_model}")
+        return {"engine": target.provider, "model": target.elevenlabs_model, "voice_settings": voice_settings}
     models = {
         "edge": "edge_read_aloud",
         "openai": "openai_tts",
@@ -237,8 +296,22 @@ def _voice_settings_key(voice_settings: Mapping[str, object] | None) -> str:
     return json.dumps(dict(voice_settings), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _add_target(targets: dict[tuple[str, str, str], VoiceAuditionTarget], target: VoiceAuditionTarget) -> None:
-    key = (target.provider, target.voice, _voice_settings_key(target.voice_settings))
+def _target_key(target: VoiceAuditionTarget) -> tuple[str, str, str, str, str, str]:
+    """Keep model/cue variants distinct even when they share a voice ID."""
+    return (
+        target.provider,
+        target.voice,
+        _voice_settings_key(target.voice_settings),
+        target.elevenlabs_model,
+        target.delivery_profile,
+        target.delivery_cue,
+    )
+
+
+def _add_target(
+    targets: dict[tuple[str, str, str, str, str, str], VoiceAuditionTarget], target: VoiceAuditionTarget
+) -> None:
+    key = _target_key(target)
     existing = targets.get(key)
     if existing is None:
         targets[key] = target
@@ -265,7 +338,7 @@ def collect_configured_targets(
     *,
     sample_text: str = DEFAULT_SAMPLE_TEXT,
 ) -> list[VoiceAuditionTarget]:
-    targets: dict[tuple[str, str, str], VoiceAuditionTarget] = {}
+    targets: dict[tuple[str, str, str, str, str, str], VoiceAuditionTarget] = {}
 
     for host in config.hosts:
         provider = _canonical_provider(host.engine or "edge")
@@ -283,6 +356,8 @@ def collect_configured_targets(
                 rate=prosody.get("rate"),
                 pitch=prosody.get("pitch"),
                 openai_instructions=_openai_instructions_for_host(host),
+                elevenlabs_model=getattr(host, "elevenlabs_model", ELEVENLABS_V2_MODEL),
+                delivery_profile=getattr(host, "delivery_profile", "none"),
             ),
         )
 
@@ -322,6 +397,80 @@ def collect_configured_targets(
         )
 
     return list(targets.values())
+
+
+def build_v3_host_performance_targets(
+    config: StationConfig,
+    *,
+    sample_text: str = DEFAULT_V3_HOST_PERFORMANCE_TEXT,
+) -> list[VoiceAuditionTarget]:
+    """Build the reproducible V2/V3 comparison matrix for Marco and Giulia.
+
+    This is intentionally narrower than normal casting: it renders only
+    configured ElevenLabs hosts whose profiles authorize the V3 cue vocabulary.
+    Every row for one host uses the same clean text; only model/cue changes.
+    """
+    targets: list[VoiceAuditionTarget] = []
+    for host in config.hosts:
+        profile = host.delivery_profile
+        if _canonical_provider(host.engine or "edge") != "elevenlabs":
+            continue
+        if profile not in V3_DELIVERY_CUES_BY_PROFILE:
+            continue
+
+        label_prefix = f"host-{_slug(host.name)}"
+
+        def make_target(
+            label: str,
+            model: str,
+            delivery_cue: str,
+            *,
+            voice: str = host.voice,
+            host_name: str = host.name,
+            edge_fallback_voice: str = host.edge_fallback_voice,
+            voice_settings: Mapping[str, object] | None = None,
+            delivery_profile: str = profile,
+        ) -> VoiceAuditionTarget:
+            return VoiceAuditionTarget(
+                provider="elevenlabs",
+                voice=voice,
+                label=label,
+                source="v3-host-performance",
+                used_by=(f"host:{host_name}", f"v3_performance:{delivery_profile}"),
+                text=sample_text,
+                edge_fallback_voice=edge_fallback_voice,
+                voice_settings=dict(voice_settings or {}) or None,
+                elevenlabs_model=model,
+                delivery_profile=delivery_profile,
+                delivery_cue=delivery_cue,
+            )
+
+        targets.append(
+            make_target(
+                f"{label_prefix}-v2-clean",
+                ELEVENLABS_V2_MODEL,
+                NEUTRAL_DELIVERY_CUE,
+                voice_settings=host.voice_settings,
+            )
+        )
+        targets.append(
+            make_target(
+                f"{label_prefix}-v3-clean",
+                ELEVENLABS_V3_MODEL,
+                NEUTRAL_DELIVERY_CUE,
+                voice_settings=host.voice_settings,
+            )
+        )
+        for delivery_cue in V3_DELIVERY_CUES_BY_PROFILE[profile]:
+            targets.append(
+                make_target(
+                    f"{label_prefix}-v3-{delivery_cue}",
+                    ELEVENLABS_V3_MODEL,
+                    delivery_cue,
+                    voice_settings=host.voice_settings,
+                )
+            )
+    return targets
 
 
 def collect_catalog_targets(*, sample_text: str = DEFAULT_SAMPLE_TEXT) -> list[VoiceAuditionTarget]:
@@ -373,7 +522,7 @@ def build_audition_targets(
     sample_text: str = DEFAULT_SAMPLE_TEXT,
 ) -> list[VoiceAuditionTarget]:
     provider_set = set(providers)
-    merged: dict[tuple[str, str, str], VoiceAuditionTarget] = {}
+    merged: dict[tuple[str, str, str, str, str, str], VoiceAuditionTarget] = {}
     candidates: list[VoiceAuditionTarget] = []
     if include_configured:
         candidates.extend(collect_configured_targets(config, sample_text=sample_text))
@@ -445,7 +594,13 @@ async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> 
         )
     if target.provider == "elevenlabs":
         return await tts_module.synthesize_elevenlabs(
-            target.text, target.voice, output_path, voice_settings=target.voice_settings
+            target.text,
+            target.voice,
+            output_path,
+            voice_settings=target.voice_settings,
+            elevenlabs_model=target.elevenlabs_model,
+            delivery_cue=target.delivery_cue,
+            delivery_profile=target.delivery_profile,
         )
     return await tts_module.synthesize(
         target.text,
@@ -455,6 +610,41 @@ async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> 
         pitch=target.pitch,
         engine="edge",
         edge_fallback_voice=target.edge_fallback_voice,
+    )
+
+
+def _result_for_target(
+    target: VoiceAuditionTarget,
+    *,
+    status: str,
+    output_path: str = "",
+    missing_env: tuple[str, ...] = (),
+    error: str = "",
+    audio_sha256: str | None = None,
+    audio_duration_seconds: float | None = None,
+) -> VoiceAuditionResult:
+    clean_text_sha256, rendered_text_sha256 = _audition_text_hashes(target)
+    return VoiceAuditionResult(
+        provider=target.provider,
+        voice=target.voice,
+        label=target.label,
+        source=target.source,
+        used_by=target.used_by,
+        status=status,
+        output_path=output_path,
+        missing_env=missing_env,
+        error=error,
+        voice_settings=target.voice_settings,
+        # Keep the legacy V2 receipt's field stable: it is the clean text hash.
+        text_sha256=clean_text_sha256,
+        profile=_selection_profile_for_target(target),
+        audio_sha256=audio_sha256,
+        audio_duration_seconds=audio_duration_seconds,
+        clean_text_sha256=clean_text_sha256,
+        rendered_text_sha256=rendered_text_sha256,
+        elevenlabs_model=target.elevenlabs_model,
+        delivery_profile=target.delivery_profile,
+        delivery_cue=target.delivery_cue,
     )
 
 
@@ -475,40 +665,34 @@ async def run_auditions(
         if dry_run:
             status = STATUS_PLANNED if not missing_env else STATUS_SKIPPED
             results.append(
-                VoiceAuditionResult(
-                    provider=target.provider,
-                    voice=target.voice,
-                    label=target.label,
-                    source=target.source,
-                    used_by=target.used_by,
+                _result_for_target(
+                    target,
                     status=status,
                     missing_env=missing_env,
                     error="missing provider credentials" if missing_env else "",
-                    voice_settings=target.voice_settings,
-                    text_sha256=_text_sha256(target.text),
-                    profile=_selection_profile_for_target(target),
                 )
             )
             continue
 
         stability = target.voice_settings.get("stability") if target.voice_settings else None
         stab_suffix = f"-stab{round(stability * 100):02d}" if stability is not None else ""
-        output_path = run_dir / f"{index:02d}-{target.provider}-{_slug(target.voice)}{stab_suffix}.mp3"
+        model_suffix = f"-{_slug(target.elevenlabs_model)}" if target.provider == "elevenlabs" else ""
+        cue_suffix = (
+            f"-{_slug(target.delivery_cue)}"
+            if target.provider == "elevenlabs" and target.delivery_cue != NEUTRAL_DELIVERY_CUE
+            else ""
+        )
+        output_path = run_dir / (
+            f"{index:02d}-{target.provider}-{_slug(target.voice)}{model_suffix}{cue_suffix}{stab_suffix}.mp3"
+        )
         if missing_env:
             results.append(
-                VoiceAuditionResult(
-                    provider=target.provider,
-                    voice=target.voice,
-                    label=target.label,
-                    source=target.source,
-                    used_by=target.used_by,
+                _result_for_target(
+                    target,
                     status=STATUS_FAILED if strict else STATUS_SKIPPED,
                     output_path=str(output_path),
                     missing_env=missing_env,
                     error="missing provider credentials",
-                    voice_settings=target.voice_settings,
-                    text_sha256=_text_sha256(target.text),
-                    profile=_selection_profile_for_target(target),
                 )
             )
             continue
@@ -517,34 +701,20 @@ async def run_auditions(
             rendered_path = await _synthesize_target(target, output_path)
         except Exception as exc:
             results.append(
-                VoiceAuditionResult(
-                    provider=target.provider,
-                    voice=target.voice,
-                    label=target.label,
-                    source=target.source,
-                    used_by=target.used_by,
+                _result_for_target(
+                    target,
                     status=STATUS_FAILED,
                     output_path=str(output_path),
                     error=f"{type(exc).__name__}: {exc}",
-                    voice_settings=target.voice_settings,
-                    text_sha256=_text_sha256(target.text),
-                    profile=_selection_profile_for_target(target),
                 )
             )
         else:
             audio_sha256, audio_duration_seconds = _generated_audio_evidence(rendered_path)
             results.append(
-                VoiceAuditionResult(
-                    provider=target.provider,
-                    voice=target.voice,
-                    label=target.label,
-                    source=target.source,
-                    used_by=target.used_by,
+                _result_for_target(
+                    target,
                     status=STATUS_GENERATED,
                     output_path=str(rendered_path),
-                    voice_settings=target.voice_settings,
-                    text_sha256=_text_sha256(target.text),
-                    profile=_selection_profile_for_target(target),
                     audio_sha256=audio_sha256,
                     audio_duration_seconds=audio_duration_seconds,
                 )
@@ -656,6 +826,16 @@ def _manifest_result(result: VoiceAuditionResult) -> dict[str, object]:
     payload = asdict(result)
     if result.profile is not None:
         payload["candidate_id"] = _selection_candidate_id(result.provider, result.voice, result.profile)
+    if result.source == "v3-host-performance":
+        payload["performance_id"] = _host_performance_id(
+            result.provider,
+            result.voice,
+            result.elevenlabs_model,
+            result.delivery_profile,
+            result.delivery_cue,
+            result.clean_text_sha256,
+            result.rendered_text_sha256,
+        )
     return payload
 
 
@@ -726,7 +906,7 @@ def _validate_selection_profile(value: object) -> None:
             if type(setting_value) is not bool:
                 raise ValueError("candidate.profile.voice_settings.use_speaker_boost must be a boolean")
             continue
-        if isinstance(setting_value, bool) or not isinstance(setting_value, (int, float)):
+        if isinstance(setting_value, bool) or not isinstance(setting_value, int | float):
             raise ValueError(f"candidate.profile.voice_settings.{setting} must be a finite number")
         numeric_setting = float(setting_value)
         if not math.isfinite(numeric_setting):
@@ -780,7 +960,7 @@ def _validate_selection_entry(value: object, index: int) -> str:
     duration = entry["audio_duration_seconds"]
     invalid_duration = False
     if duration is not None:
-        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        if isinstance(duration, bool) or not isinstance(duration, int | float):
             invalid_duration = True
         else:
             invalid_duration = not math.isfinite(float(duration)) or duration <= 0
@@ -986,6 +1166,391 @@ def write_selection_receipt_from_manifest(
     return _commit_selection_receipt(receipt, path=path, overwrite=overwrite)
 
 
+_HOST_PERFORMANCE_RECEIPT_TOP_LEVEL_FIELDS = frozenset({"schema_version", "performances"})
+_HOST_PERFORMANCE_RECEIPT_ENTRY_FIELDS = frozenset(
+    {
+        "performance_id",
+        "host",
+        "voice_id",
+        "model",
+        "delivery_profile",
+        "delivery_cue",
+        "clean_text_sha256",
+        "rendered_text_sha256",
+        "provider_result",
+        "audio_sha256",
+        "audio_duration_seconds",
+        "human_disposition",
+        "rationale",
+    }
+)
+_HOST_PERFORMANCE_DECISION_FIELDS = frozenset({"performance_id", "host", "human_disposition", "rationale"})
+_HOST_PERFORMANCE_ACCEPTED_RATIONALES = frozenset(
+    {
+        "accepted_clear_natural_delivery",
+        "accepted_distinct_character",
+        "accepted_v3_tonal_fit",
+    }
+)
+_HOST_PERFORMANCE_REJECTED_RATIONALES = frozenset(
+    {
+        "rejected_provider_failure",
+        "rejected_unintelligible_delivery",
+        "rejected_unconvincing_character",
+        "rejected_off_brand_delivery",
+        "rejected_tag_spoken",
+        "rejected_audio_artifacts",
+    }
+)
+_HOST_PERFORMANCE_DISPOSITIONS = frozenset({"accepted", "rejected"})
+
+
+def _host_performance_id(
+    provider: object,
+    voice_id: object,
+    model: object,
+    delivery_profile: object,
+    delivery_cue: object,
+    clean_text_sha256: object,
+    rendered_text_sha256: object,
+) -> str:
+    """Return an opaque identity for one exact V2/V3 host-performance render."""
+    if provider != "elevenlabs":
+        raise ValueError("host performance provider must be elevenlabs")
+    if not isinstance(voice_id, str) or not CANDIDATE_ID_RE.fullmatch(voice_id):
+        raise ValueError("host performance voice_id must be a safe voice identifier")
+    if model not in {ELEVENLABS_V2_MODEL, ELEVENLABS_V3_MODEL}:
+        raise ValueError("host performance model must be an allowed ElevenLabs V2 or V3 model")
+    if not isinstance(delivery_profile, str) or delivery_profile not in V3_DELIVERY_CUES_BY_PROFILE:
+        raise ValueError("host performance delivery_profile is invalid")
+    if not isinstance(delivery_cue, str):
+        raise ValueError("host performance delivery_cue must be a string")
+    _sha256(clean_text_sha256, "host performance clean_text_sha256")
+    _sha256(rendered_text_sha256, "host performance rendered_text_sha256")
+    canonical = json.dumps(
+        {
+            "provider": provider,
+            "voice_id": voice_id,
+            "model": model,
+            "delivery_profile": delivery_profile,
+            "delivery_cue": delivery_cue,
+            "clean_text_sha256": clean_text_sha256,
+            "rendered_text_sha256": rendered_text_sha256,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"performance-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _validate_host_performance_rationale(
+    value: object,
+    field: str,
+    *,
+    human_disposition: object,
+) -> str:
+    allowed = (
+        _HOST_PERFORMANCE_ACCEPTED_RATIONALES
+        if human_disposition == "accepted"
+        else _HOST_PERFORMANCE_REJECTED_RATIONALES
+        if human_disposition == "rejected"
+        else frozenset()
+    )
+    if value not in allowed:
+        raise ValueError(f"{field} must be a controlled rationale code")
+    return str(value)
+
+
+def _validate_host_performance_entry(value: object, index: int) -> dict[str, object]:
+    entry = _receipt_mapping(value, f"performances[{index}]")
+    _receipt_exact_fields(entry, _HOST_PERFORMANCE_RECEIPT_ENTRY_FIELDS, f"performances[{index}]")
+    missing = sorted(_HOST_PERFORMANCE_RECEIPT_ENTRY_FIELDS - set(entry))
+    if missing:
+        raise ValueError(f"performances[{index}] is missing fields: {', '.join(missing)}")
+
+    host = _safe_receipt_note(entry["host"], f"performances[{index}].host", max_length=100)
+    delivery_profile = entry["delivery_profile"]
+    if not isinstance(delivery_profile, str) or delivery_profile not in V3_DELIVERY_CUES_BY_PROFILE:
+        raise ValueError(f"performances[{index}].delivery_profile is invalid")
+    if host.casefold() != delivery_profile:
+        raise ValueError(f"performances[{index}].host must match its delivery_profile")
+
+    voice_id = entry["voice_id"]
+    if not isinstance(voice_id, str) or not CANDIDATE_ID_RE.fullmatch(voice_id):
+        raise ValueError(f"performances[{index}].voice_id must be a safe voice identifier")
+    model = entry["model"]
+    if model not in {ELEVENLABS_V2_MODEL, ELEVENLABS_V3_MODEL}:
+        raise ValueError(f"performances[{index}].model is invalid")
+    delivery_cue = entry["delivery_cue"]
+    if not isinstance(delivery_cue, str):
+        raise ValueError(f"performances[{index}].delivery_cue must be a string")
+    if model == ELEVENLABS_V2_MODEL and delivery_cue != NEUTRAL_DELIVERY_CUE:
+        raise ValueError(f"performances[{index}] must keep V2 delivery_cue neutral")
+    if model == ELEVENLABS_V3_MODEL and delivery_cue not in {
+        NEUTRAL_DELIVERY_CUE,
+        *V3_DELIVERY_CUES_BY_PROFILE[delivery_profile],
+    }:
+        raise ValueError(f"performances[{index}].delivery_cue is invalid for its profile")
+
+    clean_text_sha256 = _sha256(entry["clean_text_sha256"], f"performances[{index}].clean_text_sha256")
+    rendered_text_sha256 = _sha256(entry["rendered_text_sha256"], f"performances[{index}].rendered_text_sha256")
+    assert isinstance(clean_text_sha256, str)
+    assert isinstance(rendered_text_sha256, str)
+    if model == ELEVENLABS_V3_MODEL and delivery_cue != NEUTRAL_DELIVERY_CUE:
+        if clean_text_sha256 == rendered_text_sha256:
+            raise ValueError(f"performances[{index}] must distinguish V3 rendered text from clean text")
+    elif clean_text_sha256 != rendered_text_sha256:
+        raise ValueError(f"performances[{index}] must keep neutral/V2 rendered text equal to clean text")
+
+    performance_id = entry["performance_id"]
+    expected_performance_id = _host_performance_id(
+        "elevenlabs",
+        voice_id,
+        model,
+        delivery_profile,
+        delivery_cue,
+        clean_text_sha256,
+        rendered_text_sha256,
+    )
+    if performance_id != expected_performance_id:
+        raise ValueError(f"performances[{index}].performance_id must match the immutable render identity")
+
+    provider_result = entry["provider_result"]
+    if provider_result not in _SELECTION_PROVIDER_RESULTS:
+        raise ValueError(f"performances[{index}].provider_result is invalid")
+    human_disposition = entry["human_disposition"]
+    if human_disposition not in _HOST_PERFORMANCE_DISPOSITIONS:
+        raise ValueError(f"performances[{index}].human_disposition is invalid")
+    if human_disposition == "accepted" and provider_result != STATUS_GENERATED:
+        raise ValueError(f"performances[{index}] cannot be accepted without generated provider audio")
+
+    audio_sha256 = _sha256(entry["audio_sha256"], f"performances[{index}].audio_sha256", allow_none=True)
+    duration = entry["audio_duration_seconds"]
+    invalid_duration = duration is not None and (
+        isinstance(duration, bool)
+        or not isinstance(duration, int | float)
+        or not math.isfinite(float(duration))
+        or duration <= 0
+    )
+    if invalid_duration:
+        raise ValueError(f"performances[{index}].audio_duration_seconds must be a positive finite number or null")
+    if provider_result == STATUS_GENERATED:
+        if audio_sha256 is None or duration is None:
+            raise ValueError(f"performances[{index}] needs audio checksum and duration after generated provider audio")
+    elif audio_sha256 is not None or duration is not None:
+        raise ValueError(f"performances[{index}] must not include audio evidence without generated provider audio")
+    _validate_host_performance_rationale(
+        entry["rationale"],
+        f"performances[{index}].rationale",
+        human_disposition=human_disposition,
+    )
+    return dict(entry)
+
+
+def validate_host_performance_receipt(receipt: object) -> None:
+    """Validate safe V2/V3 host-performance evidence without requiring approval."""
+    payload = _receipt_mapping(receipt, "host performance receipt")
+    _receipt_exact_fields(payload, _HOST_PERFORMANCE_RECEIPT_TOP_LEVEL_FIELDS, "host performance receipt")
+    if set(payload) != _HOST_PERFORMANCE_RECEIPT_TOP_LEVEL_FIELDS:
+        missing = sorted(_HOST_PERFORMANCE_RECEIPT_TOP_LEVEL_FIELDS - set(payload))
+        raise ValueError(f"host performance receipt is missing fields: {', '.join(missing)}")
+    if payload["schema_version"] != HOST_PERFORMANCE_RECEIPT_SCHEMA_VERSION:
+        raise ValueError(f"host performance receipt.schema_version must be {HOST_PERFORMANCE_RECEIPT_SCHEMA_VERSION}")
+    performances = payload["performances"]
+    if not isinstance(performances, list) or not performances:
+        raise ValueError("host performance receipt.performances must be a non-empty array")
+    validated = [_validate_host_performance_entry(performance, index) for index, performance in enumerate(performances)]
+    performance_ids = [str(performance["performance_id"]) for performance in validated]
+    if len(performance_ids) != len(set(performance_ids)):
+        raise ValueError("host performance receipt.performances must not repeat performance_id")
+
+
+def assert_host_performance_gate(receipt: object) -> None:
+    """Require every V2/V3 comparison row to be generated and human-accepted.
+
+    A rejected receipt remains valuable evidence, so the general schema accepts
+    it. This explicit gate is the release-time blocker for the V3 host rollout.
+    """
+    validate_host_performance_receipt(receipt)
+    payload = _receipt_mapping(receipt, "host performance receipt")
+    performances = payload["performances"]
+    assert isinstance(performances, list)
+    by_profile: dict[str, dict[tuple[str, str], Mapping[str, object]]] = {}
+    for raw_performance in performances:
+        performance = _receipt_mapping(raw_performance, "host performance receipt.performances[]")
+        profile = str(performance["delivery_profile"])
+        key = (str(performance["model"]), str(performance["delivery_cue"]))
+        profile_rows = by_profile.setdefault(profile, {})
+        if key in profile_rows:
+            raise ValueError(f"host performance receipt repeats {profile} {key[0]} {key[1]}")
+        profile_rows[key] = performance
+
+    for profile, cues in V3_DELIVERY_CUES_BY_PROFILE.items():
+        expected = {(ELEVENLABS_V2_MODEL, NEUTRAL_DELIVERY_CUE), (ELEVENLABS_V3_MODEL, NEUTRAL_DELIVERY_CUE)}
+        expected.update((ELEVENLABS_V3_MODEL, cue) for cue in cues)
+        actual = set(by_profile.get(profile, {}))
+        missing = sorted(expected - actual)
+        if missing:
+            formatted = ", ".join(f"{model}/{cue}" for model, cue in missing)
+            raise ValueError(f"host performance receipt is missing {profile} rows: {formatted}")
+        clean_hashes = {str(by_profile[profile][key]["clean_text_sha256"]) for key in expected}
+        if len(clean_hashes) != 1:
+            raise ValueError(f"host performance receipt must use one clean comparison text for {profile}")
+        for model, cue in expected:
+            row = by_profile[profile][(model, cue)]
+            if row["provider_result"] != STATUS_GENERATED or row["human_disposition"] != "accepted":
+                raise ValueError(f"host performance receipt is not approved for {profile} {model}/{cue}")
+
+
+def host_performance_receipt(performances: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    receipt: dict[str, object] = {
+        "schema_version": HOST_PERFORMANCE_RECEIPT_SCHEMA_VERSION,
+        "performances": [dict(performance) for performance in performances],
+    }
+    validate_host_performance_receipt(receipt)
+    return receipt
+
+
+def _commit_host_performance_receipt(receipt: Mapping[str, object], *, path: Path, overwrite: bool) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if overwrite:
+            temporary_path.replace(path)
+        else:
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                raise FileExistsError(f"Refusing to overwrite existing host-performance receipt: {path}") from None
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return path
+
+
+def write_host_performance_receipt(
+    performances: Sequence[Mapping[str, object]],
+    *,
+    path: Path = HOST_PERFORMANCE_RECEIPT_PATH,
+    overwrite: bool = False,
+) -> Path:
+    """Atomically write reviewed, redacted V3 host-performance evidence."""
+    receipt = host_performance_receipt(performances)
+    return _commit_host_performance_receipt(receipt, path=path, overwrite=overwrite)
+
+
+def load_host_performance_receipt(
+    path: Path = HOST_PERFORMANCE_RECEIPT_PATH,
+    *,
+    require_approved_matrix: bool = False,
+) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    validate_host_performance_receipt(value)
+    if require_approved_matrix:
+        assert_host_performance_gate(value)
+    return value
+
+
+def _host_performance_decisions(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("host performance decisions must be a non-empty array")
+    decisions: list[Mapping[str, object]] = []
+    performance_ids: set[str] = set()
+    for index, item in enumerate(value):
+        decision = _receipt_mapping(item, f"host performance decisions[{index}]")
+        _receipt_exact_fields(decision, _HOST_PERFORMANCE_DECISION_FIELDS, f"host performance decisions[{index}]")
+        if set(decision) != _HOST_PERFORMANCE_DECISION_FIELDS:
+            missing = sorted(_HOST_PERFORMANCE_DECISION_FIELDS - set(decision))
+            raise ValueError(f"host performance decisions[{index}] is missing fields: {', '.join(missing)}")
+        performance_id = decision["performance_id"]
+        if not isinstance(performance_id, str) or not CANDIDATE_ID_RE.fullmatch(performance_id):
+            raise ValueError(f"host performance decisions[{index}].performance_id is invalid")
+        if performance_id in performance_ids:
+            raise ValueError("host performance decisions must not repeat performance_id")
+        performance_ids.add(performance_id)
+        _safe_receipt_note(decision["host"], f"host performance decisions[{index}].host", max_length=100)
+        if decision["human_disposition"] not in _HOST_PERFORMANCE_DISPOSITIONS:
+            raise ValueError(f"host performance decisions[{index}].human_disposition is invalid")
+        _validate_host_performance_rationale(
+            decision["rationale"],
+            f"host performance decisions[{index}].rationale",
+            human_disposition=decision["human_disposition"],
+        )
+        decisions.append(decision)
+    return decisions
+
+
+def host_performance_receipt_from_manifest(manifest: object, decisions: object) -> dict[str, object]:
+    """Join a local V2/V3 audition manifest with explicit human disposition."""
+    manifest_data = _receipt_mapping(manifest, "audition manifest")
+    raw_results = manifest_data.get("results")
+    if not isinstance(raw_results, list):
+        raise ValueError("audition manifest.results must be an array")
+
+    performances: list[Mapping[str, object]] = []
+    for decision in _host_performance_decisions(decisions):
+        performance_id = str(decision["performance_id"])
+        host = str(decision["host"])
+        matches: list[Mapping[str, object]] = []
+        for raw_result in raw_results:
+            result = _receipt_mapping(raw_result, "audition manifest.results[]")
+            if result.get("source") != "v3-host-performance":
+                continue
+            computed_id = _host_performance_id(
+                result.get("provider"),
+                result.get("voice"),
+                result.get("elevenlabs_model"),
+                result.get("delivery_profile"),
+                result.get("delivery_cue"),
+                result.get("clean_text_sha256"),
+                result.get("rendered_text_sha256"),
+            )
+            if result.get("performance_id") != computed_id:
+                raise ValueError("audition manifest performance_id must match its immutable render identity")
+            used_by = result.get("used_by")
+            if computed_id == performance_id and isinstance(used_by, list) and f"host:{host}" in used_by:
+                matches.append(result)
+        if len(matches) != 1:
+            raise ValueError(
+                f"host performance decision for {host!r} must match exactly one host performance result in the manifest"
+            )
+        result = matches[0]
+        performances.append(
+            {
+                "performance_id": performance_id,
+                "host": host,
+                "voice_id": result.get("voice"),
+                "model": result.get("elevenlabs_model"),
+                "delivery_profile": result.get("delivery_profile"),
+                "delivery_cue": result.get("delivery_cue"),
+                "clean_text_sha256": result.get("clean_text_sha256"),
+                "rendered_text_sha256": result.get("rendered_text_sha256"),
+                "provider_result": result.get("status"),
+                "audio_sha256": result.get("audio_sha256"),
+                "audio_duration_seconds": result.get("audio_duration_seconds"),
+                "human_disposition": decision["human_disposition"],
+                "rationale": decision["rationale"],
+            }
+        )
+    return host_performance_receipt(performances)
+
+
+def write_host_performance_receipt_from_manifest(
+    *,
+    manifest_path: Path,
+    decisions_path: Path,
+    path: Path = HOST_PERFORMANCE_RECEIPT_PATH,
+    overwrite: bool = False,
+) -> Path:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
+    receipt = host_performance_receipt_from_manifest(manifest, decisions)
+    return _commit_host_performance_receipt(receipt, path=path, overwrite=overwrite)
+
+
 def _print_summary(results: list[VoiceAuditionResult], *, dry_run: bool, run_dir: Path | None = None) -> None:
     counts = Counter(result.status for result in results)
     prefix = "Dry-run targets" if dry_run else "Audition results"
@@ -1042,7 +1607,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not include voices currently configured in radio.toml",
     )
     parser.add_argument("--voice", action="append", help="Add one explicit provider:voice_id target; repeatable")
-    parser.add_argument("--sample-text", default=DEFAULT_SAMPLE_TEXT, help="Italian sample sentence for all auditions")
+    parser.add_argument(
+        "--sample-text",
+        help="Italian sample sentence for all auditions (V3 host-performance uses its paired banter sample by default)",
+    )
+    parser.add_argument(
+        "--v3-host-performance",
+        action="store_true",
+        help="Build only the Marco/Giulia paired V2-clean, V3-clean, and allowed V3-cue comparison matrix",
+    )
     parser.add_argument(
         "--elevenlabs-stability",
         nargs="*",
@@ -1079,11 +1652,75 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Allow replacing an existing reviewed selection receipt",
     )
+    parser.add_argument(
+        "--host-performance-manifest",
+        type=Path,
+        help="Ignored manifest.json from a V3 host-performance audition; pair with --host-performance-decisions",
+    )
+    parser.add_argument(
+        "--host-performance-decisions",
+        type=Path,
+        help="Local JSON array of human performance_id/host/disposition/controlled-rationale decisions",
+    )
+    parser.add_argument(
+        "--host-performance-receipt-path",
+        type=Path,
+        default=HOST_PERFORMANCE_RECEIPT_PATH,
+        help="Tracked redacted V3 performance receipt path (default: proof/2026-07-16-v3-host-performance.json)",
+    )
+    parser.add_argument(
+        "--overwrite-host-performance-receipt",
+        action="store_true",
+        help="Allow replacing an existing reviewed host-performance receipt",
+    )
+    parser.add_argument(
+        "--verify-host-performance-gate",
+        action="store_true",
+        help="Validate the tracked V3 receipt and require the complete approved Marco/Giulia comparison matrix",
+    )
     args = parser.parse_args(argv)
 
+    if bool(args.host_performance_manifest) != bool(args.host_performance_decisions):
+        print(
+            "ERROR: --host-performance-manifest and --host-performance-decisions must be used together",
+            file=sys.stderr,
+        )
+        return 2
+    if (args.selection_manifest or args.selection_decisions) and (
+        args.host_performance_manifest or args.host_performance_decisions
+    ):
+        print("ERROR: selection and host-performance receipt modes cannot be combined", file=sys.stderr)
+        return 2
     if bool(args.selection_manifest) != bool(args.selection_decisions):
         print("ERROR: --selection-manifest and --selection-decisions must be used together", file=sys.stderr)
         return 2
+    if args.verify_host_performance_gate:
+        if args.host_performance_manifest or args.host_performance_decisions:
+            print("ERROR: receipt verification cannot be combined with receipt writing", file=sys.stderr)
+            return 2
+        try:
+            load_host_performance_receipt(
+                args.host_performance_receipt_path,
+                require_approved_matrix=True,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Host-performance gate: approved ({args.host_performance_receipt_path})")
+        return 0
+    if args.host_performance_manifest and args.host_performance_decisions:
+        try:
+            receipt_path = write_host_performance_receipt_from_manifest(
+                manifest_path=args.host_performance_manifest,
+                decisions_path=args.host_performance_decisions,
+                path=args.host_performance_receipt_path,
+                overwrite=args.overwrite_host_performance_receipt,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Host-performance receipt: {receipt_path}")
+        return 0
     if args.selection_manifest and args.selection_decisions:
         try:
             receipt_path = write_selection_receipt_from_manifest(
@@ -1108,15 +1745,28 @@ def main(argv: list[str] | None = None) -> int:
         # from another directory would fall back to the wrong/absent registry.
         # Mirrors mammamiradio.main.startup.
         configure_openai_tts_model(config.models.tts_model("openai"))
-        targets = build_audition_targets(
-            config,
-            providers=providers,
-            include_configured=not args.no_configured,
-            include_catalog=args.include_catalog,
-            manual_voices=manual_voices,
-            sample_text=args.sample_text,
-        )
-        targets = expand_stability_variants(targets, args.elevenlabs_stability)
+        if args.v3_host_performance:
+            if args.include_catalog or args.no_configured or manual_voices or args.elevenlabs_stability:
+                raise ValueError(
+                    "--v3-host-performance cannot be combined with catalog, manual voices, "
+                    "--no-configured, or stability sweeps"
+                )
+            if "elevenlabs" not in providers:
+                raise ValueError("--v3-host-performance requires the elevenlabs provider")
+            targets = build_v3_host_performance_targets(
+                config,
+                sample_text=args.sample_text or DEFAULT_V3_HOST_PERFORMANCE_TEXT,
+            )
+        else:
+            targets = build_audition_targets(
+                config,
+                providers=providers,
+                include_configured=not args.no_configured,
+                include_catalog=args.include_catalog,
+                manual_voices=manual_voices,
+                sample_text=args.sample_text or DEFAULT_SAMPLE_TEXT,
+            )
+            targets = expand_stability_variants(targets, args.elevenlabs_stability)
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -1132,7 +1782,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         for result in results:
             missing = f" missing={','.join(result.missing_env)}" if result.missing_env else ""
-            print(f"{result.status}\t{result.provider}\t{result.voice}\t{';'.join(result.used_by)}{missing}")
+            performance = ""
+            if result.provider == "elevenlabs":
+                performance = (
+                    f" model={result.elevenlabs_model} profile={result.delivery_profile} cue={result.delivery_cue}"
+                )
+            print(
+                f"{result.status}\t{result.provider}\t{result.voice}\t{';'.join(result.used_by)}{performance}{missing}"
+            )
         return 1 if any(result.status == STATUS_FAILED for result in results) else 0
 
     try:

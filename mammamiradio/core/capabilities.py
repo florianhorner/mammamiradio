@@ -21,7 +21,11 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
         home_context_enabled=home_availability.readiness != "disabled",
         jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
         charts_reload=bool(config.allow_ytdlp),
-        tts_degraded=bool(getattr(config, "tts_degraded_voices", [])),
+        tts_degraded=bool(getattr(config, "tts_degraded_voices", []))
+        or any(
+            (provider_class == "tts_provider" or provider_class.startswith("tts:")) and details.get("fallback_active")
+            for provider_class, details in getattr(state, "runtime_provider_state", {}).items()
+        ),
     )
 
 

@@ -190,7 +190,7 @@ _CULTURAL_CUES = [
 # ---------------------------------------------------------------------------
 
 _BEHAVIORAL_CUES = [
-    "ci hai messo in pausa e sei tornato — ti abbiamo aspettato",
+    "la musica ha fatto una piccola pausa, ma lo studio non si è mosso",
     "abbiamo la sensazione che non stai ascoltando davvero, ma va bene",
     "stai facendo finta di lavorare mentre ci ascolti? Rispettabile",
     "se hai alzato il volume per questa canzone, abbiamo notato",
@@ -237,23 +237,8 @@ _SEASONAL_CUES: dict[int, list[str]] = {
 # ---------------------------------------------------------------------------
 
 
-_NEW_LISTENER_LINES = [
-    "Eyyy, qualcuno si è sintonizzato! Benvenuto, chiunque tu sia.",
-    "Oh! Abbiamo compagnia. Ciao, ciao. Fai come se fossi a casa.",
-    "Sento che qualcuno ci ascolta adesso. Lo sento. Non chiedetemi come.",
-    "Ecco, un nuovo arrivo. Siediti, mettiti comodo. Noi siamo già qui da un po'.",
-    "Benvenuto nella nostra frequenza. Arrivavi al momento giusto, come sempre.",
-]
-
-_FIRST_LISTENER_LINES = [
-    "E finalmente qualcuno ci ascolta! Cominciavamo a parlare da soli.",
-    "Oh! Il primo ascoltatore! Stavamo per spegnere tutto, giuro.",
-    "Qualcuno si è sintonizzato. Allora non trasmettiamo nel vuoto. Che sollievo.",
-]
-
-
 # ---------------------------------------------------------------------------
-# Impossible moment lines — pre-written, time/listener-aware, no LLM needed
+# Impossible moment lines — pre-written, time-aware, no LLM needed
 # ---------------------------------------------------------------------------
 
 _IMPOSSIBLE_LINES: dict[str, list[str]] = {
@@ -338,20 +323,12 @@ def generate_impossible_line(
     *,
     segments_produced: int = 0,
     listener_patterns: list[str] | None = None,
-    is_new_listener: bool = False,
-    is_first_listener: bool = False,
 ) -> str:
-    """Return a pre-written Italian line that feels uncannily aware.
+    """Return a pre-written line based on broad, identity-free context.
 
-    Uses time-of-day, day-of-week, and optional listener behavior patterns
-    to pick a line that sounds like the DJ *knows* the listener. No LLM needed.
+    Uses time-of-day, day-of-week, and optional aggregate behavior patterns.
+    No connection edge or individual listener identity enters the selection.
     """
-    if is_first_listener:
-        return random.choice(_FIRST_LISTENER_LINES)
-
-    if is_new_listener and segments_produced < 3:
-        return random.choice(_NEW_LISTENER_LINES)
-
     now = datetime.datetime.now()
     weekday = now.weekday()
     segment_key = _current_segment_key(now.hour)
@@ -372,7 +349,10 @@ def generate_impossible_line(
         candidates.extend(_IMPOSSIBLE_DAY_LINES.get(weekday, []))
 
     if not candidates:
-        candidates = _NEW_LISTENER_LINES
+        candidates = [
+            "La radio continua, con calma. La musica sa sempre quando rientrare.",
+            "Studio B è ancora in piedi. Per ora basta questo.",
+        ]
 
     return random.choice(candidates)
 

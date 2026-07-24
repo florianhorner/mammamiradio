@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
 CANONICAL_STATUS_STATES = {"ready", "working", "degraded", "blocked", "idle"}
 
@@ -81,24 +82,50 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
-def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
+def test_record_hunt_card_has_phase_copy_and_wrapping_guard() -> None:
     html = _read_admin_html()
     block = _function_block(html, "updateHeadingBanner")
-    style = re.search(r"\.course-banner\s*\{([^}]*)\}", html, re.DOTALL)
+    card = re.search(r"\.record-hunt\s*\{([^}]*)\}", html, re.DOTALL)
+    status = re.search(r"\.record-hunt-status-copy\s*\{([^}]*)\}", html, re.DOTALL)
 
-    assert style is not None
-    assert "min-width: 0" in style.group(1)
-    assert "overflow-wrap: break-word" in style.group(1)
-    assert 'class="record-hunt-truth"' in html
-    assert 'class="record-hunt-stage" aria-hidden="true"' in html
-    assert "Record Hunt: <b>Auto rotation</b>" in html
+    assert card is not None
+    assert "background: var(--surface-strong)" in card.group(1)
+    assert status is not None
+    assert "min-width: 0" in status.group(1)
+    assert "overflow-wrap: break-word" in status.group(1)
+    assert 'class="record-hunt-status-copy" id="courseBanner"' in html
+    assert 'class="record-hunt-truth" id="recordHuntTruth"' in html
+    assert 'class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"' in html
+    assert "Auto rotation is ready for a new direction." in html
     assert "Record Hunt:" in block
-    assert "Record Hunt is searching for" in block
-    assert "Record Hunt is opening the back room for" in html
-    assert "is shaping the next stretch" in block
+    assert "Hunting for" in block
+    assert "Steering toward" in block
     assert "Hunt pick" in block
     assert "played through. Back on auto." in block
     assert "Course:" not in block
+
+
+def test_record_hunt_pulse_is_scoped_without_overriding_global_status_pulse() -> None:
+    """Record Hunt must not redefine the animation used by global status chips."""
+    html = _read_admin_html()
+    base_css = BASE_CSS.read_text(encoding="utf-8")
+
+    assert ".record-hunt-status-shape.working { animation: record-hunt-pulse" in html
+    assert "@keyframes record-hunt-pulse" in html
+    assert "@keyframes status-pulse" not in html
+    assert "@keyframes status-pulse" in base_css
+    assert "0%, 100% { opacity: 0.4; }" in base_css
+
+
+def test_record_hunt_reset_is_active_only_and_survives_status_renders() -> None:
+    html = _read_admin_html()
+    desk = _function_block(html, "renderRecordHuntDesk")
+
+    assert 'id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>' in html
+    assert "const reset=document.getElementById('clearHeadingBtn');" in desk
+    assert "if(reset)reset.hidden=!active;" in desk
+    assert "banner.innerHTML" not in desk
+    assert ".record-hunt-reset[hidden] { display: none; }" in html
 
 
 def test_record_hunt_matches_are_visible_in_rotation_rows() -> None:
@@ -139,9 +166,9 @@ def test_record_hunt_pending_guard_blocks_stale_auto_rotation_poll() -> None:
     block = _function_block(_read_admin_html(), "updateHeadingBanner")
 
     assert "}else if(_recordHuntOptimistic.active){" in block
-    assert "Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
-    assert "renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>')" in block
-    assert block.index("_recordHuntOptimistic.active") < block.index("Record Hunt: <b>Auto rotation</b>")
+    assert "Hunting for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
+    assert "renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.')" in block
+    assert block.index("_recordHuntOptimistic.active") < block.index("Auto rotation is ready for a new direction.")
 
 
 def test_failed_direction_clears_pending_record_hunt_before_refresh() -> None:
@@ -220,6 +247,17 @@ def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
     assert "Running on rescue" in block
     # Row is wired into the rendered card array.
     assert "rescueRow," in block
+
+
+def test_runtime_status_card_renders_cached_rotation_from_rotation_status() -> None:
+    """The admin card exposes the cached-music rest window, not just raw JSON."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const rr=rs.rescue_rotation" in block
+    assert "statusRow('Cached rotation'" in block
+    assert "No cached music rescue has reached a listener this session" in block
+    assert "Rotating" in block
+    assert "rotationRow," in block
 
 
 def test_runtime_status_card_projects_capacity_exempt_continuity() -> None:
@@ -438,6 +476,79 @@ def test_production_feed_surfaces_operator_trigger() -> None:
     assert "Triggered — building next" in block
     # Reuses the canonical (colorblind-safe) status pill, not a bespoke color.
     assert "statusInline('working','',segmentText(segmentTypeKey(fp)))" in block
+
+
+def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
+    """The status fallback must use the approved 'update delayed' copy, keep the old
+    producer-jargon copy gone, announce politely on entry only, and wire a retry
+    control to the existing refreshFast() path that survives a paused station."""
+    html = _read_admin_html()
+    block = _function_block(html, "renderProductionUnavailable")
+
+    # Exact approved strings (verbatim).
+    assert "In produzione · update delayed" in block
+    assert "statusInline('working','Status update delayed','Status update delayed')" in block
+    assert "Can't update this panel right now. We'll keep trying automatically." in block
+    assert ">Try again now</button>" in block
+
+    # Old producer-jargon copy is gone from the whole template.
+    assert "In produzione · reconnecting" not in html
+    assert "The producer desk will retry automatically." not in html
+    assert "Producer desk reconnecting" not in html
+    assert "Reconnecting" not in block
+
+    # A persistent polite atomic region exists before the outage; populating it on
+    # entry is reliable across screen readers and avoids repeated poll announcements.
+    live_region = (
+        'id="productionStatusAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"'
+    )
+    assert live_region in html
+    assert "const alreadyUnavailable=_productionUnavailable" in block
+    assert "let _productionRetryInFlight=false" in html
+    assert "if(!alreadyUnavailable){" in block
+    assert "const announcement=document.getElementById('productionStatusAnnouncement')" in block
+    announcement_copy = (
+        "announcement.textContent=\"Status update delayed. Can't update this panel "
+        "right now. We'll keep trying automatically.\""
+    )
+    assert announcement_copy in block
+
+    # Retry control reuses the existing poll path with a visible pending/busy state.
+    assert 'onclick="retryProductionNow(this)"' in block
+    retry = _function_block(html, "retryProductionNow")
+    assert "await refreshFast()" in retry
+    assert "if(_productionRetryInFlight)return" in retry
+    assert "_productionRetryInFlight=true" in retry
+    assert "_productionRetryInFlight=false" in retry
+    busy = _function_block(html, "_setProductionRetryBusy")
+    assert "btn.disabled=busy" in busy
+    assert "'Trying…'" in busy
+
+    # A successfully rendered poll clears the latch so a later outage re-announces.
+    refresh_fast = _function_block(html, "refreshFast")
+    assert refresh_fast.index("renderProduction(_st);") < refresh_fast.index("_productionUnavailable=false")
+    assert "_productionUnavailable=false" in refresh_fast
+    assert "productionAnnouncement.textContent=''" in refresh_fast
+
+    # The retry button is NOT a producer-action control, so it stays available while
+    # the station is paused (updateStopState only inerts the producer-action set).
+    update_stop = _function_block(html, "updateStopState")
+    assert "prod-retry" not in update_stop
+    assert "productionRetryBtn" not in update_stop
+
+
+def test_unrenderable_production_status_replaces_stale_rows_with_fallback() -> None:
+    """A malformed production block must never leave an older live-work row visible."""
+    refresh_fast = _function_block(_read_admin_html(), "refreshFast")
+    production_guard = refresh_fast[
+        refresh_fast.index("try{\n      renderProduction(_st);") : refresh_fast.index("if (_st.station)")
+    ]
+
+    assert "console.error('refreshFast production',e);" in production_guard
+    assert "renderProductionUnavailable();" in production_guard
+    assert production_guard.index("console.error('refreshFast production',e);") < production_guard.index(
+        "renderProductionUnavailable();"
+    )
 
 
 def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:

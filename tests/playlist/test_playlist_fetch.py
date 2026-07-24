@@ -1071,7 +1071,7 @@ def test_download_sync_jamendo_cache_hit_skips_direct_url_fetch(tmp_path):
     mock_direct.assert_not_called()
 
 
-def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
+def test_download_sync_direct_url_failure_marks_track_unavailable(tmp_path):
     from mammamiradio.playlist.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
@@ -1096,7 +1096,7 @@ def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    assert result.name.startswith("_silence_")
+    assert result.name.startswith("_failed_")
     assert result.exists()
 
 

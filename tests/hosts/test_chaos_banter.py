@@ -144,7 +144,7 @@ async def test_normal_banter_still_uses_generic_stock_without_llm(config, state)
 
     lines, _ = await write_banter(state, config)
 
-    assert [text for _host, text in lines] == ["E torniamo alla musica!"]
+    assert [text for _host, text in lines] == ["And back to the music, amici!"]
     assert state.chaos_script_fallbacks == 0
 
 

@@ -121,7 +121,7 @@ It runs on your hardware with your own AI keys: no account, no servers of ours, 
 
 ## Docs
 
-[Architecture](docs/architecture.md) · [Troubleshooting](docs/troubleshooting.md) · [Operations & deploy](docs/operations.md) · [Repo map](docs/REPO_MAP.md)
+[Product status](docs/status-quo.md) · [Architecture](docs/architecture.md) · [Troubleshooting](docs/troubleshooting.md) · [Operations & deploy](docs/operations.md) · [Repo map](docs/REPO_MAP.md)
 
 ## Contributing
 

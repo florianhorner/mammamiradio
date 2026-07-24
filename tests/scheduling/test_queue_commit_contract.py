@@ -47,6 +47,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mammamiradio.audio.audio_quality import AudioQualityError
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling import producer
@@ -1124,8 +1125,12 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
     """A banned song dropped at the enqueue funnel must not leave a ghost up-next row
     or overwrite the prior valid music bed used by speech-bed adjacency (#660, #664)."""
     state = _make_state()
+    # This test asserts against the rendered cache for the selected song, so
+    # keep the producer's weighted choice deterministic under pytest-randomly.
+    state.playlist = state.playlist[:1]
     previous_song = tmp_path / "previous_song.mp3"
     previous_song.write_bytes(b"prior-music")
+    save_track_metadata(previous_song, title="Previous Song", artist="Prior Artist")
     state.last_music_file = previous_song
     state.last_enqueued_type = SegmentType.MUSIC
     state.current_track = Track(title="Previous Song", artist="Prior Artist", duration_ms=180_000, spotify_id="prev")

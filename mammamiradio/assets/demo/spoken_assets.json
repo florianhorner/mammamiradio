@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "path": "recovery/continuity_1.mp3",
+      "sha256": "dc7df6df0a9651fe8aa9475b0931c5b49230d8644de3185e4e7eb3e4462c1ab5",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Siamo sempre in onda. Un attimo e torniamo con la musica."
+    },
+    {
+      "path": "recovery/emergency_tone.mp3",
+      "sha256": "f1f021294811af950852464d7c1f53a99ad225427fb343bbfa83ef616a14f690",
+      "kind": "tone",
+      "language": "none",
+      "transcript": ""
+    }
+  ]
+}

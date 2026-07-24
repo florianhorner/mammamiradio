@@ -81,6 +81,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Local setup, conventions         | `CONTRIBUTING.md`                |
 | Agent rules + leadership         | `CLAUDE.md`                      |
 | Release notes                    | `CHANGELOG.md`                   |
+| Product and market status        | `docs/status-quo.md`             |
 | Runtime flow + API routes        | `docs/architecture.md`           |
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |

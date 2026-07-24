@@ -1,0 +1,11 @@
+# 2.18 closeout — runtime verification
+branch: florianhorner/chore/close-2.18-release
+
+## Host voice models resolve to V2 (V3 reverted after audition rejection)
+Marco            engine=elevenlabs model=eleven_multilingual_v2   delivery_profile=none
+Giulia           engine=elevenlabs model=eleven_multilingual_v2   delivery_profile=none
+Hans Günther     engine=elevenlabs model=eleven_multilingual_v2   delivery_profile=none
+
+## Host-performance gate — correctly NOT approved (human rejected V3)
+ERROR: host performance receipt is not approved for marco eleven_v3/curious
+gate exit=2 (2 = not-approved, expected: V3 rejected -> V3 stays disabled)

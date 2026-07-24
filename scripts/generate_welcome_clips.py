@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the bundled welcome clips into mammamiradio/assets/demo/welcome/.
+"""Generate neutral, local-review clips into assets/demo/welcome/.
 
-Welcome clips are the DJ "interrupting" the broadcast to greet a listener.
-The playback loop reaches for them via _pick_canned_clip("welcome") as one of
-its instant-audio fallbacks (after canned banter, before forced TTS), so an
-empty welcome/ directory quietly removes a rescue rung. This script populates
-that directory from a fixed, Italian-only contract using the station's own TTS
-pipeline, replacing the fragile copy-paste `python -c` snippet that used to
-live in welcome/README.md.
+The runtime deliberately does not discover this directory. This historical
+utility remains useful for voice review, but generated files are not eligible
+for playback unless a future explicit manifest policy admits them.
 
 Defaults to the free Edge engine, so no API key is required to regenerate the
-clips. The clips are committed-asset candidates: run this locally, listen, then
-commit the MP3s if they sound right.
+clips. The fixed lines contain no listener arrival, return, or recognition
+claim.
 
 Usage:
     python scripts/generate_welcome_clips.py                 # write missing clips
@@ -50,17 +46,16 @@ STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 STATUS_PLANNED = "planned"
 
-# Pure digital silence (the TTS silence fallback) measures near the floor
-# (~-91 dBFS peak); real speech peaks far above this, so -80 cleanly splits them.
+# Pure digital silence measures near the floor (~-91 dBFS peak); real speech
+# peaks far above this, so -80 cleanly splits them. Runtime TTS now raises when
+# every route fails, but this remains a defense against stale or malformed output.
 SILENCE_PEAK_DBFS = -80.0
 MIN_CLIP_BYTES = 1024
 MIN_CLIP_DURATION_SEC = 0.5
 
-# Render intermediates here, never directly in the clip dir. The playback loop
-# serves any ``*.mp3`` directly under welcome/ — and Path.glob matches dotfiles —
-# while synthesize() also drops a sibling ``.raw.mp3``. Staging in a subdirectory
-# (still on the same filesystem, so the final publish stays an atomic replace)
-# keeps every partial/raw artifact out of that glob.
+# Render intermediates here, never directly in the clip dir. Synthesis also
+# drops a sibling ``.raw.mp3``; staging preserves a clean review directory and
+# keeps the final publish atomic even though runtime discovery is disabled.
 STAGING_DIRNAME = ".staging"
 
 
@@ -77,19 +72,17 @@ class WelcomeClip:
     voice: str = ""
 
 
-# The contract. Italian-only by design — these match the station identity and
-# its two house hosts (Marco / Giulia). Keep filenames stable: the runtime globs
-# welcome/*.mp3, but committing predictable names keeps regeneration idempotent.
+# The historical contract. Keep filenames stable for reproducible local review.
 # Voice IDs are deliberately resolved from radio.toml below, never frozen here.
 WELCOME_CLIPS: tuple[WelcomeClip, ...] = (
     WelcomeClip(
         "marco_welcome_1.mp3",
         "Marco",
-        "Eyyy, qualcuno si e collegato! Benvenuto, benvenuto!",
+        "Siamo sempre in onda. La musica continua, piano piano.",
     ),
-    WelcomeClip("marco_welcome_2.mp3", "Marco", "Eccolo! Un nuovo ascoltatore! Che bello, che bello!"),
-    WelcomeClip("giulia_welcome_1.mp3", "Giulia", "Benvenuto... vediamo cosa ci hai portato oggi."),
-    WelcomeClip("giulia_welcome_2.mp3", "Giulia", "Oh, qualcuno si e sintonizzato. Finalmente."),
+    WelcomeClip("marco_welcome_2.mp3", "Marco", "Studio B resiste. Un attimo e torna il prossimo disco."),
+    WelcomeClip("giulia_welcome_1.mp3", "Giulia", "La frequenza resta accesa. Nessun dramma, quasi."),
+    WelcomeClip("giulia_welcome_2.mp3", "Giulia", "Mamma Mi Radio continua. La musica sa dove andare."),
 )
 
 
@@ -138,14 +131,12 @@ def _discard(path: Path) -> str:
 
 
 def _looks_like_silence(path: Path) -> bool:
-    """True if a rendered clip is effectively silent (the TTS silence fallback).
+    """True if a rendered clip is effectively silent.
 
-    ``synthesize()`` never raises: when every Edge attempt fails (network blocked,
-    Edge down) it returns 2s of ``generate_silence()`` rather than erroring.
-    Measuring the peak level lets us reject that instead of committing a silent
-    greeting. Best-effort — if the level can't be measured we do NOT claim silence
-    (avoid false failures); ``synthesize`` already needed ffmpeg to produce the
-    file at all.
+    ``synthesize()`` raises when every configured route fails. Measuring peak
+    level remains a defense-in-depth check for stale, malformed, or unexpectedly
+    silent output before a greeting is committed. Best-effort: if the level
+    cannot be measured, do not claim silence and risk a false failure.
     """
     try:
         _mean_db, peak_db = _probe_volume(path)
@@ -204,9 +195,9 @@ async def generate_clips(
     Always renders through Edge. If a configured host uses a cloud engine, its
     explicit Edge fallback is selected before rendering. Returns one ClipResult
     per clip. Best-effort per clip:
-    a single failure (a flaky voice, an unwritable output dir, a silent fallback,
-    or a substituted voice) is recorded as STATUS_FAILED and does not abort the
-    remaining clips.
+    a single failure (a flaky voice, an unwritable output dir, an unexpectedly
+    silent render, or a substituted voice) is recorded as STATUS_FAILED and
+    does not abort the remaining clips.
     """
     if config is not None:
         clips = resolve_welcome_clips(config, clips)
@@ -246,15 +237,15 @@ async def generate_clips(
                 results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{render_error}; clip discarded{note}"))
                 continue
             if _looks_like_silence(staging):
-                # The TTS backend was unreachable and fell back to silence. Discard
-                # the file so an operator can't unknowingly commit a silent greeting.
+                # Defense in depth: active TTS failures raise, but never let an
+                # unexpectedly silent artifact become a packaged greeting.
                 note = _discard(staging)
                 results.append(
                     ClipResult(
                         clip,
                         dest,
                         STATUS_FAILED,
-                        error=f"voice backend unreachable — TTS returned silence; clip discarded{note}",
+                        error=f"rendered audio was effectively silent; clip discarded{note}",
                     )
                 )
                 continue
@@ -307,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(
         prog="generate_welcome_clips.py",
-        description="Generate the bundled Italian welcome clips for the demo asset tree.",
+        description="Generate neutral Italian station-continuity clips for local review.",
     )
     parser.add_argument(
         "--output-dir",
