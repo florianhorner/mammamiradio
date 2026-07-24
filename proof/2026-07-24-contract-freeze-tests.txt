@@ -1,0 +1,25 @@
+Contract-freeze governance lane — validation runs
+Date: 2026-07-24T08:29:40Z
+Branch: governance/contract-freeze @ 46afbc44 (base origin/main)
+
+$ python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output
+
+$ pytest -q -n auto  (full suite)
+5413 passed, 3 skipped, 18 warnings in 32.11s
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+320 files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 291 source files
+
+$ python -c 'yaml.safe_load(.github/workflows/contract-drift.yml)'
+workflow YAML ok
+
+$ curl -s -o /dev/null -w '%{http_code}' https://raw.githubusercontent.com/music-assistant/server/dev/tests/providers/mammamiradio/fixtures/v1_now_playing.json
+404
+(404 -> cross-repo checksum step skips with notice until the sibling fixture lands)
