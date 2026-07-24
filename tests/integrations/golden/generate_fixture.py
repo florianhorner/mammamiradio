@@ -98,19 +98,27 @@ def normalize_volatile(payload: dict[str, Any]) -> dict[str, Any]:
     Volatile fields are ``changed_at`` and ``now_playing.started_at`` — wall
     clock values in a live capture. The ETag is an HTTP header derived from
     the body and never appears in the payload itself.
+
+    :raises ValueError: if a volatile field is not a plain number — a type
+        change on these fields is contract drift, not volatility, and must
+        not be pinned into invisibility.
     """
     normalized = copy.deepcopy(payload)
     if "changed_at" in normalized:
+        _require_number("changed_at", normalized["changed_at"])
         normalized["changed_at"] = PINNED_CHANGED_AT
     now_playing = normalized.get("now_playing")
     if isinstance(now_playing, dict) and "started_at" in now_playing:
+        _require_number("now_playing.started_at", now_playing["started_at"])
         now_playing["started_at"] = PINNED_STARTED_AT
     return normalized
 
 
 def fixture_bytes(payload: dict[str, Any]) -> bytes:
     """Canonical on-disk encoding used for both writing and byte-comparison."""
-    return (json.dumps(normalize_volatile(payload), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    return (json.dumps(normalize_volatile(payload), indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode(
+        "utf-8"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,7 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    rendered = fixture_bytes(render_golden_payload())
+    try:
+        rendered = fixture_bytes(render_golden_payload())
+    except ValueError as exc:
+        print(f"DRIFT: rendered payload failed volatile-field normalization: {exc}")
+        return 1
 
     if not args.check:
         FIXTURE_PATH.write_bytes(rendered)
@@ -137,15 +149,34 @@ def main(argv: list[str] | None = None) -> int:
     if not FIXTURE_PATH.exists():
         print(f"DRIFT: fixture missing at {FIXTURE_PATH} — run this script without --check to create it")
         return 1
-    on_disk = fixture_bytes(json.loads(FIXTURE_PATH.read_text(encoding="utf-8")))
+    raw = FIXTURE_PATH.read_bytes()
+    try:
+        on_disk = fixture_bytes(json.loads(raw.decode("utf-8")))
+    except ValueError as exc:
+        # Covers invalid JSON/UTF-8 and volatile-field type drift alike.
+        print(f"DRIFT: fixture at {FIXTURE_PATH} failed validation: {exc}")
+        return 1
     if on_disk != rendered:
         print("DRIFT: serializer output no longer matches tests/integrations/golden/v1_now_playing.json")
         print("The v1 wire contract is frozen — see CONTRACT.md for the change process.")
         print("If this change went through a contract window, regenerate the fixture with:")
         print("  python tests/integrations/golden/generate_fixture.py")
         return 1
+    if raw != on_disk:
+        # Keep the committed bytes exactly canonical so this check and the
+        # cross-repo sha256 comparison always watch the same bytes.
+        print("DRIFT: fixture bytes are not in the canonical encoding")
+        print("Rewrite it canonically with:")
+        print("  python tests/integrations/golden/generate_fixture.py")
+        return 1
     print("golden fixture matches serializer output")
     return 0
+
+
+def _require_number(field: str, value: Any) -> None:
+    """Reject a volatile-field value whose type drifted away from a number."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"volatile field {field} must be a number, got {type(value).__name__}")
 
 
 if __name__ == "__main__":
