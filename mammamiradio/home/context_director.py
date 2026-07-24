@@ -166,8 +166,9 @@ class DirectorObservation:
             # deny-by-default, and the raw state never crosses this boundary.
             # The unit is mandatory here: HA always publishes one for a
             # classified sensor, so guessing Celsius would state a wrong number
-            # as fact rather than merely omit one.  Weather and climate keep the
-            # legacy assumption because HA publishes no unit for them at all.
+            # as fact rather than merely omit one.  ``weather.*`` advertises
+            # ``temperature_unit`` and is honoured when it does; ``climate.*``
+            # publishes none at all, so it keeps the legacy Celsius assumption.
             temperature_c = _temperature(raw_state, temperature_unit, require_unit=True)
             if temperature_c is None:
                 return None

@@ -67,7 +67,15 @@ def normalize_temperature(
     if not math.isfinite(temperature):
         return None
 
-    normalized_unit = str(unit or "").strip().upper().replace("°", "")
+    # Only an absent or blank unit earns the legacy Celsius default. An
+    # explicitly supplied non-string (False, 0, a dict) is malformed input, not
+    # a missing field, and must not be silently read as Celsius.
+    if unit is None:
+        normalized_unit = ""
+    elif isinstance(unit, str):
+        normalized_unit = unit.strip().upper().replace("°", "")
+    else:
+        return None
     if not normalized_unit:
         if require_unit:
             return None

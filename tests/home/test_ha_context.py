@@ -61,6 +61,31 @@ from mammamiradio.home.ha_context import (
     revalidate_home_context_outcome_mutes,
 )
 
+
+@pytest.fixture(autouse=True)
+def _isolate_weather_cache_globals():
+    """Keep the weather cache module globals from leaking between tests.
+
+    The forecast tests set these in place; without a restore the suite becomes
+    order-dependent — a cancellation test leaves a sentinel in the cache, and
+    ``_weather_degraded_warned`` carries a warn-transition forward, which is
+    exactly the state ``_warn_once_on_weather_degraded`` branches on.
+    """
+    import mammamiradio.home.ha_context as ha_mod
+
+    names = (
+        "_weather_forecast_cache",
+        "_weather_forecast_cache_en",
+        "_weather_forecast_fetched_at",
+        "_weather_forecast_ttl",
+        "_weather_degraded_warned",
+    )
+    saved = {name: getattr(ha_mod, name) for name in names}
+    yield
+    for name, value in saved.items():
+        setattr(ha_mod, name, value)
+
+
 # ---------------------------------------------------------------------------
 # HomeContext dataclass
 # ---------------------------------------------------------------------------

@@ -34,6 +34,13 @@ def test_normalize_temperature_can_require_an_explicit_unit():
     assert normalize_temperature(5, "%") is None
 
 
+@pytest.mark.parametrize("unit", [False, 0, True, 1, [], {}, object()])
+def test_normalize_temperature_rejects_a_malformed_unit_instead_of_assuming_celsius(unit):
+    # `unit or ""` used to conflate these with an absent unit, so a malformed
+    # payload silently became Celsius even with require_unit left off.
+    assert normalize_temperature(5, unit) is None
+
+
 @pytest.mark.parametrize(
     "value",
     [True, False, None, [], {}, object(), "abc", "", float("nan"), float("inf"), float("-inf")],

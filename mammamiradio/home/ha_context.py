@@ -720,12 +720,13 @@ def _format_state(
         return None
 
     # Weather gets special treatment — include temperature and condition.
-    # A temperature we cannot convert is dropped rather than narrated: the raw
-    # unit is entity-controlled text, and an unconverted number read aloud as
-    # Celsius is worse than no number at all.
+    # ``weather.*`` publishes ``temperature_unit``, so the unit is required here
+    # exactly as it is for the forecast arcs: a temperature we cannot convert is
+    # dropped rather than narrated, because the raw unit is entity-controlled
+    # text and an unconverted number read aloud as Celsius is worse than none.
     if entity_id.startswith("weather."):
         condition = STATE_TRANSLATIONS.get(state, state)
-        temperature_c = _celsius_for_prompt(attrs.get("temperature"), temperature_unit_of(attrs))
+        temperature_c = _celsius_for_prompt(attrs.get("temperature"), temperature_unit_of(attrs), require_unit=True)
         if temperature_c is not None:
             return f"{label}: {condition}, {format_celsius(temperature_c)}°C"
         return f"{label}: {condition}"
@@ -1391,7 +1392,7 @@ _weather_forecast_fetched_at: float = 0.0
 _WEATHER_CACHE_TTL = 3600.0
 # How long the current cached arc stays valid. Normally the full hour; shortened
 # when the arc had to air without its temperature.
-_weather_forecast_ttl: float = 3600.0
+_weather_forecast_ttl: float = _WEATHER_CACHE_TTL
 _weather_degraded_warned: bool = False
 # A failed unit lookup costs the arc its temperature, so it retries on the next
 # poll instead of pinning a degraded narrative for the full hour.
@@ -1512,12 +1513,17 @@ def _warn_once_on_weather_degraded(degraded: bool) -> None:
     A permanently mis-scoped token or a renamed forecast entity would otherwise
     strip the temperature from every break forever with nothing above DEBUG to
     explain it. Logged on transition only, so a persistent fault does not spam.
+
+    Callers reach here for more than one cause — an unreadable unit, a failed
+    unit lookup, or a forecast request that failed outright — so the message
+    names the symptom and points at the checks rather than asserting one cause.
     """
     global _weather_degraded_warned
     if degraded and not _weather_degraded_warned:
         logger.warning(
-            "Weather arc is airing without a temperature: Home Assistant did not report a unit "
-            "for %s. Check that the entity exists and the token can read it.",
+            "Weather arc is airing without a temperature: could not read a usable "
+            "temperature and unit for %s. Check that the entity exists, that the token "
+            "can read it, and that it reports a unit Home Assistant recognizes.",
             _WEATHER_FORECAST_ENTITY_ID,
         )
     elif not degraded and _weather_degraded_warned:
@@ -1571,13 +1577,18 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         # return_exceptions keeps a failing forecast from orphaning the in-flight
         # unit request: gather waits for both, then we surface the real failure.
         resp, entity_unit = await asyncio.gather(forecast_task, unit_task, return_exceptions=True)
+        # A cancellation outranks a sibling failure regardless of arrival order.
+        # If the forecast merely errored while the unit task was cancelled,
+        # raising the forecast error first would let `except Exception` swallow
+        # it, mutate the cache globals, and lose the deadline's cancellation.
+        for outcome in (resp, entity_unit):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
         if isinstance(resp, BaseException):
             raise resp
         if isinstance(entity_unit, BaseException):
-            # The unit helper swallows Exception itself, so anything surfacing
-            # here is a CancelledError from the enrichment deadline. Propagate
-            # it rather than downgrading a cancellation into a normal result and
-            # going on to mutate the shared cache globals.
+            # The unit helper swallows Exception itself, so anything else
+            # surfacing here is a BaseException worth propagating untouched.
             raise entity_unit
         resp.raise_for_status()
         data = resp.json()
