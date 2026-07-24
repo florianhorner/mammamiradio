@@ -1,25 +1,28 @@
 Contract-freeze governance lane — validation runs
-Date: 2026-07-24T08:29:40Z
-Branch: governance/contract-freeze @ 46afbc44 (base origin/main)
+Date: 2026-07-24T08:45:29Z
+Commands ran on branch governance/contract-freeze at commit 9cf2edfe
 
-$ python tests/integrations/golden/generate_fixture.py --check
+$ .venv/bin/python tests/integrations/golden/generate_fixture.py --check
 golden fixture matches serializer output
 
-$ pytest -q -n auto  (full suite)
-5413 passed, 3 skipped, 18 warnings in 32.11s
+$ .venv/bin/pytest -q -n auto
+5419 passed, 3 skipped, 18 warnings in 24.17s
 
-$ ruff check .
+$ .venv/bin/ruff check .
 All checks passed!
 
-$ ruff format --check .
-320 files already formatted
+$ .venv/bin/ruff format --check .
+322 files already formatted
 
-$ mypy mammamiradio/ tests/
-Success: no issues found in 291 source files
+$ .venv/bin/mypy mammamiradio/ tests/
+Success: no issues found in 293 source files
 
-$ python -c 'yaml.safe_load(.github/workflows/contract-drift.yml)'
+$ .venv/bin/python -c "import yaml; yaml.safe_load(open('.github/workflows/contract-drift.yml')); print('workflow YAML ok')"
 workflow YAML ok
 
-$ curl -s -o /dev/null -w '%{http_code}' https://raw.githubusercontent.com/music-assistant/server/dev/tests/providers/mammamiradio/fixtures/v1_now_playing.json
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ curl -s -o /dev/null -w '%{http_code}\n' https://raw.githubusercontent.com/music-assistant/server/dev/tests/providers/mammamiradio/fixtures/v1_now_playing.json
 404
-(404 -> cross-repo checksum step skips with notice until the sibling fixture lands)
+(404 means the cross-repo checksum job takes its skip-with-notice path until the sibling fixture lands)
