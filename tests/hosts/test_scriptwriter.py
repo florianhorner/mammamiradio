@@ -39,6 +39,7 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.language_policy import (
     NORMAL_MODE_ENGLISH_MAX,
     NORMAL_MODE_ENGLISH_MIN,
+    NORMAL_MODE_ENGLISH_TARGET,
     assess_language,
 )
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
@@ -60,6 +61,7 @@ from mammamiradio.hosts.scriptwriter import (
     _personality_modifier,
     _plan_listener_request_block,
     _regular_hosts,
+    assess_spoken_texts,
     repair_banter_without_listener_context,
     write_ad,
     write_banter,
@@ -1366,10 +1368,34 @@ def test_normal_mode_repair_prompt_still_asks_for_the_target_band(config):
     ledger reports against.
     """
     band = f"{round(NORMAL_MODE_ENGLISH_MIN * 100)}–{round(NORMAL_MODE_ENGLISH_MAX * 100)}%"
+    target = f"{round(NORMAL_MODE_ENGLISH_TARGET * 100)}%"
 
     assert band in _NORMAL_MODE_LANGUAGE_REPAIR
     assert band in language_mode_rule(False, "en")
+    assert target in _NORMAL_MODE_LANGUAGE_REPAIR
+    assert target in language_mode_rule(False, "en")
     assert "Do not answer by dropping\nItalian altogether" in _NORMAL_MODE_LANGUAGE_REPAIR
+
+
+def test_assess_spoken_texts_separates_acceptance_from_the_preferred_band(config):
+    """English-only copy is accepted, and the ledger still records the drift.
+
+    ``accepted`` is now true for both a healthy 75/25 exchange and an all-English
+    one, so ``within_preferred_band`` is what keeps an English-only station
+    visible to the same provenance analysis that surfaced the original bug.
+    """
+    config.super_italian_mode = False
+    on_target = assess_spoken_texts(["The music is back and we stay with the song, ciao amici grazie"], config)
+    english_only = assess_spoken_texts(["The music is back and we stay with the song tonight"], config)
+
+    assert on_target["target_english_share"] == NORMAL_MODE_ENGLISH_TARGET
+    assert (on_target["accepted"], on_target["within_preferred_band"]) == (True, True)
+
+    assert english_only["english_share"] == 1.0
+    assert english_only["italian_tokens"] == 0
+    assert english_only["accepted"] is True
+    assert english_only["decision"] == "accepted"
+    assert english_only["within_preferred_band"] is False
 
 
 def test_normal_mode_language_guard_ignores_ambiguous_short_markers(config):
