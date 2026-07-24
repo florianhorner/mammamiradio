@@ -203,7 +203,7 @@ def language_mode_rule(super_italian: bool, language_code: str) -> str:
         language_name = _LANGUAGE_NAMES.get(code, code) if code else "Italian"
         return f"ALL text in {language_name}."
     return (
-        "Target 75% English / 25% Italian (acceptable range 70–85% English): "
+        "Target 75% English / 25% Italian (keep English within 70–85%): "
         "English carries the information, Italian the flavor — Italian moments "
         "land without translation. Short copy must include an English phrase."
     )

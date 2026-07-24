@@ -66,6 +66,8 @@ from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — A
     select_ad_promo_tag,
 )
 from mammamiradio.hosts.language_policy import (
+    NORMAL_MODE_ENGLISH_MAX,
+    NORMAL_MODE_ENGLISH_MIN,
     NORMAL_MODE_ENGLISH_TARGET,
     assess_language,
 )
@@ -1586,11 +1588,13 @@ def _anthropic_text(content: object) -> str:
 
 _NORMAL_MODE_LANGUAGE_REPAIR = """
 NORMAL MODE LANGUAGE REPAIR:
-The previous JSON was too Italian for Normal Mode. Rewrite the same content as
-English-led host speech: target roughly 75% English / 25% Italian, staying within
-the accepted 70–85% English range. English carries the
-information and full sentences; Italian is only greetings, reactions, punchlines,
-and colour. Keep the same JSON schema and valid host names.
+The previous JSON did not contain enough clearly English spoken copy for Normal
+Mode. Rewrite the same content as English-led host speech: target roughly 75%
+English / 25% Italian, keeping English within 70–85%. Do not answer by dropping
+Italian altogether — the exchange still needs its Italian greetings, reactions,
+and punchlines. English carries the information and full sentences; Italian is
+only greetings, reactions, punchlines, and colour. Keep the same JSON schema and
+valid host names.
 """.strip()
 
 
@@ -1649,12 +1653,19 @@ def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
 
 
 def assess_spoken_texts(texts: list[str], config: StationConfig) -> dict[str, object]:
-    """Return JSON-safe policy telemetry for final spoken provenance rows."""
+    """Return JSON-safe policy telemetry for final spoken provenance rows.
+
+    ``accepted`` reflects the guard, which only turns back Italian-heavy copy.
+    ``within_preferred_band`` reports the two-sided 70-85% target separately, so
+    the ledger can still show a station drifting English-only — a direction the
+    guard deliberately no longer rejects.
+    """
     assessment = assess_language(texts)
     accepted = _normal_mode_language_ok(texts, config)
     return {
         "mode": "super_italian" if config.super_italian_mode else "normal",
         "target_english_share": NORMAL_MODE_ENGLISH_TARGET,
+        "within_preferred_band": (NORMAL_MODE_ENGLISH_MIN <= assessment.english_share <= NORMAL_MODE_ENGLISH_MAX),
         "total_tokens": assessment.total_tokens,
         "english_tokens": assessment.english_tokens,
         "italian_tokens": assessment.italian_tokens,
