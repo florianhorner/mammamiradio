@@ -372,6 +372,57 @@ async def test_listener_truth_repair_refuses_a_damaged_exchange(config, state):
 
 
 @pytest.mark.asyncio
+async def test_listener_truth_repair_publishes_its_own_accounting(config, state):
+    """The repair replaces the exchange, so it must replace the accounting too.
+
+    Otherwise the rejected banter's numbers ride onto the repair's ledger row and
+    describe copy that never aired.
+    """
+    regulars = _regular_hosts(config)
+    state.last_banter_line_loss = {"authored": 9, "aired": 1}
+    response = {
+        "lines": [
+            {"host": regulars[0].name, "text": TEXT_A},
+            {"host": regulars[1].name, "text": TEXT_B},
+            {"host": regulars[1].name, "text": "[ride]"},
+            {"host": regulars[0].name, "text": TEXT_C},
+        ]
+    }
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert [line.text for line in result] == [TEXT_A, TEXT_B, TEXT_C]
+    assert state.last_banter_line_loss is not None
+    assert state.last_banter_line_loss["authored"] == 4
+    assert state.last_banter_line_loss["aired"] == 3
+    assert state.last_banter_line_loss["dropped_empty"] == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_clears_accounting_for_a_clean_exchange(config, state):
+    regulars = _regular_hosts(config)
+    state.last_banter_line_loss = {"authored": 9, "aired": 1}
+    response = {
+        "lines": [
+            {"host": regulars[0].name, "text": TEXT_A},
+            {"host": regulars[1].name, "text": TEXT_B},
+        ]
+    }
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        await repair_banter_without_listener_context(state, config)
+
+    assert state.last_banter_line_loss is None
+
+
+@pytest.mark.asyncio
 async def test_listener_truth_repair_keeps_an_intact_exchange(config, state):
     regulars = _regular_hosts(config)
     response = {

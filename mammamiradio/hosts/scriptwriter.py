@@ -3022,12 +3022,17 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
         if not isinstance(raw_line, dict):
             line_loss.dropped_malformed += 1
             continue
+        # Tag the position before any reason to drop it: the model assigned this
+        # turn to a host, so if it disappears from between two lines by another
+        # host, the alternation it was meant to provide is what went missing.
+        # Only a shape with no host at all (above) stays untagged, and that never
+        # had a speaker to lose.  write_banter tags at the same point.
+        host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
+        authored_tags[authored_index] = _normalize_host_tag(host.name)
         text = raw_line.get("text")
         if not isinstance(text, str):
             line_loss.dropped_malformed += 1
             continue
-        host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
-        authored_tags[authored_index] = _normalize_host_tag(host.name)
         text = _strip_raw_delivery_directives(text)
         if not text:
             line_loss.dropped_empty += 1
@@ -3053,6 +3058,7 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
         return None
     if contains_unsafe_listener_claims(line.text for line in result):
         return None
+    state.last_banter_line_loss = line_loss.as_row() if line_loss.dropped else None
     return result
 
 

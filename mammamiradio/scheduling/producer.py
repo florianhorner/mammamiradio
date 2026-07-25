@@ -1340,6 +1340,9 @@ async def _listener_truth_guard(
     state.pending_verbal_gag = None
     state.last_banter_home_fact = None
     state.last_banter_return_authority = None
+    # The rejected exchange's line accounting describes copy that is about to be
+    # thrown away; leaving it set would attach it to the repair's ledger row.
+    state.last_banter_line_loss = None
     repaired_lines = await _sw.repair_banter_without_listener_context(state, config)
     if repaired_lines is None or contains_unsafe_listener_claims(_dialogue_line_text(line) for line in repaired_lines):
         logger.error("Listener-truth repair remained unsafe; abandoning generated banter")

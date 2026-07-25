@@ -12,3 +12,12 @@ All checks passed
 All invariants passed.
 
 Changelog lint clean.
+
+$ make check   (2026-07-25T00:23:54Z, after review-bot follow-up)
+
+All checks passed!
+Success: no issues found in 296 source files
+Required test coverage of 92.0% reached. Total coverage: 92.46%
+5554 passed, 3 skipped, 21 deselected, 1 warning in 169.07s (0:02:49)
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed
