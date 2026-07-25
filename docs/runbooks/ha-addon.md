@@ -136,7 +136,7 @@ Current config options:
 | `songs_between_banter` | `int(2,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER` |
 | `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
-| `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup trims it to what the disk can hold — see `docs/operations.md` → "Music cache sizing") |
+| `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
@@ -184,8 +184,8 @@ The option extraction in run.sh uses a single guarded Python script that reads k
 2. Add a translation entry in `translations/en.yaml`
 3. Add the run.sh export, either in the tuple loop for direct UPPER_CASE keys or as an explicit mapping for app-specific env vars
 4. Read it in `config.py` via `os.getenv("MY_OPTION", "default")`
-5. Add a row to the **Current config options** table above — it is meant to be exhaustive, and it is the step that gets forgotten
-6. Mirror steps 1-2 into `ha-addon/mammamiradio-edge/` (`scripts/validate-addon.sh` fails on stable/edge drift)
+5. Add a row to the **Current config options** table above. The table must include every option.
+6. Mirror steps 1-2 into `ha-addon/mammamiradio-edge/`. `scripts/validate-addon.sh` checks stable and Edge parity.
 
 **Media-player ownership.** Stable and Edge manifests default
 `ha_media_player_push` to `true`, so an add-on-only setup gets a basic

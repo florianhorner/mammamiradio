@@ -355,11 +355,10 @@ def test_broadcast_chain_defaults_off_without_env(monkeypatch):
     assert config.audio.broadcast_chain is False
 
 
-# ── Normalization cache ceiling ──────────────────────────────────────────────
-# A 500 MB ceiling evicted 51-65 files/hour on the HA Green, so more than half a
-# 200-track rotation stayed permanently cold and re-paid the ~65s cold render.
-# The add-on now defaults to 1500 MB. The parsing must never raise: this runs
-# during config load, and an exception here means the station does not boot.
+# Normalization cache ceiling
+# A 500 MB ceiling left more than half of a 200-track rotation cold and caused
+# repeated ~65-second renders on HA Green. The add-on now defaults to 1500 MB.
+# Config parsing must not raise because it runs during startup.
 
 
 def test_max_cache_size_defaults_to_500_standalone(monkeypatch):
@@ -383,8 +382,7 @@ def test_max_cache_size_env_override_wins(monkeypatch):
 
 
 def test_max_cache_size_garbage_degrades_to_default_without_raising(monkeypatch, caplog):
-    """The bug this guards: int(os.getenv(...)) raised ValueError and aborted config
-    load, so one bad character meant no station at all."""
+    """Malformed input uses the default and logs a warning instead of aborting."""
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("HASSIO_TOKEN", raising=False)
     monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "1500MB")

@@ -1264,11 +1264,9 @@ def test_addon_schema_has_no_provider_secret_fields() -> None:
 
 
 def test_addon_cache_default_is_consistent_across_files() -> None:
-    """The add-on cache default is a hand-copied literal in five places.
+    """Check that the add-on cache default is identical in all five config paths.
 
-    Drift means the HA Configuration tab shows one number while the runtime uses
-    another — the operator raises the cache to stop songs repeating, and nothing
-    changes. Same failure shape as port drift above, so guard it the same way.
+    A mismatch would leave the Configuration tab and runtime using different values.
     """
     import re
 
@@ -1299,8 +1297,7 @@ def test_addon_cache_default_is_consistent_across_files() -> None:
 
 
 def test_addon_cache_schema_bounds_match_config_py() -> None:
-    """The add-on schema clamp and the runtime clamp must agree, or the Supervisor
-    accepts a value the runtime then silently changes."""
+    """The Supervisor schema and runtime must use the same cache bounds."""
     import re
 
     config_py = (ROOT / "mammamiradio" / "core" / "config.py").read_text()

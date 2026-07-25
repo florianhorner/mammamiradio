@@ -1545,10 +1545,10 @@ def test_validate_aggregates_multiple_errors_each_with_hint():
 
 
 def test_apply_addon_options_maps_cache_mb(monkeypatch, tmp_path):
-    """/data/options.json norm_cache_mb reaches env via _apply_addon_options (the
-    non-run.sh add-on boot path), matching the pacing keys above. This is the
-    second of the two option-ingestion paths; run.sh is covered separately in
-    tests/repo/test_run_sh_options_parser.py."""
+    """Verify that the non-run.sh add-on boot path exports norm_cache_mb.
+
+    The run.sh path is covered in tests/repo/test_run_sh_options_parser.py.
+    """
     import os
 
     options_file = tmp_path / "options.json"
@@ -1564,8 +1564,10 @@ def test_apply_addon_options_maps_cache_mb(monkeypatch, tmp_path):
 
 
 def test_apply_addon_options_cache_mb_absent_leaves_env_unset(monkeypatch, tmp_path):
-    """The upgrade shape: an existing install has no norm_cache_mb key. Nothing is
-    exported, so the add-on default in load_config decides — not a stale value."""
+    """An older options file can omit norm_cache_mb.
+
+    load_config then uses the add-on default without an exported value.
+    """
     import os
 
     options_file = tmp_path / "options.json"
@@ -1577,11 +1579,14 @@ def test_apply_addon_options_cache_mb_absent_leaves_env_unset(monkeypatch, tmp_p
             _apply_addon_options()
         assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
     finally:
+        # The options file also carries songs_between_banter, so _apply_addon_options
+        # exports that too. Clear both, or the pacing value leaks into later tests.
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
         os.environ.pop("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", None)
 
 
 def test_apply_addon_options_cache_mb_rejects_bool(monkeypatch, tmp_path):
-    """bool is an int subclass. A YAML `true` must not become a 1 MB cache."""
+    """Reject JSON booleans so true cannot become a 1 MB cache."""
     import os
 
     options_file = tmp_path / "options.json"

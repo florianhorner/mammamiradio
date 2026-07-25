@@ -232,13 +232,13 @@ for _pace_opt, _pace_env in (
     except (TypeError, ValueError):
         continue
     print('export ' + _pace_env + '=' + shlex.quote(str(_pace_int)))
-# Normalization cache ceiling. Bigger cache = fewer cold ~65s renders, because a
-# whole rotation stays warm instead of being evicted every hour. Config load
-# clamps the value, so a bad one is bounded rather than fatal.
+# Normalization cache ceiling. A larger cache keeps more of the rotation ready and
+# reduces cold renders. Config loading clamps the value, so malformed input uses a
+# safe bound instead of stopping startup.
 cache_mb = opts.get('norm_cache_mb', 1500)
 try:
-    # bool is an int subclass, so int(True) is 1 — a 1 MB cache. Reject it before
-    # converting, matching _apply_addon_options in core/config.py.
+    # Python treats bool as an int. Without this guard, True becomes a 1 MB cache.
+    # Reject bool before conversion to match _apply_addon_options in core/config.py.
     if isinstance(cache_mb, bool):
         raise ValueError
     cache_mb_int = int(cache_mb)

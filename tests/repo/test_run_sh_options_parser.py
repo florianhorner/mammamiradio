@@ -718,10 +718,9 @@ def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
         server.server_close()
 
 
-# ── Music cache size ─────────────────────────────────────────────────────────
-# The cache ceiling reaches the app only through this snippet. A bug here is the
-# class this whole file exists to catch: the export silently vanishes and the
-# station falls back to a default the operator never chose.
+# Music cache size
+# This option reaches the app through the parser below. Keep a test here so a
+# missing export cannot silently replace the chosen value with the default.
 
 
 def test_parser_exports_cache_mb_from_norm_cache_mb_option():
@@ -731,17 +730,14 @@ def test_parser_exports_cache_mb_from_norm_cache_mb_option():
 
 
 def test_parser_cache_mb_missing_key_defaults_to_addon_default():
-    """The upgrade shape: an existing install's /data/options.json predates this
-    option entirely. It must still land on the add-on default, not on the smaller
-    standalone one and not on nothing."""
+    """Older options files may omit norm_cache_mb and should use 1500 MB."""
     rc, stdout, _ = _run_parser({"station_name": "Test"})
     assert rc == 0
     assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
 
 
 def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
-    """bool is included deliberately: it is an int subclass, so an unguarded
-    int(True) yields a 1 MB cache — every song cold, every play."""
+    """JSON booleans are ints in Python, so they must not become a 1 MB cache."""
     for value in ("not-a-number", 0, -5, None, True, False):
         rc, stdout, _ = _run_parser({"norm_cache_mb": value})
         assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
@@ -749,8 +745,7 @@ def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
 
 
 def test_parser_cache_mb_does_not_break_sibling_exports():
-    """A bad value in one key must not take the whole export block down with it —
-    that is the failure mode that once dropped every API key on restart."""
+    """Invalid cache input must not prevent other options from exporting."""
     rc, stdout, _ = _run_parser({"norm_cache_mb": "garbage", "anthropic_api_key": "sk-ant-abc123"})
     assert rc == 0
     exports = _parse_exports(stdout)

@@ -76,10 +76,9 @@ _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
 DEFAULT_STATION_NAME = "Mamma Mi Radio"
 _MAX_STATION_NAME_LEN = 80
 
-# Normalization-cache ceiling, in MB. A normalized track is ~5 MB, so the add-on
-# default holds a full ~200-track rotation and the cold render stops repeating.
-# Bounds exist so a hand-edited or malformed value degrades to a clamp instead of
-# failing config load — the same posture as the pacing overrides.
+# Normalization-cache ceiling in MB. A normalized track uses about 5 MB, so the
+# add-on default covers roughly 200 tracks. Bounds keep malformed values within a
+# usable range instead of failing config load.
 DEFAULT_MAX_CACHE_SIZE_MB = 500
 ADDON_MAX_CACHE_SIZE_MB = 1500
 MIN_MAX_CACHE_SIZE_MB = 200
@@ -1149,9 +1148,8 @@ def _apply_addon_options() -> None:
         if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
             os.environ[env_key] = str(pv)
 
-    # Norm-cache ceiling: same non-run.sh boot path as the pacing block above.
-    # Clamping happens at load time in _env_clamped_int, so a stale value here is
-    # bounded rather than fatal.
+    # This is the add-on boot path that does not use run.sh. _env_clamped_int
+    # applies the bounds during config loading, so stale input cannot abort startup.
     cache_mb = options.get("norm_cache_mb")
     if isinstance(cache_mb, int) and not isinstance(cache_mb, bool) and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB"):
         os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
@@ -1517,12 +1515,11 @@ def _env_positive_int(name: str) -> int | None:
 
 
 def _env_clamped_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
-    """Parse an integer env var, clamping to range; fall back to ``default`` on garbage.
+    """Parse an integer env var, clamp it to range, and use a default for invalid input.
 
-    Unlike :func:`_env_positive_int` this never returns None — the caller needs a
-    concrete number. A malformed value degrades to the default with a warning
-    instead of raising, because this runs during config load: an exception here
-    means the station never boots at all (leadership principle #2, INSTANT AUDIO).
+    Unlike :func:`_env_positive_int`, this always returns a concrete number.
+    Config loading uses this helper so malformed input logs a warning and does not
+    abort startup.
     """
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -2295,10 +2292,8 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         tmp_dir=tmp_dir,
         max_cache_size_mb=_env_clamped_int(
             "MAMMAMIRADIO_MAX_CACHE_MB",
-            # The add-on holds a whole rotation (~200 tracks x ~5 MB); a 500 MB
-            # ceiling evicted 51-65 files/hour on the Green, so more than half the
-            # rotation stayed permanently cold and re-paid the ~65s cold render.
-            # Standalone keeps the smaller default — it is often a laptop.
+            # The add-on default covers a whole rotation of about 200 tracks at
+            # roughly 5 MB each. Standalone keeps the smaller 500 MB default.
             default=ADDON_MAX_CACHE_SIZE_MB if addon_mode else DEFAULT_MAX_CACHE_SIZE_MB,
             minimum=MIN_MAX_CACHE_SIZE_MB,
             maximum=MAX_MAX_CACHE_SIZE_MB,

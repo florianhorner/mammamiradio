@@ -73,41 +73,38 @@ even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 
 ### Music cache sizing
 
-The normalization cache holds ready-to-play songs. A cached song starts almost
-instantly; an uncached one costs a full render (~65s on HA Green hardware), so the
-cache size decides how often a listener waits on that.
+The normalization cache stores ready-to-play songs. A cached song starts almost
+instantly. An uncached song takes a full render, about 65 seconds on HA Green
+hardware, so a small cache makes listeners wait more often.
 
-A normalized track is roughly 5 MB. The ceiling is `MAMMAMIRADIO_MAX_CACHE_MB` —
-default 500 MB standalone, 1500 MB on the add-on, where it appears as the **Music
-cache size (MB)** option (`norm_cache_mb`). Values outside 200-8000 are clamped, and
-a malformed value falls back to the default with a warning rather than failing the
-boot.
+`MAMMAMIRADIO_MAX_CACHE_MB` sets the ceiling. Standalone defaults to 500 MB. The
+add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
+(`norm_cache_mb`). Values outside 200-8000 are clamped. A malformed value uses the
+default and logs a warning, so config loading can complete.
 
-Size it to the rotation, not to a round number. A 200-track Jamendo rotation needs
-about 1 GB; below that the LRU evicts faster than the rotation comes round and the
-same cold tracks re-render forever. Symptom to watch for: a handful of songs
-repeating while others never seem to play. Enabling **On-Air Sound** roughly doubles
-per-track footprint, because each song then keeps both a normalized file and a
-coloured bake.
+Size the cache for the rotation. A 200-track Jamendo rotation needs about 1 GB.
+Below that, LRU eviction can remove tracks before the rotation returns, which
+causes repeated cold renders. If a few songs repeat while others rarely play,
+increase the cache. **On-Air Sound** roughly doubles the per-track footprint
+because each song keeps a normalized file and a coloured bake.
 
-At startup the effective ceiling is trimmed to what the disk can actually hold
-(free space plus the reclaimable cache, less a 512 MB reserve) and written back, so
-the producer's periodic eviction pass enforces the same number. A ceiling above free
-space would never trigger eviction, so the cache would grow until the volume filled —
-on the add-on that volume is `/data`, shared with the database and the ledger. The
-trim logs a warning naming both numbers.
+At startup, the station combines free space, reclaimable cache bytes, and a 512 MB
+reserve to choose the effective ceiling. It writes that value back to the config
+object so the producer periodic eviction pass uses the same limit. A configured
+ceiling above available free space would not trigger eviction and could fill the
+volume. On the add-on, that volume is `/data`, shared with the database and ledger.
+The station logs the configured and effective values when it lowers the ceiling.
 
-The trim stops at a 200 MB floor and will not go below it even when the disk cannot
-honour that much. This is deliberate: the norm cache doubles as the rescue pool the
-playback loop reaches for during queue starvation, and emptying it to reclaim disk
-would trade a full disk for dead air. On a disk that full the startup log says so in
-those terms rather than reporting a smaller ceiling as if it had fixed anything —
-the only real fix is freeing space on the add-on's data disk.
+The effective ceiling stops at 200 MB. The norm cache also supplies fallback audio
+when the playback queue needs a ready track, so startup keeps that floor even when
+the disk has less room. In that case, the log says the disk is nearly full, warns
+that the minimum may still exceed available space, and tells the operator to free
+space on the add-on data disk.
 
-Known limitation: the effective ceiling is visible in the startup log and in
-authenticated `/status` (`cache_limit_mb`), but the add-on Configuration tab keeps
-showing the value you set. If you raised the cache and songs still repeat, check
-`ha apps logs` for a trim warning before assuming the setting did nothing.
+The effective ceiling appears in the startup log and in authenticated `/status`
+as `cache_limit_mb`. The add-on Configuration tab continues to show the value you
+entered. If songs still repeat after raising the setting, check `ha apps logs`
+for a trim warning.
 
 ## Startup model
 

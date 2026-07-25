@@ -46,7 +46,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Purges suspect cache files (< 10KB, likely failed downloads), trims the configured cache ceiling to what the disk can actually hold (`_disk_safe_cache_ceiling_mb`; a ceiling above free space would never evict), and evicts old cache entries down to it.
+3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
 5. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
 6. Initializes the clip ring buffer for WTF clip sharing.
