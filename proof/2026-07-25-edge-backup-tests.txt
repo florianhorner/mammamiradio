@@ -1,0 +1,54 @@
+mammamiradio proof — florianhorner/fix/edge-backup @ ae80ca85f04bb5e5aaf5cacb9b726e436730d428
+Generated 2026-07-25 (UTC)
+
+## lint (ruff check .)
+All checks passed!
+
+## format (ruff format --check .)
+325 files already formatted
+
+## typecheck (mypy mammamiradio/ tests/)
+Success: no issues found in 296 source files
+
+## tests — full suite, no coverage instrumentation, fail-fast, unrandomized
+$ python -m pytest tests/ -x -q --no-cov -p no:randomly
+5572 passed, 3 skipped, 21 deselected, 1 warning in 161.47s (0:02:41)
+
+## tests — full suite under coverage (make check)
+5571 passed, 1 failed, 3 skipped, 21 deselected, 1 warning in 195.88s (0:03:15)
+FAILED tests/scheduling/test_producer_unit.py::test_source_switch_discards_stale_music_segment
+Pre-existing coverage-instrumentation timing flake, unrelated to this diff
+(this PR touches no files under mammamiradio/scheduling/). Confirmed by
+re-running the single test in isolation (passed) and the full suite without
+coverage instrumentation (passed, see above). Known pattern — async-loop
+tests waiting on wall-clock timing flake under coverage.
+
+## coverage
+Required test coverage of 92.0% reached. Total coverage: 92.43%
+All coverage floors held (ratchet headroom on 4 modules, no regressions).
+
+## new/changed test file — tests/addon/test_addon_backup_contract.py
+$ python -m pytest tests/addon/test_addon_backup_contract.py -v
+42 passed in 0.78s
+(38 original cases + 2 added post-review: depth-generalization coverage for
+single-segment exclude patterns — "music/tmp/orphan_render.mp3" and
+"cache/library/downloads/current.part" excluded; "cache/archive/current.m4a"
+and "cache/archive/current.webm" retained as near-misses.)
+
+## scripts/validate-addon.sh (static checks, all 13 sections)
+52 PASS, 0 FAIL
+All checks passed. Safe to push.
+
+## scripts/validate-addon.sh --build (Docker image build)
+n/a — no Docker daemon available in this Conductor workspace
+(dial unix /var/run/docker.sock: connect: no such file or directory).
+Static manifest/schema/backup-contract validation above (13/13 sections)
+covers everything this diff touches. Multi-arch image build runs in CI via
+.github/workflows/docker.yml on this PR.
+
+## pre-ship review squad (adversarial + test-coverage + docs/config-consistency)
+3 parallel agents, no P0/P1 findings. Test-coverage agent's one P1 (exclusion
+model untested at non-root depth for single-segment patterns) closed by the
+two added test cases above. Adversarial agent independently verified the
+exclusion-matching model against real upstream Home Assistant Supervisor
+(commit 4152855) and securetar (commit 64434c78) source — confirmed correct.
