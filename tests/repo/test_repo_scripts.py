@@ -506,6 +506,23 @@ def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -
     assert r"\bsuperseded\b" in result.stdout
 
 
+VALIDATE_ADDON_BACKUP_CONTRACT = (
+    "backup: hot",
+    "backup_exclude:",
+    '  - "tmp"',
+    '  - "cache/.ytdlp_tmp"',
+    '  - "cache/restart_handoff"',
+    '  - "cache/clips"',
+    '  - "cache/*.mp3"',
+    '  - "cache/*.mp3.json"',
+    '  - "cache/*.m4a"',
+    '  - "cache/*.webm"',
+    '  - "*.part"',
+    '  - "*.ytdl"',
+    '  - "*.tmp"',
+)
+
+
 def _create_validate_addon_repo(
     tmp_path: Path,
     *,
@@ -526,6 +543,7 @@ def _create_validate_addon_repo(
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  anthropic_api_key: ""',
                 '  openai_api_key: ""',
@@ -783,6 +801,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  anthropic_api_key: ""',
                 '  openai_api_key: ""',
@@ -824,6 +843,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  station_name: "Test"',
                 '  quality_profile: "balanced"',
@@ -887,6 +907,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  station_name: "Test"',
                 "schema:",
