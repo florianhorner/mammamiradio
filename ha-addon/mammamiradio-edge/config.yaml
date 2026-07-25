@@ -24,6 +24,19 @@ ports_description:
   8000/tcp: Web UI and stream
 map:
   - addon_config:rw
+backup: hot
+backup_exclude:
+  - "tmp"
+  - "cache/.ytdlp_tmp"
+  - "cache/restart_handoff"
+  - "cache/clips"
+  - "cache/*.mp3"
+  - "cache/*.mp3.json"
+  - "cache/*.m4a"
+  - "cache/*.webm"
+  - "*.part"
+  - "*.ytdl"
+  - "*.tmp"
 options:
   station_name: "Mamma Mi Radio"
   enable_home_assistant: true
