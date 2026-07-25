@@ -2794,12 +2794,10 @@ Return JSON:
         line_loss.aired = len(result)
         deduped_has_guest_host_line = any(_is_local_guest_host_name(line.host.name) for line in result)
         deduped_has_regular_host_line = any(not _is_local_guest_host_name(line.host.name) for line in result)
-        # A drop that leaves a solo line is never a real exchange, whichever site
-        # dropped it.  The old guard only covered the guest-host gate, so dedup
-        # could collapse a break to one line and still air it — with the duration
-        # floor switched off, because both floors return None below two lines.
-        if line_loss.dropped and len(result) < 2:
-            raise ValueError("banter response contained no full exchange after per-line drops")
+        # A solo line is never a real exchange, whether the model authored only
+        # one usable line or per-line processing reduced the response to one.
+        if len(result) < 2:
+            raise ValueError("banter response contained fewer than two usable lines")
         if accepted_guest_host_line and not deduped_has_regular_host_line:
             raise ValueError("banter response contained no regular host lines after dedup")
         # A dropped line can weld its two neighbours onto one speaker, so the host
@@ -2807,12 +2805,12 @@ Return JSON:
         # a model that already wrote two lines for one host is a taste problem,
         # not a hole, and trading that exchange for stock copy would repeat the
         # over-strict mistake this file just came back from.
-        if _drop_caused_same_host_run(
-            result, authored_indices, authored_tags, multi_host=_has_multiple_regular_hosts(config)
-        ):
-            raise ValueError("per-line drops left the same host speaking twice in a row")
         if line_loss.dropped:
             logger.warning("Banter lost lines before air: %s", line_loss.as_row())
+            if _drop_caused_same_host_run(
+                result, authored_indices, authored_tags, multi_host=_has_multiple_regular_hosts(config)
+            ):
+                raise ValueError("per-line drops left the same host speaking twice in a row")
         if deduped_has_guest_host_line:
             guest_host_index = next(idx for idx, line in enumerate(result) if _is_local_guest_host_name(line.host.name))
             has_regular_before = any(
@@ -3060,9 +3058,11 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
     line_loss.aired = len(result)
     if not result:
         return None
+    if len(result) < 2:
+        return None
     if line_loss.dropped:
         logger.warning("Listener-truth repair lost lines: %s", line_loss.as_row())
-        if len(result) < 2 or _drop_caused_same_host_run(
+        if _drop_caused_same_host_run(
             result, authored_indices, authored_tags, multi_host=_has_multiple_regular_hosts(config)
         ):
             return None
