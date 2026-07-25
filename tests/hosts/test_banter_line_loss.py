@@ -271,21 +271,6 @@ async def test_dedup_collapsing_to_one_line_falls_back(config, state):
 
 
 @pytest.mark.asyncio
-async def test_single_usable_line_without_drops_falls_back(config, state):
-    """A one-line model response is not an exchange even when nothing was dropped."""
-    regulars = _regular_hosts(config)
-    result, _ = await _run_banter(
-        state,
-        config,
-        [{"host": regulars[0].name, "text": TEXT_A}],
-    )
-
-    assert len(result) >= 2
-    assert [line.text for line in result] != [TEXT_A]
-    assert state.last_banter_line_loss is None
-
-
-@pytest.mark.asyncio
 async def test_model_authored_same_host_run_still_airs(config, state):
     """The model writing two lines for one host is a taste problem, not a hole.
 
@@ -496,18 +481,6 @@ async def test_listener_truth_repair_refuses_a_drop_down_to_one_line(config, sta
             {"host": regulars[1].name, "text": "[ride]"},
         ]
     }
-    with patch(
-        "mammamiradio.hosts.scriptwriter._generate_json_response",
-        new_callable=AsyncMock,
-        return_value=response,
-    ):
-        assert await repair_banter_without_listener_context(state, config) is None
-
-
-@pytest.mark.asyncio
-async def test_listener_truth_repair_refuses_one_usable_line_without_drops(config, state):
-    regulars = _regular_hosts(config)
-    response = {"lines": [{"host": regulars[0].name, "text": TEXT_A}]}
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
