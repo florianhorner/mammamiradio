@@ -563,6 +563,37 @@ EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
 STABLE_TRANS="ha-addon/mammamiradio/translations/en.yaml"
 EDGE_TRANS="ha-addon/mammamiradio-edge/translations/en.yaml"
+EXPECTED_BACKUP_MODE="backup: hot"
+EXPECTED_BACKUP_EXCLUDE_BLOCK=$(cat <<'EOF'
+  - "tmp"
+  - "cache/.ytdlp_tmp"
+  - "cache/restart_handoff"
+  - "cache/clips"
+  - "cache/*.mp3"
+  - "cache/*.mp3.json"
+  - "cache/*.m4a"
+  - "cache/*.webm"
+  - "*.part"
+  - "*.ytdl"
+  - "*.tmp"
+EOF
+)
+
+STABLE_BACKUP_MODE=$(grep '^backup:' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$STABLE_CONFIG")
+if [ "$STABLE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+    pass "stable backup mode: hot"
+else
+    fail "stable backup mode must be hot"
+fi
+if [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+   [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+    pass "stable backup exclusion contract matches expected paths"
+else
+    fail "stable backup exclusion contract drifted"
+fi
+
 if [ ! -f "$EDGE_CONFIG" ]; then
     echo "  (no edge add-on — skipping)"
 else
@@ -608,6 +639,31 @@ else
         pass "edge stage: experimental"
     else
         fail "edge stage must stay experimental, got: ${EDGE_STAGE:-missing}"
+    fi
+
+    # Hot-backup policy is an exact, ordered contract. Check each manifest
+    # independently so identical (common-mode) drift cannot hide behind parity,
+    # then check parity so unilateral stable/edge changes are explicit.
+    EDGE_BACKUP_MODE=$(grep '^backup:' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$EDGE_CONFIG")
+    if [ "$EDGE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+        pass "edge backup mode: hot"
+    else
+        fail "edge backup mode must be hot"
+    fi
+    if [ "$EDGE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+       [ "$EDGE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup exclusion contract matches expected paths"
+    else
+        fail "edge backup exclusion contract drifted"
+    fi
+    if [ "$STABLE_BACKUP_MODE" = "$EDGE_BACKUP_MODE" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "$EDGE_BACKUP_EXCLUDE_COUNT" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EDGE_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup contract matches stable"
+    else
+        fail "edge backup contract drifted from stable"
     fi
 
     # options + schema parity with stable (edge runs the same image/run.sh).
