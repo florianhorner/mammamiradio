@@ -1341,6 +1341,17 @@ async def synthesize_ad(
         for part in script.parts
         if part.type in ("voice", "sfx", "pause") and (part.type != "voice" or part.text)
     ]
+    # A voice part with empty text drops out here. has_required_voice below only
+    # asserts that SOME voice survived, so the ad still airs with a hole where
+    # that copy was — leave a trace rather than losing it silently.
+    dropped_voice_parts = sum(1 for part in script.parts if part.type == "voice" and not part.text)
+    if dropped_voice_parts:
+        logger.warning(
+            "Ad %s dropped %d empty voice part(s) of %d before render",
+            getattr(script, "brand", "?"),
+            dropped_voice_parts,
+            sum(1 for part in script.parts if part.type == "voice"),
+        )
 
     # Launch motif generation + all parts concurrently.  Every owned task must
     # settle before cleanup: a sibling can still be writing from an executor

@@ -714,6 +714,11 @@ class StationState:
     # an older fact to unrelated speech.
     last_banter_home_fact: PromptFact | None = None
     last_banter_return_authority: HomeReturnAuthority | None = None
+    # Per-line loss accounting for the banter the scriptwriter just returned
+    # (same lifetime as last_banter_script). The producer copies it onto the
+    # Tier-2 provenance row so a debrief can tell a full exchange from a short
+    # one without re-parsing the raw model output. None when nothing was lost.
+    last_banter_line_loss: dict[str, int] | None = None
     # Community-inspired Impossible Moments recipe telemetry. Public surfaces
     # may expose only the coarse family labels; recipe internals stay admin-only.
     ha_ritual_context: str = ""

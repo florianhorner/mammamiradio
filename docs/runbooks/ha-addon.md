@@ -294,6 +294,89 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 
 **Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
 
+## Hot backup and restore contract
+
+Stable and Edge declare the same `backup: hot` contract. Home Assistant can
+therefore collect the app's `/data` and `/config` trees while playback keeps
+running; there are no stop/start backup hooks. The exclusion list keeps
+Supervisor out of high-churn, rebuildable audio:
+
+- `/data/tmp`, yt-dlp scratch, restart-handoff media, and temporary share clips
+- direct generated audio and sidecars under `/data/cache`
+- `.part`, `.ytdl`, and `.tmp` files at any depth
+
+The backup retains `/data/options.json`, `/config/secrets.env`,
+`/data/cache/mammamiradio.db`, durable JSON state and flags, and provenance
+ledger `.jsonl` / `.jsonl.gz` files. Those are the station's settings, provider
+keys, memory, and retained history. Generated downloads, normalization outputs,
+renders, and clips warm again after restore.
+
+`/data/music` is deliberately retained, but it is storage-only today. The
+current app runs from `/app` and resolves its local `music/` source there; it is
+not wired to `/data/music` as an operator-managed local library. Do not describe
+backing up that directory as enabling local-library restore behavior.
+
+This is a live, file-level copy, **not a copy taken from one single exact
+moment** of the retained state. SQLite may commit while Supervisor is
+traversing the tree; its rollback journal remains included when present, but
+inclusion alone does not make the copy a single-moment snapshot. Ledger
+rollover writes a
+`.jsonl.gz.tmp`, atomically publishes the `.jsonl.gz`, then removes the source
+`.jsonl`, while retention can delete old ledger files. Excluding `*.tmp`
+protects the staging file, but a narrow source-delete or retention-delete race
+remains. The contract removes the observed high-churn generated-media race; it
+does not promise universal hot-snapshot consistency.
+
+**When the manifest takes effect.** Merging the manifest changes updates the
+repository metadata seen by a new or reinstalled Stable app after its catalog
+refresh. An existing Stable installation keeps the manifest metadata that came
+with its installed app version until it updates. Edge is the controlled
+installed canary. A merge by itself does not change a running installation.
+
+### Edge backup canary and stable-release gate
+
+Run this gate after the exact-head Edge image is built and Edge is installed
+through the normal planned update path. The update has one expected restart;
+the backup itself must not restart the app.
+
+1. Start a partial backup while audio is playing. Require Edge to be present,
+   `failed_addons` to be empty, and no
+   `Error adding ... No such file or directory` message in the backup log.
+   `/healthz` and `/readyz` must remain `200`, the restart count must not change
+   during the backup, and listening must remain continuous.
+2. Inspect the archive member list and extracted files **regardless of archive
+   size**. Confirm the retained files above are present and the excluded
+   generated-media paths are absent. On the current canary host, a result below
+   50 MiB while `/data/music` is empty is a useful diagnostic; it is not a
+   product limit or a promise for other installations. A larger result blocks
+   Stable promotion until its contents are explained.
+3. Compare the pre-backup and restored `secrets.env` with a silent digest
+   comparison only. For example, with shell tracing disabled, use `cmp -s`
+   over two binary SHA-256 streams and inspect only the exit status. Never
+   print, log, or paste the secret file or either fingerprint.
+4. On the extracted `mammamiradio.db`, require both
+   `PRAGMA quick_check;` and `PRAGMA integrity_check;` to return `ok`. Confirm
+   the expected tables are present: `tracks`, `play_history`,
+   `listener_persona`, `listener_session_receipts`, `track_rules`, `song_cues`,
+   and the install-origin witness
+   `_mammamiradio_home_install_origin_v1`.
+5. Parse every retained JSON document. Validate every plain ledger JSONL row,
+   run a gzip integrity check on each `.jsonl.gz`, then parse every decompressed
+   row as JSON. An archive that merely opens is not sufficient.
+6. Restore into a disposable Home Assistant test installation before treating
+   the contract as Stable-ready. Confirm settings, provider-key presence
+   without revealing the key, station memory, and retained history; start the
+   restored app and verify that generated audio rebuilds while the station
+   becomes ready.
+7. Confirm the next scheduled automatic backup includes Edge under the same
+   checks.
+
+SQLite integrity, ledger readability, and the disposable restore are
+Stable-release gates, not optional diagnostics. If a retained-state check or
+restore fails—or a retained ledger file hits the narrow delete race—stop the
+rollout and design an application-coordinated snapshot. Do not switch to cold
+backup or add emergency stop/start hooks as a workaround.
+
 ## Landing a PR (merge gate)
 
 Landing is mechanized — see the **Landing contract** in `CLAUDE.md` "Quality
