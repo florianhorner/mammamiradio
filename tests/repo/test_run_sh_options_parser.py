@@ -716,3 +716,38 @@ def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# Music cache size
+# This option reaches the app through the parser below. Keep a test here so a
+# missing export cannot silently replace the chosen value with the default.
+
+
+def test_parser_exports_cache_mb_from_norm_cache_mb_option():
+    rc, stdout, _ = _run_parser({"norm_cache_mb": 2200})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "2200"
+
+
+def test_parser_cache_mb_missing_key_defaults_to_addon_default():
+    """Older options files may omit norm_cache_mb and should use 1500 MB."""
+    rc, stdout, _ = _run_parser({"station_name": "Test"})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
+    """JSON booleans are ints in Python, so they must not become a 1 MB cache."""
+    for value in ("not-a-number", 0, -5, None, True, False):
+        rc, stdout, _ = _run_parser({"norm_cache_mb": value})
+        assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
+        assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+def test_parser_cache_mb_does_not_break_sibling_exports():
+    """Invalid cache input must not prevent other options from exporting."""
+    rc, stdout, _ = _run_parser({"norm_cache_mb": "garbage", "anthropic_api_key": "sk-ant-abc123"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-abc123"
+    assert exports["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"

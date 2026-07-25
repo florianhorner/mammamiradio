@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from mammamiradio.audio.normalizer import norm_cache_duration_sec
-from mammamiradio.core.config import DEFAULT_STATION_NAME, load_config
+from mammamiradio.core.config import DEFAULT_STATION_NAME, MIN_MAX_CACHE_SIZE_MB, load_config
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.authorization import HomeAuthorization
@@ -188,6 +188,58 @@ async def _restore_direction_targets_background(app_state, heading_id: str, raw_
         logger.warning("Persisted direction background restore failed", exc_info=True)
 
 
+def _scan_cache_dir(cache_dir: Path) -> tuple[int, int]:
+    """Scan the cache once and return (normalized track count, MP3 megabytes).
+
+    Startup needs the count for its summary and the total size for the disk
+    ceiling. One stat pass avoids extra work on SD-card storage.
+
+    Skip files that disappear during the scan.
+    """
+    norm_count = 0
+    total_bytes = 0
+    try:
+        entries = list(cache_dir.glob("*.mp3"))
+    except OSError:
+        return 0, 0
+    for f in entries:
+        if f.name.startswith("norm_"):
+            norm_count += 1
+        try:
+            total_bytes += f.stat().st_size
+        except OSError:
+            continue  # Eviction or a purge removed the file before stat().
+    return norm_count, total_bytes // (1024 * 1024)
+
+
+def _disk_safe_cache_ceiling_mb(cache_dir: Path, configured_mb: int, *, cached_mb: int) -> tuple[int, bool]:
+    """Return ``(ceiling_mb, disk_limited)`` for a cache that fits the disk.
+
+    A ceiling above free space never triggers eviction. The cache can then fill
+    the volume and block later writes. Count cached bytes as reclaimable, reserve
+    headroom, and cap the ceiling at the affordable size.
+
+    ``ceiling_mb`` is never below ``MIN_MAX_CACHE_SIZE_MB``: when space is below
+    that floor, keep the floor so playback retains its ready-track fallback.
+
+    ``disk_limited`` is True when free space, not the configured value, decided
+    the answer. The caller warns on that flag rather than on the number changing —
+    a station already configured at the floor would otherwise sit on a full disk
+    and say nothing, because the trimmed value equals the configured one.
+
+    If the mount cannot be read, keep the configured value and let startup continue.
+    """
+    reserve_mb = 512
+    try:
+        usage = shutil.disk_usage(cache_dir)
+    except OSError:
+        return max(MIN_MAX_CACHE_SIZE_MB, configured_mb), False
+    affordable_mb = (usage.free // (1024 * 1024)) + cached_mb - reserve_mb
+    if affordable_mb >= configured_mb:
+        return max(MIN_MAX_CACHE_SIZE_MB, configured_mb), False
+    return max(MIN_MAX_CACHE_SIZE_MB, affordable_mb), True
+
+
 def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) -> int:
     """Synchronously admit safe handoff music before background tasks start."""
     if state.session_stopped:
@@ -285,11 +337,37 @@ async def startup():
     purged = purge_suspect_cache_files(config.cache_dir)
     if purged:
         logger.info("Cache integrity check: purged %d suspect file(s)", purged)
-    norm_count = len(list(config.cache_dir.glob("norm_*.mp3")))
+    norm_count, cached_mb = _scan_cache_dir(config.cache_dir)
     logger.info("Normalization cache: %d tracks pre-normalized", norm_count)
 
-    # Evict old cached tracks if the cache exceeds the configured size limit
-    evict_cache_lru(config.cache_dir, config.max_cache_size_mb)
+    # Choose a disk-safe ceiling before eviction. A limit larger than free space
+    # would not trigger eviction and could fill /data. A failed disk probe leaves
+    # the configured value unchanged so startup can continue.
+    effective_cache_mb, disk_limited = _disk_safe_cache_ceiling_mb(
+        config.cache_dir, config.max_cache_size_mb, cached_mb=cached_mb
+    )
+    if disk_limited:
+        if effective_cache_mb <= MIN_MAX_CACHE_SIZE_MB:
+            # The effective limit is at the floor. The disk may still lack room for
+            # it, so report that condition and tell the operator to free space.
+            logger.warning(
+                "Cache disk is nearly full. The station is using the %d MB minimum instead of the requested "
+                "%d MB. The minimum may still exceed available space, so songs may need to be rebuilt often. "
+                "Free space on the add-on data disk.",
+                effective_cache_mb,
+                config.max_cache_size_mb,
+            )
+        else:
+            logger.warning(
+                "The station reduced the music cache limit from %d MB to %d MB because the cache disk has too "
+                "little free space. Free space or lower the cache size in the add-on settings.",
+                config.max_cache_size_mb,
+                effective_cache_mb,
+            )
+        # Keep the config object and the producer periodic eviction pass on the
+        # same ceiling.
+        config.max_cache_size_mb = effective_cache_mb
+    evict_cache_lru(config.cache_dir, effective_cache_mb)
 
     # R0 privacy bridge: capture the ORIGINAL pre-init database fact before
     # init_db can make every later restart look like an upgrade. The first
