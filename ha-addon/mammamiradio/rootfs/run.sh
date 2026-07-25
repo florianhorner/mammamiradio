@@ -237,6 +237,10 @@ for _pace_opt, _pace_env in (
 # clamps the value, so a bad one is bounded rather than fatal.
 cache_mb = opts.get('norm_cache_mb', 1500)
 try:
+    # bool is an int subclass, so int(True) is 1 — a 1 MB cache. Reject it before
+    # converting, matching _apply_addon_options in core/config.py.
+    if isinstance(cache_mb, bool):
+        raise ValueError
     cache_mb_int = int(cache_mb)
     if cache_mb_int <= 0:
         raise ValueError

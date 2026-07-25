@@ -2949,10 +2949,14 @@ async def test_lifespan_says_plainly_when_the_disk_is_genuinely_full(tmp_path, c
 
 @pytest.mark.asyncio
 async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplog):
-    """End-to-end, unmocked: real files -> real scan -> real trim -> real eviction.
-    The norm-cache rescue pool is a dead-air backstop, so an arithmetic or units
-    bug that over-trims and empties it every boot must fail loudly here. The unit
-    tests above mock disk_usage and evict_cache_lru, so neither would catch it."""
+    """End-to-end on a disk tight enough to force the trim: real files, real scan,
+    real trim arithmetic, real eviction, real rescue selection.
+
+    The norm cache doubles as the rescue pool the playback loop reaches for during
+    queue starvation, so an arithmetic or units bug that over-trims and empties it
+    every boot would be a dead-air bug. disk_usage is the one thing patched — the
+    host's real free space would otherwise leave the ceiling untouched and this
+    test would never enter the branch it exists to cover."""
     import json
 
     from mammamiradio.audio.norm_cache import select_norm_cache_rescue
@@ -2979,18 +2983,30 @@ async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplo
 
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
 
+    # 300 MB free + 12 MB reclaimable - 512 MB reserve is negative, so the trim
+    # lands on the 200 MB floor and the "disk is nearly full" branch fires.
+    tight = SimpleNamespace(total=8000 * 1024 * 1024, used=7700 * 1024 * 1024, free=300 * 1024 * 1024)
+
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
         patch(f"{MODULE}.read_persisted_source", return_value=None),
         patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.disk_usage", return_value=tight),
+        caplog.at_level(logging.WARNING),
     ):
         from mammamiradio.main import _lifespan, app
 
         async with _lifespan(app):
             state = app.state.station_state
 
+    # The trim really fired and was written back for the producer's eviction pass.
+    assert mock_config.max_cache_size_mb == 200
+    assert "nearly full" in caplog.text
+
+    # ...and the rescue pool survived it. 12 MB of cache sits under the 200 MB
+    # floor, so eviction has nothing to take — that is the guarantee worth pinning.
     survivors = list(cache_dir.glob("norm_*.mp3"))
-    assert survivors, "startup trim + eviction emptied the norm cache — rescue pool is gone"
+    assert len(survivors) == 6, "startup trim + eviction removed cached tracks it should have kept"
     assert select_norm_cache_rescue(cache_dir, state) is not None

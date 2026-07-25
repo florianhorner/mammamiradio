@@ -740,7 +740,9 @@ def test_parser_cache_mb_missing_key_defaults_to_addon_default():
 
 
 def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
-    for value in ("not-a-number", 0, -5, None):
+    """bool is included deliberately: it is an int subclass, so an unguarded
+    int(True) yields a 1 MB cache — every song cold, every play."""
+    for value in ("not-a-number", 0, -5, None, True, False):
         rc, stdout, _ = _run_parser({"norm_cache_mb": value})
         assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
         assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
