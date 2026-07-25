@@ -110,7 +110,7 @@ def test_normal_ad_wrapper_inventory_is_english_led():
     assert normal_mode_language_ok(select_ad_promo_tag(False))
 
 
-def test_normal_chaos_inventory_stays_inside_the_language_band():
+def test_normal_chaos_inventory_satisfies_normal_mode_policy():
     assert all(normal_mode_language_ok(text) for lines in CHAOS_NORMAL_STOCK_LINES.values() for text in lines)
 
 

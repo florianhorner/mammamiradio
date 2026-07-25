@@ -1,0 +1,22 @@
+$ make check   (2026-07-24T19:03:03Z, d805b78d)
+
+All checks passed!
+Success: no issues found in 293 source files
+Required test coverage of 92.0% reached. Total coverage: 92.41%
+5426 passed, 3 skipped, 21 deselected, 1 warning in 154.23s (0:02:34)
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed
+  Passed: 11  Failed: 0
+=======================================
+
+All invariants passed.
+
+Changelog lint clean.
+$ make check   (2026-07-24T19:17:28Z, after CodeRabbit follow-up)
+
+All checks passed!
+Success: no issues found in 293 source files
+Required test coverage of 92.0% reached. Total coverage: 92.38%
+5427 passed, 3 skipped, 21 deselected, 1 warning in 162.03s (0:02:42)
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed
