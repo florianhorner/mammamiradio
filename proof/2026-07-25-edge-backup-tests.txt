@@ -1,31 +1,15 @@
-mammamiradio proof — florianhorner/fix/edge-backup @ ae80ca85f04bb5e5aaf5cacb9b726e436730d428
+mammamiradio proof — florianhorner/fix/edge-backup
 Generated 2026-07-25 (UTC)
 
-## lint (ruff check .)
-All checks passed!
-
-## format (ruff format --check .)
-325 files already formatted
-
-## typecheck (mypy mammamiradio/ tests/)
-Success: no issues found in 296 source files
-
-## tests — full suite, no coverage instrumentation, fail-fast, unrandomized
-$ python -m pytest tests/ -x -q --no-cov -p no:randomly
-5572 passed, 3 skipped, 21 deselected, 1 warning in 161.47s (0:02:41)
-
-## tests — full suite under coverage (make check)
-5571 passed, 1 failed, 3 skipped, 21 deselected, 1 warning in 195.88s (0:03:15)
-FAILED tests/scheduling/test_producer_unit.py::test_source_switch_discards_stale_music_segment
-Pre-existing coverage-instrumentation timing flake, unrelated to this diff
-(this PR touches no files under mammamiradio/scheduling/). Confirmed by
-re-running the single test in isolation (passed) and the full suite without
-coverage instrumentation (passed, see above). Known pattern — async-loop
-tests waiting on wall-clock timing flake under coverage.
-
-## coverage
-Required test coverage of 92.0% reached. Total coverage: 92.43%
-All coverage floors held (ratchet headroom on 4 modules, no regressions).
+## make check — final, clean run (source of truth for this proof)
+$ make check
+lint (ruff check .): All checks passed!
+format (ruff format --check .): 325 files already formatted
+typecheck (mypy mammamiradio/ tests/): Success: no issues found in 296 source files
+tests: 5572 passed, 3 skipped, 21 deselected, 1 warning in 150.12s (0:02:30)
+coverage: Required test coverage of 92.0% reached. Total coverage: 92.45%
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed
 
 ## new/changed test file — tests/addon/test_addon_backup_contract.py
 $ python -m pytest tests/addon/test_addon_backup_contract.py -v
@@ -34,6 +18,11 @@ $ python -m pytest tests/addon/test_addon_backup_contract.py -v
 single-segment exclude patterns — "music/tmp/orphan_render.mp3" and
 "cache/library/downloads/current.part" excluded; "cache/archive/current.m4a"
 and "cache/archive/current.webm" retained as near-misses.)
+
+## modified self-test — tests/workflows/test_validate_addon_edge.sh
+$ bash tests/workflows/test_validate_addon_edge.sh
+All 12 scenarios passed (baseline, 4 new backup-contract mutation cases,
+8 pre-existing edge-metadata cases).
 
 ## scripts/validate-addon.sh (static checks, all 13 sections)
 52 PASS, 0 FAIL
@@ -46,9 +35,33 @@ Static manifest/schema/backup-contract validation above (13/13 sections)
 covers everything this diff touches. Multi-arch image build runs in CI via
 .github/workflows/docker.yml on this PR.
 
+## Prior flaky run (resolved, kept for transparency)
+An earlier `make check` run on this branch (before the review-comment fixes
+below) recorded one failure: tests/scheduling/test_producer_unit.py::
+test_source_switch_discards_stale_music_segment. This test lives outside this
+diff's scope (this PR touches no files under mammamiradio/scheduling/) and
+passed both in isolation and in two subsequent full-suite runs, including the
+clean run above — a coverage-instrumentation timing flake, not a regression
+introduced by this change.
+
 ## pre-ship review squad (adversarial + test-coverage + docs/config-consistency)
 3 parallel agents, no P0/P1 findings. Test-coverage agent's one P1 (exclusion
 model untested at non-root depth for single-segment patterns) closed by the
 two added test cases above. Adversarial agent independently verified the
 exclusion-matching model against real upstream Home Assistant Supervisor
 (commit 4152855) and securetar (commit 64434c78) source — confirmed correct.
+
+## PR review comments addressed (CodeRabbit + Copilot, all non-blocking)
+- Copilot: tests/workflows/test_validate_addon_edge.sh's restore_configs()
+  silently swallowed copy errors between assertions, which could let a later
+  mutation run against an already-corrupted config. Split into a strict
+  restore_configs() used between assertions (fails loudly) and a tolerant
+  cleanup() used only by the EXIT trap.
+- CodeRabbit: "transactional point-in-time snapshot" is technical jargon on
+  human-facing surfaces. Replaced with plain language ("not a copy taken from
+  one single exact moment") in docs/runbooks/ha-addon.md, DOCS.md, and both
+  CHANGELOG.md files.
+- CodeRabbit: this proof artifact previously included a failed run without a
+  fully green make check alongside it. Replaced with the clean run above as
+  the primary evidence; the historical flake is now clearly separated and
+  labeled resolved, not presented as passing proof.

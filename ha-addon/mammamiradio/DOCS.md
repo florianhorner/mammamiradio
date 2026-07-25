@@ -98,7 +98,7 @@ Files in `/data/music` are kept as storage, but this app version does not use
 that folder as a local music library.
 
 A hot backup copies retained files while the station is active, so it is not a
-single transactional snapshot of one exact instant. After a restore, confirm
+copy taken from one single exact moment. After a restore, confirm
 your settings and key presence without sharing the keys, then let the app
 rebuild its audio cache and wait for the station to become ready. If the app
 cannot start or its station memory is missing, keep that restored copy stopped

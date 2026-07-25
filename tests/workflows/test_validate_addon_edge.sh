@@ -27,12 +27,19 @@ STABLE_BACKUP="$BACKUP_DIR/stable-config.yaml"
 EDGE_BACKUP="$BACKUP_DIR/edge-config.yaml"
 cp "$STABLE_CONFIG" "$STABLE_BACKUP"
 cp "$EDGE_CONFIG" "$EDGE_BACKUP"
+# Strict restore for use between assertions: a failed copy must abort the
+# test loudly rather than let a later mutation/assertion run against an
+# already-corrupted config and produce a misleading pass/fail result.
 restore_configs() {
+  cp "$STABLE_BACKUP" "$STABLE_CONFIG"
+  cp "$EDGE_BACKUP" "$EDGE_CONFIG"
+}
+# Tolerant restore for the EXIT trap only: on an already-failing/aborting run
+# the backups may be missing or already restored, so best-effort is correct
+# here even though it isn't during normal test flow.
+cleanup() {
   cp "$STABLE_BACKUP" "$STABLE_CONFIG" 2>/dev/null || true
   cp "$EDGE_BACKUP" "$EDGE_CONFIG" 2>/dev/null || true
-}
-cleanup() {
-  restore_configs
   rm -f "$STABLE_CONFIG.tmp" "$EDGE_CONFIG.tmp" "$STABLE_BACKUP" "$EDGE_BACKUP"
   rmdir "$BACKUP_DIR" 2>/dev/null || true
 }

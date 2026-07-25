@@ -316,10 +316,11 @@ current app runs from `/app` and resolves its local `music/` source there; it is
 not wired to `/data/music` as an operator-managed local library. Do not describe
 backing up that directory as enabling local-library restore behavior.
 
-This is a live, file-level copy, **not a transactional point-in-time snapshot**
-of the retained state. SQLite may commit while Supervisor is traversing the
-tree; its rollback journal remains included when present, but inclusion alone
-does not make the copy transactional. Ledger rollover writes a
+This is a live, file-level copy, **not a copy taken from one single exact
+moment** of the retained state. SQLite may commit while Supervisor is
+traversing the tree; its rollback journal remains included when present, but
+inclusion alone does not make the copy a single-moment snapshot. Ledger
+rollover writes a
 `.jsonl.gz.tmp`, atomically publishes the `.jsonl.gz`, then removes the source
 `.jsonl`, while retention can delete old ledger files. Excluding `*.tmp`
 protects the staging file, but a narrow source-delete or retention-delete race
