@@ -3051,6 +3051,7 @@ def _emit_segment_prepared(
     final_script: list[str],
     collector,
     language_assessment: dict | None = None,
+    line_accounting: dict | None = None,
 ) -> None:
     """Tier-2: record the FINAL spoken script (post-processing) for one segment.
 
@@ -3081,6 +3082,12 @@ def _emit_segment_prepared(
         # join on the stable row shape while the assessor evolves independently.
         if isinstance(language_assessment, dict):
             row["language_assessment"] = language_assessment
+        # Present only when lines were actually lost, so its absence means a full
+        # exchange rather than an unwritten field. Without it a short break and a
+        # healthy one are indistinguishable on this row: `final_script` carries
+        # the survivors, never the authored count.
+        if isinstance(line_accounting, dict):
+            row["line_accounting"] = line_accounting
         led.record(row)
     except Exception as exc:  # pragma: no cover - provenance must never break audio
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
@@ -4768,6 +4775,7 @@ async def _run_producer_inner(
                 state.last_banter_ritual_moment_id = ""
                 state.last_banter_home_fact = None
                 state.last_banter_return_authority = None
+                state.last_banter_line_loss = None
 
                 def _drop_unqueued_banter_receipts(reason: str, context: str) -> None:
                     ritual_id = state.last_banter_ritual_moment_id
@@ -4890,6 +4898,7 @@ async def _run_producer_inner(
                                 role="banter",
                                 final_script=line_texts,
                                 collector=_banter_collector,
+                                line_accounting=state.last_banter_line_loss,
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
@@ -4955,6 +4964,7 @@ async def _run_producer_inner(
                                 role="banter",
                                 final_script=line_texts,
                                 collector=_banter_collector,
+                                line_accounting=state.last_banter_line_loss,
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
@@ -5332,6 +5342,7 @@ async def _run_producer_inner(
                 state.last_banter_ritual_moment_id = ""
                 state.last_banter_home_fact = None
                 state.last_banter_return_authority = None
+                state.last_banter_line_loss = None
 
                 def _banter_callback(
                     *,

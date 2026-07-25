@@ -19,9 +19,9 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import cycle
+from itertools import cycle, pairwise
 from typing import TYPE_CHECKING, cast
 
 import anthropic
@@ -1372,6 +1372,14 @@ _DELIVERY_CUES_BY_PROFILE: dict[str, frozenset[str]] = {
     "giulia": frozenset({"neutral", "dry", "curious", "playful"}),
 }
 _RAW_DELIVERY_DIRECTIVE_RE = re.compile(r"\[[^\]\r\n]{0,120}\]")
+# Paired with _strip_raw_delivery_directives: the sanitizer runs on every spoken
+# surface, so the instruction that keeps its input clean has to reach the model on
+# every one too.  It used to live only inside the V3 delivery contract, which is
+# empty whenever no host has V3 cues — so with V3 dormant the sanitizer was armed
+# while the rule that prevents its input was not.
+_CLEAN_SPOKEN_TEXT_RULE = (
+    "Use clean spoken text only: no brackets, audio tags, SSML, stage directions, or sound effects."
+)
 
 
 def _dialogue_line_parts(line: DialogueLine | tuple[HostPersonality, str]) -> tuple[HostPersonality, str]:
@@ -1471,6 +1479,84 @@ def _banter_turn_taking_ok(lines: Sequence[DialogueLine | tuple[HostPersonality,
         if _normalize_host_tag(host.name) == _normalize_host_tag(next_host.name):
             return False
     return True
+
+
+def _has_multiple_regular_hosts(config: StationConfig) -> bool:
+    """Whether the station rosters two or more distinct non-guest hosts."""
+    return len({_normalize_host_tag(host.name) for host in _regular_hosts(config)}) > 1
+
+
+def _drop_caused_same_host_run(
+    lines: Sequence[DialogueLine],
+    authored_indices: Sequence[int],
+    authored_tags: Mapping[int, str],
+    *,
+    multi_host: bool,
+) -> bool:
+    """Whether a dropped line welded two neighbours onto one speaker.
+
+    This is what per-line loss sounds like: the hole closes and a host answers
+    themselves.  ``_banter_turn_taking_ok`` cannot see it — that check only fires
+    on a cut-off, so a complete sentence followed by a same-host line reads as
+    fine.
+
+    Only runs the drop actually *created* count.  A same-host pair is blamed on
+    the drop only when a DIFFERENT host's line was removed from the gap between
+    them (hence ``authored_tags``, which covers dropped positions too).  A model
+    that wrote one host three times in a row already sounded that way, and
+    rejecting it would trade a serviceable exchange for stock copy — the
+    over-strict failure this file just came back from.  Positions with no
+    resolvable host never counted as a speaking turn, so they never break a run.
+
+    ``multi_host`` comes from the roster, never from the survivors.  Reading it
+    off the surviving lines would make this check vanish in the very case it
+    exists for: a drop that leaves nothing but one speaker's lines.
+    """
+    if not multi_host:
+        return False
+    tags = [_normalize_host_tag(line.host.name) for line in lines]
+    for (current_tag, next_tag), (current_index, next_index) in zip(
+        pairwise(tags), pairwise(authored_indices), strict=True
+    ):
+        if current_tag != next_tag:
+            continue
+        gap = range(current_index + 1, next_index)
+        if any(authored_tags.get(position, current_tag) != current_tag for position in gap):
+            return True
+    return False
+
+
+@dataclass
+class LineLossAccounting:
+    """How many authored banter lines survived to air, and where the rest went.
+
+    Recorded on the Tier-2 provenance row so a debrief can tell a healthy break
+    from a short one without re-parsing the raw model output — and so the two
+    existing drop warnings stop being the only trace.
+    """
+
+    authored: int = 0
+    aired: int = 0
+    dropped_empty: int = 0
+    dropped_malformed: int = 0
+    dropped_guest_host: int = 0
+    dropped_duplicate: int = 0
+
+    @property
+    def dropped(self) -> int:
+        """Total lines lost between the model response and the aired exchange."""
+        return self.dropped_empty + self.dropped_malformed + self.dropped_guest_host + self.dropped_duplicate
+
+    def as_row(self) -> dict[str, int]:
+        """Return JSON-safe accounting for the provenance ledger."""
+        return {
+            "authored": self.authored,
+            "aired": self.aired,
+            "dropped_empty": self.dropped_empty,
+            "dropped_malformed": self.dropped_malformed,
+            "dropped_guest_host": self.dropped_guest_host,
+            "dropped_duplicate": self.dropped_duplicate,
+        }
 
 
 def _banter_fallback_pools(config: StationConfig) -> list[list[DialogueLine]]:
@@ -2539,6 +2625,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {context_block}
 </context_awareness>
 {track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
+{_CLEAN_SPOKEN_TEXT_RULE}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"{delivery_schema}}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}{companionship_proof_schema}}}"""
 
@@ -2606,11 +2693,20 @@ Return JSON:
         accepted_guest_host_line = False
         regular_host_line_count = 0
         dropped_guest_host_line = False
+        # Per-line loss accounting.  Every drop site below feeds one of these so a
+        # short exchange is a countable, ledger-visible fact instead of a warning
+        # in a rotated log (the addon runs with --no-access-log).
+        line_loss = LineLossAccounting(authored=len(raw_lines))
         non_neutral_delivery_hosts: set[str] = set()
         # Unknown/misspelled host tags fall back to a REGULAR host (never the guest),
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
-        for line in raw_lines:
+        # Where each surviving line sat in the model's own list, plus the host
+        # every authored position belonged to (dropped ones included), so a
+        # same-host run can be blamed on a drop only when the drop caused it.
+        authored_indices: list[int] = []
+        authored_tags: dict[int, str] = {}
+        for authored_index, line in enumerate(raw_lines):
             if isinstance(line, dict):
                 raw_name = str(line.get("host", "")).strip()
                 raw_guest_host_tag = _is_local_guest_host_tag(raw_name)
@@ -2634,9 +2730,17 @@ Return JSON:
                 raw_guest_host_tag = False
                 raw_delivery = None
             else:
+                logger.warning("Dropped malformed banter line of type %s", type(line).__name__)
+                line_loss.dropped_malformed += 1
                 continue
+            authored_tags[authored_index] = _normalize_host_tag(host.name)
+            raw_stripped = text
             text = _strip_raw_delivery_directives(text)
             if not text:
+                # A bracket-only line ("[ride]", "[applausi]") sanitizes to nothing.
+                # Silently skipping it used to shorten the exchange with no trace.
+                logger.warning("Dropped empty banter line after sanitize: %r", raw_stripped[:60])
+                line_loss.dropped_empty += 1
                 continue
             if isinstance(line, str):
                 str_line_idx += 1
@@ -2644,6 +2748,7 @@ Return JSON:
                 if not guest_host_invited or accepted_guest_host_line:
                     logger.warning("Dropped gated guest-host banter line: %r", text[:60])
                     dropped_guest_host_line = True
+                    line_loss.dropped_guest_host += 1
                     continue
                 accepted_guest_host_line = True
             else:
@@ -2660,6 +2765,7 @@ Return JSON:
                     ),
                 )
             )
+            authored_indices.append(authored_index)
 
         # Genuinely unusable shape (no airable lines) → fall to stock copy via except.
         if not result:
@@ -2671,18 +2777,38 @@ Return JSON:
 
         # Dedup guard: drop consecutive lines with identical text (LLM copy-paste error)
         deduped: list[DialogueLine] = []
-        for entry in result:
+        deduped_indices: list[int] = []
+        for entry, entry_index in zip(result, authored_indices, strict=True):
             if deduped and entry.text == deduped[-1].text:
                 logger.warning("Dropped duplicate banter line: %r", entry.text[:60])
+                line_loss.dropped_duplicate += 1
                 continue
             deduped.append(entry)
+            deduped_indices.append(entry_index)
         result = deduped
+        authored_indices = deduped_indices
+        line_loss.aired = len(result)
         deduped_has_guest_host_line = any(_is_local_guest_host_name(line.host.name) for line in result)
         deduped_has_regular_host_line = any(not _is_local_guest_host_name(line.host.name) for line in result)
-        if dropped_guest_host_line and len(result) < 2:
-            raise ValueError("banter response contained no full exchange after guest-host gate after dedup")
+        # A drop that leaves a solo line is never a real exchange, whichever site
+        # dropped it.  The old guard only covered the guest-host gate, so dedup
+        # could collapse a break to one line and still air it — with the duration
+        # floor switched off, because both floors return None below two lines.
+        if line_loss.dropped and len(result) < 2:
+            raise ValueError("banter response contained no full exchange after per-line drops")
         if accepted_guest_host_line and not deduped_has_regular_host_line:
             raise ValueError("banter response contained no regular host lines after dedup")
+        # A dropped line can weld its two neighbours onto one speaker, so the host
+        # answers themselves on air.  Blame only the runs the drop actually made:
+        # a model that already wrote two lines for one host is a taste problem,
+        # not a hole, and trading that exchange for stock copy would repeat the
+        # over-strict mistake this file just came back from.
+        if _drop_caused_same_host_run(
+            result, authored_indices, authored_tags, multi_host=_has_multiple_regular_hosts(config)
+        ):
+            raise ValueError("per-line drops left the same host speaking twice in a row")
+        if line_loss.dropped:
+            logger.warning("Banter lost lines before air: %s", line_loss.as_row())
         if deduped_has_guest_host_line:
             guest_host_index = next(idx for idx, line in enumerate(result) if _is_local_guest_host_name(line.host.name))
             has_regular_before = any(
@@ -2715,6 +2841,7 @@ Return JSON:
         # the director is reserved at queue admission, never at prompt selection.
         state.last_banter_home_fact = prompt_fact
         state.last_banter_return_authority = return_authority
+        state.last_banter_line_loss = line_loss.as_row() if line_loss.dropped else None
 
         # Seed running jokes (banter self-reference + persona store, unchanged)
         # AND stash a pending verbal gag for the producer to commit to the
@@ -2793,6 +2920,7 @@ Return JSON:
     except Exception as e:
         state.last_banter_home_fact = None
         state.last_banter_return_authority = None
+        state.last_banter_line_loss = None
         if prompt_fact is not None:
             director = getattr(state, "home_context_director", None)
             if director is not None:
@@ -2865,7 +2993,7 @@ welcoming anyone back, or identifying who is listening. Aggregate phrases such
 as "we have company" are allowed only when they do not imply a new arrival.
 {language_mode_rule(config.super_italian_mode, config.station.language)}
 Every cut-off must be answered by a different host and the final line must be complete.
-Use clean spoken text only: no brackets, audio tags, SSML, stage directions, or sound effects.
+{_CLEAN_SPOKEN_TEXT_RULE}
 Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
 
     try:
@@ -2885,22 +3013,40 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
     if not isinstance(raw_lines, list):
         return None
     result: list[DialogueLine] = []
-    for raw_line in raw_lines:
+    # This exchange is already the fallback after a rejected banter, so a silently
+    # short repair airs as the finished product.  Account for the drops here too.
+    line_loss = LineLossAccounting(authored=len(raw_lines))
+    authored_indices: list[int] = []
+    authored_tags: dict[int, str] = {}
+    for authored_index, raw_line in enumerate(raw_lines):
         if not isinstance(raw_line, dict):
+            line_loss.dropped_malformed += 1
             continue
         text = raw_line.get("text")
         if not isinstance(text, str):
-            continue
-        text = _strip_raw_delivery_directives(text)
-        if not text:
+            line_loss.dropped_malformed += 1
             continue
         host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
+        authored_tags[authored_index] = _normalize_host_tag(host.name)
+        text = _strip_raw_delivery_directives(text)
+        if not text:
+            line_loss.dropped_empty += 1
+            continue
         if _is_local_guest_host_name(host.name):
+            line_loss.dropped_guest_host += 1
             continue
         result.append(DialogueLine(host, _fix_wrong_station_names(text, config.display_station_name)))
+        authored_indices.append(authored_index)
 
+    line_loss.aired = len(result)
     if not result:
         return None
+    if line_loss.dropped:
+        logger.warning("Listener-truth repair lost lines: %s", line_loss.as_row())
+        if len(result) < 2 or _drop_caused_same_host_run(
+            result, authored_indices, authored_tags, multi_host=_has_multiple_regular_hosts(config)
+        ):
+            return None
     if not _normal_mode_language_ok([line.text for line in result], config):
         return None
     if not _banter_turn_taking_ok(result):

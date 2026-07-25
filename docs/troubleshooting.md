@@ -115,6 +115,34 @@ Song-end transitions are validated before they reach TTS. Missing, malformed, sh
 
 Generated banter keeps lively interruptions only when the next emitted line belongs to a different host and answers or counters the cut-in. A terminal cut-off, same-speaker continuation, or stray one/two-word fragment rejects the generated exchange and uses the existing stock banter instead. This is script validation only: it does not change TTS, FFmpeg, streaming, or Home Assistant runtime behavior.
 
+## A host answered themselves, or a break sounded shorter than it should
+
+Individual written lines can be unusable and get dropped before air: a line that
+is only a stage direction (`[ride]`, `[applausi]`) sanitizes to nothing, a model
+sometimes repeats a line verbatim, and a guest-host cameo is dropped when the
+guest was not invited to that break. Dropping one used to shorten the exchange
+silently, and if the dropped line sat between the two hosts their surrounding
+lines welded onto one speaker.
+
+A drop is now only allowed to air when what remains still reads as a
+conversation. Fewer than two surviving lines, or a drop that removed the other
+host's line from between two lines by the same host, rejects the generated
+exchange and uses the complete stock banter instead. A model that simply wrote
+two lines for one host is left alone — that is a taste problem, not a hole, and
+trading it for stock copy would lose a serviceable break. The hosts are also
+asked in every banter prompt to keep stage directions out of spoken copy, so the
+sanitizer has less to remove.
+
+Check: grep the log for `Dropped empty banter line`, `Dropped duplicate banter
+line`, `Dropped gated guest-host banter line`, `Dropped malformed banter line`,
+and the summary line `Banter lost lines before air`. With Show Memory (the
+provenance ledger) enabled, the same counts land on the segment's Tier-2 row as
+`line_accounting` (`authored`, `aired`, and a per-reason breakdown); the field is
+present only when lines were actually lost, so its absence means a full exchange.
+Persistent losses usually mean the model is writing stage directions or repeating
+itself — worth checking before assuming a TTS or audio fault, since a per-line
+voice failure fails the whole segment rather than airing it short.
+
 The app tries Anthropic first, then falls back to OpenAI through the active
 quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `model_registry.toml`), then to stock lines. Check the registry—not Python or
