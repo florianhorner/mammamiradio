@@ -21,3 +21,12 @@ Required test coverage of 92.0% reached. Total coverage: 92.46%
 5554 passed, 3 skipped, 21 deselected, 1 warning in 169.07s (0:02:49)
 All coverage floors held. Total: 92% (floor: 92%)
 All checks passed
+
+$ make check   (2026-07-25T02:56:25Z, after CodeRabbit follow-up)
+
+All checks passed!
+Success: no issues found in 296 source files
+Required test coverage of 92.0% reached. Total coverage: 92.47%
+5557 passed, 3 skipped, 21 deselected, 1 warning in 264.74s (0:04:24)
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed

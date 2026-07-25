@@ -2702,8 +2702,11 @@ Return JSON:
         # so a malformed line can't be put in the guest's mouth regardless of roster order.
         fallback_hosts = _regular_hosts(config)
         # Where each surviving line sat in the model's own list, plus the host
-        # every authored position belonged to (dropped ones included), so a
-        # same-host run can be blamed on a drop only when the drop caused it.
+        # every authored position was EXPLICITLY assigned to (dropped ones
+        # included), so a same-host run can be blamed on a drop only when the
+        # drop caused it.  A position the model never named a host for stays
+        # untagged and is read as no-loss: guessing a fallback speaker for it
+        # would invent a vanished turn and reject a serviceable exchange.
         authored_indices: list[int] = []
         authored_tags: dict[int, str] = {}
         for authored_index, line in enumerate(raw_lines):
@@ -2719,6 +2722,8 @@ Return JSON:
                 # so a malformed line falls through to stock copy instead of airing junk.
                 text = raw_text if isinstance(raw_text, str) else ""
                 raw_delivery = line.get("delivery")
+                if raw_name:
+                    authored_tags[authored_index] = _normalize_host_tag(host.name)
             elif isinstance(line, str):
                 # The OpenAI fallback sometimes returns lines as plain
                 # strings with no host. Alternate hosts across the string lines we
@@ -2733,7 +2738,6 @@ Return JSON:
                 logger.warning("Dropped malformed banter line of type %s", type(line).__name__)
                 line_loss.dropped_malformed += 1
                 continue
-            authored_tags[authored_index] = _normalize_host_tag(host.name)
             raw_stripped = text
             text = _strip_raw_delivery_directives(text)
             if not text:
@@ -3022,13 +3026,23 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
         if not isinstance(raw_line, dict):
             line_loss.dropped_malformed += 1
             continue
-        # Tag the position before any reason to drop it: the model assigned this
-        # turn to a host, so if it disappears from between two lines by another
-        # host, the alternation it was meant to provide is what went missing.
-        # Only a shape with no host at all (above) stays untagged, and that never
-        # had a speaker to lose.  write_banter tags at the same point.
-        host = host_names.get(str(raw_line.get("host", "")).strip().casefold(), fallback_host)
-        authored_tags[authored_index] = _normalize_host_tag(host.name)
+        # Tag the position before any reason to drop it: a turn the model
+        # explicitly assigned to a host is a lost alternation when it vanishes
+        # between two lines by another host, even if its text was unusable.  An
+        # entry that names no host ({} or {"text": None}) stays untagged — it
+        # never had a speaker, and inventing the fallback one for it would
+        # reject a serviceable exchange.  write_banter tags on the same rule.
+        raw_host = str(raw_line.get("host", "")).strip()
+        # This roster excludes the guest, so resolution alone can never surface
+        # him — the raw tag is the only place an uninvited cameo is visible, and
+        # it is also what the gap check must see so a dropped cameo reads as the
+        # different speaker it was.  write_banter gates on the same raw tag.
+        raw_guest_host_tag = _is_local_guest_host_tag(raw_host)
+        host = host_names.get(raw_host.casefold(), fallback_host)
+        if raw_host:
+            authored_tags[authored_index] = (
+                _LOCAL_BALLOON_GUEST_HOST_CI if raw_guest_host_tag else _normalize_host_tag(host.name)
+            )
         text = raw_line.get("text")
         if not isinstance(text, str):
             line_loss.dropped_malformed += 1
@@ -3037,7 +3051,7 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
         if not text:
             line_loss.dropped_empty += 1
             continue
-        if _is_local_guest_host_name(host.name):
+        if raw_guest_host_tag or _is_local_guest_host_name(host.name):
             line_loss.dropped_guest_host += 1
             continue
         result.append(DialogueLine(host, _fix_wrong_station_names(text, config.display_station_name)))

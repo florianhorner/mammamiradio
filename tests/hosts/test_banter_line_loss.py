@@ -417,9 +417,76 @@ async def test_listener_truth_repair_clears_accounting_for_a_clean_exchange(conf
         new_callable=AsyncMock,
         return_value=response,
     ):
-        await repair_banter_without_listener_context(state, config)
+        result = await repair_banter_without_listener_context(state, config)
 
+    assert [line.text for line in result] == [TEXT_A, TEXT_B]
     assert state.last_banter_line_loss is None
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_ignores_a_hostless_entry_in_the_gap(config, state):
+    """An entry naming no host never had a speaker, so it cannot weld anything.
+
+    Guessing a fallback speaker for `{}` would invent a vanished turn and reject
+    an exchange the model wrote as two lines by the same host.
+    """
+    regulars = _regular_hosts(config)
+    response = {
+        "lines": [
+            {"host": regulars[0].name, "text": TEXT_A},
+            {},
+            {"host": regulars[0].name, "text": TEXT_B},
+            {"host": regulars[1].name, "text": TEXT_C},
+        ]
+    }
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert [line.text for line in result] == [TEXT_A, TEXT_B, TEXT_C]
+    assert state.last_banter_line_loss["dropped_malformed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_counts_a_gated_guest_line(config, state):
+    regulars = _regular_hosts(config)
+    response = {
+        "lines": [
+            {"host": regulars[0].name, "text": TEXT_A},
+            {"host": regulars[1].name, "text": TEXT_B},
+            {"host": GUEST_HOST_NAME, "text": TEXT_D},
+            {"host": regulars[0].name, "text": TEXT_C},
+        ]
+    }
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert [line.text for line in result] == [TEXT_A, TEXT_B, TEXT_C]
+    assert state.last_banter_line_loss["dropped_guest_host"] == 1
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_refuses_a_drop_down_to_one_line(config, state):
+    regulars = _regular_hosts(config)
+    response = {
+        "lines": [
+            {"host": regulars[0].name, "text": TEXT_A},
+            {"host": regulars[1].name, "text": "[ride]"},
+        ]
+    }
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        assert await repair_banter_without_listener_context(state, config) is None
 
 
 @pytest.mark.asyncio
