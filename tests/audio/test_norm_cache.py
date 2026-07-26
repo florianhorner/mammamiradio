@@ -493,27 +493,44 @@ def test_every_ladder_declares_its_repeat_policy_explicitly():
 def test_operations_doc_repeat_policy_table_matches_the_code():
     """The operator doc's `allow_recent_repeat` table must not contradict the code.
 
-    This table has now been wrong in BOTH directions on one branch: first it
-    claimed the playback-gap rescue asked permissively while the code asked
-    strictly, then the code changed and the doc kept the old answer. An operator
-    reading it to decide whether a repeat is expected behaviour got the opposite
-    of the truth each time, and neither slip was catchable by any existing check.
+    This table has been wrong in both directions on one branch: first it claimed
+    the playback-gap rescue asked permissively while the code asked strictly, then
+    the code changed and the doc kept the old answer. An operator reading it to
+    decide whether a repeat is expected got the opposite of the truth each time,
+    and neither slip was catchable by any existing check.
 
-    Every `producer.py:NNN` / `streamer.py:NNN` reference inside that section is
-    resolved against the real source line. A stale line number fails just as
-    loudly as a wrong bucket, because a doc pointing at the wrong line is not
-    documentation either.
+    Anchored on FUNCTION names, not line numbers. An earlier version resolved
+    `producer.py:NNN` references into source lines, so inserting a line anywhere
+    above a call site red-failed this test on an unrelated change, and the
+    scheduled `web/streamer.py` split would have done exactly that.
+
+    Two guarantees: every rung the doc lists carries the policy the doc claims,
+    and every policy value present in the code appears in the doc. The second is
+    what catches a new rung added without documenting it.
     """
+    import inspect
     import re
     from pathlib import Path
+
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web import streamer
 
     repo_root = Path(__file__).resolve().parents[2]
     doc = (repo_root / "docs" / "operations.md").read_text(encoding="utf-8")
 
-    section = doc.split("Whether a caller may re-serve a recent song")[1]
-    section = section.split("That parameter is not cosmetic")[0]
+    open_anchor = "Whether a caller may re-serve a recent song"
+    close_anchor = "That parameter is not cosmetic"
+    for anchor in (open_anchor, close_anchor):
+        assert doc.count(anchor) == 1, (
+            f"docs/operations.md: expected exactly one {anchor!r}. The repeat-policy "
+            "section moved or was reworded; update the anchor in this test."
+        )
+    section = doc.split(open_anchor)[1].split(close_anchor)[0]
 
-    buckets: dict[str, list[tuple[str, int]]] = {"True": [], "False": []}
+    # Collect the rung names each bucket claims. `current` resets on any
+    # non-bullet, non-continuation line so prose after the bullets cannot inherit
+    # the last bucket.
+    documented: dict[str, str] = {}
     current: str | None = None
     for line in section.splitlines():
         stripped = line.strip()
@@ -521,26 +538,44 @@ def test_operations_doc_repeat_policy_table_matches_the_code():
             current = "False"
         elif stripped.startswith("- `True`"):
             current = "True"
+        elif stripped and not line.startswith((" ", "\t")):
+            current = None
         if current is None:
             continue
-        for module_name, lineno in re.findall(r"\b(producer\.py|streamer\.py):(\d+)", line):
-            buckets[current].append((module_name, int(lineno)))
+        for name in re.findall(r"`(_?[a-z_]+)`", line):
+            documented.setdefault(name, current)
 
-    assert buckets["True"], "doc lists no permissive call sites — did the section move?"
-    assert buckets["False"], "doc lists no strict call sites — did the section move?"
+    assert documented, "doc lists no call sites; did the repeat-policy section move?"
 
-    paths = {
-        "producer.py": repo_root / "mammamiradio" / "scheduling" / "producer.py",
-        "streamer.py": repo_root / "mammamiradio" / "web" / "streamer.py",
+    # 1. Every documented rung declares the policy the doc claims.
+    lookup = {
+        "_queue_continuity_bridge": producer._queue_continuity_bridge,
+        "_producer_error_recovery_segment": producer._producer_error_recovery_segment,
+        "run_playback_loop": streamer.run_playback_loop,
     }
-    for expected, sites in buckets.items():
-        for module_name, lineno in sites:
-            source_line = paths[module_name].read_text(encoding="utf-8").splitlines()[lineno - 1]
-            assert "allow_recent_repeat" in source_line, (
-                f"docs/operations.md points at {module_name}:{lineno}, which no longer "
-                f"declares a repeat policy: {source_line.strip()!r}"
-            )
-            assert f"allow_recent_repeat={expected}" in source_line, (
-                f"docs/operations.md lists {module_name}:{lineno} as {expected}, "
-                f"but the code says: {source_line.strip()!r}"
-            )
+    checked = 0
+    for name, expected in documented.items():
+        func = lookup.get(name)
+        if func is None:
+            continue  # a helper mentioned in prose, not a documented rung
+        checked += 1
+        assert f"allow_recent_repeat={expected}" in inspect.getsource(func), (
+            f"docs/operations.md lists {name} as {expected}, but its source does not "
+            f"contain allow_recent_repeat={expected}"
+        )
+    assert checked == len(lookup), (
+        f"docs/operations.md names {checked} of the {len(lookup)} rungs that take a "
+        "repeat policy; every rung belongs in the table"
+    )
+
+    # 2. Every policy literal in the code is documented, so a rung cannot be added
+    #    in a bucket the table never mentions. Scan the literal rather than the
+    #    call: the strict ask reaches the selector through
+    #    `_queue_norm_cache_bridge_segment`, so keying on `select_norm_cache_rescue`
+    #    would miss it entirely.
+    literal_re = re.compile(r"allow_recent_repeat=(True|False)")
+    found = {v for module in (producer, streamer) for v in literal_re.findall(inspect.getsource(module))}
+    assert found == set(documented.values()), (
+        f"docs/operations.md documents buckets {sorted(set(documented.values()))} but the code "
+        f"has call sites for {sorted(found)}; a rung was added or removed without updating the table"
+    )
