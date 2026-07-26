@@ -1148,10 +1148,16 @@ def _apply_addon_options() -> None:
         if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
             os.environ[env_key] = str(pv)
 
-    # This is the add-on boot path that does not use run.sh. _env_clamped_int
-    # applies the bounds during config loading, so stale input cannot abort startup.
+    # The direct add-on fallback treats non-positive cache input as malformed
+    # before clamping, matching the run.sh contract. The parser matrix test keeps
+    # both ingestion paths aligned for supported add-on input.
     cache_mb = options.get("norm_cache_mb")
-    if isinstance(cache_mb, int) and not isinstance(cache_mb, bool) and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB"):
+    if (
+        isinstance(cache_mb, int)
+        and not isinstance(cache_mb, bool)
+        and cache_mb > 0
+        and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB")
+    ):
         os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
 
 
