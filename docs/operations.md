@@ -270,21 +270,31 @@ Whether a caller may re-serve a recent song is now an explicit parameter
 (`allow_recent_repeat`) rather than a property of where the code happens to live.
 Each caller answers one question honestly: what is below me?
 
-- `False` — the producer's music-first bridge rung
-  (`_queue_continuity_bridge`, `producer.py:826`) and the playback-gap rescue in
-  the send loop (`streamer.py:3079`). Both have real audio underneath them (the
-  packaged clip and the emergency tone for the first; bundled demo music and
-  forced banter for the second), so re-airing the song currently on air is never
-  their best option and they fall through to the rung below instead. The
-  live-control continuity reservation reaches the same answer by a different
-  route: it skips on-air and recently-heard cache files outright
-  (`_is_recent_music`) rather than passing this flag.
+- `False` — the producer's music-first bridge rung (`_queue_continuity_bridge`,
+  `producer.py:826`). It has the packaged continuity clip and then the emergency
+  tone underneath it, so re-airing the song currently on air is never its best
+  option; it falls through to the rung below instead. The live-control continuity
+  reservation reaches the same answer by a different route: it skips on-air and
+  recently-heard cache files outright (`_is_recent_music`) rather than passing
+  this flag.
 - `True` — the producer's last cache retry when there is no packaged clip
-  (`producer.py:882`) and `_producer_error_recovery_segment` (`producer.py:977`).
-  Below the first sits two seconds of emergency tone; below the second sits
+  (`producer.py:882`), `_producer_error_recovery_segment` (`producer.py:977`),
+  and the playback-gap rescue in the send loop (`streamer.py:3088`). Below the
+  first sits two seconds of emergency tone; below the second sits
   `_blocklist_safe_last_music`, which recycles the last-known-good song and is
-  therefore a guaranteed repeat. At that depth a song the listener heard recently
-  genuinely is the better radio, so these two ask permissively.
+  therefore a guaranteed repeat. The third has nothing real below it at all:
+  `assets/demo/music/` is not packaged, so the bundled-demo rung is a no-op in
+  every shipped container, and the packaged-clip branch sets `segment_ready`,
+  which makes the 60-second forced-banter escape unreachable. A strict ask there
+  means the same 4.4-second station ident on a loop while a playable song sits in
+  the cache. At all three depths a song the listener heard recently genuinely is
+  the better radio, so they ask permissively.
+
+Permissive does not mean "repeat freely". `select_norm_cache_rescue` still
+prefers a non-recent candidate and only returns a recent one when the cache holds
+nothing else, which is exactly what the pre-existing behaviour did. The flag only
+decides what happens once every candidate is recent: decline and fall through, or
+serve the best available repeat.
 
 That parameter is not cosmetic. Reaching for cached music first (above) made the
 loose fallback reachable in a place it had never been: on a one-song warm cache a

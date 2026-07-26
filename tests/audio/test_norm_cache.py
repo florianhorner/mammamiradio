@@ -488,3 +488,59 @@ def test_every_ladder_declares_its_repeat_policy_explicitly():
             assert "allow_recent_repeat" in line or line.rstrip().endswith("("), (
                 f"call site omits the repeat policy: {line.strip()}"
             )
+
+
+def test_operations_doc_repeat_policy_table_matches_the_code():
+    """The operator doc's `allow_recent_repeat` table must not contradict the code.
+
+    This table has now been wrong in BOTH directions on one branch: first it
+    claimed the playback-gap rescue asked permissively while the code asked
+    strictly, then the code changed and the doc kept the old answer. An operator
+    reading it to decide whether a repeat is expected behaviour got the opposite
+    of the truth each time, and neither slip was catchable by any existing check.
+
+    Every `producer.py:NNN` / `streamer.py:NNN` reference inside that section is
+    resolved against the real source line. A stale line number fails just as
+    loudly as a wrong bucket, because a doc pointing at the wrong line is not
+    documentation either.
+    """
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    doc = (repo_root / "docs" / "operations.md").read_text(encoding="utf-8")
+
+    section = doc.split("Whether a caller may re-serve a recent song")[1]
+    section = section.split("That parameter is not cosmetic")[0]
+
+    buckets: dict[str, list[tuple[str, int]]] = {"True": [], "False": []}
+    current: str | None = None
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- `False`"):
+            current = "False"
+        elif stripped.startswith("- `True`"):
+            current = "True"
+        if current is None:
+            continue
+        for module_name, lineno in re.findall(r"\b(producer\.py|streamer\.py):(\d+)", line):
+            buckets[current].append((module_name, int(lineno)))
+
+    assert buckets["True"], "doc lists no permissive call sites — did the section move?"
+    assert buckets["False"], "doc lists no strict call sites — did the section move?"
+
+    paths = {
+        "producer.py": repo_root / "mammamiradio" / "scheduling" / "producer.py",
+        "streamer.py": repo_root / "mammamiradio" / "web" / "streamer.py",
+    }
+    for expected, sites in buckets.items():
+        for module_name, lineno in sites:
+            source_line = paths[module_name].read_text(encoding="utf-8").splitlines()[lineno - 1]
+            assert "allow_recent_repeat" in source_line, (
+                f"docs/operations.md points at {module_name}:{lineno}, which no longer "
+                f"declares a repeat policy: {source_line.strip()!r}"
+            )
+            assert f"allow_recent_repeat={expected}" in source_line, (
+                f"docs/operations.md lists {module_name}:{lineno} as {expected}, "
+                f"but the code says: {source_line.strip()!r}"
+            )
