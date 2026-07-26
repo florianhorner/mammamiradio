@@ -22,7 +22,7 @@ The pinned snapshot is sourced from:
 - `.github/workflows/commit-lint.yml` — validation of commits and the PR title.
 - `scripts/lint-patterns.sh`, `scripts/check-pr-body-lint.sh`, and
   `.github/workflows/pr-body-lint.yml` — PR editorial bans (snapshotted at
-  repository commit `469caa61543573064106a93c44b6e11d31c3a489`).
+  repository commit `b4c3b6ccfbb76ed9ca124fc97df2190f306e4412`).
 - `.github/pull_request_template.md` — Summary, Test plan, and conditional
   Admin Panel Standards sections.
 - `.github/workflows/verify-claims.yml` — terminal `## Proof` validation.
