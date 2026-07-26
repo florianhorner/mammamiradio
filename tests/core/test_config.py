@@ -1608,11 +1608,19 @@ def test_apply_addon_options_cache_mb_rejects_non_positive(monkeypatch, tmp_path
 
     options_file = tmp_path / "options.json"
     options_file.write_text(json.dumps({"norm_cache_mb": cache_mb}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("")
+    path_fixtures = {
+        "/data/options.json": options_file,
+        "/config/secrets.env": secrets_file,
+    }
     monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
     try:
-        with patch("mammamiradio.core.config.Path") as mock_path_cls:
-            mock_path_cls.return_value = options_file
-            _apply_addon_options()
+        monkeypatch.setattr(
+            "mammamiradio.core.config.Path",
+            lambda path: path_fixtures[str(path)],
+        )
+        _apply_addon_options()
         assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
     finally:
         os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)

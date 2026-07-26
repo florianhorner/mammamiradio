@@ -794,12 +794,12 @@ def test_cache_mb_ingestion_contract_matrix(
     cache_env = "MAMMAMIRADIO_MAX_CACHE_MB"
     options_path = tmp_path / "options.json"
     secrets_path = tmp_path / "secrets.env"
-    os.environ.pop(cache_env, None)
+    monkeypatch.delenv(cache_env, raising=False)
 
     try:
         rc, stdout, _ = _run_parser({"norm_cache_mb": option_value})
         assert rc == 0
-        os.environ[cache_env] = _parse_exports(stdout)[cache_env]
+        monkeypatch.setenv(cache_env, _parse_exports(stdout)[cache_env])
         run_sh_effective = _env_clamped_int(
             cache_env,
             default=ADDON_MAX_CACHE_SIZE_MB,
@@ -807,7 +807,7 @@ def test_cache_mb_ingestion_contract_matrix(
             maximum=MAX_MAX_CACHE_SIZE_MB,
         )
 
-        os.environ.pop(cache_env, None)
+        monkeypatch.delenv(cache_env, raising=False)
         options_path.write_text(json.dumps({"norm_cache_mb": option_value}))
         secrets_path.write_text("")
         path_fixtures = {
@@ -830,7 +830,7 @@ def test_cache_mb_ingestion_contract_matrix(
         assert direct_effective == expected_direct
         assert (run_sh_effective != direct_effective) is accepted_divergence
     finally:
-        os.environ.pop(cache_env, None)
+        monkeypatch.delenv(cache_env, raising=False)
 
 
 def test_parser_cache_mb_does_not_break_sibling_exports():
