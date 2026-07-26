@@ -27,6 +27,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import (
+    is_recent_music as _is_recent_music,
+)
+from mammamiradio.audio.norm_cache import (
+    recent_music_identity_keys as _recent_music_identity_keys,
+)
+from mammamiradio.audio.norm_cache import (
     record_rescue_airplay as _record_rescue_airplay,
 )
 from mammamiradio.audio.norm_cache import (
@@ -40,6 +46,9 @@ from mammamiradio.audio.norm_cache import (
 )
 from mammamiradio.audio.norm_cache import (
     select_norm_cache_rescue as _select_norm_cache_rescue,
+)
+from mammamiradio.audio.norm_cache import (
+    sidecar_track_key as _sidecar_track_key,
 )
 from mammamiradio.audio.normalizer import (
     configure_broadcast_chain,
@@ -63,6 +72,7 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    segment_track_key,
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
@@ -323,6 +333,12 @@ BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
 BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
+# Bridge types that are recorded but must NOT feed the "running on rescue" alarm.
+# "continuity" is a live control reserving safety audio that then aired, which
+# reflects operator activity rather than the producer falling behind. Every type
+# added to record_bridge_fire feeds the rolling window by default, so a new type
+# belongs here whenever it fires on ordinary operator activity.
+_NON_ALARMING_BRIDGE_TYPES = frozenset({"continuity"})
 # Generated segment waste (#397). Counts rendered audio discarded before broadcast.
 # The rolling window and thresholds flip the admin "Generated waste" row to degraded
 # so operators see frequent purges instead of a falsely-green diagnostics card.
@@ -644,12 +660,13 @@ def _indexed_audio_path_is_file(path: Path) -> bool:
 
 
 def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
-    """Return the durable blocklist identity carried by a ready segment."""
-    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-    return (
-        str(metadata.get("artist") or "").strip().lower(),
-        str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
-    )
+    """Return the durable blocklist identity carried by a ready segment.
+
+    Delegates to the shared definition in ``core.models`` so the streamer, the
+    producer's admission gate, and the restart-handoff validator cannot drift on
+    what counts as the same song.
+    """
+    return segment_track_key(segment)
 
 
 def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
@@ -749,29 +766,6 @@ def _continuity_reservation_segments(
             )
         )
 
-    if (
-        _can_add()
-        and recovery not in excluded_paths
-        and is_approved_spoken_asset(recovery, assets_root=_DEMO_ASSETS_DIR)
-    ):
-        _add(
-            Segment(
-                type=SegmentType.BANTER,
-                path=recovery,
-                duration_sec=4.44,
-                metadata={
-                    "type": "banter",
-                    "title": "Station continuity",
-                    "canned": True,
-                    "rescue": True,
-                    _CONTINUITY_RESERVATION_FLAG: True,
-                    "continuity_reservation_id": reservation_id,
-                    "queue_reason": "Protected continuity audio.",
-                },
-                ephemeral=False,
-            )
-        )
-
     # Stop as soon as the target/capacity contract is satisfied. A control hot
     # path must not stat and read sidecars for the whole warm cache merely to
     # choose the first one or two immediately playable tracks.
@@ -779,6 +773,9 @@ def _continuity_reservation_segments(
     prune_paths: list[Path] = []
     deferred_cooling: list[tuple[Path, float, dict]] = []
     indexed_items = list(state.immediate_audio_index.items())
+    # Computed once, in memory, before the scan: no filesystem access, and the
+    # per-candidate check below reuses the sidecar the loop already loaded.
+    recent_keys = _recent_music_identity_keys(state)
     cooling_by_path: dict[Path, bool] = {}
     if state.rescue_airplay:
         rotation_now = time.monotonic()
@@ -806,16 +803,22 @@ def _continuity_reservation_segments(
             prune_paths.append(cached)
             continue
         metadata = load_track_metadata(cached) or {}
-        cache_key = (
-            str(metadata.get("artist") or "").strip().lower(),
-            str(metadata.get("title") or "").strip().lower(),
-        )
+        cache_key = _sidecar_track_key(metadata)
         if cache_key in blocked_keys:
             logger.info("Skipping blocklisted cached continuity track (%s - %s)", cache_key[0], cache_key[1])
             if cache_key in persistent_blocked_keys:
                 # A durable ban makes this path unusable for the session. It can
                 # be re-indexed by a later render or the next startup after unban.
                 prune_paths.append(cached)
+            continue
+        if _is_recent_music(cached, recent_keys, sidecar=metadata):
+            # The song on air right now (or one of the last few) must never be
+            # re-reserved. Unlike the cooldown below this is a HARD skip: it is
+            # never rescued into deferred_cooling, because a listener hearing
+            # the same song twice in four minutes is the illusion breaking. The
+            # rungs below (packaged clip, emergency tone, and the playback
+            # loop's own ladder) keep audio flowing.
+            logger.info("Skipping on-air/recent cached continuity track: %s", cached.name)
             continue
         if cooling_by_path.get(cached, False):
             # This song aired as a rescue within the hour. Prefer a fresher track
@@ -837,6 +840,35 @@ def _continuity_reservation_segments(
 
     for path in prune_paths:
         state.immediate_audio_index.pop(path, None)
+
+    # The packaged sweeper is the rung BELOW cached music, not a mandatory
+    # preamble to it. When the warm cache yielded a real song the control goes
+    # straight into it: a 4.4s canned line in front of the song is what made a
+    # repeat sound like a deliberate rotation choice instead of a hiccup, and it
+    # is the one voice on air that belongs to neither host.
+    if (
+        not selected
+        and _can_add()
+        and recovery not in excluded_paths
+        and is_approved_spoken_asset(recovery, assets_root=_DEMO_ASSETS_DIR)
+    ):
+        _add(
+            Segment(
+                type=SegmentType.BANTER,
+                path=recovery,
+                duration_sec=4.44,
+                metadata={
+                    "type": "banter",
+                    "title": "Station continuity",
+                    "canned": True,
+                    "rescue": True,
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": reservation_id,
+                    "queue_reason": "Protected continuity audio.",
+                },
+                ephemeral=False,
+            )
+        )
 
     # This asset is deliberately separate from the normal continuity copy: it is
     # the cold-cache, no-clip final fallback and is available without a render.
@@ -1229,8 +1261,10 @@ def _reserve_continuity_runway(
             combined = existing + reservation
         else:
             # Queue capacity is occupied entirely by air-next work. The current
-            # queue remains audible; keep one packaged clip out-of-band for the
-            # later empty transition instead of rejecting the operator action.
+            # queue remains audible; keep the single strongest candidate
+            # out-of-band for the later empty transition instead of rejecting
+            # the operator action. That candidate is a cached song whenever the
+            # warm cache had one, and only falls back to the packaged clip.
             planned_slot = reservation[0]
             reservation = []
             combined = existing
@@ -1250,9 +1284,10 @@ def _reserve_continuity_runway(
         )
         if planned_ready <= current_ready:
             # Count-bound eviction must never trade a long, ready ordinary tail
-            # for a shorter safety clip. Preserve the real queue and add the
+            # for shorter safety audio. Preserve the real queue and add the
             # minimal candidate out-of-band instead; this is the maximal runway
             # available without weakening what listeners can already hear.
+            # reservation[0] is the best candidate, not necessarily the clip.
             if state.continuity_slot is None:
                 fallback_slot = planned_slot or reservation[0]
                 if protected:
@@ -1271,6 +1306,48 @@ def _reserve_continuity_runway(
     _rebuild_queue_shadow(q, state, combined)
     state.continuity_epoch += 1
     return len(dropped)
+
+
+def _record_continuity_air(state: StationState, segment: Segment) -> None:
+    """Report reserved safety audio as a rescue bridge once a LISTENER HAS IT.
+
+    Three things this is deliberately not:
+
+    * Not reservation-time. Every live control reserves safety audio before it
+      mutates the queue, and most of it is never heard because the real queue
+      refills first. Counting reservations trips ``BRIDGE_HEALTH_THRESHOLD``
+      (2 per 30 min) after two ordinary admin actions and tells the operator a
+      perfectly healthy station is "running on rescue". A false red is worse than
+      the false green this was written to replace.
+    * Not segment-start. That fires before ``open()``, so a vanished file or an
+      instant skip would count as aired.
+    * Not once per reserved track. One control can reserve several segments under
+      one ``continuity_reservation_id``; they air back to back, and reporting each
+      one would cross the threshold from a single operator action.
+
+    Called from the send loop on the first chunk a listener queue accepted — the
+    same "truly heard" predicate the rotation stamp uses. Best-effort: telemetry
+    must never affect what airs.
+    """
+    try:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if not metadata.get(_CONTINUITY_RESERVATION_FLAG):
+            return
+        reservation_id = str(metadata.get("continuity_reservation_id") or "")
+        if reservation_id and reservation_id == state.last_continuity_air_reservation_id:
+            return
+        state.last_continuity_air_reservation_id = reservation_id
+        source = str(metadata.get("audio_source") or "")
+        if not source:
+            source = "canned" if metadata.get("canned") else "unknown"
+        state.record_bridge_fire("continuity", source)
+        logger.info(
+            "Continuity reservation on air: %s (%s)",
+            metadata.get("title") or segment.path.name,
+            source,
+        )
+    except Exception:  # pragma: no cover - telemetry must never break the stream
+        logger.debug("continuity air telemetry failed", exc_info=True)
 
 
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
@@ -1367,15 +1444,11 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         state.playlist_revision += 1
 
     def _matches_blocklist(segment: Segment) -> bool:
-        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-        # Producer music carries `title_only` (bare title); norm-cache bridge and
-        # rescue fills stamp only `title`. Fall back so a banned song queued via
-        # either shape is still purged.
-        key = (
-            str(metadata.get("artist", "")).strip().lower(),
-            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
-        )
-        return segment.type is SegmentType.MUSIC and key in banned_keys
+        # Shared definition, not a local copy. The hand-rolled tuple this
+        # replaced used `metadata.get("artist", "")`, so a segment carrying an
+        # explicit `artist: None` keyed as ("none", title) and slipped through
+        # the purge - the canonical helper coalesces falsy to "".
+        return segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in banned_keys
 
     prior_tail = None
     if queue is not None:
@@ -2121,15 +2194,26 @@ def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
 def _bridge_health_snapshot(state: StationState) -> dict:
     """Producer rescue-bridge health for the admin Runtime Status card (#547).
 
-    Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
-    fires; ``unhealthy`` trips once either repeated bridge fires or sustained
-    queue-empty time indicate the station is "running on rescue". Session counts
-    and queue-empty elapsed ride along so the operator sees one honest readout
-    instead of a falsely-green card.
+    Windows ``state.bridge_events`` to count recent PRODUCER bridge fires
+    (drain/resume/idle); ``unhealthy`` trips once either repeated bridge fires or
+    sustained queue-empty time indicate the station is "running on rescue".
+    Session counts and queue-empty elapsed ride along so the operator sees one
+    honest readout instead of a falsely-green card.
+
+    ``continuity`` fires stay out of the rolling window. A live control reserved
+    safety audio and it aired, which is the safety net covering an operator
+    action rather than the producer falling behind. Counting them would trip
+    ``BRIDGE_HEALTH_THRESHOLD`` (2 per 30 min) after two ordinary admin actions
+    and tell the operator a healthy station is "running on rescue". They still
+    ride along in ``session_count`` and ``by_type``; only the alarm is scoped.
     """
     now = time.time()
     window = BRIDGE_HEALTH_WINDOW_SECONDS
-    recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
+    recent = [
+        e
+        for e in state.bridge_events
+        if now - float(e.get("timestamp") or 0.0) <= window and e.get("bridge_type") not in _NON_ALARMING_BRIDGE_TYPES
+    ]
     last_fire = state.bridge_events[-1] if state.bridge_events else None
     # Compare on the RAW elapsed; round only for the payload. Rounding before the
     # threshold check let raw 59.95s round up to 60.0 and trip "queue_empty" ~0.05s
@@ -2984,7 +3068,20 @@ async def run_playback_loop(app) -> None:
                 if not segment_ready:
                     rescued_from_norm = False
                     if elapsed >= FIRST_BYTE_GRACE_SECONDS:
-                        rescue = _select_norm_cache_rescue(config.cache_dir, state)
+                        # Permissive because nothing real sits below this rung.
+                        # The bundled-demo-music rung does not ship
+                        # (``assets/demo/music/`` is absent from the package), and
+                        # the packaged-clip branch below sets ``segment_ready``,
+                        # which makes the 60s forced-banter escape unreachable.
+                        # The alternative here is the same 4.4s canned line on
+                        # repeat, with a playable song sitting in the cache.
+                        #
+                        # Permissive still prefers a non-recent candidate:
+                        # select_norm_cache_rescue returns a recent one only when
+                        # the cache holds nothing else. The strict answer belongs
+                        # to the producer's drain/resume/idle bridge, which has the
+                        # packaged clip and the emergency tone beneath it.
+                        rescue = _select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=True)
                         if rescue:
                             logger.warning(
                                 "Queue empty %ds - rescuing with norm cache: %s",
@@ -3012,6 +3109,13 @@ async def run_playback_loop(app) -> None:
                                     )
                                     or raw_sidecar_title
                                 )
+                                # `title` is the display label and packs the artist in;
+                                # `title_only` is the bare song title. Both are stamped
+                                # because `segment_track_key` prefers `title_only`, and
+                                # without it the ban fence below keys this segment as
+                                # ("artist", "artist - title") - a shape that can never
+                                # be in state.blocklist, silently disarming the fence.
+                                rescue_title_only: str | None = song_title
                                 if clean_artist:
                                     rescue_title = f"{clean_artist} – {song_title}"
                                     rescue_artist: str | None = clean_artist
@@ -3021,6 +3125,10 @@ async def run_playback_loop(app) -> None:
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
+                                # No sidecar: the humanized filename is all we have, and
+                                # it is not a trustworthy bare title. Leave title_only
+                                # unset so the key falls back to `title` as before.
+                                rescue_title_only = None
                             duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
                             duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
@@ -3030,6 +3138,7 @@ async def run_playback_loop(app) -> None:
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
+                                    **({"title_only": rescue_title_only} if rescue_title_only else {}),
                                     **({"artist": rescue_artist} if rescue_artist else {}),
                                     **duration_fields,
                                     "audio_source": "fallback_norm_cache",
@@ -3189,6 +3298,7 @@ async def run_playback_loop(app) -> None:
             send_completed_cleanly = False
             terminal_reason = "aborted"
             companionship_discard_recorded = False
+            air_start_stamped = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -3272,6 +3382,30 @@ async def run_playback_loop(app) -> None:
 
                         if not is_companionship_cue or accepted_listeners > 0:
                             bytes_sent += len(chunk)
+
+                        # Keep the `or 0`. The sibling check above short-circuits
+                        # on `not is_companionship_cue`, so for an ordinary segment
+                        # this is the first place the value is compared, and a hub
+                        # whose broadcast returns None would raise TypeError here
+                        # and kill the playback loop.
+                        if not air_start_stamped and (accepted_listeners or 0) > 0:
+                            # First chunk a listener queue actually accepted. This is
+                            # the single "truly heard" moment for both bookkeeping
+                            # jobs below, and it is strictly more accurate than EOF:
+                            # a live control firing two minutes into a 3.5-minute
+                            # play would otherwise see the on-air song as never
+                            # heard and re-reserve it. Audio that never reaches a
+                            # listener never gets here, so neither consumes rotation
+                            # nor reports a bridge.
+                            #
+                            # Both callees are cheap, bounded, and self-guarded. Keep
+                            # them that way: this is the hottest loop in the product
+                            # and anything that blocks here is dead air, so no
+                            # filesystem, network, or unbounded work may move behind
+                            # this once-per-segment flag.
+                            air_start_stamped = True
+                            _record_rescue_airplay(state, segment)
+                            _record_continuity_air(state, segment)
 
                         # Feed the clip ring buffer for "share WTF moment"
                         clip_buf = getattr(app.state, "clip_ring_buffer", None)
@@ -3476,11 +3610,13 @@ def _emit_stream_result(
         )
     except Exception as exc:  # pragma: no cover - diagnostics must never break audio
         logger.debug("Anonymous stream outcome recording failed: %s", exc)
-    # Feed the rescue rotation cooldown only from a rescue that was truly heard:
-    # bytes reached at least one listener. A rescue selected then skipped, or
-    # aired to an empty room, must not consume rotation.
-    if bytes_sent > 0 and listeners > 0 and not was_skipped:
-        _record_rescue_airplay(state, segment)
+    # The rotation cooldown is stamped in the send loop, on the first chunk a
+    # listener queue accepted — not here. That predicate is strictly tighter than
+    # this one was: `bytes_sent` counts bytes the loop wrote even when zero
+    # listeners took them, and `listeners` is sampled at segment start, so an
+    # empty room could still be credited. Stamping at EOF also left a song
+    # looking unheard for its entire play, which is how a live control came to
+    # re-reserve the song already on the air.
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return

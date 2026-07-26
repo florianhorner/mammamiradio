@@ -351,6 +351,22 @@ class Segment:
     ephemeral: bool = True
 
 
+def segment_track_key(segment: Segment) -> tuple[str, str]:
+    """Canonical station song identity carried by a rendered segment.
+
+    The segment-side mirror of :func:`normalized_track_key`: producer music
+    stamps ``title_only`` (the bare title) alongside ``artist``, while norm-cache
+    bridges and rescue fills stamp only ``title``.  One key definition, so bans,
+    rotation membership, and dedupe can never disagree about what "the same
+    song" means.
+    """
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return (
+        str(metadata.get("artist") or "").strip().lower(),
+        str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+    )
+
+
 @dataclass
 class SegmentLogEntry:
     """Compact log event for produced or streamed segments."""
@@ -599,6 +615,11 @@ class StationState:
     # in twenty minutes when the producer stalls (the illusion break this closes).
     # Cleared on restart; no persistence. Pruned on record. See audio/norm_cache.py.
     rescue_airplay: dict[Path, float] = field(default_factory=dict)
+    # Last continuity reservation whose audio actually reached a listener. One
+    # live control can reserve several segments under one id and they air
+    # consecutively, so remembering the last one reports ONE bridge fire per
+    # control action instead of one per reserved track.
+    last_continuity_air_reservation_id: str = ""
     # Stream-side log (when segments actually play, not when produced)
     stream_log: deque[SegmentLogEntry] = field(default_factory=lambda: deque(maxlen=50))
     # Recent generated banter clips that have actually started streaming.
@@ -863,7 +884,9 @@ class StationState:
     # (survives deque eviction); bridge_events backs the rolling-window health
     # check. record_bridge_fire appends only AFTER a successful enqueue.
     bridge_fires_total: int = 0
-    bridge_fires_by_type: dict[str, int] = field(default_factory=lambda: {"drain": 0, "resume": 0, "idle": 0})
+    bridge_fires_by_type: dict[str, int] = field(
+        default_factory=lambda: {"drain": 0, "resume": 0, "idle": 0, "continuity": 0}
+    )
     bridge_events: deque[dict] = field(default_factory=lambda: deque(maxlen=50))
     # Generated segment waste telemetry: rendered audio discarded before broadcast.
     # Session-local counters mirror the bridge-health pattern — discard_events backs
@@ -1194,7 +1217,9 @@ class StationState:
         Best-effort observability for #547 — never gates the audio path. Called
         once per bridge that actually queued rescue audio:
 
-            bridge_type ∈ {"drain", "resume", "idle"}   (which rescue site fired)
+            bridge_type ∈ {"drain", "resume", "idle", "continuity"}
+                          (which rescue site fired; "continuity" is a live
+                          control reserving safety audio, not the producer)
             source      ∈ {"canned", "norm_cache", "emergency_tone"}  (what aired)
 
         bridge_fires_total is the lifetime session count; bridge_events is a

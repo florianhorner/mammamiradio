@@ -532,7 +532,7 @@ def test_home_moment_drop_reasons_explain_changed_show_state() -> None:
     for reason, label in (
         ("directive_slot_busy", "stepped aside — another moment was already lined up"),
         ("interrupt_slot_busy", "stepped aside — another moment was already lined up"),
-        ("stale_playlist", "set aside when the playlist changed — the hosts are following the new rundown"),
+        ("stale_playlist", "set aside because that song left the rotation while it was being prepared"),
         ("stale_source", "set aside when the music source changed — the hosts are following the new source"),
         ("source_switch", "set aside when the music source changed — the hosts are following the new source"),
         ("stale_chaos", "set aside when Chaos Mode changed — the hosts are following the new direction"),

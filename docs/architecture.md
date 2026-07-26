@@ -278,10 +278,18 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
 
-- The **main-loop** stale gate compares `generation_revision` (captured once per loop
-  iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
-  `generation_chaos_epoch`), and runs **pre-egress only** — those paths do not re-check
-  after the awaited egress pass, so a slow/enabled egress colour pass widens their window.
+- The **main-loop** stale gate checks `source_revision` on its own axis, then treats
+  `state.playlist_revision` as a cheap pre-filter: a bump only discards when
+  `_music_segment_left_rotation` confirms the rendered song is genuinely gone from
+  `state.playlist` (removed or banned). Ten of the thirteen sites that bump
+  `playlist_revision` are benign — add, shuffle, move, enrich, direction retag — and
+  a pool that merely grew leaves the render exactly as playable as when it started.
+  Speech and rescue fills are never bound to a rotation row, so no playlist edit
+  discards them. `chaos_cutover_epoch` and `continuity_epoch` are unchanged. The gate
+  runs **pre-egress only** — those paths do not re-check after the awaited egress
+  pass, so a slow/enabled egress colour pass widens their window. `_enqueue_stale_reason`
+  re-checks at admission with the *same* predicate; `test_epilogue_and_admission_stale_predicates_agree`
+  pins the two together so they cannot drift.
 - **Prewarm** keys on `source_revision` (bumped only by a true source switch via
   `switch_playlist`), not the broad `playlist_revision`, so a benign in-place edit
   (shuffle/add/move/enrich) keeps the on-source pre-roll. It also passes a **post-egress**
@@ -317,11 +325,15 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Program-replacing controls — source switches, playlist purges, panic, and
 Chaos/Festival cutovers — rebuild the real playback queue and its Scaletta shadow
 in one synchronous operation. They reserve only audio already safe to play:
-the packaged continuity clip first, then eligible normalized-cache music, then
-the packaged `emergency_tone.mp3` when the clip and cache are unavailable. A
-normalized-cache candidate passes the same final blocklist rule as every other
-music admission, so a banned song cannot re-enter through this instant-audio
-path.
+eligible normalized-cache music first, then the packaged continuity clip when the
+cache has nothing eligible, then the packaged `emergency_tone.mp3` when both are
+unavailable. The clip is the rung below cached music, not a preamble in front of
+it: a real song is both the better listener experience and the faster one to first
+byte, because the cached payload takes its duration from the sidecar while the
+clip needs an ffprobe first. A normalized-cache candidate passes the same final
+blocklist rule as every other music admission, so a banned song cannot re-enter
+through this instant-audio path, and the song currently on air (or one heard in
+the last few segments) is skipped outright rather than reserved behind itself.
 
 Cache selection here shares the same rescue-rotation cooldown as the producer and
 playback-gap rescues (`audio/norm_cache.py`): a cached song that aired as a rescue
@@ -849,10 +861,11 @@ cutover only after fresh protected replacement audio is admitted: the current
 segment is skipped and playback begins from the new source. If the continuity
 fallback preserves an older queue head or slot, or no ready runway exists, the
 current segment finishes and the response reports `skipped: false`. The producer
-uses a `playlist_revision` counter on `StationState` to detect and discard
-segments generated for a stale source. `/api/shuffle` also increments
-`playlist_revision` so any in-flight producer work targeting the old order is
-discarded and rebuilt against the new sequence.
+uses a `source_revision` counter on `StationState` to detect and discard segments
+generated for a stale source. `/api/shuffle` increments the broader
+`playlist_revision`, but that alone no longer discards in-flight producer work:
+reordering the pool does not make a rendered song unplayable, and the render is
+kept and queued against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful fresh replacement supersedes existing reservations and

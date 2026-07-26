@@ -3044,4 +3044,7 @@ async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplo
     # Eviction unlinks only the .mp3, and rescue selection uses the sidecar's
     # title/artist, so the surviving sidecars must remain available.
     assert all(s.exists() for s in sidecar_paths)
-    assert select_norm_cache_rescue(cache_dir, state) is not None
+    # Permissive: this asserts the rescue POOL survived eviction, so it models the
+    # deep rung where a recently-heard song still beats the emergency tone. The
+    # policy itself is unit-tested both ways in tests/audio/test_norm_cache.py.
+    assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is not None

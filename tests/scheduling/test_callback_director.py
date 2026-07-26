@@ -148,7 +148,11 @@ async def test_discarded_segment_does_not_retire(tmp_path):
     async def _flash(state_arg, config_arg, callback_gag=None):
         if callback_gag:
             state_arg.pending_callback_landed = True  # would retire IF it queued
-            state_arg.playlist_revision += 1  # source switch mid-generation -> discard
+            # A real source switch mid-generation, which is what this test always
+            # meant: bumping playlist_revision alone no longer discards a flash,
+            # because a news flash is not bound to a rotation row.
+            state_arg.source_revision += 1
+            state_arg.playlist_revision += 1
         return (host, "Flash che verra scartato.", "sports")
 
     with (

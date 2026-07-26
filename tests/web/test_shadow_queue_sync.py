@@ -1147,7 +1147,7 @@ def test_bridge_health_snapshot_empty_is_healthy():
     assert bh["window_count"] == 0
     assert bh["unhealthy"] is False
     assert bh["last_fire"] is None
-    assert bh["by_type"] == {"drain": 0, "resume": 0, "idle": 0}
+    assert bh["by_type"] == {"drain": 0, "resume": 0, "idle": 0, "continuity": 0}
     assert bh["threshold"] == BRIDGE_HEALTH_THRESHOLD
     assert bh["window_seconds"] == BRIDGE_HEALTH_WINDOW_SECONDS
     assert isinstance(bh["queue_empty_elapsed_s"], float)
@@ -1260,7 +1260,7 @@ def test_bridge_health_snapshot_ignores_events_outside_window():
     assert bh["session_count"] == BRIDGE_HEALTH_THRESHOLD + 1  # lifetime, all fires
     assert bh["window_count"] == 1  # only the fresh one
     assert bh["unhealthy"] is False
-    assert bh["by_type"] == {"drain": 1, "resume": 0, "idle": BRIDGE_HEALTH_THRESHOLD}
+    assert bh["by_type"] == {"drain": 1, "resume": 0, "idle": BRIDGE_HEALTH_THRESHOLD, "continuity": 0}
 
 
 def test_runtime_status_snapshot_includes_bridge_health():
@@ -1609,7 +1609,9 @@ def test_continuity_reservation_stops_cache_sidecar_reads_at_target(tmp_path):
         _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
 
     assert metadata_reads.call_count == 2
-    assert app.state.queue.qsize() == 3  # packaged clip + the two candidates needed for 240s
+    # Two cached songs cover the 240s floor on their own; the packaged clip is
+    # the rung below cached music, so it is not queued in front of them.
+    assert app.state.queue.qsize() == 2
 
 
 def test_continuity_reservation_bounds_and_prunes_blocklisted_cache_scan(tmp_path):
@@ -2715,7 +2717,7 @@ def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_targ
         _reserve_continuity_runway(app.state, app.state.station_state, app.state.config, replace_queue=True)
 
     queued = list(app.state.queue._queue)
-    assert [segment.path for segment in queued][1:] == [first, second]
+    assert [segment.path for segment in queued] == [first, second]
     assert sum(segment.duration_sec for segment in queued) >= 240
     assert app.state.station_state.last_enqueued_type == SegmentType.MUSIC
     assert app.state.station_state.last_music_file == second
@@ -3090,3 +3092,170 @@ def test_runtime_status_snapshot_includes_generation_waste():
 
     assert "generation_waste" in rs
     assert rs["generation_waste"]["total_segments"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Continuity telemetry must report what a LISTENER got, not what a control
+# reserved. Reservations are precautionary and mostly never air; counting them
+# trips BRIDGE_HEALTH_THRESHOLD (2 per 30 min) after two ordinary admin actions
+# and tells the operator the station is "running on rescue" while it plays fine.
+# ---------------------------------------------------------------------------
+
+
+def test_reserving_continuity_does_not_report_the_station_as_running_on_rescue(tmp_path):
+    """Three ordinary admin actions must leave Queue rescue health untouched."""
+    from mammamiradio.web.streamer import BRIDGE_HEALTH_THRESHOLD
+
+    app = _make_app()
+    state = app.state.station_state
+    for index in range(3):
+        path = tmp_path / f"norm_track_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        state.immediate_audio_index[path] = 180.0
+
+    for _ in range(BRIDGE_HEALTH_THRESHOLD + 1):
+        state.continuity_slot = None
+        _reserve_continuity_runway(app.state, state, app.state.config, replace_queue=True)
+
+    assert state.bridge_fires_total == 0, "a reservation is not a bridge fire — nothing aired yet"
+    assert state.bridge_fires_by_type["continuity"] == 0
+    assert _bridge_health_snapshot(state)["unhealthy"] is False
+
+
+def test_continuity_audio_reports_a_bridge_fire_once_it_actually_airs(tmp_path):
+    """The honest signal: reserved safety audio reaching a listener."""
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+    cached = tmp_path / "norm_rescue_128k.mp3"
+    cached.write_bytes(b"cached")
+
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=cached,
+        metadata={"title": "Ordinary song", "audio_source": "youtube"},
+    )
+    _record_continuity_air(state, ordinary)
+    assert state.bridge_fires_total == 0, "normal rotation audio is not a bridge"
+
+    reserved = Segment(
+        type=SegmentType.MUSIC,
+        path=cached,
+        metadata={
+            "title": "Cached music",
+            "audio_source": "norm_cache",
+            _CONTINUITY_RESERVATION_FLAG: True,
+        },
+    )
+    _record_continuity_air(state, reserved)
+
+    assert state.bridge_fires_total == 1
+    assert state.bridge_fires_by_type["continuity"] == 1
+    assert state.bridge_events[-1]["source"] == "norm_cache"
+
+
+def test_one_control_reserving_several_tracks_reports_one_bridge_fire(tmp_path):
+    """One operator action is one bridge, however many segments it reserved.
+
+    A single live control can reserve two or three tracks under one
+    ``continuity_reservation_id``; they air back to back. Reporting each would
+    cross BRIDGE_HEALTH_THRESHOLD from a single admin action — the exact false
+    red `_record_continuity_air` was written to avoid. The dedupe that prevents
+    it had no test at all: every prior case left ``reservation_id`` empty, so the
+    branch never executed.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+
+    def _reserved(name: str, reservation_id: str) -> Segment:
+        path = tmp_path / name
+        path.write_bytes(b"cached")
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=path,
+            metadata={
+                "title": name,
+                "audio_source": "norm_cache",
+                _CONTINUITY_RESERVATION_FLAG: True,
+                "continuity_reservation_id": reservation_id,
+            },
+        )
+
+    for name in ("norm_a_128k.mp3", "norm_b_128k.mp3", "norm_c_128k.mp3"):
+        _record_continuity_air(state, _reserved(name, "control-1"))
+
+    assert state.bridge_fires_total == 1, "three reserved tracks, one operator action, one bridge"
+    assert state.bridge_fires_by_type["continuity"] == 1
+    assert state.last_continuity_air_reservation_id == "control-1"
+
+    # A genuinely separate control is a separate bridge.
+    _record_continuity_air(state, _reserved("norm_d_128k.mp3", "control-2"))
+    assert state.bridge_fires_total == 2
+    assert state.bridge_fires_by_type["continuity"] == 2
+    assert state.last_continuity_air_reservation_id == "control-2"
+
+
+def test_continuity_fires_do_not_flip_the_rescue_health_card(tmp_path):
+    """Aired continuity audio stays out of the "running on rescue" alarm.
+
+    `_bridge_health_snapshot` windows bridge_events with no type filter, so every
+    new bridge type feeds the alarm by default. Continuity fires on ordinary
+    operator activity, not on the producer falling behind — counting it told the
+    operator a healthy station was in trouble after two admin actions. It stays
+    visible in session_count and by_type; only the alarm is scoped.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, BRIDGE_HEALTH_THRESHOLD, _record_continuity_air
+
+    state = StationState()
+    for index in range(BRIDGE_HEALTH_THRESHOLD + 2):
+        path = tmp_path / f"norm_control_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        _record_continuity_air(
+            state,
+            Segment(
+                type=SegmentType.MUSIC,
+                path=path,
+                metadata={
+                    "title": f"Control {index}",
+                    "audio_source": "norm_cache",
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": f"control-{index}",
+                },
+            ),
+        )
+
+    snapshot = _bridge_health_snapshot(state)
+    assert state.bridge_fires_by_type["continuity"] == BRIDGE_HEALTH_THRESHOLD + 2, "still counted honestly"
+    assert snapshot["session_count"] == BRIDGE_HEALTH_THRESHOLD + 2
+    assert snapshot["window_count"] == 0, "continuity must not feed the rolling alarm window"
+    assert snapshot["unhealthy"] is False
+    assert "bridge_frequency" not in snapshot["unhealthy_reasons"]
+
+    # A real producer bridge in the same window still trips it.
+    for _ in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("drain", "norm_cache")
+    tripped = _bridge_health_snapshot(state)
+    assert tripped["window_count"] == BRIDGE_HEALTH_THRESHOLD
+    assert "bridge_frequency" in tripped["unhealthy_reasons"]
+
+
+def test_continuity_air_telemetry_never_raises_into_the_stream():
+    """Best-effort: a telemetry bug must never become an audio bug."""
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+    broken = Segment(type=SegmentType.MUSIC, path=Path("/x.mp3"))
+    broken.metadata = "not a dict"  # type: ignore[assignment]
+    _record_continuity_air(state, broken)  # must not raise
+
+    class _Boom(StationState):
+        def record_bridge_fire(self, *_args, **_kwargs):
+            raise RuntimeError("telemetry backend gone")
+
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/x.mp3"),
+        metadata={"audio_source": "norm_cache", _CONTINUITY_RESERVATION_FLAG: True},
+    )
+    _record_continuity_air(_Boom(), seg)  # must not raise
