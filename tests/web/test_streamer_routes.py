@@ -1620,9 +1620,45 @@ async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cach
     assert stream_log[1].type == "music"
     assert stream_log[1].metadata.get("audio_source") == "fallback_norm_cache"
     assert stream_log[1].metadata.get("title") == "Cache Artist – Cached Song"
+    # `title` is a display label with the artist packed in, so it is NOT a usable
+    # song identity. Without a bare `title_only` alongside it, segment_track_key
+    # yields ("cache artist", "cache artist - cached song"): a shape that can
+    # never be in state.blocklist, which silently disarms the ban fence this
+    # rescue path runs before it airs. The blocklist is keyed on the same
+    # (artist, title) pair the sidecar carries, so that pair must round-trip.
+    assert stream_log[1].metadata.get("title_only") == "Cached Song"
+    assert stream_log[1].metadata.get("artist") == "Cache Artist"
     assert not (stream_log[0].metadata.get("canned") and stream_log[1].metadata.get("canned"))
     assert pick_canned.call_args_list[0].args == ("recovery",)
     assert app.state.station_state.queue_empty_since is None
+
+
+def test_norm_cache_rescue_fill_keys_onto_the_ban_identity():
+    """A rescue fill must be recognisable to the blocklist it is checked against.
+
+    Pins the round trip the test above proves end to end: the sidecar's
+    (artist, title) is what the operator banned, so a segment built from that
+    sidecar must produce the same key. This failed silently before: `title`
+    carried "Artist - Title" and no `title_only`, so the fence compared a label
+    against an identity and never matched.
+    """
+    from mammamiradio.audio.norm_cache import sidecar_track_key
+    from mammamiradio.core.models import segment_track_key
+
+    sidecar = {"title": "Cached Song", "artist": "Cache Artist"}
+    fill = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/norm_cached_song_192k.mp3"),
+        metadata={
+            "type": "music",
+            "title": "Cache Artist – Cached Song",  # display label, artist packed in
+            "title_only": "Cached Song",
+            "artist": "Cache Artist",
+            "audio_source": "fallback_norm_cache",
+            "fallback": True,
+        },
+    )
+    assert segment_track_key(fill) == sidecar_track_key(sidecar) == ("cache artist", "cached song")
 
 
 @pytest.mark.asyncio

@@ -1540,3 +1540,22 @@ def test_segment_track_key_normalizes_case_and_whitespace_and_survives_junk():
     bad = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"))
     bad.metadata = "not a dict"  # type: ignore[assignment]
     assert segment_track_key(bad) == ("", "")
+
+
+def test_segment_track_key_coalesces_an_explicit_none_artist():
+    """An explicit ``artist: None`` keys as "", never the string "none".
+
+    No site stamps a null artist today — every construction omits the key when
+    it is falsy — so this pins the contract rather than a live bug. It matters
+    because the hand-rolled copy in ``_apply_ban`` used ``.get("artist", "")``,
+    where a null artist becomes ``str(None)`` -> "none" and the segment stops
+    matching any ban. That copy now delegates here; this keeps the canonical
+    definition safe for whichever site stamps a null artist first.
+    """
+    nulled = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/x.mp3"),
+        metadata={"title_only": "Senza Nome", "artist": None},
+    )
+    assert segment_track_key(nulled) == ("", "senza nome")
+    assert "none" not in segment_track_key(nulled)
