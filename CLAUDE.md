@@ -114,6 +114,7 @@ private durable system for strategy or relationship context.
 
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
 - `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
+- `MAMMAMIRADIO_MAX_CACHE_MB`: maximum size of the normalization cache in MB. Standalone defaults to `500`; the HA add-on defaults to `1500` through `ADDON_MAX_CACHE_SIZE_MB` in `core/config.py`. The add-on setting is **Music cache size (MB)**, mapped from `norm_cache_mb` in `run.sh`, and takes effect after the next add-on restart. `_env_clamped_int` limits values to `200` through `8000`. It replaces malformed or out-of-range input with a valid value and logs the change, so config loading can complete. A normalized track uses about 5 MB. The add-on default therefore holds roughly 200 tracks. **On-Air Sound** adds a second bake and roughly doubles the per-track size. At startup, `_disk_safe_cache_ceiling_mb` in `main.py` combines free space, reclaimable cache bytes, and a 512 MB reserve to choose an effective limit. It never lowers the limit below 200 MB. If the mount cannot be read, the configured value stays unchanged. A limit above available free space would not trigger eviction and could fill `/data`, so the station logs a warning when it lowers the limit.
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
@@ -320,15 +321,17 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 - Planning archaeology: `soak window`, `live session`, `2026-04-17 live session`, references to `docs/YYYY-MM-DD-*.md` planning files
 - Architectural metaphors as labels: `cathedral`, `domain naves`, `sacred files`, `god-module`, `leadership principle`, `operator-honesty`
 - Contributor archaeology: `first outside contribution`, `work was superseded`
+- Workspace archaeology: git stash refs, `local-only`, un-pushed branch inventories, references to the maintainer's machine, untracked-code discoveries, review-run tallies (`N findings raised/confirmed/refuted`)
 
-**Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`). **Not** PR bodies — the same editorial boundary applies to pull-request descriptions.
+**Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`); post-mortems and workspace archaeology go to the private durable system (see Scope discipline). **Not** PR bodies and **not** GitHub issues — the same editorial boundary applies to pull-request descriptions and to maintainer-authored issues on the public tracker.
 
-**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Two lints consume it:
+**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Three lints consume it:
 
 - `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
 - `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
+- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml`).
 
-To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — both lints pick it up automatically.
+To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
 
 ## Scope discipline
 
@@ -353,6 +356,10 @@ writing anything down.
 - Non-public strategy, outreach, relationship context, pitch framing, timing
   gates, or personal writing plans must not be written to tracked repo files or
   public GitHub issues. Put it in a private durable system outside the repo.
+- Post-mortems, abandoned-work archaeology, and local ref inventories (stashes,
+  un-pushed branches, workspace debris) are non-public by default and follow
+  the same rule: private durable system, never a public issue. The issue-body
+  lint (see Changelog editorial boundary) enforces the vocabulary mechanically.
 - If no private durable system is available in the current session, stop and
   ask where the note should live instead of creating a tracked TODO file or
   hiding durable strategy in workspace-local `.context/`.

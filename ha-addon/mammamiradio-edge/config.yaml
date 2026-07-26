@@ -53,6 +53,7 @@ options:
   songs_between_banter: 2
   songs_between_ads: 4
   ad_spots_per_break: 2
+  norm_cache_mb: 1500
 schema:
   station_name: str?
   enable_home_assistant: bool?
@@ -69,4 +70,5 @@ schema:
   songs_between_banter: int(2,60)?
   songs_between_ads: int(1,60)?
   ad_spots_per_break: int(1,5)?
+  norm_cache_mb: int(200,8000)?
   jamendo_client_id: password?

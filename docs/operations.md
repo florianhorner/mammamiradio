@@ -71,6 +71,41 @@ even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
 
+### Music cache sizing
+
+The normalization cache stores ready-to-play songs. A cached song starts almost
+instantly. An uncached song takes a full render, about 65 seconds on HA Green
+hardware, so a small cache makes listeners wait more often.
+
+`MAMMAMIRADIO_MAX_CACHE_MB` sets the ceiling. Standalone defaults to 500 MB. The
+add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
+(`norm_cache_mb`). Values outside 200-8000 are clamped. A malformed value uses the
+default and logs a warning, so config loading can complete.
+
+Size the cache for the rotation. A 200-track Jamendo rotation needs about 1 GB.
+Below that, LRU eviction can remove tracks before the rotation returns, which
+causes repeated cold renders. If a few songs repeat while others rarely play,
+increase the cache. **On-Air Sound** roughly doubles the per-track footprint
+because each song keeps a normalized file and a coloured bake.
+
+At startup, the station combines free space, reclaimable cache bytes, and a 512 MB
+reserve to choose the effective ceiling. It writes that value back to the config
+object so the producer periodic eviction pass uses the same limit. A configured
+ceiling above available free space would not trigger eviction and could fill the
+volume. On the add-on, that volume is `/data`, shared with the database and ledger.
+The station logs the configured and effective values when it lowers the ceiling.
+
+The effective ceiling stops at 200 MB. The norm cache also supplies fallback audio
+when the playback queue needs a ready track, so startup keeps that floor even when
+the disk has less room. In that case, the log says the disk is nearly full, warns
+that the minimum may still exceed available space, and tells the operator to free
+space on the add-on data disk.
+
+The effective ceiling appears in the startup log and in authenticated `/status`
+as `cache_limit_mb`. The add-on Configuration tab continues to show the value you
+entered. If songs still repeat after raising the setting, check `ha apps logs`
+for a trim warning.
+
 ## Startup model
 
 The intended local startup path is:

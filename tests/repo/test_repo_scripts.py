@@ -1282,3 +1282,53 @@ def test_addon_schema_has_no_provider_secret_fields() -> None:
     run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
     missing = [field for field in provider_fields if f"'{field}'" not in run_sh]
     assert not missing, "run.sh lost the legacy options.json fallback for: " + ", ".join(missing)
+
+
+def test_addon_cache_default_is_consistent_across_files() -> None:
+    """Check that the add-on cache default is identical in all five config paths.
+
+    A mismatch would leave the Configuration tab and runtime using different values.
+    """
+    import re
+
+    stable_yaml = (ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()
+    edge_yaml = (ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml").read_text()
+    run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    config_py = (ROOT / "mammamiradio" / "core" / "config.py").read_text()
+
+    found: dict[str, str] = {}
+
+    for label, text in (("stable config.yaml", stable_yaml), ("edge config.yaml", edge_yaml)):
+        m = re.search(r"^\s*norm_cache_mb:\s*(\d+)\s*$", text, re.MULTILINE)
+        assert m, f"norm_cache_mb option default not found in {label}"
+        found[label] = m.group(1)
+
+    # Both the .get() default and the except-branch fallback in run.sh.
+    run_defaults = re.findall(r"norm_cache_mb'\s*,\s*(\d+)\)|cache_mb_int\s*=\s*(\d+)", run_sh)
+    flat = [g for pair in run_defaults for g in pair if g]
+    assert len(flat) == 2, f"expected 2 cache defaults in run.sh, found {flat}"
+    found["run.sh get default"] = flat[0]
+    found["run.sh fallback"] = flat[1]
+
+    m = re.search(r"^ADDON_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    assert m, "ADDON_MAX_CACHE_SIZE_MB not found in config.py"
+    found["config.py ADDON_MAX_CACHE_SIZE_MB"] = m.group(1)
+
+    assert len(set(found.values())) == 1, f"add-on cache default drifted across files: {found}"
+
+
+def test_addon_cache_schema_bounds_match_config_py() -> None:
+    """The Supervisor schema and runtime must use the same cache bounds."""
+    import re
+
+    config_py = (ROOT / "mammamiradio" / "core" / "config.py").read_text()
+    lo = re.search(r"^MIN_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    hi = re.search(r"^MAX_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    assert lo and hi, "cache clamp bounds not found in config.py"
+
+    for addon in ("mammamiradio", "mammamiradio-edge"):
+        text = (ROOT / "ha-addon" / addon / "config.yaml").read_text()
+        m = re.search(r"^\s*norm_cache_mb:\s*int\((\d+),\s*(\d+)\)\?", text, re.MULTILINE)
+        assert m, f"norm_cache_mb schema bounds not found in {addon}/config.yaml"
+        assert m.group(1) == lo.group(1), f"{addon} schema minimum drifted from MIN_MAX_CACHE_SIZE_MB"
+        assert m.group(2) == hi.group(1), f"{addon} schema maximum drifted from MAX_MAX_CACHE_SIZE_MB"
